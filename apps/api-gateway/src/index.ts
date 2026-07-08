@@ -17,11 +17,46 @@ interface DownstreamService {
 }
 
 const registerRoutes: RouteRegistrar = async (app) => {
+  const urls = readServiceUrls();
+
   app.get("/v1/platform/catalog", async (request) => {
     return envelope({
       services: serviceCatalog,
       productModules
     }, request.id);
+  });
+
+  app.get("/v1/pulso-iris/health", async (_request, reply) => {
+    return proxyGet(reply, `${urls.pulsoIris}/v1/pulso-iris/health`);
+  });
+
+  app.get("/v1/pulso-iris/catalog", async (_request, reply) => {
+    return proxyGet(reply, `${urls.pulsoIris}/v1/pulso-iris/catalog`);
+  });
+
+  app.get("/v1/tenants/:tenantId/pulso-iris/overview", async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/overview`);
+  });
+
+  app.get("/v1/tenants/:tenantId/pulso-iris/conversations", async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/conversations`);
+  });
+
+  app.get("/v1/tenants/:tenantId/pulso-iris/appointments", async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/appointments`);
+  });
+
+  app.get("/v1/tenants/:tenantId/pulso-iris/handoffs", async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/handoffs`);
+  });
+
+  app.get("/v1/tenants/:tenantId/pulso-iris/rpa/actions", async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/rpa/actions`);
   });
 
   app.get("/v1/platform/health", async () => {
@@ -47,8 +82,18 @@ function buildRegistry(): DownstreamService[] {
     { name: "prompt-flow-service", url: urls.promptFlow },
     { name: "knowledge-service", url: urls.knowledge },
     { name: "audit-service", url: urls.audit },
-    { name: "integration-service", url: urls.integration }
+    { name: "integration-service", url: urls.integration },
+    { name: "pulso-iris-service", url: urls.pulsoIris }
   ];
+}
+
+async function proxyGet(reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }, url: string): Promise<unknown> {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(2_500)
+  });
+  const payload = await response.json();
+
+  return reply.code(response.status).send(payload);
 }
 
 async function fetchServiceHealth(service: DownstreamService): Promise<ServiceHealth> {

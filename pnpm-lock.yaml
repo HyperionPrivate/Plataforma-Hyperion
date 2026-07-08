@@ -171,6 +171,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/service-runtime
 
+  services/pulso-iris-service:
+    dependencies:
+      '@hyperion/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@hyperion/service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/service-runtime
+
   services/tenant-service:
     dependencies:
       '@hyperion/contracts':

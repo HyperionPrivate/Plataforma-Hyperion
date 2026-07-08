@@ -8,7 +8,8 @@ export const serviceNameSchema = z.enum([
   "prompt-flow-service",
   "knowledge-service",
   "audit-service",
-  "integration-service"
+  "integration-service",
+  "pulso-iris-service"
 ]);
 
 export type ServiceName = z.infer<typeof serviceNameSchema>;
@@ -45,6 +46,232 @@ export type PlatformHealth = z.infer<typeof platformHealthSchema>;
 export const tenantStatusSchema = z.enum(["active", "paused", "archived"]);
 export const agentStatusSchema = z.enum(["draft", "active", "paused", "retired"]);
 export const productStatusSchema = z.enum(["foundation", "building", "active", "paused"]);
+
+export const pulsoIrisProductCode = "PULSO_IRIS" as const;
+export const pulsoIrisAgentCode = "SOFIA" as const;
+
+export const pulsoIrisChannelSchema = z.enum(["voice", "whatsapp"]);
+export const pulsoIrisConversationStatusSchema = z.enum(["active", "resolved", "handoff_required", "closed"]);
+export const pulsoIrisAppointmentStatusSchema = z.enum([
+  "offered",
+  "registered",
+  "verified",
+  "confirmed",
+  "rescheduled",
+  "cancelled",
+  "no_show"
+]);
+export const pulsoIrisRpaActionStatusSchema = z.enum([
+  "queued",
+  "running",
+  "succeeded",
+  "verification_failed",
+  "deferred",
+  "failed"
+]);
+export const pulsoIrisHandoffStatusSchema = z.enum([
+  "open",
+  "assigned",
+  "in_progress",
+  "resolved",
+  "returned_to_sofia"
+]);
+export const pulsoIrisPatientStatusSchema = z.enum([
+  "active",
+  "inactive_12m",
+  "waiting_list",
+  "high_noshow_risk",
+  "partial_optout",
+  "total_optout",
+  "data_cleanup"
+]);
+export const pulsoIrisHandoffPrioritySchema = z.enum(["max", "high", "medium", "low"]);
+
+export type PulsoIrisChannel = z.infer<typeof pulsoIrisChannelSchema>;
+export type PulsoIrisConversationStatus = z.infer<typeof pulsoIrisConversationStatusSchema>;
+export type PulsoIrisAppointmentStatus = z.infer<typeof pulsoIrisAppointmentStatusSchema>;
+export type PulsoIrisRpaActionStatus = z.infer<typeof pulsoIrisRpaActionStatusSchema>;
+export type PulsoIrisHandoffStatus = z.infer<typeof pulsoIrisHandoffStatusSchema>;
+export type PulsoIrisPatientStatus = z.infer<typeof pulsoIrisPatientStatusSchema>;
+
+export const pulsoIrisAdministrativePatientSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  status: pulsoIrisPatientStatusSchema,
+  documentType: z.string().min(1).optional(),
+  documentNumberMasked: z.string().min(1).optional(),
+  fullName: z.string().min(1).optional(),
+  preferredChannel: pulsoIrisChannelSchema.optional(),
+  metadata: z.record(z.unknown()).default({})
+});
+
+export const pulsoIrisConversationSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  patientId: z.string().uuid().optional(),
+  channel: pulsoIrisChannelSchema,
+  status: pulsoIrisConversationStatusSchema,
+  primaryIntent: z.string().min(1).optional(),
+  startedAt: z.string().datetime(),
+  endedAt: z.string().datetime().optional()
+});
+
+export const pulsoIrisMessageSchema = z.object({
+  id: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  sender: z.enum(["sofia", "patient", "advisor", "system"]),
+  body: z.string().min(1),
+  createdAt: z.string().datetime(),
+  metadata: z.record(z.unknown()).default({})
+});
+
+export const pulsoIrisAppointmentSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  patientId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  status: pulsoIrisAppointmentStatusSchema,
+  scheduledAt: z.string().datetime().optional(),
+  siteId: z.string().uuid().optional(),
+  professionalId: z.string().uuid().optional(),
+  appointmentTypeId: z.string().uuid().optional(),
+  legacyReference: z.string().min(1).optional()
+});
+
+export const pulsoIrisRpaActionSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  appointmentId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  actionType: z.enum(["check_availability", "register_appointment", "cancel", "reschedule", "confirm", "sweep", "create_patient"]),
+  status: pulsoIrisRpaActionStatusSchema,
+  priority: z.number().int().min(0).default(50),
+  idempotencyKey: z.string().min(1),
+  createdAt: z.string().datetime()
+});
+
+export const pulsoIrisHandoffSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  patientId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  triggerCode: z.string().min(1),
+  priority: pulsoIrisHandoffPrioritySchema,
+  status: pulsoIrisHandoffStatusSchema,
+  summary: z.string().optional(),
+  slaDueAt: z.string().datetime().optional()
+});
+
+export const pulsoIrisSiteSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  name: z.string().min(1),
+  city: z.string().min(1).optional(),
+  status: z.enum(["active", "paused"]).default("active")
+});
+
+export const pulsoIrisProfessionalSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  name: z.string().min(1),
+  professionalType: z.enum(["ophthalmologist", "optometrist"]),
+  status: z.enum(["active", "paused"]).default("active")
+});
+
+export const pulsoIrisPayerSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  name: z.string().min(1),
+  group: z.enum(["eps", "private_prepaid", "policy", "particular", "other"]),
+  requiresAuthorization: z.boolean().default(false),
+  status: z.enum(["active", "paused"]).default("active")
+});
+
+export const pulsoIrisOperationalKpisSchema = z.object({
+  conversationsActive: z.number().int().nonnegative(),
+  conversationsResolvedToday: z.number().int().nonnegative(),
+  appointmentsVerifiedToday: z.number().int().nonnegative(),
+  handoffsOpen: z.number().int().nonnegative(),
+  rpaActionsQueued: z.number().int().nonnegative(),
+  rpaActionsDeferred: z.number().int().nonnegative()
+});
+
+export const pulsoIrisCatalogSchema = z.object({
+  product: z.object({
+    code: z.literal(pulsoIrisProductCode),
+    name: z.literal("PULSO IRIS"),
+    status: productStatusSchema,
+    ownerService: z.literal("pulso-iris-service")
+  }),
+  agent: z.object({
+    code: z.literal(pulsoIrisAgentCode),
+    name: z.literal("Sofia"),
+    channel: z.literal("voice_whatsapp"),
+    status: agentStatusSchema
+  }),
+  modules: z.array(z.object({
+    code: z.string().min(1),
+    name: z.string().min(1),
+    status: productStatusSchema,
+    description: z.string().min(1)
+  }))
+});
+
+export type PulsoIrisAdministrativePatient = z.infer<typeof pulsoIrisAdministrativePatientSchema>;
+export type PulsoIrisConversation = z.infer<typeof pulsoIrisConversationSchema>;
+export type PulsoIrisMessage = z.infer<typeof pulsoIrisMessageSchema>;
+export type PulsoIrisAppointment = z.infer<typeof pulsoIrisAppointmentSchema>;
+export type PulsoIrisRpaAction = z.infer<typeof pulsoIrisRpaActionSchema>;
+export type PulsoIrisHandoff = z.infer<typeof pulsoIrisHandoffSchema>;
+export type PulsoIrisOperationalKpis = z.infer<typeof pulsoIrisOperationalKpisSchema>;
+export type PulsoIrisCatalog = z.infer<typeof pulsoIrisCatalogSchema>;
+
+export const pulsoIrisCatalog: PulsoIrisCatalog = pulsoIrisCatalogSchema.parse({
+  product: {
+    code: pulsoIrisProductCode,
+    name: "PULSO IRIS",
+    status: "building",
+    ownerService: "pulso-iris-service"
+  },
+  agent: {
+    code: pulsoIrisAgentCode,
+    name: "Sofia",
+    channel: "voice_whatsapp",
+    status: "draft"
+  },
+  modules: [
+    {
+      code: "INBOUND",
+      name: "Inbound voz y WhatsApp",
+      status: "foundation",
+      description: "Recepcion masiva, identificacion, intenciones y continuidad conversacional."
+    },
+    {
+      code: "AGENDA",
+      name: "Agendador end-to-end",
+      status: "foundation",
+      description: "Disponibilidad, citas, confirmaciones, reagenda, cancelacion y lista de espera."
+    },
+    {
+      code: "RPA",
+      name: "Dispatcher RPA",
+      status: "foundation",
+      description: "Cola de acciones contra el software de agendamiento legado sin API."
+    },
+    {
+      code: "HANDOFF",
+      name: "Handoff CEDCO",
+      status: "foundation",
+      description: "Transferencia humana con contexto, prioridad y SLA."
+    },
+    {
+      code: "OPERATIONS",
+      name: "Consola operativa y BI",
+      status: "foundation",
+      description: "Ficha administrativa, estado en vivo, KPIs y trazabilidad."
+    }
+  ]
+});
 
 export const productModuleSchema = z.object({
   code: z.string().min(2),
@@ -136,6 +363,11 @@ export const serviceCatalog: PlatformCatalog["services"] = [
     name: "integration-service",
     port: 8087,
     responsibility: "Conectores externos como voz, WhatsApp, GLPI, ERP y activos."
+  },
+  {
+    name: "pulso-iris-service",
+    port: 8088,
+    responsibility: "Producto PULSO IRIS: Sofia, agenda, handoff, RPA y operacion CEDCO."
   }
 ];
 
@@ -148,11 +380,11 @@ export const productModules: ProductModule[] = [
     description: "Base comun para identidad, tenants, auditoria, integraciones y productos."
   },
   {
-    code: "CEDCO-R02",
-    name: "CEDCO Agente de Voz y Plataforma",
-    status: "foundation",
-    ownerService: "agent-service",
-    description: "Producto CEDCO inicial sobre el nucleo de plataforma."
+    code: pulsoIrisProductCode,
+    name: "PULSO IRIS",
+    status: "building",
+    ownerService: "pulso-iris-service",
+    description: "Atencion y agendamiento inbound con IA para salud visual."
   },
   {
     code: "CEDCO-R03",

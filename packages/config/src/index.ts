@@ -19,6 +19,7 @@ export interface ServiceUrlMap {
   knowledge: string;
   audit: string;
   integration: string;
+  pulsoIris: string;
 }
 
 const defaultPorts: Record<ServiceName, number> = {
@@ -29,7 +30,8 @@ const defaultPorts: Record<ServiceName, number> = {
   "prompt-flow-service": 8084,
   "knowledge-service": 8085,
   "audit-service": 8086,
-  "integration-service": 8087
+  "integration-service": 8087,
+  "pulso-iris-service": 8088
 };
 
 export function readServiceConfig(serviceName: ServiceName): ServiceConfig {
@@ -53,7 +55,8 @@ export function readServiceUrls(): ServiceUrlMap {
     promptFlow: process.env.PROMPT_FLOW_SERVICE_URL ?? "http://localhost:8084",
     knowledge: process.env.KNOWLEDGE_SERVICE_URL ?? "http://localhost:8085",
     audit: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
-    integration: process.env.INTEGRATION_SERVICE_URL ?? "http://localhost:8087"
+    integration: process.env.INTEGRATION_SERVICE_URL ?? "http://localhost:8087",
+    pulsoIris: process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088"
   };
 }
 
