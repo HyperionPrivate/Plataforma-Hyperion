@@ -15,8 +15,8 @@ El VPS debe quedar con acceso por llave SSH, firewall activo y login root por pa
 
 ## Puertos
 
-- `8080`: gateway.
-- `3000`: consola web.
+- Gateway: `${API_GATEWAY_HOST_PORT:-8080}`.
+- Consola web: `${WEB_CONSOLE_HOST_PORT:-3000}`.
 - PostgreSQL no se publica al host; solo queda disponible dentro de la red Docker.
 
 ## Comando base
