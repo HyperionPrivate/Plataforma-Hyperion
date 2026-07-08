@@ -1,0 +1,30 @@
+{
+  "name": "plataforma-hyperion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hyperion platform core with microservice boundaries for products such as CEDCO.",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "check": "pnpm build && pnpm -r test",
+    "dev:gateway": "pnpm build && pnpm --filter @hyperion/api-gateway dev",
+    "dev:services": "pnpm build && pnpm --parallel --filter './services/*' dev",
+    "dev:web": "pnpm --filter @hyperion/contracts build && pnpm --filter @hyperion/web-console dev",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:up": "docker compose -f infra/docker-compose.yml up --build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "@types/pg": "^8.11.11",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.8.2",
+    "tsx": "^4.19.3",
+    "vite": "^6.2.2",
+    "vitest": "^3.0.8"
+  }
+}

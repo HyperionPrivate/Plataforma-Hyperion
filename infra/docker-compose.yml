@@ -1,0 +1,164 @@
+name: plataforma-hyperion
+
+x-node-build: &node-build
+  context: ..
+  dockerfile: infra/docker/node-service.Dockerfile
+  args:
+    VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+
+x-service-env: &service-env
+  NODE_ENV: production
+  SERVICE_VERSION: ${SERVICE_VERSION:-0.1.0}
+  DATABASE_URL: postgres://${POSTGRES_USER:-hyperion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+  INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hyperion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-hyperion}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hyperion} -d ${POSTGRES_DB:-hyperion}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  identity-service:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/identity-service", "start"]
+    environment:
+      <<: *service-env
+      PORT: 8081
+    expose:
+      - "8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  tenant-service:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/tenant-service", "start"]
+    environment:
+      <<: *service-env
+      PORT: 8082
+    expose:
+      - "8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  agent-service:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/agent-service", "start"]
+    environment:
+      <<: *service-env
+      PORT: 8083
+    expose:
+      - "8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  prompt-flow-service:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/prompt-flow-service", "start"]
+    environment:
+      <<: *service-env
+      PORT: 8084
+    expose:
+      - "8084"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  knowledge-service:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/knowledge-service", "start"]
+    environment:
+      <<: *service-env
+      PORT: 8085
+    expose:
+      - "8085"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  audit-service:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/audit-service", "start"]
+    environment:
+      <<: *service-env
+      PORT: 8086
+    expose:
+      - "8086"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  integration-service:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/integration-service", "start"]
+    environment:
+      <<: *service-env
+      PORT: 8087
+    expose:
+      - "8087"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/api-gateway", "start"]
+    environment:
+      NODE_ENV: production
+      SERVICE_VERSION: ${SERVICE_VERSION:-0.1.0}
+      PORT: 8080
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      IDENTITY_SERVICE_URL: http://identity-service:8081
+      TENANT_SERVICE_URL: http://tenant-service:8082
+      AGENT_SERVICE_URL: http://agent-service:8083
+      PROMPT_FLOW_SERVICE_URL: http://prompt-flow-service:8084
+      KNOWLEDGE_SERVICE_URL: http://knowledge-service:8085
+      AUDIT_SERVICE_URL: http://audit-service:8086
+      INTEGRATION_SERVICE_URL: http://integration-service:8087
+    ports:
+      - "8080:8080"
+    depends_on:
+      - identity-service
+      - tenant-service
+      - agent-service
+      - prompt-flow-service
+      - knowledge-service
+      - audit-service
+      - integration-service
+
+  web-console:
+    build: *node-build
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@hyperion/web-console", "preview"]
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-gateway
+
+volumes:
+  postgres_data:
