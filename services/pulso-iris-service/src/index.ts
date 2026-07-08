@@ -1,13 +1,16 @@
 import {
   envelope,
   pulsoIrisAgentCode,
+  pulsoIrisAppointmentListSchema,
   pulsoIrisCatalog,
+  pulsoIrisConversationListSchema,
+  pulsoIrisHandoffListSchema,
   pulsoIrisOperationalKpisSchema,
-  pulsoIrisProductCode
+  pulsoIrisProductCode,
+  pulsoIrisRpaActionListSchema,
+  tenantIdSchema
 } from "@hyperion/contracts";
 import { startService, type RouteRegistrar } from "@hyperion/service-runtime";
-
-const tenantParamPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const registerRoutes: RouteRegistrar = async (app, context) => {
   if (context.db) {
@@ -86,7 +89,7 @@ const registerRoutes: RouteRegistrar = async (app, context) => {
       limit 100
     `, [tenantId]);
 
-    return envelope(result.rows, request.id);
+    return envelope(pulsoIrisConversationListSchema.parse(result.rows), request.id);
   });
 
   app.get("/v1/tenants/:tenantId/pulso-iris/appointments", async (request, reply) => {
@@ -120,7 +123,7 @@ const registerRoutes: RouteRegistrar = async (app, context) => {
       limit 100
     `, [tenantId]);
 
-    return envelope(result.rows, request.id);
+    return envelope(pulsoIrisAppointmentListSchema.parse(result.rows), request.id);
   });
 
   app.get("/v1/tenants/:tenantId/pulso-iris/handoffs", async (request, reply) => {
@@ -152,7 +155,7 @@ const registerRoutes: RouteRegistrar = async (app, context) => {
       limit 100
     `, [tenantId]);
 
-    return envelope(result.rows, request.id);
+    return envelope(pulsoIrisHandoffListSchema.parse(result.rows), request.id);
   });
 
   app.get("/v1/tenants/:tenantId/pulso-iris/rpa/actions", async (request, reply) => {
@@ -183,16 +186,17 @@ const registerRoutes: RouteRegistrar = async (app, context) => {
       limit 100
     `, [tenantId]);
 
-    return envelope(result.rows, request.id);
+    return envelope(pulsoIrisRpaActionListSchema.parse(result.rows), request.id);
   });
 };
 
 function readTenantId(params: unknown): string | undefined {
-  const tenantId = typeof params === "object" && params !== null && "tenantId" in params
-    ? String((params as { tenantId?: unknown }).tenantId)
+  const raw = typeof params === "object" && params !== null && "tenantId" in params
+    ? (params as { tenantId?: unknown }).tenantId
     : undefined;
 
-  return tenantId && tenantParamPattern.test(tenantId) ? tenantId : undefined;
+  const parsed = tenantIdSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
 }
 
 async function ensurePulsoIrisDatabase(db: { query: (text: string, params?: unknown[]) => Promise<unknown> }): Promise<void> {

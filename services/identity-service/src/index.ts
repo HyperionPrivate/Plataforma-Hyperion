@@ -3,7 +3,7 @@ import { startService, type RouteRegistrar, type ServiceContext } from "@hyperio
 
 const registerRoutes: RouteRegistrar = async (app, context) => {
   app.get("/v1/identity/status", async (request) => {
-    const operatorCount = await countRows(context, "platform.operators");
+    const operatorCount = await countOperators(context);
 
     return envelope({
       service: "identity-service",
@@ -28,12 +28,12 @@ const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 };
 
-async function countRows(context: ServiceContext, tableName: string): Promise<number> {
+async function countOperators(context: ServiceContext): Promise<number> {
   if (!context.db) {
     return 0;
   }
 
-  const result = await context.db.query<{ total: string }>(`select count(*)::text as total from ${tableName}`);
+  const result = await context.db.query<{ total: string }>("select count(*)::text as total from platform.operators");
   return Number(result.rows[0]?.total ?? 0);
 }
 

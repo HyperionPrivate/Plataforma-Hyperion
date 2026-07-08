@@ -5,16 +5,24 @@ import {
   productModules,
   serviceCatalog,
   serviceHealthSchema,
+  tenantIdSchema,
   type HealthStatus,
+  type PlatformHealth,
   type ServiceHealth,
   type ServiceName
 } from "@hyperion/contracts";
 import { startService, type RouteRegistrar } from "@hyperion/service-runtime";
+import type { FastifyReply, FastifyRequest } from "fastify";
 
 interface DownstreamService {
   name: ServiceName;
   url: string;
 }
+
+const UPSTREAM_TIMEOUT_MS = 2_500;
+const HEALTH_CACHE_TTL_MS = 5_000;
+
+let healthCache: { expiresAt: number; payload: PlatformHealth } | undefined;
 
 const registerRoutes: RouteRegistrar = async (app) => {
   const urls = readServiceUrls();
@@ -26,49 +34,53 @@ const registerRoutes: RouteRegistrar = async (app) => {
     }, request.id);
   });
 
-  app.get("/v1/pulso-iris/health", async (_request, reply) => {
-    return proxyGet(reply, `${urls.pulsoIris}/v1/pulso-iris/health`);
+  app.get("/v1/pulso-iris/health", async (request, reply) => {
+    return proxyGet(request, reply, `${urls.pulsoIris}/v1/pulso-iris/health`);
   });
 
-  app.get("/v1/pulso-iris/catalog", async (_request, reply) => {
-    return proxyGet(reply, `${urls.pulsoIris}/v1/pulso-iris/catalog`);
+  app.get("/v1/pulso-iris/catalog", async (request, reply) => {
+    return proxyGet(request, reply, `${urls.pulsoIris}/v1/pulso-iris/catalog`);
   });
 
-  app.get("/v1/tenants/:tenantId/pulso-iris/overview", async (request, reply) => {
-    const { tenantId } = request.params as { tenantId: string };
-    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/overview`);
-  });
+  const tenantProxyRoutes = [
+    { path: "/v1/tenants/:tenantId/pulso-iris/overview", suffix: "overview" },
+    { path: "/v1/tenants/:tenantId/pulso-iris/conversations", suffix: "conversations" },
+    { path: "/v1/tenants/:tenantId/pulso-iris/appointments", suffix: "appointments" },
+    { path: "/v1/tenants/:tenantId/pulso-iris/handoffs", suffix: "handoffs" },
+    { path: "/v1/tenants/:tenantId/pulso-iris/rpa/actions", suffix: "rpa/actions" }
+  ] as const;
 
-  app.get("/v1/tenants/:tenantId/pulso-iris/conversations", async (request, reply) => {
-    const { tenantId } = request.params as { tenantId: string };
-    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/conversations`);
-  });
+  for (const route of tenantProxyRoutes) {
+    app.get(route.path, async (request, reply) => {
+      const params = request.params as { tenantId?: unknown };
+      const tenantId = tenantIdSchema.safeParse(params.tenantId);
+      if (!tenantId.success) {
+        return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
+      }
 
-  app.get("/v1/tenants/:tenantId/pulso-iris/appointments", async (request, reply) => {
-    const { tenantId } = request.params as { tenantId: string };
-    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/appointments`);
-  });
-
-  app.get("/v1/tenants/:tenantId/pulso-iris/handoffs", async (request, reply) => {
-    const { tenantId } = request.params as { tenantId: string };
-    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/handoffs`);
-  });
-
-  app.get("/v1/tenants/:tenantId/pulso-iris/rpa/actions", async (request, reply) => {
-    const { tenantId } = request.params as { tenantId: string };
-    return proxyGet(reply, `${urls.pulsoIris}/v1/tenants/${tenantId}/pulso-iris/rpa/actions`);
-  });
+      const target = `${urls.pulsoIris}/v1/tenants/${encodeURIComponent(tenantId.data)}/pulso-iris/${route.suffix}`;
+      return proxyGet(request, reply, target);
+    });
+  }
 
   app.get("/v1/platform/health", async () => {
+    const now = Date.now();
+    if (healthCache && healthCache.expiresAt > now) {
+      return healthCache.payload;
+    }
+
     const services = buildRegistry();
     const health = await Promise.all(services.map((service) => fetchServiceHealth(service)));
     const status = summarize(health);
 
-    return platformHealthSchema.parse({
+    const payload = platformHealthSchema.parse({
       status,
       checkedAt: new Date().toISOString(),
       services: health
     });
+
+    healthCache = { expiresAt: now + HEALTH_CACHE_TTL_MS, payload };
+    return payload;
   });
 };
 
@@ -87,13 +99,17 @@ function buildRegistry(): DownstreamService[] {
   ];
 }
 
-async function proxyGet(reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }, url: string): Promise<unknown> {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(2_500)
-  });
-  const payload = await response.json();
+async function proxyGet(request: FastifyRequest, reply: FastifyReply, url: string): Promise<unknown> {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+    });
+    const payload = await response.json();
 
-  return reply.code(response.status).send(payload);
+    return reply.code(response.status).send(payload);
+  } catch {
+    return reply.code(502).send(envelope({ error: "Upstream service unavailable" }, request.id));
+  }
 }
 
 async function fetchServiceHealth(service: DownstreamService): Promise<ServiceHealth> {
@@ -101,7 +117,7 @@ async function fetchServiceHealth(service: DownstreamService): Promise<ServiceHe
 
   try {
     const response = await fetch(`${service.url}/ready`, {
-      signal: AbortSignal.timeout(2_500)
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
     });
     const payload = await response.json();
     const parsed = serviceHealthSchema.parse(payload);
@@ -132,6 +148,10 @@ async function fetchServiceHealth(service: DownstreamService): Promise<ServiceHe
 }
 
 function summarize(services: ServiceHealth[]): HealthStatus {
+  if (services.length === 0) {
+    return "degraded";
+  }
+
   if (services.every((service) => service.status === "ok")) {
     return "ok";
   }
@@ -146,5 +166,6 @@ function summarize(services: ServiceHealth[]): HealthStatus {
 await startService({
   serviceName: "api-gateway",
   databaseRequired: false,
+  publicApi: true,
   registerRoutes
 });

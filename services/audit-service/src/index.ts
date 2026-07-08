@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { auditEventSchema, envelope } from "@hyperion/contracts";
 import { startService, type RouteRegistrar, type ServiceContext } from "@hyperion/service-runtime";
 
@@ -57,11 +58,23 @@ function validateInternalToken(context: ServiceContext, authorization: string | 
     return { statusCode: 503, message: "INTERNAL_SERVICE_TOKEN is required" };
   }
 
-  if (authorization !== `Bearer ${context.config.internalServiceToken}`) {
+  const expected = `Bearer ${context.config.internalServiceToken}`;
+  if (!authorization || !constantTimeEquals(authorization, expected)) {
     return { statusCode: 401, message: "Unauthorized" };
   }
 
   return undefined;
+}
+
+function constantTimeEquals(a: string, b: string): boolean {
+  const bufferA = Buffer.from(a);
+  const bufferB = Buffer.from(b);
+
+  if (bufferA.length !== bufferB.length) {
+    return false;
+  }
+
+  return timingSafeEqual(bufferA, bufferB);
 }
 
 await startService({
