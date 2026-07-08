@@ -17,7 +17,7 @@ El VPS debe quedar con acceso por llave SSH, firewall activo y login root por pa
 
 - `8080`: gateway.
 - `3000`: consola web.
-- `5432`: PostgreSQL ligado a `127.0.0.1` por defecto.
+- PostgreSQL no se publica al host; solo queda disponible dentro de la red Docker.
 
 ## Comando base
 
