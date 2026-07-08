@@ -12,6 +12,13 @@ x-service-env: &service-env
   DATABASE_URL: postgres://${POSTGRES_USER:-hyperion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
   INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
 
+x-node-healthcheck: &node-healthcheck
+  test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 20s
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -32,12 +39,13 @@ services:
   identity-service:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/identity-service", "start"]
+    command: ["node", "services/identity-service/dist/index.js"]
     environment:
       <<: *service-env
       PORT: 8081
     expose:
       - "8081"
+    healthcheck: *node-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -45,12 +53,13 @@ services:
   tenant-service:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/tenant-service", "start"]
+    command: ["node", "services/tenant-service/dist/index.js"]
     environment:
       <<: *service-env
       PORT: 8082
     expose:
       - "8082"
+    healthcheck: *node-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,12 +67,13 @@ services:
   agent-service:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/agent-service", "start"]
+    command: ["node", "services/agent-service/dist/index.js"]
     environment:
       <<: *service-env
       PORT: 8083
     expose:
       - "8083"
+    healthcheck: *node-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,12 +81,13 @@ services:
   prompt-flow-service:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/prompt-flow-service", "start"]
+    command: ["node", "services/prompt-flow-service/dist/index.js"]
     environment:
       <<: *service-env
       PORT: 8084
     expose:
       - "8084"
+    healthcheck: *node-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,12 +95,13 @@ services:
   knowledge-service:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/knowledge-service", "start"]
+    command: ["node", "services/knowledge-service/dist/index.js"]
     environment:
       <<: *service-env
       PORT: 8085
     expose:
       - "8085"
+    healthcheck: *node-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,12 +109,13 @@ services:
   audit-service:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/audit-service", "start"]
+    command: ["node", "services/audit-service/dist/index.js"]
     environment:
       <<: *service-env
       PORT: 8086
     expose:
       - "8086"
+    healthcheck: *node-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -110,12 +123,13 @@ services:
   integration-service:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/integration-service", "start"]
+    command: ["node", "services/integration-service/dist/index.js"]
     environment:
       <<: *service-env
       PORT: 8087
     expose:
       - "8087"
+    healthcheck: *node-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -123,12 +137,13 @@ services:
   pulso-iris-service:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/pulso-iris-service", "start"]
+    command: ["node", "services/pulso-iris-service/dist/index.js"]
     environment:
       <<: *service-env
       PORT: 8088
     expose:
       - "8088"
+    healthcheck: *node-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -136,7 +151,7 @@ services:
   api-gateway:
     build: *node-build
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/api-gateway", "start"]
+    command: ["node", "apps/api-gateway/dist/index.js"]
     environment:
       NODE_ENV: production
       SERVICE_VERSION: ${SERVICE_VERSION:-0.1.0}
@@ -152,26 +167,41 @@ services:
       PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
     ports:
       - "${API_GATEWAY_HOST_PORT:-8080}:8080"
+    healthcheck: *node-healthcheck
     depends_on:
-      - identity-service
-      - tenant-service
-      - agent-service
-      - prompt-flow-service
-      - knowledge-service
-      - audit-service
-      - integration-service
-      - pulso-iris-service
+      identity-service:
+        condition: service_healthy
+      tenant-service:
+        condition: service_healthy
+      agent-service:
+        condition: service_healthy
+      prompt-flow-service:
+        condition: service_healthy
+      knowledge-service:
+        condition: service_healthy
+      audit-service:
+        condition: service_healthy
+      integration-service:
+        condition: service_healthy
+      pulso-iris-service:
+        condition: service_healthy
 
   web-console:
-    build: *node-build
+    build:
+      <<: *node-build
+      target: web-console
     restart: unless-stopped
-    command: ["pnpm", "--filter", "@hyperion/web-console", "preview"]
-    environment:
-      NODE_ENV: production
     ports:
-      - "${WEB_CONSOLE_HOST_PORT:-3000}:3000"
+      - "${WEB_CONSOLE_HOST_PORT:-3000}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
-      - api-gateway
+      api-gateway:
+        condition: service_healthy
 
 volumes:
   postgres_data:
