@@ -1,9 +1,8 @@
-import { Bot, CalendarClock, Phone, Search, Settings2, UserRound } from "lucide-react";
+import { Bot, CalendarClock, MessageCircle, Phone, RefreshCw, Search, Settings2, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Layout } from "../components/Layout.js";
 import { Avatar, Card, EmptyState, LoadingState, Pill } from "../components/ui.js";
-import { api, SessionExpiredError } from "../lib/api.js";
 import { tenantPath, useConsole } from "../lib/context.js";
 import { formatDate, formatTime, LINE } from "../lib/format.js";
 import { usePolling } from "../lib/hooks.js";
@@ -19,6 +18,10 @@ interface InboxItem {
   payerName: string | null;
   lastMessage: string | null;
   hasOpenHandoff: boolean;
+  provider?: "whatsapp_web_test" | string | null;
+  identityStatus?: "identified" | "pending_name" | null;
+  sofiaStatus?: "queued" | "processing" | "responded" | "failed" | null;
+  lastSofiaActivityAt?: string | null;
 }
 
 interface Timeline {
@@ -29,14 +32,26 @@ interface Timeline {
     primaryIntent: string | null;
     startedAt: string;
     siteName: string | null;
+    provider?: "whatsapp_web_test" | string | null;
+    identityStatus?: "identified" | "pending_name" | null;
+    sofiaStatus?: "queued" | "processing" | "responded" | "failed" | null;
+    lastSofiaActivityAt?: string | null;
   };
-  messages: Array<{ id: string; sender: string; body: string; createdAt: string }>;
+  messages: Array<{
+    id: string;
+    sender: string;
+    body: string;
+    createdAt: string;
+    provider?: string | null;
+    providerMessageId?: string | null;
+    deliveryStatus?: "received" | "queued" | "sent" | "delivered" | "read" | "failed" | "ignored" | null;
+  }>;
   rpaActions: Array<{ id: string; actionType: string; status: string; durationMs: number | null; createdAt: string }>;
   patient: {
     id: string;
     fullName: string | null;
     documentNumberMasked: string | null;
-    phone: string | null;
+    phoneMasked: string | null;
     preferredChannel: string | null;
     status: string;
   } | null;
@@ -134,7 +149,10 @@ export function ConversationsPage() {
                     <Avatar name={item.patientName} />
                     <div className="col" style={{ flex: 1, minWidth: 0 }}>
                       <span className="row between">
-                        <strong className="small">{item.patientName ?? "Identificando..."}</strong>
+                        <strong className="small">
+                          {item.patientName ??
+                            (item.identityStatus === "pending_name" ? "Identidad pendiente" : "Identidad no vinculada")}
+                        </strong>
                         <span className="tiny muted">{formatTime(item.updatedAt)}</span>
                       </span>
                       <span
@@ -143,13 +161,23 @@ export function ConversationsPage() {
                       >
                         {item.lastMessage ?? "Sin mensajes"}
                       </span>
-                      <span className="row" style={{ gap: 6, marginTop: 4 }}>
-                        {item.channel === "voice" ? <Phone size={12} /> : null}
+                      <span className="row" style={{ gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                        {item.channel === "voice" ? <Phone size={12} /> : <MessageCircle size={12} />}
+                        <Pill tone="blue">{providerLabel(item.provider, item.channel)}</Pill>
+                        <Pill tone={conversationStatusTone(item.status)}>{conversationStatusLabel(item.status)}</Pill>
                         {item.primaryIntent ? (
                           <Pill tone="green">{INTENT_LABELS[item.primaryIntent] ?? item.primaryIntent}</Pill>
                         ) : null}
+                        {item.sofiaStatus ? (
+                          <Pill tone={sofiaStatusTone(item.sofiaStatus)}>{sofiaStatusLabel(item.sofiaStatus)}</Pill>
+                        ) : null}
                         {item.hasOpenHandoff ? <Pill tone="amber">Handoff</Pill> : null}
                       </span>
+                      {item.lastSofiaActivityAt ? (
+                        <span className="tiny muted">
+                          SOFIA: {formatDate(item.lastSofiaActivityAt)} {formatTime(item.lastSofiaActivityAt)}
+                        </span>
+                      ) : null}
                     </div>
                   </button>
                 ))
@@ -177,27 +205,13 @@ function ConversationDetail({
   conversationId: string;
   onExpired: () => void;
 }) {
-  const [timeline, setTimeline] = useState<Timeline>();
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    api
-      .get<Timeline>(tenantPath(tenantId, `conversations/${conversationId}/timeline`))
-      .then((result) => {
-        if (!cancelled) setTimeline(result);
-      })
-      .catch((err) => {
-        if (err instanceof SessionExpiredError) onExpired();
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [tenantId, conversationId, onExpired]);
+  const timelineState = usePolling<Timeline>(
+    tenantPath(tenantId, `conversations/${conversationId}/timeline`),
+    5_000,
+    onExpired
+  );
+  const timeline = timelineState.data?.conversation.id === conversationId ? timelineState.data : undefined;
+  const { loading, error, refresh } = timelineState;
 
   if (loading && !timeline) {
     return (
@@ -207,10 +221,22 @@ function ConversationDetail({
     );
   }
   if (!timeline) {
-    return <EmptyState label="No se pudo cargar la conversacion" />;
+    return (
+      <Card>
+        <div className="banner between">
+          <span>{error ?? "No se pudo cargar la conversacion"}</span>
+          <button className="btn btn-outline btn-sm" type="button" onClick={refresh}>
+            <RefreshCw size={15} /> Reintentar
+          </button>
+        </div>
+      </Card>
+    );
   }
 
   const patient = timeline.patient;
+  const latestSofiaMessage = [...timeline.messages].reverse().find((message) => message.sender === "sofia");
+  const lastSofiaActivityAt = timeline.conversation.lastSofiaActivityAt ?? latestSofiaMessage?.createdAt;
+  const identityStatus = timeline.conversation.identityStatus ?? (patient ? "identified" : "pending_name");
 
   return (
     <>
@@ -218,17 +244,45 @@ function ConversationDetail({
         <div className="card-head">
           <Avatar name={patient?.fullName} />
           <div className="col">
-            <strong>{patient?.fullName ?? "Paciente sin identificar"}</strong>
+            <strong>{patient?.fullName ?? "Identidad pendiente"}</strong>
             <span className="tiny muted">
-              {patient?.phone ?? "Sin telefono"}{" "}
+              {patient?.phoneMasked ?? "Contacto no vinculado"}{" "}
               {timeline.conversation.siteName ? `- ${timeline.conversation.siteName}` : ""}
             </span>
           </div>
-          <div className="spacer">
-            <Pill tone="green">
-              <Bot size={12} /> SOFIA atendiendo
+          <div className="spacer row" style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <Pill tone={conversationStatusTone(timeline.conversation.status)}>
+              {conversationStatusLabel(timeline.conversation.status)}
             </Pill>
+            {timeline.conversation.sofiaStatus ? (
+              <Pill tone={sofiaStatusTone(timeline.conversation.sofiaStatus)}>
+                <Bot size={12} /> {sofiaStatusLabel(timeline.conversation.sofiaStatus)}
+              </Pill>
+            ) : null}
           </div>
+        </div>
+        <div className="conversation-facts">
+          <ConversationFact
+            label="Proveedor"
+            value={providerLabel(timeline.conversation.provider, timeline.conversation.channel)}
+          />
+          <ConversationFact label="Identidad" value={identityStatusLabel(identityStatus)} />
+          <ConversationFact
+            label="Intencion"
+            value={
+              timeline.conversation.primaryIntent
+                ? (INTENT_LABELS[timeline.conversation.primaryIntent] ?? timeline.conversation.primaryIntent)
+                : "Intencion pendiente"
+            }
+          />
+          <ConversationFact
+            label="Actividad SOFIA"
+            value={
+              lastSofiaActivityAt
+                ? `${formatDate(lastSofiaActivityAt)} ${formatTime(lastSofiaActivityAt)}`
+                : "Sin actividad registrada"
+            }
+          />
         </div>
         <div
           className="card-pad col"
@@ -297,7 +351,7 @@ function ConversationDetail({
   );
 }
 
-function MessageBubble({ message }: { message: { sender: string; body: string; createdAt: string } }) {
+function MessageBubble({ message }: { message: Timeline["messages"][number] }) {
   if (message.sender === "system") {
     return (
       <div className="row" style={{ justifyContent: "center" }}>
@@ -323,10 +377,79 @@ function MessageBubble({ message }: { message: { sender: string; body: string; c
         <div className="tiny muted" style={{ marginTop: 4, textAlign: "right" }}>
           {message.sender === "sofia" ? "Sofia" : message.sender === "advisor" ? "Asesor" : "Paciente"} -{" "}
           {formatTime(message.createdAt)}
+          {message.deliveryStatus ? ` · ${deliveryStatusLabel(message.deliveryStatus)}` : ""}
         </div>
       </div>
     </div>
   );
+}
+
+function ConversationFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="conversation-fact">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function providerLabel(provider: string | null | undefined, channel: "voice" | "whatsapp"): string {
+  if (provider === "whatsapp_web_test") return "WhatsApp Web de prueba";
+  if (provider) return provider.replaceAll("_", " ");
+  return channel === "whatsapp" ? "Proveedor no informado" : "Canal de voz";
+}
+
+function identityStatusLabel(status: "identified" | "pending_name" | string): string {
+  if (status === "identified") return "Identidad vinculada";
+  if (status === "pending_name") return "Nombre pendiente";
+  return status.replaceAll("_", " ");
+}
+
+function sofiaStatusLabel(status: "queued" | "processing" | "responded" | "failed" | string): string {
+  const labels: Record<string, string> = {
+    queued: "SOFIA en cola",
+    processing: "SOFIA procesando",
+    responded: "SOFIA respondio",
+    failed: "SOFIA con error"
+  };
+  return labels[status] ?? status.replaceAll("_", " ");
+}
+
+function sofiaStatusTone(status: string): "green" | "red" | "amber" | "blue" {
+  if (status === "responded") return "green";
+  if (status === "failed") return "red";
+  if (status === "processing") return "amber";
+  return "blue";
+}
+
+function conversationStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    active: "Activa",
+    resolved: "Resuelta",
+    handoff_required: "Requiere handoff",
+    closed: "Cerrada"
+  };
+  return labels[status] ?? status.replaceAll("_", " ");
+}
+
+function conversationStatusTone(status: string): "green" | "red" | "amber" | "blue" {
+  if (status === "active") return "green";
+  if (status === "handoff_required") return "amber";
+  if (status === "closed") return "red";
+  return "blue";
+}
+
+function deliveryStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    received: "recibido",
+    queued: "en cola",
+    sent: "enviado",
+    delivered: "entregado",
+    read: "leido",
+    failed: "fallido",
+    ignored: "ignorado"
+  };
+  return labels[status] ?? status.replaceAll("_", " ");
 }
 
 function appointmentTone(status: string): "green" | "red" | "amber" | "blue" {

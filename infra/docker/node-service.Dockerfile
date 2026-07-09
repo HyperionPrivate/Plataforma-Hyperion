@@ -49,6 +49,7 @@ COPY services/knowledge-service/package.json services/knowledge-service/package.
 COPY services/prompt-flow-service/package.json services/prompt-flow-service/package.json
 COPY services/pulso-iris-service/package.json services/pulso-iris-service/package.json
 COPY services/tenant-service/package.json services/tenant-service/package.json
+COPY services/whatsapp-channel-service/package.json services/whatsapp-channel-service/package.json
 
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 
@@ -68,6 +69,10 @@ COPY --from=build /app/services/knowledge-service/dist services/knowledge-servic
 COPY --from=build /app/services/prompt-flow-service/dist services/prompt-flow-service/dist
 COPY --from=build /app/services/pulso-iris-service/dist services/pulso-iris-service/dist
 COPY --from=build /app/services/tenant-service/dist services/tenant-service/dist
+COPY --from=build /app/services/whatsapp-channel-service/dist services/whatsapp-channel-service/dist
+
+RUN mkdir -p /var/lib/hyperion/whatsapp-sessions \
+  && chown -R node:node /var/lib/hyperion
 
 USER node
 

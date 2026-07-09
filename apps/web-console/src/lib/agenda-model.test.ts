@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { normalizeImportPreview, normalizeQueueResponse, queueStatusLabel, queueViewFor } from "./agenda-model.js";
+import {
+  normalizeImportPreview,
+  normalizeQueueResponse,
+  queueConfigurationLabel,
+  queuePrimaryLabel,
+  queueScheduleLabel,
+  queueStatusLabel,
+  queueViewFor
+} from "./agenda-model.js";
 
 describe("agenda model", () => {
   it("clasifica la cola sin mezclar confirmacion de asistencia y verificacion externa", () => {
@@ -38,6 +46,22 @@ describe("agenda model", () => {
     expect(queueViewFor(queue.items[2]!)).toBe("errors");
     expect(queue.items[0]?.externalConfirmationDueAt).toBe(new Date(2).toISOString());
     expect(queue.items[2]?.errorMessage).toBe("Sin horarios");
+  });
+
+  it("expone faltantes como problemas de identidad o configuracion", () => {
+    const appointment = {
+      id: "a",
+      recordType: "appointment" as const,
+      status: "pending_external_confirmation",
+      scheduledAt: null,
+      createdAt: new Date(0).toISOString()
+    };
+    expect(queuePrimaryLabel(appointment)).toBe("Identidad del paciente no vinculada");
+    expect(queueConfigurationLabel(appointment)).toContain("Configuracion incompleta");
+    expect(queueScheduleLabel(appointment)).toContain("no tiene horario");
+    expect(queuePrimaryLabel({ ...appointment, recordType: "configuration_error" })).toBe(
+      "Problema de configuracion de agenda"
+    );
   });
 
   it("normaliza una vista previa separada por filas aceptadas y rechazadas", () => {

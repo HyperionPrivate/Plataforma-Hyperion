@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@hyperion/contracts": "workspace:*",
+    "@hyperion/database": "workspace:*",
     "@hyperion/service-runtime": "workspace:*",
     "fastify": "^5.2.1",
     "pg": "^8.22.0",

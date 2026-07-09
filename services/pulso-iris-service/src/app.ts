@@ -18,6 +18,7 @@ import { createAuditClient } from "./audit-client.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
 import { registerConfigRoutes } from "./config-routes.js";
 import { registerOperationsRoutes } from "./operations-routes.js";
+import { registerSofiaToolRoutes } from "./sofia-tools-routes.js";
 import { readTenantId } from "./shared.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
@@ -36,6 +37,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   await registerOperationsRoutes(app, context, emitAudit);
   await registerAvailabilityRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
+  await registerSofiaToolRoutes(app, context, emitAudit);
 
   const stopSimulator = startAppointmentVerificationSimulator(context, emitAudit);
   const stopHoldExpiration = startAppointmentHoldExpiration(context, emitAudit);
@@ -117,6 +119,14 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         direction,
         status,
         primary_intent as "primaryIntent",
+        metadata->>'provider' as provider,
+        case when patient_id is null then 'pending_name'
+             when exists (select 1 from pulso_iris.administrative_patients p
+                          where p.tenant_id = pulso_iris.conversations.tenant_id
+                            and p.id = patient_id and p.full_name is not null) then 'identified'
+             else 'pending_name' end as "identityStatus",
+        metadata->>'sofiaStatus' as "sofiaStatus",
+        metadata->>'lastSofiaActivityAt' as "lastSofiaActivityAt",
         started_at as "startedAt",
         ended_at as "endedAt",
         created_at as "createdAt",
@@ -145,24 +155,27 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     const result = await context.db.query(
       `
       select
-        id,
-        tenant_id as "tenantId",
-        patient_id as "patientId",
-        conversation_id as "conversationId",
-        site_id as "siteId",
-        professional_id as "professionalId",
-        payer_id as "payerId",
-        appointment_type_id as "appointmentTypeId",
-        appointment_type as "appointmentType",
-        origin,
-        status,
-        scheduled_at as "scheduledAt",
-        legacy_reference as "legacyReference",
-        created_at as "createdAt",
-        updated_at as "updatedAt"
-      from pulso_iris.appointments
-      where tenant_id = $1
-      order by coalesce(scheduled_at, created_at) desc
+        a.id,
+        a.tenant_id as "tenantId",
+        a.patient_id as "patientId",
+        a.conversation_id as "conversationId",
+        a.site_id as "siteId",
+        a.professional_id as "professionalId",
+        professional.is_pilot as "professionalIsPilot",
+        a.payer_id as "payerId",
+        a.appointment_type_id as "appointmentTypeId",
+        a.appointment_type as "appointmentType",
+        a.origin,
+        a.status,
+        a.scheduled_at as "scheduledAt",
+        a.legacy_reference as "legacyReference",
+        a.created_at as "createdAt",
+        a.updated_at as "updatedAt"
+      from pulso_iris.appointments a
+      left join pulso_iris.professionals professional
+        on professional.tenant_id = a.tenant_id and professional.id = a.professional_id
+      where a.tenant_id = $1
+      order by coalesce(a.scheduled_at, a.created_at) desc
       limit 100
     `,
       [tenantId]

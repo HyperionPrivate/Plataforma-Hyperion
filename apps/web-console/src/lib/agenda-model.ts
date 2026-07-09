@@ -1,6 +1,8 @@
 export interface AgendaQueueItem {
   id: string;
   recordType?: "appointment" | "hold" | "configuration_error";
+  origin?: string | null;
+  professionalIsPilot?: boolean;
   status: string;
   scheduledAt: string | null;
   createdAt: string;
@@ -117,6 +119,27 @@ export function queueViewFor(item: AgendaQueueItem): AgendaQueueView {
     return "closed";
   }
   return "pending";
+}
+
+export function queuePrimaryLabel(item: AgendaQueueItem): string {
+  if (item.recordType === "configuration_error") return "Problema de configuracion de agenda";
+  if (item.recordType === "hold") return "Reserva temporal sin cita vinculada";
+  return item.patientName ?? "Identidad del paciente no vinculada";
+}
+
+export function queueConfigurationLabel(item: AgendaQueueItem): string {
+  if (item.recordType === "configuration_error") return "Revisar configuracion de agenda";
+  if (item.recordType === "hold") return "Cupo temporal reservado";
+  return (
+    [item.appointmentTypeName, item.professionalName, item.siteName].filter(Boolean).join(" · ") ||
+    "Configuracion incompleta: faltan tipo de cita, profesional o sede"
+  );
+}
+
+export function queueScheduleLabel(item: AgendaQueueItem): string | undefined {
+  if (item.scheduledAt) return undefined;
+  if (item.recordType === "configuration_error") return "Sin franja aplicable";
+  return "Configuracion incompleta: la cita no tiene horario";
 }
 
 function nullableString(value: unknown): string | null {

@@ -336,6 +336,7 @@ export async function registerAppointmentRoutes(
     const appointments = await scope.db.query(
       `select ${QUALIFIED_APPOINTMENT_COLUMNS},
               s.name as "siteName", p.name as "professionalName", t.name as "appointmentTypeName",
+              p.is_pilot as "professionalIsPilot",
               patient.full_name as "patientName",
               extract(epoch from (a.external_sla_due_at - now()))::int as "slaRemainingSeconds"
        from pulso_iris.appointments a

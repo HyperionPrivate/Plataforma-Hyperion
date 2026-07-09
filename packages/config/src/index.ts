@@ -20,6 +20,7 @@ export interface ServiceUrlMap {
   audit: string;
   integration: string;
   pulsoIris: string;
+  whatsappChannel: string;
 }
 
 const defaultPorts: Record<ServiceName, number> = {
@@ -31,7 +32,8 @@ const defaultPorts: Record<ServiceName, number> = {
   "knowledge-service": 8085,
   "audit-service": 8086,
   "integration-service": 8087,
-  "pulso-iris-service": 8088
+  "pulso-iris-service": 8088,
+  "whatsapp-channel-service": 8089
 };
 
 export function readServiceConfig(serviceName: ServiceName): ServiceConfig {
@@ -56,7 +58,8 @@ export function readServiceUrls(): ServiceUrlMap {
     knowledge: process.env.KNOWLEDGE_SERVICE_URL ?? "http://localhost:8085",
     audit: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
     integration: process.env.INTEGRATION_SERVICE_URL ?? "http://localhost:8087",
-    pulsoIris: process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088"
+    pulsoIris: process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088",
+    whatsappChannel: process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089"
   };
 }
 

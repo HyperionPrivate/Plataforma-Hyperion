@@ -222,6 +222,7 @@ select
   case when b.booked >= b.capacity then 'full' else 'available' end as status,
   s.name as "siteName",
   p.name as "professionalName",
+  p.is_pilot as "professionalIsPilot",
   t.name as "appointmentTypeName",
   t.category as "appointmentCategory"
 from params par

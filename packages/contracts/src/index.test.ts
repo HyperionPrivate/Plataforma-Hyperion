@@ -15,8 +15,12 @@ import {
   pulsoIrisConfigurationImportPreviewSchema,
   pulsoIrisConversationListSchema,
   pulsoIrisManualVerificationInputSchema,
+  pulsoIrisMessageSchema,
+  pulsoIrisProfessionalSchema,
   serviceCatalog,
-  tenantIdSchema
+  tenantIdSchema,
+  whatsappIntegrationStatusSchema,
+  whatsappQrSchema
 } from "./index.js";
 
 const TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";
@@ -244,5 +248,65 @@ describe("platform contracts", () => {
         idempotencyKey: "import-control-1"
       }).success
     ).toBe(true);
+  });
+
+  it("projects a sanitized WhatsApp status and an ephemeral QR response", () => {
+    const status = whatsappIntegrationStatusSchema.parse({
+      tenantId: TENANT_ID,
+      providerMode: "whatsapp_web_test",
+      state: "qr_pending",
+      phoneMasked: null,
+      lastActivityAt: null,
+      lastError: "Conexion temporalmente no disponible",
+      qrExpiresAt: new Date("2026-07-09T16:05:00Z"),
+      sessionRestorable: false,
+      sessionMaterial: "must-not-pass-through",
+      apiKey: "must-not-pass-through"
+    });
+
+    expect(status.lastError).toBe("Conexion temporalmente no disponible");
+    expect(status).not.toHaveProperty("sessionMaterial");
+    expect(status).not.toHaveProperty("apiKey");
+
+    const qr = whatsappQrSchema.parse({
+      tenantId: TENANT_ID,
+      providerMode: "whatsapp_web_test",
+      state: "qr_pending",
+      qrDataUrl: "data:image/png;base64,CONTROLLED",
+      qrExpiresAt: new Date("2026-07-09T16:05:00Z")
+    });
+    expect(qr.qrDataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(qr.qrExpiresAt).toBe("2026-07-09T16:05:00.000Z");
+  });
+
+  it("parses pilot professionals and channel delivery metadata", () => {
+    const professional = pulsoIrisProfessionalSchema.parse({
+      id: "4f6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      tenantId: TENANT_ID,
+      name: "Controlled pilot agenda",
+      professionalType: "optometrist",
+      subspecialty: "Controlled functional test",
+      isPilot: true,
+      status: "active",
+      createdAt: new Date("2026-07-09T16:00:00Z"),
+      updatedAt: new Date("2026-07-09T16:00:00Z")
+    });
+    expect(professional.isPilot).toBe(true);
+
+    const message = pulsoIrisMessageSchema.parse({
+      id: "5f6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      tenantId: TENANT_ID,
+      conversationId: "6f6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      sender: "sofia",
+      body: "Respuesta controlada",
+      provider: "whatsapp_web_test",
+      externalMessageId: null,
+      providerMessageId: "outbound-control-1",
+      deliveryStatus: "read",
+      deliveredAt: new Date("2026-07-09T16:00:02Z"),
+      createdAt: "2026-07-09T16:00:00.000Z",
+      metadata: {}
+    });
+    expect(message.deliveryStatus).toBe("read");
   });
 });

@@ -9,7 +9,8 @@ export const serviceNameSchema = z.enum([
   "knowledge-service",
   "audit-service",
   "integration-service",
-  "pulso-iris-service"
+  "pulso-iris-service",
+  "whatsapp-channel-service"
 ]);
 
 export type ServiceName = z.infer<typeof serviceNameSchema>;
@@ -64,6 +65,51 @@ const isoDateTimeOptional = z.preprocess(
 
 const optionalFromNull = <T extends z.ZodTypeAny>(schema: T) =>
   z.preprocess((value) => value ?? undefined, schema.optional());
+
+export const whatsappSofiaRuntimeMigration = "012-whatsapp-sofia-runtime.sql" as const;
+
+export const whatsappProviderModeSchema = z.literal("whatsapp_web_test");
+export const whatsappConnectionStateSchema = z.enum(["disconnected", "qr_pending", "connecting", "ready", "degraded"]);
+
+export const whatsappIntegrationStatusSchema = z.object({
+  tenantId: tenantIdSchema,
+  providerMode: whatsappProviderModeSchema,
+  state: whatsappConnectionStateSchema,
+  phoneMasked: optionalFromNull(z.string().regex(/^\*{4,8}\d{4}$/)),
+  lastActivityAt: isoDateTimeOptional,
+  lastError: optionalFromNull(z.string().min(1).max(160)),
+  qrExpiresAt: isoDateTimeOptional,
+  sessionRestorable: z.boolean()
+});
+
+export const whatsappQrSchema = z.object({
+  tenantId: tenantIdSchema,
+  providerMode: whatsappProviderModeSchema,
+  state: whatsappConnectionStateSchema,
+  qrDataUrl: optionalFromNull(z.string().regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/)),
+  qrExpiresAt: isoDateTimeOptional
+});
+
+export const sofiaDependencyReadinessSchema = z.object({
+  name: z.enum(["channel", "llm", "prompt_flow", "agenda"]),
+  status: healthStatusSchema,
+  detail: z.string().min(1).optional()
+});
+
+export const sofiaReadinessSchema = z.object({
+  tenantId: tenantIdSchema,
+  status: z.enum(["ready", "degraded", "not_ready"]),
+  checkedAt: isoDateTime,
+  canReceiveMessages: z.boolean(),
+  canBookAppointments: z.boolean(),
+  dependencies: z.array(sofiaDependencyReadinessSchema)
+});
+
+export type WhatsAppProviderMode = z.infer<typeof whatsappProviderModeSchema>;
+export type WhatsAppConnectionState = z.infer<typeof whatsappConnectionStateSchema>;
+export type WhatsAppIntegrationStatus = z.infer<typeof whatsappIntegrationStatusSchema>;
+export type WhatsAppQr = z.infer<typeof whatsappQrSchema>;
+export type SofiaReadiness = z.infer<typeof sofiaReadinessSchema>;
 
 export const pulsoIrisChannelSchema = z.enum(["voice", "whatsapp"]);
 export const pulsoIrisDirectionSchema = z.enum(["inbound", "outbound"]);
@@ -140,6 +186,10 @@ export const pulsoIrisConversationSchema = z.object({
   direction: pulsoIrisDirectionSchema,
   status: pulsoIrisConversationStatusSchema,
   primaryIntent: optionalFromNull(z.string().min(1)),
+  provider: optionalFromNull(z.string().min(1)),
+  identityStatus: optionalFromNull(z.enum(["identified", "pending_name"])),
+  sofiaStatus: optionalFromNull(z.enum(["queued", "processing", "responded", "failed"])),
+  lastSofiaActivityAt: isoDateTimeOptional,
   startedAt: isoDateTime,
   endedAt: isoDateTimeOptional,
   createdAt: isoDateTime,
@@ -148,9 +198,15 @@ export const pulsoIrisConversationSchema = z.object({
 
 export const pulsoIrisMessageSchema = z.object({
   id: z.string().uuid(),
+  tenantId: optionalFromNull(z.string().uuid()),
   conversationId: z.string().uuid(),
   sender: z.enum(["sofia", "patient", "advisor", "system"]),
   body: z.string().min(1),
+  provider: optionalFromNull(z.string().min(1)),
+  externalMessageId: optionalFromNull(z.string().min(1)),
+  providerMessageId: optionalFromNull(z.string().min(1)),
+  deliveryStatus: optionalFromNull(z.enum(["received", "queued", "sent", "delivered", "read", "failed", "ignored"])),
+  deliveredAt: isoDateTimeOptional,
   createdAt: z.string().datetime(),
   metadata: z.record(z.unknown()).default({})
 });
@@ -162,6 +218,7 @@ export const pulsoIrisAppointmentSchema = z.object({
   conversationId: optionalFromNull(z.string().uuid()),
   siteId: optionalFromNull(z.string().uuid()),
   professionalId: optionalFromNull(z.string().uuid()),
+  professionalIsPilot: z.boolean().optional(),
   payerId: optionalFromNull(z.string().uuid()),
   appointmentTypeId: optionalFromNull(z.string().uuid()),
   appointmentType: optionalFromNull(z.string().min(1)),
@@ -262,6 +319,7 @@ export const pulsoIrisProfessionalSchema = z.object({
   name: z.string().min(1),
   professionalType: pulsoIrisProfessionalTypeSchema,
   subspecialty: optionalFromNull(z.string().min(1)),
+  isPilot: z.boolean().default(false),
   status: catalogStatusSchema.default("active"),
   createdAt: isoDateTime,
   updatedAt: isoDateTime
@@ -271,6 +329,7 @@ export const pulsoIrisProfessionalInputSchema = z.object({
   name: z.string().min(2),
   professionalType: pulsoIrisProfessionalTypeSchema,
   subspecialty: z.string().min(2).optional(),
+  isPilot: z.boolean().optional(),
   status: catalogStatusSchema.optional()
 });
 
@@ -403,6 +462,7 @@ export const pulsoIrisAvailabilitySlotSchema = z.object({
   status: z.enum(["available", "full"]),
   siteName: optionalFromNull(z.string().min(1)),
   professionalName: optionalFromNull(z.string().min(1)),
+  professionalIsPilot: z.boolean().optional(),
   appointmentTypeName: optionalFromNull(z.string().min(1)),
   appointmentCategory: optionalFromNull(pulsoIrisAppointmentTypeCategorySchema)
 });
@@ -1094,6 +1154,11 @@ export const pulsoIrisAuditEventTypeSchema = z.enum([
   "appointment.verified",
   "appointment.rescheduled",
   "appointment.cancelled",
+  "channel.message.received",
+  "channel.message.sent",
+  "agent.execution.completed",
+  "agent.tool.executed",
+  "agent.response.created",
   "handoff.assigned",
   "config.updated"
 ]);
@@ -1174,6 +1239,11 @@ export const serviceCatalog: PlatformCatalog["services"] = [
     name: "pulso-iris-service",
     port: 8088,
     responsibility: "Producto PULSO IRIS: Sofia, agenda, handoff, RPA y operacion CEDCO."
+  },
+  {
+    name: "whatsapp-channel-service",
+    port: 8089,
+    responsibility: "Canal temporal WhatsApp Web de prueba: QR, sesion durable y entrega de texto autorizada."
   }
 ];
 

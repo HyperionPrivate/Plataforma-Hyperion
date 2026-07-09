@@ -12,6 +12,11 @@ export const PULSO_AUDIT_EVENTS = [
   "appointment.verified",
   "appointment.rescheduled",
   "appointment.cancelled",
+  "channel.message.received",
+  "channel.message.sent",
+  "agent.execution.completed",
+  "agent.tool.executed",
+  "agent.response.created",
   "handoff.assigned",
   "config.updated"
 ] as const;

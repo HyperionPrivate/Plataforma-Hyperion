@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@hyperion/contracts": "workspace:*",
-    "@hyperion/service-runtime": "workspace:*"
+    "@hyperion/database": "workspace:*",
+    "@hyperion/service-runtime": "workspace:*",
+    "zod": "^3.24.2"
   }
 }
