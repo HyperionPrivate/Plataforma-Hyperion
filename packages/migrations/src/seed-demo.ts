@@ -185,10 +185,10 @@ async function seed(client: pg.Client, tenantId: string): Promise<void> {
        ts.start_ts,
        ts.start_ts + (interval '1 minute' * (2 + random() * 6))
      from (
-       select d + make_interval(
+       select (d + make_interval(
          hours => (array[7,8,8,8,9,9,9,10,10,10,11,11,12,13,14,14,15,15,16,17])[ceil(random()*20)],
          mins => floor(random()*60)::int
-       ) as start_ts
+       )) at time zone 'America/Bogota' as start_ts
        from generate_series(current_date - interval '29 days', current_date - interval '1 day', interval '1 day') d,
             generate_series(1, 420)
        where extract(isodow from d) < 6
@@ -218,10 +218,10 @@ async function seed(client: pg.Client, tenantId: string): Promise<void> {
        ts.start_ts,
        coalesce(case when ts.start_ts <= now() - interval '35 minutes' then ts.start_ts + (interval '1 minute' * (2 + random() * 6)) end, now())
      from (
-       select current_date + make_interval(
+       select (current_date + make_interval(
          hours => (array[7,8,8,8,9,9,9,9,10,10,10,11,11,12,13,13,14,15,16,17])[ceil(random()*20)],
          mins => floor(random()*60)::int
-       ) as start_ts
+       )) at time zone 'America/Bogota' as start_ts
        from generate_series(1, 320)
      ) ts
      where ts.start_ts <= now()`,
@@ -252,7 +252,7 @@ async function seed(client: pg.Client, tenantId: string): Promise<void> {
          when random() < 0.72 then 'confirmed'
          else 'verified'
        end,
-       d.d + make_interval(hours => 7 + floor(random()*10)::int, mins => (array[0,20,40])[ceil(random()*3)]),
+       (d.d + make_interval(hours => 7 + floor(random()*10)::int, mins => (array[0,20,40])[ceil(random()*3)])) at time zone 'America/Bogota',
        '${DEMO}'::jsonb,
        d.d - interval '2 days',
        d.d
@@ -283,7 +283,7 @@ async function seed(client: pg.Client, tenantId: string): Promise<void> {
          when random() < 0.5 then 'registered'
          else 'verified'
        end,
-       d.d + make_interval(hours => s.h, mins => 0),
+       (d.d + make_interval(hours => s.h, mins => 0)) at time zone 'America/Bogota',
        '${DEMO}'::jsonb,
        d.d - interval '3 days',
        now()
