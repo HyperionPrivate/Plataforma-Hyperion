@@ -9,22 +9,29 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "check": "pnpm build && pnpm -r test",
+    "check": "pnpm lint && pnpm build && pnpm -r test",
     "db:migrate": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/index.js",
-    "dev:gateway": "pnpm build && pnpm --filter @hyperion/api-gateway dev",
-    "dev:services": "pnpm build && pnpm --parallel --filter './services/*' dev",
+    "dev:gateway": "pnpm --filter \"@hyperion/api-gateway...\" build && pnpm --filter @hyperion/api-gateway dev",
+    "dev:services": "pnpm --filter \"{services/*}...\" build && pnpm --parallel --filter './services/*' dev",
     "dev:web": "pnpm --filter @hyperion/contracts build && pnpm --filter @hyperion/web-console dev",
+    "format": "prettier --write .",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:up": "docker compose -f infra/docker-compose.yml up --build",
+    "lint": "eslint . && prettier --check .",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.13.14",
     "@types/pg": "^8.11.11",
     "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "^5.8.2",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.4",
     "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.63.0",
     "vite": "^6.2.2",
     "vitest": "^3.0.8"
   }

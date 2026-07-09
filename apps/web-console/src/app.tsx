@@ -1,13 +1,4 @@
-import {
-  Activity,
-  AlertCircle,
-  CheckCircle2,
-  Database,
-  GitBranch,
-  RefreshCw,
-  Server,
-  Shield
-} from "lucide-react";
+import { Activity, AlertCircle, CheckCircle2, Database, GitBranch, RefreshCw, Server, Shield } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   productModules,
@@ -37,8 +28,10 @@ export function App() {
     loading: true
   });
 
-  const refresh = useCallback(async () => {
-    setState((current) => ({ ...current, loading: true, error: undefined }));
+  const refresh = useCallback(async (background = false) => {
+    if (!background) {
+      setState((current) => ({ ...current, loading: true, error: undefined }));
+    }
 
     try {
       const [catalogEnvelope, health] = await Promise.all([
@@ -62,6 +55,11 @@ export function App() {
 
   useEffect(() => {
     void refresh();
+    const timer = window.setInterval(() => {
+      void refresh(true);
+    }, 15_000);
+
+    return () => window.clearInterval(timer);
   }, [refresh]);
 
   const serviceHealth = useMemo(() => {
@@ -93,14 +91,18 @@ export function App() {
             <Server size={16} aria-hidden="true" />
             <span>{apiBaseUrl}</span>
           </div>
-          <button className="icon-button" type="button" onClick={refresh} aria-label="Actualizar estado">
+          <button className="icon-button" type="button" onClick={() => void refresh()} aria-label="Actualizar estado">
             <RefreshCw size={18} aria-hidden="true" className={state.loading ? "spin" : undefined} />
           </button>
         </div>
       </header>
 
       <section className="status-strip" aria-label="Estado de plataforma">
-        <StatusMetric label="Estado" value={formatStatus(state.health?.status)} status={state.health?.status ?? "degraded"} />
+        <StatusMetric
+          label="Estado"
+          value={formatStatus(state.health?.status)}
+          status={state.health?.status ?? "degraded"}
+        />
         <StatusMetric label="Operativos" value={String(totals.ok)} status="ok" />
         <StatusMetric label="Degradados" value={String(totals.degraded)} status="degraded" />
         <StatusMetric label="Caidos" value={String(totals.down)} status="down" />
@@ -132,9 +134,7 @@ export function App() {
                     </div>
                   </div>
                   <p className="service-copy">{service.responsibility}</p>
-                  <span className={`status-pill ${health?.status ?? "degraded"}`}>
-                    {formatStatus(health?.status)}
-                  </span>
+                  <span className={`status-pill ${health?.status ?? "degraded"}`}>{formatStatus(health?.status)}</span>
                 </article>
               );
             })}

@@ -93,27 +93,33 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
   app.get("/ready", async () => {
     if (!db) {
       const status = options.databaseRequired ? "down" : "ok";
-      return buildHealth(options.serviceName, config.serviceVersion, status, [{
-        name: "postgres",
-        status,
-        detail: options.databaseRequired ? "DATABASE_URL is required" : "not configured"
-      }]);
+      return buildHealth(options.serviceName, config.serviceVersion, status, [
+        {
+          name: "postgres",
+          status,
+          detail: options.databaseRequired ? "DATABASE_URL is required" : "not configured"
+        }
+      ]);
     }
 
     try {
       const latencyMs = await checkDatabase(db);
-      return buildHealth(options.serviceName, config.serviceVersion, "ok", [{
-        name: "postgres",
-        status: "ok",
-        latencyMs
-      }]);
+      return buildHealth(options.serviceName, config.serviceVersion, "ok", [
+        {
+          name: "postgres",
+          status: "ok",
+          latencyMs
+        }
+      ]);
     } catch (error) {
       logger.error("database readiness failed", { error: error instanceof Error ? error.message : String(error) });
-      return buildHealth(options.serviceName, config.serviceVersion, "down", [{
-        name: "postgres",
-        status: "down",
-        detail: "database readiness failed"
-      }]);
+      return buildHealth(options.serviceName, config.serviceVersion, "down", [
+        {
+          name: "postgres",
+          status: "down",
+          detail: "database readiness failed"
+        }
+      ]);
     }
   });
 

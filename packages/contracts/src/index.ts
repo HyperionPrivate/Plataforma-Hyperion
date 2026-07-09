@@ -58,7 +58,7 @@ const isoDateTime = z.preprocess(
 );
 
 const isoDateTimeOptional = z.preprocess(
-  (value) => (value instanceof Date ? value.toISOString() : value ?? undefined),
+  (value) => (value instanceof Date ? value.toISOString() : (value ?? undefined)),
   z.string().datetime().optional()
 );
 
@@ -166,7 +166,15 @@ export const pulsoIrisRpaActionSchema = z.object({
   tenantId: z.string().uuid(),
   appointmentId: optionalFromNull(z.string().uuid()),
   conversationId: optionalFromNull(z.string().uuid()),
-  actionType: z.enum(["check_availability", "register_appointment", "cancel", "reschedule", "confirm", "sweep", "create_patient"]),
+  actionType: z.enum([
+    "check_availability",
+    "register_appointment",
+    "cancel",
+    "reschedule",
+    "confirm",
+    "sweep",
+    "create_patient"
+  ]),
   status: pulsoIrisRpaActionStatusSchema,
   priority: z.number().int().min(0).default(50),
   idempotencyKey: z.string().min(1),
@@ -240,12 +248,14 @@ export const pulsoIrisCatalogSchema = z.object({
     channel: z.literal("voice_whatsapp"),
     status: agentStatusSchema
   }),
-  modules: z.array(z.object({
-    code: z.string().min(1),
-    name: z.string().min(1),
-    status: productStatusSchema,
-    description: z.string().min(1)
-  }))
+  modules: z.array(
+    z.object({
+      code: z.string().min(1),
+      name: z.string().min(1),
+      status: productStatusSchema,
+      description: z.string().min(1)
+    })
+  )
 });
 
 export type PulsoIrisAdministrativePatient = z.infer<typeof pulsoIrisAdministrativePatientSchema>;
@@ -315,11 +325,13 @@ export const productModuleSchema = z.object({
 export type ProductModule = z.infer<typeof productModuleSchema>;
 
 export const platformCatalogSchema = z.object({
-  services: z.array(z.object({
-    name: serviceNameSchema,
-    port: z.number().int().positive(),
-    responsibility: z.string().min(1)
-  })),
+  services: z.array(
+    z.object({
+      name: serviceNameSchema,
+      port: z.number().int().positive(),
+      responsibility: z.string().min(1)
+    })
+  ),
   productModules: z.array(productModuleSchema)
 });
 

@@ -28,10 +28,13 @@ export const registerRoutes: RouteRegistrar = async (app) => {
   const urls = readServiceUrls();
 
   app.get("/v1/platform/catalog", async (request) => {
-    return envelope({
-      services: serviceCatalog,
-      productModules
-    }, request.id);
+    return envelope(
+      {
+        services: serviceCatalog,
+        productModules
+      },
+      request.id
+    );
   });
 
   app.get("/v1/pulso-iris/health", async (request, reply) => {
@@ -138,12 +141,14 @@ async function fetchServiceHealth(service: DownstreamService): Promise<ServiceHe
       version: "unknown",
       checkedAt: new Date().toISOString(),
       uptimeSeconds: 0,
-      dependencies: [{
-        name: "http",
-        status: "down",
-        latencyMs: Math.round(performance.now() - started),
-        detail: error instanceof Error ? error.message : String(error)
-      }]
+      dependencies: [
+        {
+          name: "http",
+          status: "down",
+          latencyMs: Math.round(performance.now() - started),
+          detail: error instanceof Error ? error.message : String(error)
+        }
+      ]
     };
   }
 }

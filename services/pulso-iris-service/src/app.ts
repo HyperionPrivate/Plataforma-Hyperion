@@ -18,12 +18,15 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   }
 
   app.get("/v1/pulso-iris/health", async (request) => {
-    return envelope({
-      service: "pulso-iris-service",
-      product: pulsoIrisProductCode,
-      agent: pulsoIrisAgentCode,
-      status: "ok"
-    }, request.id);
+    return envelope(
+      {
+        service: "pulso-iris-service",
+        product: pulsoIrisProductCode,
+        agent: pulsoIrisAgentCode,
+        status: "ok"
+      },
+      request.id
+    );
   });
 
   app.get("/v1/pulso-iris/catalog", async (request) => {
@@ -40,7 +43,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
     }
 
-    const result = await context.db.query(`
+    const result = await context.db.query(
+      `
       select
         (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and status = 'active') as "conversationsActive",
         (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and status in ('resolved', 'closed') and date(updated_at) = current_date) as "conversationsResolvedToday",
@@ -48,16 +52,21 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         (select count(*)::int from pulso_iris.handoffs where tenant_id = $1 and status in ('open', 'assigned', 'in_progress')) as "handoffsOpen",
         (select count(*)::int from pulso_iris.rpa_actions where tenant_id = $1 and status = 'queued') as "rpaActionsQueued",
         (select count(*)::int from pulso_iris.rpa_actions where tenant_id = $1 and status = 'deferred') as "rpaActionsDeferred"
-    `, [tenantId]);
+    `,
+      [tenantId]
+    );
 
     const kpis = pulsoIrisOperationalKpisSchema.parse(result.rows[0]);
 
-    return envelope({
-      tenantId,
-      product: pulsoIrisCatalog.product,
-      agent: pulsoIrisCatalog.agent,
-      kpis
-    }, request.id);
+    return envelope(
+      {
+        tenantId,
+        product: pulsoIrisCatalog.product,
+        agent: pulsoIrisCatalog.agent,
+        kpis
+      },
+      request.id
+    );
   });
 
   app.get("/v1/tenants/:tenantId/pulso-iris/conversations", async (request, reply) => {
@@ -70,7 +79,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
     }
 
-    const result = await context.db.query(`
+    const result = await context.db.query(
+      `
       select
         id,
         tenant_id as "tenantId",
@@ -87,7 +97,9 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       where tenant_id = $1
       order by started_at desc
       limit 100
-    `, [tenantId]);
+    `,
+      [tenantId]
+    );
 
     return envelope(pulsoIrisConversationListSchema.parse(result.rows), request.id);
   });
@@ -102,7 +114,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
     }
 
-    const result = await context.db.query(`
+    const result = await context.db.query(
+      `
       select
         id,
         tenant_id as "tenantId",
@@ -121,7 +134,9 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       where tenant_id = $1
       order by coalesce(scheduled_at, created_at) desc
       limit 100
-    `, [tenantId]);
+    `,
+      [tenantId]
+    );
 
     return envelope(pulsoIrisAppointmentListSchema.parse(result.rows), request.id);
   });
@@ -136,7 +151,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
     }
 
-    const result = await context.db.query(`
+    const result = await context.db.query(
+      `
       select
         id,
         tenant_id as "tenantId",
@@ -153,7 +169,9 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       where tenant_id = $1
       order by created_at desc
       limit 100
-    `, [tenantId]);
+    `,
+      [tenantId]
+    );
 
     return envelope(pulsoIrisHandoffListSchema.parse(result.rows), request.id);
   });
@@ -168,7 +186,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
     }
 
-    const result = await context.db.query(`
+    const result = await context.db.query(
+      `
       select
         id,
         tenant_id as "tenantId",
@@ -184,16 +203,19 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       where tenant_id = $1
       order by created_at desc
       limit 100
-    `, [tenantId]);
+    `,
+      [tenantId]
+    );
 
     return envelope(pulsoIrisRpaActionListSchema.parse(result.rows), request.id);
   });
 };
 
 function readTenantId(params: unknown): string | undefined {
-  const raw = typeof params === "object" && params !== null && "tenantId" in params
-    ? (params as { tenantId?: unknown }).tenantId
-    : undefined;
+  const raw =
+    typeof params === "object" && params !== null && "tenantId" in params
+      ? (params as { tenantId?: unknown }).tenantId
+      : undefined;
 
   const parsed = tenantIdSchema.safeParse(raw);
   return parsed.success ? parsed.data : undefined;
@@ -219,4 +241,3 @@ async function verifyPulsoIrisSchema(context: ServiceContext): Promise<void> {
     });
   }
 }
-

@@ -4,17 +4,17 @@ La plataforma se construye como monorepo TypeScript con microservicios HTTP. El 
 
 ## Servicios
 
-| Puerto | Servicio | Responsabilidad |
-| --- | --- | --- |
-| 8080 | api-gateway | Entrada publica, catalogo y health agregado. |
-| 8081 | identity-service | Operadores, autenticacion, sesiones y permisos. |
-| 8082 | tenant-service | Clientes, organizaciones y configuracion por tenant. |
-| 8083 | agent-service | Agentes IA, productos, canales y ciclo operacional. |
-| 8084 | prompt-flow-service | Prompts, versiones y flujos conversacionales. |
-| 8085 | knowledge-service | Fuentes de conocimiento e ingesta. |
-| 8086 | audit-service | Eventos, bitacora y evidencia operacional. |
-| 8087 | integration-service | Voz, WhatsApp, GLPI, ERP, activos y conectores. |
-| 8088 | pulso-iris-service | Producto PULSO IRIS: Sofia, agenda, handoff y RPA para CEDCO. |
+| Puerto | Servicio            | Responsabilidad                                               |
+| ------ | ------------------- | ------------------------------------------------------------- |
+| 8080   | api-gateway         | Entrada publica, catalogo y health agregado.                  |
+| 8081   | identity-service    | Operadores, autenticacion, sesiones y permisos.               |
+| 8082   | tenant-service      | Clientes, organizaciones y configuracion por tenant.          |
+| 8083   | agent-service       | Agentes IA, productos, canales y ciclo operacional.           |
+| 8084   | prompt-flow-service | Prompts, versiones y flujos conversacionales.                 |
+| 8085   | knowledge-service   | Fuentes de conocimiento e ingesta.                            |
+| 8086   | audit-service       | Eventos, bitacora y evidencia operacional.                    |
+| 8087   | integration-service | Voz, WhatsApp, GLPI, ERP, activos y conectores.               |
+| 8088   | pulso-iris-service  | Producto PULSO IRIS: Sofia, agenda, handoff y RPA para CEDCO. |
 
 ## Datos
 

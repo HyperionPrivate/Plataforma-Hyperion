@@ -6,14 +6,21 @@ x-node-build: &node-build
   args:
     VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
 
+# INTERNAL_SERVICE_TOKEN se inyecta solo a los servicios que lo validan (audit-service),
+# para que una fuga en un contenedor no comprometa a los demas.
 x-service-env: &service-env
   NODE_ENV: production
   SERVICE_VERSION: ${SERVICE_VERSION:-0.1.0}
   DATABASE_URL: postgres://${POSTGRES_USER:-hyperion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
-  INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
 
 x-node-healthcheck: &node-healthcheck
-  test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+  test:
+    [
+      "CMD",
+      "node",
+      "-e",
+      "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+    ]
   interval: 15s
   timeout: 5s
   retries: 5
@@ -131,6 +138,7 @@ services:
     command: ["node", "services/audit-service/dist/index.js"]
     environment:
       <<: *service-env
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
       PORT: 8086
     expose:
       - "8086"

@@ -62,10 +62,7 @@ export async function runMigrations(databaseUrl: string, sqlDir: string): Promis
       await client.query("begin");
       try {
         await client.query(content);
-        await client.query(
-          "insert into platform.schema_migrations (name, checksum) values ($1, $2)",
-          [file, checksum]
-        );
+        await client.query("insert into platform.schema_migrations (name, checksum) values ($1, $2)", [file, checksum]);
         await client.query("commit");
       } catch (error) {
         await client.query("rollback");

@@ -5,11 +5,14 @@ const registerRoutes: RouteRegistrar = async (app, context) => {
   app.get("/v1/identity/status", async (request) => {
     const operatorCount = await countOperators(context);
 
-    return envelope({
-      service: "identity-service",
-      operatorCount,
-      databaseConfigured: Boolean(context.db)
-    }, request.id);
+    return envelope(
+      {
+        service: "identity-service",
+        operatorCount,
+        databaseConfigured: Boolean(context.db)
+      },
+      request.id
+    );
   });
 
   app.get("/v1/identity/operators", async (request) => {

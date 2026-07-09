@@ -30,30 +30,38 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 
     const parsed = auditEventSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send(envelope({ error: "Invalid audit payload", issues: parsed.error.issues }, request.id));
+      return reply
+        .code(400)
+        .send(envelope({ error: "Invalid audit payload", issues: parsed.error.issues }, request.id));
     }
 
     const event = parsed.data;
-    const result = await context.db.query(`
+    const result = await context.db.query(
+      `
       insert into platform.audit_events (
         tenant_id, actor_id, event_type, entity_type, entity_id, metadata
       )
       values ($1, $2, $3, $4, $5, $6::jsonb)
       returning id, tenant_id, actor_id, event_type, entity_type, entity_id, metadata, created_at
-    `, [
-      event.tenantId ?? null,
-      event.actorId ?? null,
-      event.eventType,
-      event.entityType,
-      event.entityId ?? null,
-      JSON.stringify(event.metadata)
-    ]);
+    `,
+      [
+        event.tenantId ?? null,
+        event.actorId ?? null,
+        event.eventType,
+        event.entityType,
+        event.entityId ?? null,
+        JSON.stringify(event.metadata)
+      ]
+    );
 
     return reply.code(201).send(envelope(result.rows[0], request.id));
   });
 };
 
-function validateInternalToken(context: ServiceContext, authorization: string | undefined): { statusCode: number; message: string } | undefined {
+function validateInternalToken(
+  context: ServiceContext,
+  authorization: string | undefined
+): { statusCode: number; message: string } | undefined {
   if (!context.config.internalServiceToken) {
     return { statusCode: 503, message: "INTERNAL_SERVICE_TOKEN is required" };
   }
