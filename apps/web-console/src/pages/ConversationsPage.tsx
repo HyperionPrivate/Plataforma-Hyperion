@@ -1,5 +1,6 @@
 import { Bot, CalendarClock, Phone, Search, Settings2, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Layout } from "../components/Layout.js";
 import { Avatar, Card, EmptyState, LoadingState, Pill } from "../components/ui.js";
 import { api, SessionExpiredError } from "../lib/api.js";
@@ -62,16 +63,22 @@ const INTENT_LABELS: Record<string, string> = {
 
 export function ConversationsPage() {
   const { tenant, logout } = useConsole();
+  const [searchParams] = useSearchParams();
   const { data, loading, error } = usePolling<InboxItem[]>(
     tenantPath(tenant.id, "conversations/inbox"),
     12_000,
     logout
   );
-  const [selectedId, setSelectedId] = useState<string>();
+  const linkedConversationId = searchParams.get("conversationId") ?? undefined;
+  const [selectedId, setSelectedId] = useState<string | undefined>(linkedConversationId);
   const [search, setSearch] = useState("");
 
   const items = useMemo(() => data ?? [], [data]);
   const activeId = selectedId ?? items[0]?.id;
+
+  useEffect(() => {
+    if (linkedConversationId) setSelectedId(linkedConversationId);
+  }, [linkedConversationId]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -90,7 +97,10 @@ export function ConversationsPage() {
       ) : !data && loading ? (
         <LoadingState />
       ) : (
-        <div className="grid" style={{ gridTemplateColumns: "320px 1fr 300px", alignItems: "start", gap: 16 }}>
+        <div
+          className="grid conversations-layout"
+          style={{ gridTemplateColumns: "320px minmax(0, 1fr) 300px", alignItems: "start", gap: 16 }}
+        >
           <Card>
             <div className="card-pad" style={{ paddingBottom: 10 }}>
               <div className="row" style={{ gap: 8 }}>

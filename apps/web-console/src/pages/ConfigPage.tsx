@@ -1,5 +1,18 @@
-import { CalendarClock, PauseCircle, PlayCircle, Plus, RefreshCw, Server } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  CalendarClock,
+  CheckCircle2,
+  Download,
+  FileSpreadsheet,
+  Link2,
+  PauseCircle,
+  PlayCircle,
+  Plus,
+  RefreshCw,
+  Save,
+  Server,
+  Upload
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   OperatorListItem,
   PulsoIrisAgendaBlock,
@@ -8,26 +21,38 @@ import type {
   PulsoIrisHoliday,
   PulsoIrisPayer,
   PulsoIrisPayerExclusion,
+  PulsoIrisAgendaSettings,
+  PulsoIrisProfessionalAppointmentType,
   PulsoIrisProfessional,
+  PulsoIrisProfessionalSite,
   PulsoIrisSite
 } from "@hyperion/contracts";
 import { Layout } from "../components/Layout.js";
 import { Card, CardHead, EmptyState, LoadingState, Pill } from "../components/ui.js";
 import { api, SessionExpiredError } from "../lib/api.js";
+import { normalizeImportPreview, type ImportPreview } from "../lib/agenda-model.js";
 import { tenantPath, useConsole } from "../lib/context.js";
 import { LINE } from "../lib/format.js";
 import { can } from "../lib/rbac.js";
 
-type Tab = "sites" | "professionals" | "payers" | "types" | "availability" | "operators" | "platform";
+type Tab = "agenda" | "sites" | "operators" | "platform";
+type AgendaTab = "general" | "professionals" | "schedules" | "payers" | "holidays" | "blocks" | "imports";
 
 const TABS: Array<{ id: Tab; label: string }> = [
+  { id: "agenda", label: "Agenda" },
   { id: "sites", label: "Sedes" },
-  { id: "professionals", label: "Profesionales" },
-  { id: "payers", label: "Convenios" },
-  { id: "types", label: "Tipos de cita" },
-  { id: "availability", label: "Disponibilidad" },
   { id: "operators", label: "Operadores" },
   { id: "platform", label: "Estado de plataforma" }
+];
+
+const AGENDA_TABS: Array<{ id: AgendaTab; label: string }> = [
+  { id: "general", label: "General" },
+  { id: "professionals", label: "Profesionales" },
+  { id: "schedules", label: "Horarios" },
+  { id: "payers", label: "Convenios y exclusiones" },
+  { id: "holidays", label: "Festivos" },
+  { id: "blocks", label: "Bloqueos" },
+  { id: "imports", label: "Importar / exportar" }
 ];
 
 const WEEKDAYS = [
@@ -42,7 +67,7 @@ const WEEKDAYS = [
 
 export function ConfigPage() {
   const { session, tenant } = useConsole();
-  const [tab, setTab] = useState<Tab>("sites");
+  const [tab, setTab] = useState<Tab>("agenda");
   const visibleTabs = TABS.filter((item) => item.id !== "operators" || can(session.operator.role, "manage:operators"));
   const canWriteConfig = can(session.operator.role, "write:config");
 
@@ -61,11 +86,8 @@ export function ConfigPage() {
         ))}
       </div>
 
+      {tab === "agenda" ? <AgendaConfiguration tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
       {tab === "sites" ? <SitesTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
-      {tab === "professionals" ? <ProfessionalsTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
-      {tab === "payers" ? <PayersTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
-      {tab === "types" ? <TypesTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
-      {tab === "availability" ? <AvailabilityTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
       {tab === "operators" && can(session.operator.role, "manage:operators") ? <OperatorsTab /> : null}
       {tab === "platform" ? <PlatformTab /> : null}
     </Layout>
@@ -95,6 +117,310 @@ function useCatalog<T>(path: string) {
 
   useEffect(() => reload(), [reload]);
   return { items, loading, error, reload };
+}
+
+function AgendaConfiguration({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
+  const [tab, setTab] = useState<AgendaTab>("general");
+
+  return (
+    <section className="agenda-config" aria-label="Configuracion de agenda">
+      <div className="subnav" role="tablist" aria-label="Secciones de agenda">
+        {AGENDA_TABS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
+            className={`subnav-item${tab === item.id ? " active" : ""}`}
+            onClick={() => setTab(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "general" ? <AgendaGeneralTab tenantId={tenantId} canWrite={canWrite} /> : null}
+      {tab === "professionals" ? (
+        <div className="col" style={{ gap: 16 }}>
+          <ProfessionalsTab tenantId={tenantId} canWrite={canWrite} />
+          <ProfessionalRelationsTab tenantId={tenantId} canWrite={canWrite} />
+        </div>
+      ) : null}
+      {tab === "schedules" ? (
+        <div className="col" style={{ gap: 16 }}>
+          <TypesTab tenantId={tenantId} canWrite={canWrite} />
+          <AvailabilityTab tenantId={tenantId} canWrite={canWrite} section="rules" />
+        </div>
+      ) : null}
+      {tab === "payers" ? (
+        <div className="col" style={{ gap: 16 }}>
+          <PayersTab tenantId={tenantId} canWrite={canWrite} />
+          <AvailabilityTab tenantId={tenantId} canWrite={canWrite} section="exclusions" />
+        </div>
+      ) : null}
+      {tab === "holidays" ? <AvailabilityTab tenantId={tenantId} canWrite={canWrite} section="holidays" /> : null}
+      {tab === "blocks" ? <AvailabilityTab tenantId={tenantId} canWrite={canWrite} section="blocks" /> : null}
+      {tab === "imports" ? <ImportExportTab tenantId={tenantId} canWrite={canWrite} /> : null}
+    </section>
+  );
+}
+
+function AgendaGeneralTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
+  const { logout } = useConsole();
+  const path = tenantPath(tenantId, "config/agenda-settings");
+  const [settings, setSettings] = useState<PulsoIrisAgendaSettings>();
+  const [draft, setDraft] = useState<PulsoIrisAgendaSettings>();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const [saved, setSaved] = useState(false);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    api
+      .get<PulsoIrisAgendaSettings>(path)
+      .then((value) => {
+        setSettings(value);
+        setDraft(value);
+        setError(undefined);
+      })
+      .catch((err) => {
+        if (err instanceof SessionExpiredError) logout();
+        else setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setLoading(false));
+  }, [logout, path]);
+
+  useEffect(() => reload(), [reload]);
+
+  const setNumber = (key: keyof PulsoIrisAgendaSettings, value: string) => {
+    setDraft((current) => (current ? { ...current, [key]: Number(value) } : current));
+    setSaved(false);
+  };
+
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const updated = await api.patch<PulsoIrisAgendaSettings>(path, {
+        mode: draft.mode,
+        timezone: draft.timezone,
+        bookingHorizonDays: draft.bookingHorizonDays,
+        holdDurationMinutes: draft.holdDurationMinutes,
+        maxAlternatives: draft.maxAlternatives,
+        maxReschedules: draft.maxReschedules,
+        externalConfirmationSlaMinutes: draft.externalConfirmationSlaMinutes,
+        externalReferenceRequired: draft.externalReferenceRequired,
+        capacityPolicy: draft.capacityPolicy,
+        status: draft.status
+      });
+      setSettings(updated);
+      setDraft(updated);
+      setSaved(true);
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <LoadingState />;
+  if (!draft) {
+    return (
+      <Card>
+        <div className="banner between">
+          <span>{error ?? "No fue posible cargar la configuracion de agenda."}</span>
+          <button className="btn btn-outline btn-sm" type="button" onClick={reload}>
+            <RefreshCw size={15} /> Reintentar
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  const dirty = JSON.stringify(settings) !== JSON.stringify(draft);
+  return (
+    <Card>
+      <CardHead
+        title="Configuracion general"
+        icon={<CalendarClock size={18} />}
+        trailing={
+          <Pill tone={draft.status === "active" ? "green" : "amber"}>
+            {draft.status === "active" ? "Agenda activa" : "Agenda pausada"}
+          </Pill>
+        }
+      />
+      <div className="card-pad settings-grid">
+        <label className="field">
+          <span>Modo de agenda</span>
+          <select
+            className="select"
+            value={draft.mode}
+            onChange={(event) => {
+              const mode = event.target.value as PulsoIrisAgendaSettings["mode"];
+              setDraft({
+                ...draft,
+                mode,
+                externalReferenceRequired: mode === "hybrid_manual" ? true : draft.externalReferenceRequired
+              });
+              setSaved(false);
+            }}
+            disabled={!canWrite}
+          >
+            <option value="hybrid_manual">Hibrido manual</option>
+            <option value="internal">Interno</option>
+            <option value="legacy_integrated" disabled>
+              Legado integrado (sin proveedor)
+            </option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Zona horaria</span>
+          <input
+            className="input"
+            value={draft.timezone}
+            onChange={(event) => {
+              setDraft({ ...draft, timezone: event.target.value });
+              setSaved(false);
+            }}
+            disabled={!canWrite}
+          />
+        </label>
+        <NumericSetting
+          label="Horizonte de agendamiento (dias)"
+          value={draft.bookingHorizonDays}
+          min={1}
+          max={730}
+          disabled={!canWrite}
+          onChange={(value) => setNumber("bookingHorizonDays", value)}
+        />
+        <NumericSetting
+          label="Reserva temporal (minutos)"
+          value={draft.holdDurationMinutes}
+          min={1}
+          max={1440}
+          disabled={!canWrite}
+          onChange={(value) => setNumber("holdDurationMinutes", value)}
+        />
+        <NumericSetting
+          label="Alternativas maximas"
+          value={draft.maxAlternatives}
+          min={1}
+          max={20}
+          disabled={!canWrite}
+          onChange={(value) => setNumber("maxAlternatives", value)}
+        />
+        <NumericSetting
+          label="Reagendamientos maximos"
+          value={draft.maxReschedules}
+          min={0}
+          max={20}
+          disabled={!canWrite}
+          onChange={(value) => setNumber("maxReschedules", value)}
+        />
+        <NumericSetting
+          label="SLA de confirmacion externa (minutos)"
+          value={draft.externalConfirmationSlaMinutes}
+          min={1}
+          max={10080}
+          disabled={!canWrite}
+          onChange={(value) => setNumber("externalConfirmationSlaMinutes", value)}
+        />
+        <label className="field">
+          <span>Politica de capacidad</span>
+          <select
+            className="select"
+            value={draft.capacityPolicy}
+            onChange={(event) => {
+              setDraft({ ...draft, capacityPolicy: event.target.value as "strict" });
+              setSaved(false);
+            }}
+            disabled={!canWrite}
+          >
+            <option value="strict">Estricta por franja</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Estado</span>
+          <select
+            className="select"
+            value={draft.status}
+            onChange={(event) => {
+              setDraft({ ...draft, status: event.target.value as PulsoIrisAgendaSettings["status"] });
+              setSaved(false);
+            }}
+            disabled={!canWrite}
+          >
+            <option value="active">Activa</option>
+            <option value="paused">Pausada</option>
+          </select>
+        </label>
+        <label className="toggle-field">
+          <input
+            type="checkbox"
+            checked={draft.externalReferenceRequired}
+            onChange={(event) => {
+              setDraft({ ...draft, externalReferenceRequired: event.target.checked });
+              setSaved(false);
+            }}
+            disabled={!canWrite || draft.mode === "hybrid_manual"}
+          />
+          <span>
+            <strong>Referencia externa obligatoria</strong>
+            <small>Siempre se exige en modo hibrido manual.</small>
+          </span>
+        </label>
+      </div>
+      {error ? <div className="banner">{error}</div> : null}
+      {canWrite ? (
+        <div className="card-actions">
+          {saved ? (
+            <span className="row small" style={{ color: "var(--green-dark)" }}>
+              <CheckCircle2 size={16} /> Cambios guardados
+            </span>
+          ) : (
+            <span className="small muted">{dirty ? "Hay cambios sin guardar" : "Configuracion al dia"}</span>
+          )}
+          <button className="btn btn-primary" type="button" onClick={() => void save()} disabled={saving || !dirty}>
+            <Save size={16} /> Guardar
+          </button>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function NumericSetting({
+  label,
+  value,
+  min,
+  max,
+  disabled,
+  onChange
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max?: number;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        className="input"
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+      />
+    </label>
+  );
 }
 
 function SitesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
@@ -246,7 +572,7 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
       ) : error ? (
         <div className="banner">{error}</div>
       ) : items.length === 0 ? (
-        <EmptyState label="Sin profesionales. Agrega o carga el dataset demo." />
+        <EmptyState label="Sin profesionales configurados" />
       ) : (
         <table className="table">
           <thead>
@@ -282,6 +608,263 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
         </table>
       )}
     </Card>
+  );
+}
+
+function ProfessionalRelationsTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
+  const { logout } = useConsole();
+  const sitesPath = tenantPath(tenantId, "config/sites");
+  const professionalsPath = tenantPath(tenantId, "config/professionals");
+  const typesPath = tenantPath(tenantId, "config/appointment-types");
+  const professionalSitesPath = tenantPath(tenantId, "config/professional-sites");
+  const professionalTypesPath = tenantPath(tenantId, "config/professional-appointment-types");
+  const sites = useCatalog<PulsoIrisSite>(sitesPath);
+  const professionals = useCatalog<PulsoIrisProfessional>(professionalsPath);
+  const appointmentTypes = useCatalog<PulsoIrisAppointmentType>(typesPath);
+  const professionalSites = useCatalog<PulsoIrisProfessionalSite>(professionalSitesPath);
+  const professionalTypes = useCatalog<PulsoIrisProfessionalAppointmentType>(professionalTypesPath);
+  const [professionalId, setProfessionalId] = useState("");
+  const [siteId, setSiteId] = useState("");
+  const [appointmentProfessionalId, setAppointmentProfessionalId] = useState("");
+  const [appointmentTypeId, setAppointmentTypeId] = useState("");
+  const [saving, setSaving] = useState<"site" | "type">();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    const firstProfessional = professionals.items[0]?.id ?? "";
+    const firstSite = sites.items[0]?.id ?? "";
+    const firstType = appointmentTypes.items[0]?.id ?? "";
+    if (!professionalId && firstProfessional) setProfessionalId(firstProfessional);
+    if (!appointmentProfessionalId && firstProfessional) setAppointmentProfessionalId(firstProfessional);
+    if (!siteId && firstSite) setSiteId(firstSite);
+    if (!appointmentTypeId && firstType) setAppointmentTypeId(firstType);
+  }, [
+    appointmentProfessionalId,
+    appointmentTypeId,
+    appointmentTypes.items,
+    professionalId,
+    professionals.items,
+    siteId,
+    sites.items
+  ]);
+
+  const professionalById = useMemo(
+    () => new Map(professionals.items.map((item) => [item.id, item.name])),
+    [professionals.items]
+  );
+  const siteById = useMemo(() => new Map(sites.items.map((item) => [item.id, item.name])), [sites.items]);
+  const typeById = useMemo(
+    () => new Map(appointmentTypes.items.map((item) => [item.id, item.name])),
+    [appointmentTypes.items]
+  );
+
+  const addSite = async () => {
+    if (!professionalId || !siteId) return;
+    setSaving("site");
+    setError(undefined);
+    try {
+      await api.post(professionalSitesPath, { professionalId, siteId });
+      professionalSites.reload();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(undefined);
+    }
+  };
+
+  const addType = async () => {
+    if (!appointmentProfessionalId || !appointmentTypeId) return;
+    setSaving("type");
+    setError(undefined);
+    try {
+      await api.post(professionalTypesPath, { professionalId: appointmentProfessionalId, appointmentTypeId });
+      professionalTypes.reload();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(undefined);
+    }
+  };
+
+  const loading =
+    sites.loading ||
+    professionals.loading ||
+    appointmentTypes.loading ||
+    professionalSites.loading ||
+    professionalTypes.loading;
+  const loadError =
+    sites.error ?? professionals.error ?? appointmentTypes.error ?? professionalSites.error ?? professionalTypes.error;
+
+  return (
+    <div className="config-split">
+      <Card>
+        <CardHead title={`Sedes autorizadas (${professionalSites.items.length})`} icon={<Link2 size={18} />} />
+        {canWrite ? (
+          <div className="card-pad compact-form">
+            <select
+              className="select"
+              value={professionalId}
+              onChange={(event) => setProfessionalId(event.target.value)}
+              aria-label="Profesional para relacionar con sede"
+            >
+              {professionals.items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="select"
+              value={siteId}
+              onChange={(event) => setSiteId(event.target.value)}
+              aria-label="Sede autorizada"
+            >
+              {sites.items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              onClick={() => void addSite()}
+              disabled={saving === "site" || !professionalId || !siteId}
+            >
+              <Plus size={15} /> Relacionar
+            </button>
+          </div>
+        ) : null}
+        {loading ? (
+          <LoadingState />
+        ) : loadError ? (
+          <div className="banner">{loadError}</div>
+        ) : professionalSites.items.length === 0 ? (
+          <EmptyState label="Sin relaciones profesional-sede" />
+        ) : (
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Profesional</th>
+                  <th>Sede</th>
+                  <th>Estado</th>
+                  {canWrite ? <th>Accion</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {professionalSites.items.map((item) => (
+                  <tr key={item.id}>
+                    <td className="small">{professionalById.get(item.professionalId) ?? item.professionalId}</td>
+                    <td className="small muted">{siteById.get(item.siteId) ?? item.siteId}</td>
+                    <td>
+                      <Pill tone={item.status === "active" ? "green" : "amber"}>{item.status}</Pill>
+                    </td>
+                    {canWrite ? (
+                      <td>
+                        <StatusToggle
+                          path={professionalSitesPath}
+                          id={item.id}
+                          status={item.status}
+                          onDone={professionalSites.reload}
+                        />
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <CardHead
+          title={`Tipos de cita autorizados (${professionalTypes.items.length})`}
+          icon={<CalendarClock size={18} />}
+        />
+        {canWrite ? (
+          <div className="card-pad compact-form">
+            <select
+              className="select"
+              value={appointmentProfessionalId}
+              onChange={(event) => setAppointmentProfessionalId(event.target.value)}
+              aria-label="Profesional para relacionar con tipo de cita"
+            >
+              {professionals.items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="select"
+              value={appointmentTypeId}
+              onChange={(event) => setAppointmentTypeId(event.target.value)}
+              aria-label="Tipo de cita autorizado"
+            >
+              {appointmentTypes.items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              onClick={() => void addType()}
+              disabled={saving === "type" || !appointmentProfessionalId || !appointmentTypeId}
+            >
+              <Plus size={15} /> Autorizar
+            </button>
+          </div>
+        ) : null}
+        {loading ? (
+          <LoadingState />
+        ) : loadError ? (
+          <div className="banner">{loadError}</div>
+        ) : professionalTypes.items.length === 0 ? (
+          <EmptyState label="Sin tipos de cita asociados" />
+        ) : (
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Profesional</th>
+                  <th>Tipo de cita</th>
+                  <th>Estado</th>
+                  {canWrite ? <th>Accion</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {professionalTypes.items.map((item) => (
+                  <tr key={item.id}>
+                    <td className="small">{professionalById.get(item.professionalId) ?? item.professionalId}</td>
+                    <td className="small muted">{typeById.get(item.appointmentTypeId) ?? item.appointmentTypeId}</td>
+                    <td>
+                      <Pill tone={item.status === "active" ? "green" : "amber"}>{item.status}</Pill>
+                    </td>
+                    {canWrite ? (
+                      <td>
+                        <StatusToggle
+                          path={professionalTypesPath}
+                          id={item.id}
+                          status={item.status}
+                          onDone={professionalTypes.reload}
+                        />
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      {error ? <div className="banner config-span">{error}</div> : null}
+    </div>
   );
 }
 
@@ -455,7 +1038,7 @@ function TypesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean 
           />
           <label className="row small muted">
             <input type="checkbox" checked={bookableByIa} onChange={(e) => setBookableByIa(e.target.checked)} />
-            IA
+            Agendable por IA
           </label>
           <input
             className="input"
@@ -514,7 +1097,16 @@ function TypesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean 
   );
 }
 
-function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
+function AvailabilityTab({
+  tenantId,
+  canWrite,
+  section
+}: {
+  tenantId: string;
+  canWrite: boolean;
+  section: "rules" | "blocks" | "holidays" | "exclusions";
+}) {
+  const { logout } = useConsole();
   const rulesPath = tenantPath(tenantId, "config/availability-rules");
   const blocksPath = tenantPath(tenantId, "config/agenda-blocks");
   const holidaysPath = tenantPath(tenantId, "config/holidays");
@@ -539,9 +1131,15 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
   const [endsAt, setEndsAt] = useState("12:00");
   const [slotDurationMin, setSlotDurationMin] = useState("20");
   const [capacity, setCapacity] = useState("1");
+  const [effectiveFrom, setEffectiveFrom] = useState("");
+  const [effectiveTo, setEffectiveTo] = useState("");
   const [saving, setSaving] = useState(false);
   const [blockStartsAt, setBlockStartsAt] = useState(() => defaultLocalDateTime(8));
   const [blockEndsAt, setBlockEndsAt] = useState(() => defaultLocalDateTime(9));
+  const [blockType, setBlockType] = useState<"block" | "absence" | "vacation">("block");
+  const [blockSiteId, setBlockSiteId] = useState("");
+  const [blockProfessionalId, setBlockProfessionalId] = useState("");
+  const [blockAppointmentTypeId, setBlockAppointmentTypeId] = useState("");
   const [blockReason, setBlockReason] = useState("");
   const [savingBlock, setSavingBlock] = useState(false);
   const [holidayDate, setHolidayDate] = useState("");
@@ -550,6 +1148,7 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
   const [exclusionProfessionalId, setExclusionProfessionalId] = useState("");
   const [exclusionPayerId, setExclusionPayerId] = useState("");
   const [savingExclusion, setSavingExclusion] = useState(false);
+  const [actionError, setActionError] = useState<string>();
 
   useEffect(() => {
     if (!siteId && sites.items[0]) setSiteId(sites.items[0].id);
@@ -575,8 +1174,9 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
   const typeById = new Map(appointmentTypes.items.map((type) => [type.id, type.name]));
 
   const add = async () => {
-    if (!siteId || !professionalId || !appointmentTypeId) return;
+    if (!canCreate) return;
     setSaving(true);
+    setActionError(undefined);
     try {
       await api.post(rulesPath, {
         siteId,
@@ -586,28 +1186,38 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
         startsAt,
         endsAt,
         slotDurationMin: Number(slotDurationMin),
-        capacity: Number(capacity)
+        capacity: Number(capacity),
+        effectiveFrom: effectiveFrom || undefined,
+        effectiveTo: effectiveTo || undefined
       });
       rules.reload();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
   };
 
   const addBlock = async () => {
-    if (!blockReason.trim()) return;
+    if (!blockReason.trim() || new Date(blockStartsAt).getTime() >= new Date(blockEndsAt).getTime()) return;
     setSavingBlock(true);
+    setActionError(undefined);
     try {
       await api.post(blocksPath, {
-        siteId: siteId || undefined,
-        professionalId: professionalId || undefined,
-        appointmentTypeId: appointmentTypeId || undefined,
+        siteId: blockSiteId || undefined,
+        professionalId: blockProfessionalId || undefined,
+        appointmentTypeId: blockAppointmentTypeId || undefined,
         startsAt: new Date(blockStartsAt).toISOString(),
         endsAt: new Date(blockEndsAt).toISOString(),
+        blockType,
         reason: blockReason
       });
       setBlockReason("");
       blocks.reload();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingBlock(false);
     }
@@ -616,10 +1226,14 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
   const addHoliday = async () => {
     if (!holidayDate || !holidayName.trim()) return;
     setSavingHoliday(true);
+    setActionError(undefined);
     try {
       await api.post(holidaysPath, { holidayDate, name: holidayName.trim() });
       setHolidayName("");
       holidays.reload();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingHoliday(false);
     }
@@ -628,394 +1242,769 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
   const addExclusion = async () => {
     if (!exclusionProfessionalId || !exclusionPayerId) return;
     setSavingExclusion(true);
+    setActionError(undefined);
     try {
       await api.post(exclusionsPath, {
         professionalId: exclusionProfessionalId,
         payerId: exclusionPayerId
       });
       exclusions.reload();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingExclusion(false);
     }
   };
 
   const loading =
-    rules.loading ||
-    blocks.loading ||
-    holidays.loading ||
-    exclusions.loading ||
-    sites.loading ||
-    professionals.loading ||
-    payers.loading ||
-    appointmentTypes.loading;
-  const error =
-    rules.error ??
-    blocks.error ??
-    holidays.error ??
-    exclusions.error ??
-    sites.error ??
-    professionals.error ??
-    payers.error ??
-    appointmentTypes.error;
-  const canCreate = canWrite && siteId && professionalId && appointmentTypeId;
+    section === "holidays"
+      ? holidays.loading
+      : section === "exclusions"
+        ? exclusions.loading || professionals.loading || payers.loading
+        : section === "blocks"
+          ? blocks.loading || sites.loading || professionals.loading || appointmentTypes.loading
+          : rules.loading || sites.loading || professionals.loading || appointmentTypes.loading;
+  const catalogError =
+    section === "holidays"
+      ? holidays.error
+      : section === "exclusions"
+        ? (exclusions.error ?? professionals.error ?? payers.error)
+        : section === "blocks"
+          ? (blocks.error ?? sites.error ?? professionals.error ?? appointmentTypes.error)
+          : (rules.error ?? sites.error ?? professionals.error ?? appointmentTypes.error);
+  const error = actionError ?? catalogError;
+  const selectedAppointmentType = appointmentTypes.items.find((item) => item.id === appointmentTypeId);
+  const validTimeRange = startsAt < endsAt;
+  const validDuration = Number(slotDurationMin) >= (selectedAppointmentType?.durationMin ?? 1);
+  const validEffectiveRange = !effectiveFrom || !effectiveTo || effectiveFrom <= effectiveTo;
+  const validBlockRange = new Date(blockStartsAt).getTime() < new Date(blockEndsAt).getTime();
+  const canCreate =
+    canWrite &&
+    Boolean(siteId && professionalId && appointmentTypeId) &&
+    validTimeRange &&
+    validDuration &&
+    validEffectiveRange &&
+    Number(capacity) > 0;
+  const ruleValidation = !validTimeRange
+    ? "La hora final debe ser posterior a la inicial."
+    : !validDuration
+      ? `La duracion debe ser al menos ${selectedAppointmentType?.durationMin ?? 1} minutos para este tipo de cita.`
+      : !validEffectiveRange
+        ? "La vigencia final debe ser posterior a la inicial."
+        : undefined;
+
+  return (
+    <div className="col" style={{ gap: 16 }}>
+      {section === "rules" ? (
+        <Card>
+          <CardHead
+            title={`Reglas de disponibilidad (${rules.items.length})`}
+            icon={<CalendarClock size={18} />}
+            trailing={<ReloadButton onClick={rules.reload} />}
+          />
+          {canWrite ? (
+            <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+              <select className="select" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+                {sites.items.map((site) => (
+                  <option key={site.id} value={site.id}>
+                    {site.name}
+                  </option>
+                ))}
+              </select>
+              <select className="select" value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
+                {professionals.items.map((professional) => (
+                  <option key={professional.id} value={professional.id}>
+                    {professional.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="select"
+                value={appointmentTypeId}
+                onChange={(e) => setAppointmentTypeId(e.target.value)}
+              >
+                {appointmentTypes.items.map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.name}
+                  </option>
+                ))}
+              </select>
+              <select className="select" value={weekday} onChange={(e) => setWeekday(e.target.value)}>
+                {WEEKDAYS.map((day) => (
+                  <option key={day.value} value={day.value}>
+                    {day.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input"
+                type="time"
+                value={startsAt}
+                onChange={(e) => setStartsAt(e.target.value)}
+                style={{ maxWidth: 112 }}
+              />
+              <input
+                className="input"
+                type="time"
+                value={endsAt}
+                onChange={(e) => setEndsAt(e.target.value)}
+                style={{ maxWidth: 112 }}
+              />
+              <input
+                className="input"
+                type="number"
+                min={5}
+                value={slotDurationMin}
+                onChange={(e) => setSlotDurationMin(e.target.value)}
+                style={{ maxWidth: 92 }}
+              />
+              <input
+                className="input"
+                type="number"
+                min={1}
+                value={capacity}
+                onChange={(e) => setCapacity(e.target.value)}
+                style={{ maxWidth: 92 }}
+              />
+              <label className="inline-field">
+                <span>Vigente desde</span>
+                <input
+                  className="input"
+                  type="date"
+                  value={effectiveFrom}
+                  onChange={(event) => setEffectiveFrom(event.target.value)}
+                />
+              </label>
+              <label className="inline-field">
+                <span>Hasta</span>
+                <input
+                  className="input"
+                  type="date"
+                  value={effectiveTo}
+                  min={effectiveFrom || undefined}
+                  onChange={(event) => setEffectiveTo(event.target.value)}
+                />
+              </label>
+              <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving || !canCreate}>
+                <Plus size={15} /> Agregar
+              </button>
+            </div>
+          ) : null}
+          {canWrite && ruleValidation ? <div className="form-warning">{ruleValidation}</div> : null}
+          {loading ? (
+            <LoadingState />
+          ) : error ? (
+            <div className="banner">{error}</div>
+          ) : rules.items.length === 0 ? (
+            <EmptyState label="Sin reglas de disponibilidad" />
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Dia</th>
+                  <th>Horario</th>
+                  <th>Sede</th>
+                  <th>Profesional</th>
+                  <th>Tipo de cita</th>
+                  <th>Capacidad</th>
+                  <th>Estado</th>
+                  {canWrite ? <th>Acciones</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {rules.items.map((rule) => (
+                  <tr key={rule.id}>
+                    <td className="small">{weekdayLabel(rule.weekday)}</td>
+                    <td>
+                      <strong className="small">
+                        {shortTime(rule.startsAt)} - {shortTime(rule.endsAt)}
+                      </strong>
+                      <div className="tiny muted">{rule.slotDurationMin} min por slot</div>
+                      <div className="tiny muted">
+                        {rule.effectiveFrom ?? "Sin inicio"} / {rule.effectiveTo ?? "Sin fin"}
+                      </div>
+                    </td>
+                    <td className="small muted">{siteById.get(rule.siteId) ?? rule.siteId}</td>
+                    <td className="small muted">{professionalById.get(rule.professionalId) ?? rule.professionalId}</td>
+                    <td className="small muted">{typeById.get(rule.appointmentTypeId) ?? rule.appointmentTypeId}</td>
+                    <td className="small muted">{rule.capacity}</td>
+                    <td>
+                      <Pill tone={rule.status === "active" ? "green" : "amber"}>{rule.status}</Pill>
+                    </td>
+                    {canWrite ? (
+                      <td>
+                        <StatusToggle path={rulesPath} id={rule.id} status={rule.status} onDone={rules.reload} />
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      ) : null}
+
+      {section === "blocks" ? (
+        <Card>
+          <CardHead
+            title={`Bloqueos de agenda (${blocks.items.length})`}
+            trailing={<ReloadButton onClick={blocks.reload} />}
+          />
+          {canWrite ? (
+            <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+              <input
+                className="input"
+                type="datetime-local"
+                value={blockStartsAt}
+                onChange={(e) => setBlockStartsAt(e.target.value)}
+                style={{ maxWidth: 190 }}
+              />
+              <select
+                className="select"
+                value={blockType}
+                onChange={(event) => setBlockType(event.target.value as typeof blockType)}
+                aria-label="Tipo de bloqueo"
+              >
+                <option value="block">Bloqueo</option>
+                <option value="absence">Ausencia</option>
+                <option value="vacation">Vacaciones</option>
+              </select>
+              <select
+                className="select"
+                value={blockSiteId}
+                onChange={(event) => setBlockSiteId(event.target.value)}
+                aria-label="Sede del bloqueo"
+              >
+                <option value="">Todas las sedes</option>
+                {sites.items.map((site) => (
+                  <option key={site.id} value={site.id}>
+                    {site.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="select"
+                value={blockProfessionalId}
+                onChange={(event) => setBlockProfessionalId(event.target.value)}
+                aria-label="Profesional del bloqueo"
+              >
+                <option value="">Todos los profesionales</option>
+                {professionals.items.map((professional) => (
+                  <option key={professional.id} value={professional.id}>
+                    {professional.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="select"
+                value={blockAppointmentTypeId}
+                onChange={(event) => setBlockAppointmentTypeId(event.target.value)}
+                aria-label="Tipo de cita del bloqueo"
+              >
+                <option value="">Todos los tipos de cita</option>
+                {appointmentTypes.items.map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input"
+                type="datetime-local"
+                value={blockEndsAt}
+                onChange={(e) => setBlockEndsAt(e.target.value)}
+                style={{ maxWidth: 190 }}
+              />
+              <input
+                className="input"
+                placeholder="Motivo"
+                value={blockReason}
+                onChange={(e) => setBlockReason(e.target.value)}
+                style={{ maxWidth: 260 }}
+              />
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                onClick={addBlock}
+                disabled={savingBlock || !validBlockRange || !blockReason.trim()}
+              >
+                <Plus size={15} /> Bloquear
+              </button>
+            </div>
+          ) : null}
+          {canWrite && !validBlockRange ? (
+            <div className="form-warning">La fecha final debe ser posterior a la inicial.</div>
+          ) : null}
+          {loading ? (
+            <LoadingState />
+          ) : error ? (
+            <div className="banner">{error}</div>
+          ) : blocks.items.length === 0 ? (
+            <EmptyState label="Sin bloqueos de agenda" />
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Franja</th>
+                  <th>Tipo</th>
+                  <th>Motivo</th>
+                  <th>Sede</th>
+                  <th>Profesional</th>
+                  <th>Tipo de cita</th>
+                  <th>Estado</th>
+                  {canWrite ? <th>Acciones</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {blocks.items.map((block) => (
+                  <tr key={block.id}>
+                    <td>
+                      <strong className="small">{formatBlockRange(block.startsAt, block.endsAt)}</strong>
+                    </td>
+                    <td className="small muted">{blockTypeLabel(block.blockType)}</td>
+                    <td className="small muted">{block.reason}</td>
+                    <td className="small muted">
+                      {block.siteId ? (siteById.get(block.siteId) ?? block.siteId) : "Todas"}
+                    </td>
+                    <td className="small muted">
+                      {block.professionalId
+                        ? (professionalById.get(block.professionalId) ?? block.professionalId)
+                        : "Todos"}
+                    </td>
+                    <td className="small muted">
+                      {block.appointmentTypeId
+                        ? (typeById.get(block.appointmentTypeId) ?? block.appointmentTypeId)
+                        : "Todos"}
+                    </td>
+                    <td>
+                      <Pill tone={block.status === "active" ? "green" : "amber"}>{block.status}</Pill>
+                    </td>
+                    {canWrite ? (
+                      <td>
+                        <BlockStatusToggle path={blocksPath} block={block} onDone={blocks.reload} />
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      ) : null}
+
+      {section === "holidays" ? (
+        <Card>
+          <CardHead
+            title={`Festivos (${holidays.items.length})`}
+            trailing={<ReloadButton onClick={holidays.reload} />}
+          />
+          {canWrite ? (
+            <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+              <input
+                className="input"
+                type="date"
+                value={holidayDate}
+                onChange={(e) => setHolidayDate(e.target.value)}
+                style={{ maxWidth: 160 }}
+              />
+              <input
+                className="input"
+                placeholder="Nombre del festivo"
+                value={holidayName}
+                onChange={(e) => setHolidayName(e.target.value)}
+                style={{ maxWidth: 260 }}
+              />
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                onClick={addHoliday}
+                disabled={savingHoliday || !holidayDate || !holidayName.trim()}
+              >
+                <Plus size={15} /> Agregar
+              </button>
+            </div>
+          ) : null}
+          {loading ? (
+            <LoadingState />
+          ) : error ? (
+            <div className="banner">{error}</div>
+          ) : holidays.items.length === 0 ? (
+            <EmptyState label="Sin festivos configurados" />
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Nombre</th>
+                  <th>Estado</th>
+                  {canWrite ? <th>Acciones</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {holidays.items.map((holiday) => (
+                  <tr key={holiday.id}>
+                    <td className="small">{holiday.holidayDate}</td>
+                    <td className="small muted">{holiday.name}</td>
+                    <td>
+                      <Pill tone={holiday.status === "active" ? "green" : "amber"}>{holiday.status}</Pill>
+                    </td>
+                    {canWrite ? (
+                      <td>
+                        <StatusToggle
+                          path={holidaysPath}
+                          id={holiday.id}
+                          status={holiday.status}
+                          onDone={holidays.reload}
+                        />
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      ) : null}
+
+      {section === "exclusions" ? (
+        <Card>
+          <CardHead
+            title={`Exclusiones por convenio (${exclusions.items.length})`}
+            trailing={<ReloadButton onClick={exclusions.reload} />}
+          />
+          {canWrite ? (
+            <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+              <select
+                className="select"
+                value={exclusionProfessionalId}
+                onChange={(e) => setExclusionProfessionalId(e.target.value)}
+              >
+                {professionals.items.map((professional) => (
+                  <option key={professional.id} value={professional.id}>
+                    {professional.name}
+                  </option>
+                ))}
+              </select>
+              <select className="select" value={exclusionPayerId} onChange={(e) => setExclusionPayerId(e.target.value)}>
+                {payers.items.map((payer) => (
+                  <option key={payer.id} value={payer.id}>
+                    {payer.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                onClick={addExclusion}
+                disabled={savingExclusion || !exclusionProfessionalId || !exclusionPayerId}
+              >
+                <Plus size={15} /> Excluir
+              </button>
+            </div>
+          ) : null}
+          {loading ? (
+            <LoadingState />
+          ) : error ? (
+            <div className="banner">{error}</div>
+          ) : exclusions.items.length === 0 ? (
+            <EmptyState label="Sin exclusiones por convenio" />
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Profesional</th>
+                  <th>Convenio</th>
+                  <th>Estado</th>
+                  {canWrite ? <th>Acciones</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {exclusions.items.map((exclusion) => (
+                  <tr key={exclusion.id}>
+                    <td className="small muted">
+                      {professionalById.get(exclusion.professionalId) ?? exclusion.professionalId}
+                    </td>
+                    <td className="small muted">{payerById.get(exclusion.payerId) ?? exclusion.payerId}</td>
+                    <td>
+                      <Pill tone={exclusion.status === "active" ? "green" : "amber"}>{exclusion.status}</Pill>
+                    </td>
+                    {canWrite ? (
+                      <td>
+                        <StatusToggle
+                          path={exclusionsPath}
+                          id={exclusion.id}
+                          status={exclusion.status}
+                          onDone={exclusions.reload}
+                        />
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      ) : null}
+    </div>
+  );
+}
+
+type ImportResource =
+  | "professionals"
+  | "professional-sites"
+  | "professional-appointment-types"
+  | "availability-rules"
+  | "payer-exclusions"
+  | "agenda-blocks";
+
+const IMPORT_RESOURCES: Array<{ id: ImportResource; label: string }> = [
+  { id: "professionals", label: "Profesionales" },
+  { id: "professional-sites", label: "Profesional - sede" },
+  { id: "professional-appointment-types", label: "Tipos por profesional" },
+  { id: "availability-rules", label: "Horarios" },
+  { id: "payer-exclusions", label: "Exclusiones por convenio" },
+  { id: "agenda-blocks", label: "Bloqueos" }
+];
+
+function ImportExportTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
+  const { logout } = useConsole();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [resource, setResource] = useState<ImportResource>("professionals");
+  const [csv, setCsv] = useState("");
+  const [filename, setFilename] = useState("");
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [preview, setPreview] = useState<ImportPreview>();
+  const [busy, setBusy] = useState<"template" | "export" | "preview" | "apply">();
+  const [error, setError] = useState<string>();
+  const [result, setResult] = useState<string>();
+
+  const resetFile = (nextResource = resource) => {
+    setResource(nextResource);
+    setCsv("");
+    setFilename("");
+    setPreview(undefined);
+    setResult(undefined);
+    setError(undefined);
+    setIdempotencyKey(crypto.randomUUID());
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const download = async (kind: "template" | "export") => {
+    setBusy(kind);
+    setError(undefined);
+    try {
+      const suffix = kind === "template" ? `config/import/${resource}/template` : `config/export/${resource}`;
+      const value = await api.text(tenantPath(tenantId, suffix));
+      downloadCsv(value.content, value.filename ?? `${resource}-${kind}.csv`);
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const selectFile = async (file: File | undefined) => {
+    setPreview(undefined);
+    setResult(undefined);
+    setError(undefined);
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setError("Selecciona un archivo CSV.");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setError("El archivo supera el limite de 2 MB.");
+      return;
+    }
+    setFilename(file.name);
+    setCsv(await file.text());
+    setIdempotencyKey(crypto.randomUUID());
+  };
+
+  const runPreview = async () => {
+    if (!csv) return;
+    setBusy("preview");
+    setError(undefined);
+    setResult(undefined);
+    try {
+      const value = await api.post<unknown>(tenantPath(tenantId, `config/import/${resource}/preview`), { csv });
+      setPreview(normalizeImportPreview(value));
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const apply = async () => {
+    if (!csv || !preview || preview.accepted === 0) return;
+    setBusy("apply");
+    setError(undefined);
+    try {
+      const value = await api.post<{ applied: number; idempotent: boolean }>(
+        tenantPath(tenantId, `config/import/${resource}/apply`),
+        { csv, idempotencyKey }
+      );
+      setResult(
+        value.idempotent
+          ? "La importacion ya habia sido aplicada; no se duplicaron registros."
+          : `${value.applied} filas aplicadas correctamente.`
+      );
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(undefined);
+    }
+  };
 
   return (
     <div className="col" style={{ gap: 16 }}>
       <Card>
-        <CardHead
-          title={`Reglas de disponibilidad (${rules.items.length})`}
-          icon={<CalendarClock size={18} />}
-          trailing={<ReloadButton onClick={rules.reload} />}
-        />
-        {canWrite ? (
-          <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
-            <select className="select" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
-              {sites.items.map((site) => (
-                <option key={site.id} value={site.id}>
-                  {site.name}
-                </option>
-              ))}
-            </select>
-            <select className="select" value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
-              {professionals.items.map((professional) => (
-                <option key={professional.id} value={professional.id}>
-                  {professional.name}
-                </option>
-              ))}
-            </select>
-            <select className="select" value={appointmentTypeId} onChange={(e) => setAppointmentTypeId(e.target.value)}>
-              {appointmentTypes.items.map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.name}
-                </option>
-              ))}
-            </select>
-            <select className="select" value={weekday} onChange={(e) => setWeekday(e.target.value)}>
-              {WEEKDAYS.map((day) => (
-                <option key={day.value} value={day.value}>
-                  {day.label}
-                </option>
-              ))}
-            </select>
-            <input
-              className="input"
-              type="time"
-              value={startsAt}
-              onChange={(e) => setStartsAt(e.target.value)}
-              style={{ maxWidth: 112 }}
-            />
-            <input
-              className="input"
-              type="time"
-              value={endsAt}
-              onChange={(e) => setEndsAt(e.target.value)}
-              style={{ maxWidth: 112 }}
-            />
-            <input
-              className="input"
-              type="number"
-              min={5}
-              value={slotDurationMin}
-              onChange={(e) => setSlotDurationMin(e.target.value)}
-              style={{ maxWidth: 92 }}
-            />
-            <input
-              className="input"
-              type="number"
-              min={1}
-              value={capacity}
-              onChange={(e) => setCapacity(e.target.value)}
-              style={{ maxWidth: 92 }}
-            />
-            <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving || !canCreate}>
-              <Plus size={15} /> Agregar
-            </button>
-          </div>
-        ) : null}
-        {loading ? (
-          <LoadingState />
-        ) : error ? (
-          <div className="banner">{error}</div>
-        ) : rules.items.length === 0 ? (
-          <EmptyState label="Sin reglas de disponibilidad" />
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Dia</th>
-                <th>Horario</th>
-                <th>Sede</th>
-                <th>Profesional</th>
-                <th>Tipo de cita</th>
-                <th>Capacidad</th>
-                <th>Estado</th>
-                {canWrite ? <th>Acciones</th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {rules.items.map((rule) => (
-                <tr key={rule.id}>
-                  <td className="small">{weekdayLabel(rule.weekday)}</td>
-                  <td>
-                    <strong className="small">
-                      {shortTime(rule.startsAt)} - {shortTime(rule.endsAt)}
-                    </strong>
-                    <div className="tiny muted">{rule.slotDurationMin} min por slot</div>
-                  </td>
-                  <td className="small muted">{siteById.get(rule.siteId) ?? rule.siteId}</td>
-                  <td className="small muted">{professionalById.get(rule.professionalId) ?? rule.professionalId}</td>
-                  <td className="small muted">{typeById.get(rule.appointmentTypeId) ?? rule.appointmentTypeId}</td>
-                  <td className="small muted">{rule.capacity}</td>
-                  <td>
-                    <Pill tone={rule.status === "active" ? "green" : "amber"}>{rule.status}</Pill>
-                  </td>
-                  {canWrite ? (
-                    <td>
-                      <StatusToggle path={rulesPath} id={rule.id} status={rule.status} onDone={rules.reload} />
-                    </td>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
-
-      <Card>
-        <CardHead
-          title={`Bloqueos de agenda (${blocks.items.length})`}
-          trailing={<ReloadButton onClick={blocks.reload} />}
-        />
-        {canWrite ? (
-          <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
-            <input
-              className="input"
-              type="datetime-local"
-              value={blockStartsAt}
-              onChange={(e) => setBlockStartsAt(e.target.value)}
-              style={{ maxWidth: 190 }}
-            />
-            <input
-              className="input"
-              type="datetime-local"
-              value={blockEndsAt}
-              onChange={(e) => setBlockEndsAt(e.target.value)}
-              style={{ maxWidth: 190 }}
-            />
-            <input
-              className="input"
-              placeholder="Motivo"
-              value={blockReason}
-              onChange={(e) => setBlockReason(e.target.value)}
-              style={{ maxWidth: 260 }}
-            />
-            <button className="btn btn-primary btn-sm" type="button" onClick={addBlock} disabled={savingBlock}>
-              <Plus size={15} /> Bloquear
-            </button>
-          </div>
-        ) : null}
-        {loading ? (
-          <LoadingState />
-        ) : error ? (
-          <div className="banner">{error}</div>
-        ) : blocks.items.length === 0 ? (
-          <EmptyState label="Sin bloqueos de agenda" />
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Franja</th>
-                <th>Motivo</th>
-                <th>Sede</th>
-                <th>Profesional</th>
-                <th>Tipo de cita</th>
-                <th>Estado</th>
-                {canWrite ? <th>Acciones</th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {blocks.items.map((block) => (
-                <tr key={block.id}>
-                  <td>
-                    <strong className="small">{formatBlockRange(block.startsAt, block.endsAt)}</strong>
-                  </td>
-                  <td className="small muted">{block.reason}</td>
-                  <td className="small muted">
-                    {block.siteId ? (siteById.get(block.siteId) ?? block.siteId) : "Todas"}
-                  </td>
-                  <td className="small muted">
-                    {block.professionalId
-                      ? (professionalById.get(block.professionalId) ?? block.professionalId)
-                      : "Todos"}
-                  </td>
-                  <td className="small muted">
-                    {block.appointmentTypeId
-                      ? (typeById.get(block.appointmentTypeId) ?? block.appointmentTypeId)
-                      : "Todos"}
-                  </td>
-                  <td>
-                    <Pill tone={block.status === "active" ? "green" : "amber"}>{block.status}</Pill>
-                  </td>
-                  {canWrite ? (
-                    <td>
-                      <BlockStatusToggle path={blocksPath} block={block} onDone={blocks.reload} />
-                    </td>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
-
-      <Card>
-        <CardHead title={`Festivos (${holidays.items.length})`} trailing={<ReloadButton onClick={holidays.reload} />} />
-        {canWrite ? (
-          <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
-            <input
-              className="input"
-              type="date"
-              value={holidayDate}
-              onChange={(e) => setHolidayDate(e.target.value)}
-              style={{ maxWidth: 160 }}
-            />
-            <input
-              className="input"
-              placeholder="Nombre del festivo"
-              value={holidayName}
-              onChange={(e) => setHolidayName(e.target.value)}
-              style={{ maxWidth: 260 }}
-            />
-            <button
-              className="btn btn-primary btn-sm"
-              type="button"
-              onClick={addHoliday}
-              disabled={savingHoliday || !holidayDate || !holidayName.trim()}
-            >
-              <Plus size={15} /> Agregar
-            </button>
-          </div>
-        ) : null}
-        {loading ? (
-          <LoadingState />
-        ) : error ? (
-          <div className="banner">{error}</div>
-        ) : holidays.items.length === 0 ? (
-          <EmptyState label="Sin festivos configurados" />
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Fecha</th>
-                <th>Nombre</th>
-                <th>Estado</th>
-                {canWrite ? <th>Acciones</th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {holidays.items.map((holiday) => (
-                <tr key={holiday.id}>
-                  <td className="small">{holiday.holidayDate}</td>
-                  <td className="small muted">{holiday.name}</td>
-                  <td>
-                    <Pill tone={holiday.status === "active" ? "green" : "amber"}>{holiday.status}</Pill>
-                  </td>
-                  {canWrite ? (
-                    <td>
-                      <StatusToggle
-                        path={holidaysPath}
-                        id={holiday.id}
-                        status={holiday.status}
-                        onDone={holidays.reload}
-                      />
-                    </td>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
-
-      <Card>
-        <CardHead
-          title={`Exclusiones por convenio (${exclusions.items.length})`}
-          trailing={<ReloadButton onClick={exclusions.reload} />}
-        />
-        {canWrite ? (
-          <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+        <CardHead title="Importar configuracion CSV" icon={<FileSpreadsheet size={18} />} />
+        <div className="card-pad import-toolbar">
+          <label className="field">
+            <span>Tipo de configuracion</span>
             <select
               className="select"
-              value={exclusionProfessionalId}
-              onChange={(e) => setExclusionProfessionalId(e.target.value)}
+              value={resource}
+              onChange={(event) => resetFile(event.target.value as ImportResource)}
             >
-              {professionals.items.map((professional) => (
-                <option key={professional.id} value={professional.id}>
-                  {professional.name}
+              {IMPORT_RESOURCES.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
                 </option>
               ))}
             </select>
-            <select className="select" value={exclusionPayerId} onChange={(e) => setExclusionPayerId(e.target.value)}>
-              {payers.items.map((payer) => (
-                <option key={payer.id} value={payer.id}>
-                  {payer.name}
-                </option>
-              ))}
-            </select>
+          </label>
+          <button
+            className="btn btn-outline"
+            type="button"
+            onClick={() => void download("template")}
+            disabled={busy === "template"}
+          >
+            <Download size={16} /> Plantilla CSV
+          </button>
+          <button
+            className="btn btn-outline"
+            type="button"
+            onClick={() => void download("export")}
+            disabled={busy === "export"}
+          >
+            <Download size={16} /> Exportar actual
+          </button>
+        </div>
+        {canWrite ? (
+          <div className="drop-row">
+            <input
+              ref={inputRef}
+              className="visually-hidden"
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(event) => void selectFile(event.target.files?.[0])}
+            />
+            <button className="btn btn-outline" type="button" onClick={() => inputRef.current?.click()}>
+              <Upload size={16} /> Seleccionar CSV
+            </button>
+            <div className="col" style={{ flex: 1, minWidth: 0 }}>
+              <strong className="small text-ellipsis">{filename || "Ningun archivo seleccionado"}</strong>
+              <span className="tiny muted">Vista previa obligatoria antes de aplicar</span>
+            </div>
             <button
-              className="btn btn-primary btn-sm"
+              className="btn btn-primary"
               type="button"
-              onClick={addExclusion}
-              disabled={savingExclusion || !exclusionProfessionalId || !exclusionPayerId}
+              onClick={() => void runPreview()}
+              disabled={!csv || busy === "preview"}
             >
-              <Plus size={15} /> Excluir
+              <FileSpreadsheet size={16} /> Validar
             </button>
           </div>
         ) : null}
-        {loading ? (
-          <LoadingState />
-        ) : error ? (
-          <div className="banner">{error}</div>
-        ) : exclusions.items.length === 0 ? (
-          <EmptyState label="Sin exclusiones por convenio" />
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Profesional</th>
-                <th>Convenio</th>
-                <th>Estado</th>
-                {canWrite ? <th>Acciones</th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {exclusions.items.map((exclusion) => (
-                <tr key={exclusion.id}>
-                  <td className="small muted">
-                    {professionalById.get(exclusion.professionalId) ?? exclusion.professionalId}
-                  </td>
-                  <td className="small muted">{payerById.get(exclusion.payerId) ?? exclusion.payerId}</td>
-                  <td>
-                    <Pill tone={exclusion.status === "active" ? "green" : "amber"}>{exclusion.status}</Pill>
-                  </td>
-                  {canWrite ? (
-                    <td>
-                      <StatusToggle
-                        path={exclusionsPath}
-                        id={exclusion.id}
-                        status={exclusion.status}
-                        onDone={exclusions.reload}
-                      />
-                    </td>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        {error ? <div className="banner">{error}</div> : null}
+        {result ? <div className="success-banner">{result}</div> : null}
       </Card>
+
+      {preview ? (
+        <Card>
+          <CardHead
+            title="Vista previa"
+            trailing={
+              <div className="row" style={{ flexWrap: "wrap" }}>
+                <Pill tone="green">{preview.accepted} aceptadas</Pill>
+                <Pill tone={preview.rejected > 0 ? "red" : "green"}>{preview.rejected} rechazadas</Pill>
+              </div>
+            }
+          />
+          {preview.rows.length === 0 ? (
+            <EmptyState label="El archivo no contiene filas de datos" />
+          ) : (
+            <div className="table-scroll">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Fila</th>
+                    <th>Resultado</th>
+                    <th>Detalle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.rows.map((row) => (
+                    <tr key={`${row.rowNumber}-${row.accepted ? "ok" : "error"}`}>
+                      <td className="small">{row.rowNumber}</td>
+                      <td>
+                        <Pill tone={row.accepted ? "green" : "red"}>{row.accepted ? "Aceptada" : "Rechazada"}</Pill>
+                      </td>
+                      <td className="small muted">{row.reason ?? summarizeImportValues(row.values)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {canWrite ? (
+            <div className="card-actions">
+              <span className="small muted">
+                La aplicacion es transaccional e idempotente. Solo se aplican filas validadas.
+              </span>
+              <button
+                className="btn btn-primary"
+                type="button"
+                onClick={() => void apply()}
+                disabled={preview.accepted === 0 || busy === "apply" || Boolean(result)}
+              >
+                <Upload size={16} /> Aplicar importacion
+              </button>
+            </div>
+          ) : null}
+        </Card>
+      ) : null}
     </div>
   );
+}
+
+function summarizeImportValues(values?: Record<string, unknown>): string {
+  if (!values) return "Fila valida";
+  const ignored = new Set(["accepted", "row", "rowNumber", "values"]);
+  const parts = Object.entries(values)
+    .filter(([key, value]) => !ignored.has(key) && value != null && typeof value !== "object")
+    .slice(0, 4)
+    .map(([key, value]) => `${key}: ${String(value)}`);
+  return parts.join(" · ") || "Fila valida";
+}
+
+function downloadCsv(content: string, filename: string) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function OperatorsTab() {
@@ -1237,6 +2226,12 @@ function BlockStatusToggle({ path, block, onDone }: { path: string; block: Pulso
 
 function weekdayLabel(value: number): string {
   return WEEKDAYS.find((day) => day.value === value)?.label ?? String(value);
+}
+
+function blockTypeLabel(value: "block" | "absence" | "vacation"): string {
+  if (value === "absence") return "Ausencia";
+  if (value === "vacation") return "Vacaciones";
+  return "Bloqueo";
 }
 
 function shortTime(value: string): string {
