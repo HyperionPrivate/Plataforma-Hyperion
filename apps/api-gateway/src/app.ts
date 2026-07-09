@@ -24,6 +24,12 @@ interface DownstreamService {
 
 export type SessionResolver = (token: string) => Promise<AuthMe | undefined>;
 
+declare module "fastify" {
+  interface FastifyRequest {
+    session?: AuthMe;
+  }
+}
+
 const UPSTREAM_TIMEOUT_MS = 2_500;
 const HEALTH_CACHE_TTL_MS = 5_000;
 const SESSION_CACHE_TTL_MS = 30_000;
@@ -51,6 +57,8 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
       if (!session) {
         return reply.code(401).send(envelope({ error: "Invalid or expired session" }, request.id));
       }
+
+      request.session = session;
 
       const tenantMatch = path.match(/^\/v1\/tenants\/([^/]+)\//);
       if (tenantMatch) {
@@ -96,26 +104,61 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
       return proxyGet(request, reply, `${urls.pulsoIris}/v1/pulso-iris/catalog`);
     });
 
-    const tenantProxyRoutes = [
-      { path: "/v1/tenants/:tenantId/pulso-iris/overview", suffix: "overview" },
-      { path: "/v1/tenants/:tenantId/pulso-iris/conversations", suffix: "conversations" },
-      { path: "/v1/tenants/:tenantId/pulso-iris/appointments", suffix: "appointments" },
-      { path: "/v1/tenants/:tenantId/pulso-iris/handoffs", suffix: "handoffs" },
-      { path: "/v1/tenants/:tenantId/pulso-iris/rpa/actions", suffix: "rpa/actions" }
-    ] as const;
+    app.get("/v1/tenants", async (request, reply) => {
+      try {
+        const response = await fetch(`${urls.tenant}/v1/tenants`, {
+          headers: { "x-request-id": request.id },
+          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+        });
+        const payload = (await response.json()) as { data?: unknown };
+        if (!response.ok) {
+          return reply.code(response.status).send(payload);
+        }
 
-    for (const route of tenantProxyRoutes) {
-      app.get(route.path, async (request, reply) => {
-        const params = request.params as { tenantId?: unknown };
+        const rows = Array.isArray(payload.data) ? payload.data : [];
+        const session = request.session;
+        const visible =
+          session && session.operator.role !== "admin"
+            ? rows.filter(
+                (row) =>
+                  typeof row === "object" &&
+                  row !== null &&
+                  session.tenantIds.includes(String((row as { id?: unknown }).id))
+              )
+            : rows;
+
+        return envelope(visible, request.id);
+      } catch {
+        return reply.code(502).send(envelope({ error: "Upstream service unavailable" }, request.id));
+      }
+    });
+
+    // Proxy generico de PULSO IRIS: la validacion de tenant y la membresia
+    // operador-tenant ya ocurrieron en el preHandler.
+    app.route({
+      method: ["GET", "POST", "PATCH"],
+      url: "/v1/tenants/:tenantId/pulso-iris/*",
+      handler: async (request, reply) => {
+        const params = request.params as { tenantId?: unknown; "*"?: string };
         const tenantId = tenantIdSchema.safeParse(params.tenantId);
         if (!tenantId.success) {
           return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
         }
 
-        const target = `${urls.pulsoIris}/v1/tenants/${encodeURIComponent(tenantId.data)}/pulso-iris/${route.suffix}`;
-        return proxyGet(request, reply, target);
-      });
-    }
+        const suffix = params["*"] ?? "";
+        if (suffix.includes("..") || suffix.includes("//")) {
+          return reply.code(400).send(envelope({ error: "Invalid path" }, request.id));
+        }
+
+        const query = (request.raw.url ?? "").split("?")[1];
+        const target = `${urls.pulsoIris}/v1/tenants/${encodeURIComponent(tenantId.data)}/pulso-iris/${suffix}${
+          query ? `?${query}` : ""
+        }`;
+
+        const method = request.method as "GET" | "POST" | "PATCH";
+        return proxyJson(request, reply, target, method, method === "GET" ? undefined : request.body);
+      }
+    });
 
     app.get("/v1/platform/health", async () => {
       const now = Date.now();
@@ -219,7 +262,7 @@ async function proxyJson(
   request: FastifyRequest,
   reply: FastifyReply,
   url: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH",
   body?: unknown
 ): Promise<unknown> {
   try {

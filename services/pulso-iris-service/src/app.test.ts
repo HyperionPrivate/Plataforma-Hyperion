@@ -64,4 +64,23 @@ describe("pulso-iris-service routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().status).toBe("down");
   });
+
+  it("validates the tenant on config routes", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tenants/no-uuid/pulso-iris/config/sites"
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("returns 503 for config writes when the database is not configured", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/professionals`,
+      payload: { name: "Dra. Prueba", professionalType: "optometrist" }
+    });
+
+    expect(response.statusCode).toBe(503);
+  });
 });

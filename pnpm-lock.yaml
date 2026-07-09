@@ -212,6 +212,12 @@ importers:
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
+      fastify:
+        specifier: ^5.2.1
+        version: 5.10.0
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
 
   services/tenant-service:
     dependencies:

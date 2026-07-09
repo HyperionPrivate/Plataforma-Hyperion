@@ -196,30 +196,107 @@ export const pulsoIrisHandoffSchema = z.object({
   updatedAt: isoDateTime
 });
 
+const catalogStatusSchema = z.enum(["active", "paused"]);
+
 export const pulsoIrisSiteSchema = z.object({
   id: z.string().uuid(),
   tenantId: z.string().uuid(),
   name: z.string().min(1),
-  city: z.string().min(1).optional(),
-  status: z.enum(["active", "paused"]).default("active")
+  city: optionalFromNull(z.string().min(1)),
+  address: optionalFromNull(z.string().min(1)),
+  phone: optionalFromNull(z.string().min(1)),
+  status: catalogStatusSchema.default("active"),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
 });
+
+export const pulsoIrisSiteInputSchema = z.object({
+  name: z.string().min(2),
+  city: z.string().min(2).optional(),
+  address: z.string().min(2).optional(),
+  phone: z.string().min(5).optional(),
+  status: catalogStatusSchema.optional()
+});
+
+export const pulsoIrisProfessionalTypeSchema = z.enum(["ophthalmologist", "optometrist"]);
 
 export const pulsoIrisProfessionalSchema = z.object({
   id: z.string().uuid(),
   tenantId: z.string().uuid(),
   name: z.string().min(1),
-  professionalType: z.enum(["ophthalmologist", "optometrist"]),
-  status: z.enum(["active", "paused"]).default("active")
+  professionalType: pulsoIrisProfessionalTypeSchema,
+  subspecialty: optionalFromNull(z.string().min(1)),
+  status: catalogStatusSchema.default("active"),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
 });
+
+export const pulsoIrisProfessionalInputSchema = z.object({
+  name: z.string().min(2),
+  professionalType: pulsoIrisProfessionalTypeSchema,
+  subspecialty: z.string().min(2).optional(),
+  status: catalogStatusSchema.optional()
+});
+
+export const pulsoIrisPayerGroupSchema = z.enum(["eps", "private_prepaid", "policy", "particular", "other"]);
 
 export const pulsoIrisPayerSchema = z.object({
   id: z.string().uuid(),
   tenantId: z.string().uuid(),
   name: z.string().min(1),
-  group: z.enum(["eps", "private_prepaid", "policy", "particular", "other"]),
+  group: pulsoIrisPayerGroupSchema,
   requiresAuthorization: z.boolean().default(false),
-  status: z.enum(["active", "paused"]).default("active")
+  status: catalogStatusSchema.default("active"),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
 });
+
+export const pulsoIrisPayerInputSchema = z.object({
+  name: z.string().min(2),
+  group: pulsoIrisPayerGroupSchema,
+  requiresAuthorization: z.boolean().optional(),
+  status: catalogStatusSchema.optional()
+});
+
+export const pulsoIrisAppointmentTypeCategorySchema = z.enum(["consulta", "ayuda_dx", "valoracion_qx", "control_post"]);
+
+export const pulsoIrisAppointmentTypeSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  name: z.string().min(1),
+  category: pulsoIrisAppointmentTypeCategorySchema,
+  durationMin: z.number().int().positive(),
+  preparationText: optionalFromNull(z.string().min(1)),
+  bookableByIa: z.boolean(),
+  slotPriority: z.number().int().nonnegative(),
+  status: catalogStatusSchema.default("active"),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisAppointmentTypeInputSchema = z.object({
+  name: z.string().min(2),
+  category: pulsoIrisAppointmentTypeCategorySchema,
+  durationMin: z.number().int().positive().optional(),
+  preparationText: z.string().min(2).optional(),
+  bookableByIa: z.boolean().optional(),
+  slotPriority: z.number().int().nonnegative().optional(),
+  status: catalogStatusSchema.optional()
+});
+
+export const pulsoIrisSiteListSchema = z.array(pulsoIrisSiteSchema);
+export const pulsoIrisProfessionalListSchema = z.array(pulsoIrisProfessionalSchema);
+export const pulsoIrisPayerListSchema = z.array(pulsoIrisPayerSchema);
+export const pulsoIrisAppointmentTypeListSchema = z.array(pulsoIrisAppointmentTypeSchema);
+
+export type PulsoIrisSite = z.infer<typeof pulsoIrisSiteSchema>;
+export type PulsoIrisSiteInput = z.infer<typeof pulsoIrisSiteInputSchema>;
+export type PulsoIrisProfessional = z.infer<typeof pulsoIrisProfessionalSchema>;
+export type PulsoIrisProfessionalInput = z.infer<typeof pulsoIrisProfessionalInputSchema>;
+export type PulsoIrisPayer = z.infer<typeof pulsoIrisPayerSchema>;
+export type PulsoIrisPayerInput = z.infer<typeof pulsoIrisPayerInputSchema>;
+export type PulsoIrisAppointmentType = z.infer<typeof pulsoIrisAppointmentTypeSchema>;
+export type PulsoIrisAppointmentTypeInput = z.infer<typeof pulsoIrisAppointmentTypeInputSchema>;
 
 export const pulsoIrisConversationListSchema = z.array(pulsoIrisConversationSchema);
 export const pulsoIrisAppointmentListSchema = z.array(pulsoIrisAppointmentSchema);

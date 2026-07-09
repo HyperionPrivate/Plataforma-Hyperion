@@ -96,6 +96,39 @@ describe("api-gateway authentication", () => {
     // Authorization passed; upstream is not running in tests.
     expect(response.statusCode).toBe(502);
   });
+
+  it("proxies write methods through the generic pulso-iris route", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/sites`,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      payload: { name: "Sede de prueba" }
+    });
+
+    // Authorization and routing passed; upstream is not running in tests.
+    expect(response.statusCode).toBe(502);
+  });
+
+  it("rejects path traversal in the proxied suffix", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/..%2Fadmin`,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("lists tenants through the gateway", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tenants",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+    });
+
+    // Tenant service is not running in tests.
+    expect(response.statusCode).toBe(502);
+  });
 });
 
 describe("api-gateway routes", () => {

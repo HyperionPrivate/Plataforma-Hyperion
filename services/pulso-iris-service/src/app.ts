@@ -7,15 +7,18 @@
   pulsoIrisHandoffListSchema,
   pulsoIrisOperationalKpisSchema,
   pulsoIrisProductCode,
-  pulsoIrisRpaActionListSchema,
-  tenantIdSchema
+  pulsoIrisRpaActionListSchema
 } from "@hyperion/contracts";
 import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import { registerConfigRoutes } from "./config-routes.js";
+import { readTenantId } from "./shared.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   if (context.db) {
     await verifyPulsoIrisSchema(context);
   }
+
+  await registerConfigRoutes(app, context);
 
   app.get("/v1/pulso-iris/health", async (request) => {
     return envelope(
@@ -210,16 +213,6 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     return envelope(pulsoIrisRpaActionListSchema.parse(result.rows), request.id);
   });
 };
-
-function readTenantId(params: unknown): string | undefined {
-  const raw =
-    typeof params === "object" && params !== null && "tenantId" in params
-      ? (params as { tenantId?: unknown }).tenantId
-      : undefined;
-
-  const parsed = tenantIdSchema.safeParse(raw);
-  return parsed.success ? parsed.data : undefined;
-}
 
 // Schema is owned by @hyperion/migrations; the service only checks it is present.
 async function verifyPulsoIrisSchema(context: ServiceContext): Promise<void> {
