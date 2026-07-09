@@ -1,4 +1,4 @@
-import { envelope, pulsoIrisWorkerListSchema } from "@hyperion/contracts";
+﻿import { envelope, pulsoIrisWorkerListSchema } from "@hyperion/contracts";
 import type { RouteRegistrar } from "@hyperion/service-runtime";
 import { readUuidParam, requireTenantDb } from "./shared.js";
 
@@ -22,25 +22,25 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
       scope.db.query(
         `select
            (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and status in ('active', 'handoff_required')) as "interactionsActive",
-           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and channel = 'whatsapp' and started_at::date = current_date) as "whatsappToday",
-           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and channel = 'voice' and started_at::date = current_date) as "voiceToday",
-           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and channel = 'whatsapp' and started_at::date = current_date - 1) as "whatsappYesterday",
-           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and channel = 'voice' and started_at::date = current_date - 1) as "voiceYesterday",
-           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and status = 'resolved' and started_at::date = current_date) as "resolvedToday",
-           (select count(*)::int from pulso_iris.conversations c where c.tenant_id = $1 and c.started_at::date = current_date
+           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and channel = 'whatsapp' and timezone('America/Bogota', started_at)::date = timezone('America/Bogota', now())::date) as "whatsappToday",
+           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and channel = 'voice' and timezone('America/Bogota', started_at)::date = timezone('America/Bogota', now())::date) as "voiceToday",
+           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and channel = 'whatsapp' and timezone('America/Bogota', started_at)::date = timezone('America/Bogota', now())::date - 1) as "whatsappYesterday",
+           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and channel = 'voice' and timezone('America/Bogota', started_at)::date = timezone('America/Bogota', now())::date - 1) as "voiceYesterday",
+           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and status = 'resolved' and timezone('America/Bogota', started_at)::date = timezone('America/Bogota', now())::date) as "resolvedToday",
+           (select count(*)::int from pulso_iris.conversations c where c.tenant_id = $1 and timezone('America/Bogota', c.started_at)::date = timezone('America/Bogota', now())::date
               and exists (select 1 from pulso_iris.handoffs h where h.tenant_id = $1 and h.conversation_id = c.id)) as "handoffToday",
-           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and status = 'closed' and started_at::date = current_date) as "abandonedToday",
-           (select count(*)::int from pulso_iris.appointments where tenant_id = $1 and created_at::date = current_date and origin in ('sofia_voz', 'sofia_wa')) as "appointmentsTodayBySofia",
+           (select count(*)::int from pulso_iris.conversations where tenant_id = $1 and status = 'closed' and timezone('America/Bogota', started_at)::date = timezone('America/Bogota', now())::date) as "abandonedToday",
+           (select count(*)::int from pulso_iris.appointments where tenant_id = $1 and timezone('America/Bogota', created_at)::date = timezone('America/Bogota', now())::date and origin in ('sofia_voz', 'sofia_wa')) as "appointmentsTodayBySofia",
            (select count(*)::int from pulso_iris.handoffs where tenant_id = $1 and status in ('open', 'assigned', 'in_progress')) as "handoffsOpen"`,
         [scope.tenantId]
       ),
       scope.db.query(
-        `select extract(hour from started_at)::int as hour,
+        `select extract(hour from timezone('America/Bogota', started_at))::int as hour,
                 count(*)::int as total,
                 count(*) filter (where channel = 'voice')::int as voice,
                 count(*) filter (where channel = 'whatsapp')::int as whatsapp
          from pulso_iris.conversations
-         where tenant_id = $1 and started_at::date = current_date
+         where tenant_id = $1 and timezone('America/Bogota', started_at)::date = timezone('America/Bogota', now())::date
          group by 1 order by 1`,
         [scope.tenantId]
       ),
@@ -50,7 +50,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
            count(*) filter (where exists (select 1 from pulso_iris.handoffs h where h.tenant_id = $1 and h.conversation_id = c.id))::int as transferred,
            count(*) filter (where status = 'closed')::int as abandoned
          from pulso_iris.conversations c
-         where tenant_id = $1 and started_at::date = current_date`,
+         where tenant_id = $1 and timezone('America/Bogota', started_at)::date = timezone('America/Bogota', now())::date`,
         [scope.tenantId]
       ),
       scope.db.query(
@@ -70,13 +70,13 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
         `select s.id as "siteId", s.name as "siteName",
                 count(c.id)::int as interactions,
                 (select count(*)::int from pulso_iris.appointments a
-                  where a.tenant_id = $1 and a.site_id = s.id and a.created_at::date = current_date) as appointments,
+                  where a.tenant_id = $1 and a.site_id = s.id and timezone('America/Bogota', a.created_at)::date = timezone('America/Bogota', now())::date) as appointments,
                 round(avg((c.metadata->>'first_response_s')::numeric), 1) as "avgResponseSeconds",
                 round(100.0 * count(c.id) filter (where c.status = 'resolved') / nullif(count(c.id), 0), 0)::int as "absorptionPct",
                 round(100.0 * count(c.id) filter (where exists (select 1 from pulso_iris.handoffs h where h.conversation_id = c.id)) / nullif(count(c.id), 0), 0)::int as "handoffPct"
          from pulso_iris.sites s
          left join pulso_iris.conversations c
-           on c.site_id = s.id and c.tenant_id = $1 and c.started_at::date = current_date
+           on c.site_id = s.id and c.tenant_id = $1 and timezone('America/Bogota', c.started_at)::date = timezone('America/Bogota', now())::date
          where s.tenant_id = $1
          group by s.id, s.name
          order by interactions desc nulls last`,
@@ -154,8 +154,8 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
                 count(*) filter (where status = 'confirmed')::int as confirmed,
                 count(*) filter (where origin in ('sofia_voz', 'sofia_wa'))::int as "bySofia",
                 count(*) filter (where status = 'no_show')::int as "noShow",
-                count(*) filter (where scheduled_at::date = current_date)::int as today,
-                count(*) filter (where origin in ('sofia_voz', 'sofia_wa') and scheduled_at::date = current_date)::int as "bySofiaToday"
+                count(*) filter (where timezone('America/Bogota', scheduled_at)::date = timezone('America/Bogota', now())::date)::int as today,
+                count(*) filter (where origin in ('sofia_voz', 'sofia_wa') and timezone('America/Bogota', scheduled_at)::date = timezone('America/Bogota', now())::date)::int as "bySofiaToday"
          from pulso_iris.appointments
          where tenant_id = $1
            and scheduled_at >= coalesce($2::date, date_trunc('week', current_date))
@@ -312,13 +312,13 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
       ),
       scope.db.query(
         `select
-           count(*) filter (where created_at::date = current_date)::int as "actionsToday",
+           count(*) filter (where timezone('America/Bogota', created_at)::date = timezone('America/Bogota', now())::date)::int as "actionsToday",
            count(*) filter (where status = 'queued')::int as "queued",
            count(*) filter (where status = 'deferred')::int as "deferred",
-           round(100.0 * count(*) filter (where status = 'succeeded' and created_at::date = current_date)
-             / nullif(count(*) filter (where status in ('succeeded', 'failed', 'verification_failed') and created_at::date = current_date), 0), 1)::float as "successPctToday",
-           round(avg(duration_ms) filter (where action_type = 'check_availability' and duration_ms is not null and created_at::date = current_date) / 1000.0, 1)::float as "avgConsultSeconds",
-           round(((percentile_cont(0.95) within group (order by duration_ms) filter (where action_type = 'register_appointment' and duration_ms is not null and created_at::date = current_date))::numeric) / 1000.0, 1)::float as "p95RegisterSeconds"
+           round(100.0 * count(*) filter (where status = 'succeeded' and timezone('America/Bogota', created_at)::date = timezone('America/Bogota', now())::date)
+             / nullif(count(*) filter (where status in ('succeeded', 'failed', 'verification_failed') and timezone('America/Bogota', created_at)::date = timezone('America/Bogota', now())::date), 0), 1)::float as "successPctToday",
+           round(avg(duration_ms) filter (where action_type = 'check_availability' and duration_ms is not null and timezone('America/Bogota', created_at)::date = timezone('America/Bogota', now())::date) / 1000.0, 1)::float as "avgConsultSeconds",
+           round(((percentile_cont(0.95) within group (order by duration_ms) filter (where action_type = 'register_appointment' and duration_ms is not null and timezone('America/Bogota', created_at)::date = timezone('America/Bogota', now())::date))::numeric) / 1000.0, 1)::float as "p95RegisterSeconds"
          from pulso_iris.rpa_actions
          where tenant_id = $1`,
         [scope.tenantId]
