@@ -426,13 +426,13 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
              and primary_intent in ('agendar_cita', 'reagendar', 'confirmar_asistencia')
              and started_at >= coalesce($2::date, date_trunc('month', current_date))
              and started_at < coalesce($2::date, date_trunc('month', current_date)) + interval '1 month') as "appointmentIntent",
-           (select count(*)::int from pulso_iris.rpa_actions where tenant_id = $1 and action_type = 'check_availability'
+           (select count(*)::int from pulso_iris.appointments where tenant_id = $1
              and created_at >= coalesce($2::date, date_trunc('month', current_date))
              and created_at < coalesce($2::date, date_trunc('month', current_date)) + interval '1 month') as "availabilityChecked",
-           (select count(*)::int from pulso_iris.rpa_actions where tenant_id = $1 and action_type = 'register_appointment'
+           (select count(*)::int from pulso_iris.appointments where tenant_id = $1 and status <> 'cancelled'
              and created_at >= coalesce($2::date, date_trunc('month', current_date))
              and created_at < coalesce($2::date, date_trunc('month', current_date)) + interval '1 month') as registered,
-           (select count(*)::int from pulso_iris.rpa_actions where tenant_id = $1 and action_type = 'register_appointment' and status = 'succeeded'
+           (select count(*)::int from pulso_iris.appointments where tenant_id = $1 and status in ('verified', 'confirmed')
              and created_at >= coalesce($2::date, date_trunc('month', current_date))
              and created_at < coalesce($2::date, date_trunc('month', current_date)) + interval '1 month') as verified,
            (select count(*)::int from pulso_iris.appointments where tenant_id = $1 and status = 'confirmed'

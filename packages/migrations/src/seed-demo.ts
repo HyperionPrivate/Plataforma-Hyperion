@@ -240,10 +240,11 @@ async function seed(client: pg.Client, tenantId: string): Promise<void> {
        case when random() < 0.8 then (select id from pulso_iris.administrative_patients where tenant_id = $1 and metadata @> '${DEMO}'::jsonb order by random() limit 1) end,
        (select id from pulso_iris.sites where tenant_id = $1 order by random() limit 1),
        (select id from pulso_iris.professionals where tenant_id = $1 and metadata @> '${DEMO}'::jsonb order by random() limit 1),
-       (select id from pulso_iris.payers where tenant_id = $1 order by
-          random() * case payer_group when 'eps' then 0.55 when 'private_prepaid' then 0.9 when 'particular' then 0.95 else 1.2 end
-        limit 1),
-       (select id from pulso_iris.appointment_types where tenant_id = $1 order by random() limit 1),
+       (select id from pulso_iris.payers where tenant_id = $1
+         and payer_group = (array['eps','eps','eps','private_prepaid','particular','policy'])[ceil(random()*6)]
+         and d.d = d.d
+         order by random() limit 1),
+       (select id from pulso_iris.appointment_types where tenant_id = $1 and d.d = d.d order by random() limit 1),
        (array['sofia_wa','sofia_wa','sofia_voz','sofia_voz','advisor','legacy'])[ceil(random()*6)],
        case
          when random() < (0.15 - 0.02 * floor((29 - (current_date - d.d::date)) / 7.0)) then 'no_show'
@@ -274,8 +275,11 @@ async function seed(client: pg.Client, tenantId: string): Promise<void> {
        (select id from pulso_iris.administrative_patients where tenant_id = $1 and metadata @> '${DEMO}'::jsonb order by random() limit 1),
        (select id from pulso_iris.sites where tenant_id = $1 order by random() limit 1),
        p.id,
-       (select id from pulso_iris.payers where tenant_id = $1 order by random() limit 1),
-       (select id from pulso_iris.appointment_types where tenant_id = $1 order by random() limit 1),
+       (select id from pulso_iris.payers where tenant_id = $1
+         and payer_group = (array['eps','eps','eps','private_prepaid','particular','policy'])[ceil(random()*6)]
+         and p.id = p.id
+         order by random() limit 1),
+       (select id from pulso_iris.appointment_types where tenant_id = $1 and p.id = p.id order by random() limit 1),
        (array['sofia_wa','sofia_wa','sofia_voz','advisor'])[ceil(random()*4)],
        case
          when d.d < current_date and random() < 0.06 then 'no_show'
