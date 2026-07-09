@@ -71,12 +71,21 @@ export const pulsoIrisConversationStatusSchema = z.enum(["active", "resolved", "
 export const pulsoIrisAppointmentStatusSchema = z.enum([
   "offered",
   "registered",
+  "pending_provider",
+  "submitted",
+  "pending_external_confirmation",
   "verified",
   "confirmed",
+  "deferred",
+  "verification_failed",
+  "failed",
+  "external_rejected",
+  "expired",
   "rescheduled",
   "cancelled",
   "no_show"
 ]);
+export const pulsoIrisVerificationModeSchema = z.enum(["internal", "manual_external", "legacy_provider", "simulated"]);
 export const pulsoIrisRpaActionStatusSchema = z.enum([
   "queued",
   "running",
@@ -159,6 +168,26 @@ export const pulsoIrisAppointmentSchema = z.object({
   origin: z.string().min(1).default("sofia_wa"),
   status: pulsoIrisAppointmentStatusSchema,
   scheduledAt: isoDateTimeOptional,
+  durationMin: optionalFromNull(z.number().int().positive()),
+  idempotencyKey: optionalFromNull(z.string().min(4)),
+  holdId: optionalFromNull(z.string().uuid()),
+  slotCapacityToken: optionalFromNull(z.number().int().positive()),
+  verificationMode: optionalFromNull(pulsoIrisVerificationModeSchema),
+  externalSystem: optionalFromNull(z.string().min(1)),
+  externalReference: optionalFromNull(z.string().min(1)),
+  externalNote: optionalFromNull(z.string().min(1)),
+  verifiedAt: isoDateTimeOptional,
+  verifiedBy: optionalFromNull(z.string().min(1)),
+  externalSlaDueAt: isoDateTimeOptional,
+  rescheduleCount: z.number().int().nonnegative().default(0),
+  previousAppointmentId: optionalFromNull(z.string().uuid()),
+  cancellationReason: optionalFromNull(z.string().min(1)),
+  cancelledAt: isoDateTimeOptional,
+  cancelledBy: optionalFromNull(z.string().min(1)),
+  externalRejectionReason: optionalFromNull(z.string().min(1)),
+  externalRejectedAt: isoDateTimeOptional,
+  externalRejectedBy: optionalFromNull(z.string().min(1)),
+  statusUpdatedAt: isoDateTimeOptional,
   legacyReference: optionalFromNull(z.string().min(1)),
   createdAt: isoDateTime,
   updatedAt: isoDateTime
@@ -333,6 +362,7 @@ export const pulsoIrisAvailabilityRuleInputSchema = z.object({
 });
 
 export const pulsoIrisAgendaBlockStatusSchema = z.enum(["active", "cancelled"]);
+export const pulsoIrisAgendaBlockTypeSchema = z.enum(["block", "absence", "vacation"]);
 
 export const pulsoIrisAgendaBlockSchema = z.object({
   id: z.string().uuid(),
@@ -342,6 +372,7 @@ export const pulsoIrisAgendaBlockSchema = z.object({
   appointmentTypeId: optionalFromNull(z.string().uuid()),
   startsAt: isoDateTime,
   endsAt: isoDateTime,
+  blockType: pulsoIrisAgendaBlockTypeSchema.default("block"),
   reason: z.string().min(1),
   status: pulsoIrisAgendaBlockStatusSchema,
   createdAt: isoDateTime,
@@ -354,6 +385,7 @@ export const pulsoIrisAgendaBlockInputSchema = z.object({
   appointmentTypeId: z.string().uuid().optional(),
   startsAt: z.string().datetime(),
   endsAt: z.string().datetime(),
+  blockType: pulsoIrisAgendaBlockTypeSchema.optional(),
   reason: z.string().min(2),
   status: pulsoIrisAgendaBlockStatusSchema.optional()
 });
@@ -423,6 +455,237 @@ export const pulsoIrisPayerExclusionInputSchema = z.object({
   status: catalogStatusSchema.optional()
 });
 
+export const pulsoIrisAgendaModeSchema = z.enum(["internal", "hybrid_manual", "legacy_integrated"]);
+export const pulsoIrisAgendaCapacityPolicySchema = z.literal("strict");
+export const pulsoIrisAgendaStatusSchema = z.enum(["active", "paused"]);
+
+export const pulsoIrisAgendaSettingsSchema = z.object({
+  tenantId: z.string().uuid(),
+  mode: pulsoIrisAgendaModeSchema,
+  timezone: z.string().min(1),
+  bookingHorizonDays: z.number().int().min(1).max(730),
+  holdDurationMinutes: z.number().int().min(1).max(1440),
+  maxAlternatives: z.number().int().min(1).max(20),
+  maxReschedules: z.number().int().min(0).max(20),
+  externalConfirmationSlaMinutes: z.number().int().min(1).max(10080),
+  externalReferenceRequired: z.boolean(),
+  capacityPolicy: pulsoIrisAgendaCapacityPolicySchema,
+  status: pulsoIrisAgendaStatusSchema,
+  updatedBy: optionalFromNull(z.string().min(1)),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisAgendaSettingsInputSchema = z
+  .object({
+    mode: pulsoIrisAgendaModeSchema.optional(),
+    timezone: z.string().trim().min(1).optional(),
+    bookingHorizonDays: z.number().int().min(1).max(730).optional(),
+    holdDurationMinutes: z.number().int().min(1).max(1440).optional(),
+    maxAlternatives: z.number().int().min(1).max(20).optional(),
+    maxReschedules: z.number().int().min(0).max(20).optional(),
+    externalConfirmationSlaMinutes: z.number().int().min(1).max(10080).optional(),
+    externalReferenceRequired: z.boolean().optional(),
+    capacityPolicy: pulsoIrisAgendaCapacityPolicySchema.optional(),
+    status: pulsoIrisAgendaStatusSchema.optional()
+  })
+  .refine((input) => Object.keys(input).length > 0, "at least one agenda setting is required");
+
+export const pulsoIrisAgendaSettingsPatchSchema = pulsoIrisAgendaSettingsInputSchema;
+
+export const pulsoIrisProfessionalSiteSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  professionalId: z.string().uuid(),
+  siteId: z.string().uuid(),
+  status: catalogStatusSchema,
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisProfessionalSiteInputSchema = z.object({
+  professionalId: z.string().uuid(),
+  siteId: z.string().uuid(),
+  status: catalogStatusSchema.optional()
+});
+
+export const pulsoIrisProfessionalAppointmentTypeSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  professionalId: z.string().uuid(),
+  appointmentTypeId: z.string().uuid(),
+  status: catalogStatusSchema,
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisProfessionalAppointmentTypeInputSchema = z.object({
+  professionalId: z.string().uuid(),
+  appointmentTypeId: z.string().uuid(),
+  status: catalogStatusSchema.optional()
+});
+
+export const pulsoIrisAppointmentHoldStatusSchema = z.enum(["active", "consumed", "expired", "cancelled"]);
+
+export const pulsoIrisAppointmentHoldSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  patientId: optionalFromNull(z.string().uuid()),
+  conversationId: optionalFromNull(z.string().uuid()),
+  siteId: z.string().uuid(),
+  professionalId: z.string().uuid(),
+  payerId: optionalFromNull(z.string().uuid()),
+  appointmentTypeId: z.string().uuid(),
+  scheduledAt: isoDateTime,
+  durationMin: z.number().int().positive(),
+  slotCapacityToken: z.number().int().positive(),
+  status: pulsoIrisAppointmentHoldStatusSchema,
+  expiresAt: isoDateTime,
+  idempotencyKey: z.string().min(4),
+  appointmentId: optionalFromNull(z.string().uuid()),
+  createdBy: optionalFromNull(z.string().min(1)),
+  consumedAt: isoDateTimeOptional,
+  cancelledAt: isoDateTimeOptional,
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisAppointmentHoldInputSchema = z.object({
+  patientId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  siteId: z.string().uuid(),
+  professionalId: z.string().uuid(),
+  payerId: z.string().uuid().optional(),
+  appointmentTypeId: z.string().uuid(),
+  scheduledAt: z.string().datetime(),
+  idempotencyKey: z.string().trim().min(4).max(200)
+});
+
+export const pulsoIrisAppointmentHoldListSchema = z.array(pulsoIrisAppointmentHoldSchema);
+
+export const pulsoIrisManualVerificationInputSchema = z.object({
+  externalReference: z.string().trim().min(1).max(200),
+  externalSystem: z.string().trim().min(1).max(200),
+  note: z.string().trim().min(1).max(2000).optional()
+});
+
+export const pulsoIrisExternalRejectionInputSchema = z.object({
+  reason: z.string().trim().min(2).max(1000)
+});
+
+export const pulsoIrisAppointmentCancellationInputSchema = z.object({
+  reason: z.string().trim().min(2).max(1000)
+});
+
+export const pulsoIrisAppointmentRescheduleInputSchema = z
+  .object({
+    holdId: z.string().uuid().optional(),
+    siteId: z.string().uuid().optional(),
+    professionalId: z.string().uuid().optional(),
+    appointmentTypeId: z.string().uuid().optional(),
+    payerId: z.string().uuid().optional(),
+    scheduledAt: z.string().datetime().optional(),
+    reason: z.string().trim().min(2).max(1000),
+    idempotencyKey: z.string().trim().min(4).max(200)
+  })
+  .refine(
+    (input) =>
+      Boolean(input.holdId) ||
+      Boolean(input.siteId && input.professionalId && input.appointmentTypeId && input.scheduledAt),
+    "holdId or complete slot coordinates are required"
+  );
+
+export const pulsoIrisAppointmentStatusHistorySchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  appointmentId: z.string().uuid(),
+  fromStatus: optionalFromNull(pulsoIrisAppointmentStatusSchema),
+  toStatus: pulsoIrisAppointmentStatusSchema,
+  actorId: optionalFromNull(z.string().min(1)),
+  reason: optionalFromNull(z.string().min(1)),
+  metadata: z.record(z.unknown()).default({}),
+  createdAt: isoDateTime
+});
+
+export const pulsoIrisAppointmentStatusHistoryListSchema = z.array(pulsoIrisAppointmentStatusHistorySchema);
+
+export const pulsoIrisConfigurationImportKindSchema = z.enum([
+  "professionals",
+  "professional_sites",
+  "professional_appointment_types",
+  "availability_rules",
+  "payer_exclusions",
+  "agenda_blocks"
+]);
+
+export const pulsoIrisConfigurationImportResourceSchema = z.enum([
+  "professionals",
+  "professional-sites",
+  "professional-appointment-types",
+  "availability-rules",
+  "payer-exclusions",
+  "agenda-blocks"
+]);
+
+export const pulsoIrisConfigurationImportStatusSchema = z.enum(["previewed", "applying", "applied", "failed"]);
+export const pulsoIrisConfigurationImportRowStatusSchema = z.enum(["accepted", "rejected"]);
+
+export const pulsoIrisConfigurationImportAcceptedRowSchema = z.object({
+  row: z.number().int().positive(),
+  data: z.record(z.union([z.string(), z.number(), z.null()]))
+});
+
+export const pulsoIrisConfigurationImportRejectedRowSchema = z.object({
+  row: z.number().int().positive(),
+  reason: z.string().min(1)
+});
+
+export const pulsoIrisConfigurationImportSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  kind: pulsoIrisConfigurationImportKindSchema,
+  idempotencyKey: z.string().min(4),
+  contentHash: z.string().min(32),
+  status: pulsoIrisConfigurationImportStatusSchema,
+  rowCount: z.number().int().nonnegative(),
+  acceptedCount: z.number().int().nonnegative(),
+  rejectedCount: z.number().int().nonnegative(),
+  createdBy: optionalFromNull(z.string().min(1)),
+  createdAt: isoDateTime,
+  appliedAt: isoDateTimeOptional,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisConfigurationImportPreviewInputSchema = z.object({
+  csv: z.string().min(1).max(2_000_000)
+});
+
+export const pulsoIrisConfigurationImportPreviewSchema = z.object({
+  resource: pulsoIrisConfigurationImportResourceSchema,
+  accepted: z.array(pulsoIrisConfigurationImportAcceptedRowSchema),
+  rejected: z.array(pulsoIrisConfigurationImportRejectedRowSchema),
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    accepted: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative()
+  })
+});
+
+export const pulsoIrisConfigurationImportApplyInputSchema = z.object({
+  csv: z.string().min(1).max(2_000_000),
+  idempotencyKey: z.string().trim().min(8).max(200)
+});
+
+export const pulsoIrisConfigurationImportApplyResultSchema = pulsoIrisConfigurationImportPreviewSchema.extend({
+  importId: z.string().uuid(),
+  applied: z.number().int().nonnegative(),
+  idempotent: z.boolean()
+});
+
+export const pulsoIrisConfigurationExportQuerySchema = z.object({
+  resource: pulsoIrisConfigurationImportResourceSchema
+});
+
 export const pulsoIrisSlotAlternativeSchema = z.object({
   startsAt: isoDateTime,
   endsAt: isoDateTime,
@@ -443,6 +706,8 @@ export const pulsoIrisAvailabilityRuleListSchema = z.array(pulsoIrisAvailability
 export const pulsoIrisAgendaBlockListSchema = z.array(pulsoIrisAgendaBlockSchema);
 export const pulsoIrisHolidayListSchema = z.array(pulsoIrisHolidaySchema);
 export const pulsoIrisPayerExclusionListSchema = z.array(pulsoIrisPayerExclusionSchema);
+export const pulsoIrisProfessionalSiteListSchema = z.array(pulsoIrisProfessionalSiteSchema);
+export const pulsoIrisProfessionalAppointmentTypeListSchema = z.array(pulsoIrisProfessionalAppointmentTypeSchema);
 
 export type PulsoIrisSite = z.infer<typeof pulsoIrisSiteSchema>;
 export type PulsoIrisSiteInput = z.infer<typeof pulsoIrisSiteInputSchema>;
@@ -463,6 +728,20 @@ export type PulsoIrisHolidayInput = z.infer<typeof pulsoIrisHolidayInputSchema>;
 export type PulsoIrisPayerExclusion = z.infer<typeof pulsoIrisPayerExclusionSchema>;
 export type PulsoIrisPayerExclusionInput = z.infer<typeof pulsoIrisPayerExclusionInputSchema>;
 export type PulsoIrisSlotAlternative = z.infer<typeof pulsoIrisSlotAlternativeSchema>;
+export type PulsoIrisAgendaMode = z.infer<typeof pulsoIrisAgendaModeSchema>;
+export type PulsoIrisAgendaSettings = z.infer<typeof pulsoIrisAgendaSettingsSchema>;
+export type PulsoIrisAgendaSettingsInput = z.infer<typeof pulsoIrisAgendaSettingsInputSchema>;
+export type PulsoIrisProfessionalSite = z.infer<typeof pulsoIrisProfessionalSiteSchema>;
+export type PulsoIrisProfessionalSiteInput = z.infer<typeof pulsoIrisProfessionalSiteInputSchema>;
+export type PulsoIrisProfessionalAppointmentType = z.infer<typeof pulsoIrisProfessionalAppointmentTypeSchema>;
+export type PulsoIrisProfessionalAppointmentTypeInput = z.infer<typeof pulsoIrisProfessionalAppointmentTypeInputSchema>;
+export type PulsoIrisAppointmentHold = z.infer<typeof pulsoIrisAppointmentHoldSchema>;
+export type PulsoIrisAppointmentHoldInput = z.infer<typeof pulsoIrisAppointmentHoldInputSchema>;
+export type PulsoIrisManualVerificationInput = z.infer<typeof pulsoIrisManualVerificationInputSchema>;
+export type PulsoIrisAppointmentRescheduleInput = z.infer<typeof pulsoIrisAppointmentRescheduleInputSchema>;
+export type PulsoIrisConfigurationImport = z.infer<typeof pulsoIrisConfigurationImportSchema>;
+export type PulsoIrisConfigurationImportPreview = z.infer<typeof pulsoIrisConfigurationImportPreviewSchema>;
+export type PulsoIrisConfigurationImportApplyResult = z.infer<typeof pulsoIrisConfigurationImportApplyResultSchema>;
 
 export const pulsoIrisConversationListSchema = z.array(pulsoIrisConversationSchema);
 export const pulsoIrisAppointmentListSchema = z.array(pulsoIrisAppointmentSchema);
@@ -512,6 +791,8 @@ export const pulsoIrisAppointmentInputSchema = z.object({
   appointmentTypeId: z.string().uuid().optional(),
   appointmentType: z.string().min(2).optional(),
   scheduledAt: z.string().datetime().optional(),
+  holdId: z.string().uuid().optional(),
+  idempotencyKey: z.string().trim().min(4).max(200).optional(),
   origin: pulsoIrisAppointmentOriginSchema.optional()
 });
 
@@ -519,7 +800,8 @@ export const pulsoIrisAppointmentPatchSchema = z.object({
   status: pulsoIrisAppointmentStatusSchema.optional(),
   scheduledAt: z.string().datetime().optional(),
   siteId: z.string().uuid().optional(),
-  professionalId: z.string().uuid().optional()
+  professionalId: z.string().uuid().optional(),
+  holdId: z.string().uuid().optional()
 });
 
 export const pulsoIrisHandoffInputSchema = z.object({
@@ -799,6 +1081,24 @@ export const operatorListSchema = z.array(operatorListItemSchema);
 export type OperatorCreateInput = z.infer<typeof operatorCreateSchema>;
 export type OperatorPatchInput = z.infer<typeof operatorPatchSchema>;
 export type OperatorListItem = z.infer<typeof operatorListItemSchema>;
+
+export const pulsoIrisAuditEventTypeSchema = z.enum([
+  "agenda.settings.updated",
+  "agenda.configuration.imported",
+  "appointment.hold.created",
+  "appointment.hold.expired",
+  "appointment.pending_external_confirmation",
+  "appointment.manually_verified",
+  "appointment.external_rejected",
+  "appointment.registered",
+  "appointment.verified",
+  "appointment.rescheduled",
+  "appointment.cancelled",
+  "handoff.assigned",
+  "config.updated"
+]);
+
+export type PulsoIrisAuditEventType = z.infer<typeof pulsoIrisAuditEventTypeSchema>;
 
 export const auditEventSchema = z.object({
   tenantId: z.string().uuid().optional(),

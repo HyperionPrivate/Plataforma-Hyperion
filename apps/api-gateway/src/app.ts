@@ -247,6 +247,12 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
     return role === "coordinator" ? undefined : "Coordinator role required";
   }
 
+  const appointmentAction = /\/pulso-iris\/appointments\/[^/]+\/(manual-verify|reject|cancel|reschedule)$/.test(path);
+  const appointmentPatch = method === "PATCH" && /\/pulso-iris\/appointments\/[^/]+$/.test(path);
+  if (appointmentAction || appointmentPatch) {
+    return role === "coordinator" ? undefined : "Coordinator role required";
+  }
+
   if (path.includes("/pulso-iris/campaigns") || path.includes("/pulso-iris/rpa/actions")) {
     return role === "coordinator" ? undefined : "Coordinator role required";
   }

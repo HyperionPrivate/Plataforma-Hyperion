@@ -1,6 +1,13 @@
 import type { AuditEventInput } from "@hyperion/contracts";
 
 export const PULSO_AUDIT_EVENTS = [
+  "agenda.settings.updated",
+  "agenda.configuration.imported",
+  "appointment.hold.created",
+  "appointment.hold.expired",
+  "appointment.pending_external_confirmation",
+  "appointment.manually_verified",
+  "appointment.external_rejected",
   "appointment.registered",
   "appointment.verified",
   "appointment.rescheduled",
@@ -91,4 +98,12 @@ export function readOperatorId(headers: Record<string, unknown> | undefined): st
     return raw[0].trim();
   }
   return undefined;
+}
+
+export function readOperatorRole(
+  headers: Record<string, unknown> | undefined
+): "admin" | "coordinator" | "advisor" | "auditor" | undefined {
+  const raw = headers?.["x-operator-role"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === "admin" || value === "coordinator" || value === "advisor" || value === "auditor" ? value : undefined;
 }

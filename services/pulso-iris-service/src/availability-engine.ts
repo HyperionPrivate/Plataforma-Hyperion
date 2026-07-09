@@ -6,7 +6,7 @@ import {
 } from "@hyperion/contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 
-type Database = NonNullable<ServiceContext["db"]>;
+type Database = Pick<NonNullable<ServiceContext["db"]>, "query">;
 
 export interface AvailabilitySlotFilters {
   tenantId: string;
@@ -48,12 +48,16 @@ with params as (
     $7::boolean as include_full,
     $8::uuid as exclude_appointment_id,
     $9::int as row_limit,
-    $10::uuid as payer_id
+    $10::uuid as payer_id,
+    coalesce(
+      (select s.timezone from pulso_iris.agenda_settings s where s.tenant_id = $1::uuid),
+      'America/Bogota'
+    ) as tenant_timezone
 ),
 local_days as (
   select generate_series(
-    timezone('America/Bogota', from_ts)::date,
-    timezone('America/Bogota', to_ts)::date,
+    timezone(tenant_timezone, from_ts)::date,
+    timezone(tenant_timezone, to_ts)::date,
     interval '1 day'
   )::date as local_date
   from params
@@ -76,6 +80,22 @@ rule_windows as (
    and (p.site_id is null or r.site_id = p.site_id)
    and (p.professional_id is null or r.professional_id = p.professional_id)
    and (p.appointment_type_id is null or r.appointment_type_id = p.appointment_type_id)
+  join pulso_iris.agenda_settings settings
+    on settings.tenant_id = r.tenant_id
+   and settings.status = 'active'
+  join pulso_iris.sites site
+    on site.tenant_id = r.tenant_id
+   and site.id = r.site_id
+   and site.status = 'active'
+  join pulso_iris.professionals professional
+    on professional.tenant_id = r.tenant_id
+   and professional.id = r.professional_id
+   and professional.status = 'active'
+  join pulso_iris.appointment_types appointment_type
+    on appointment_type.tenant_id = r.tenant_id
+   and appointment_type.id = r.appointment_type_id
+   and appointment_type.status = 'active'
+   and appointment_type.bookable_by_ia is true
   join local_days d
     on extract(dow from d.local_date)::int = r.weekday
    and (r.effective_from is null or r.effective_from <= d.local_date)
@@ -87,7 +107,7 @@ rule_windows as (
        and h.status = 'active'
        and h.holiday_date = d.local_date
    )
-   and (
+    and (
      p.payer_id is null
      or not exists (
        select 1
@@ -96,8 +116,24 @@ rule_windows as (
          and e.status = 'active'
          and e.professional_id = r.professional_id
          and e.payer_id = p.payer_id
-     )
-   )
+      )
+    )
+    and exists (
+      select 1
+      from pulso_iris.professional_sites ps
+      where ps.tenant_id = r.tenant_id
+        and ps.professional_id = r.professional_id
+        and ps.site_id = r.site_id
+        and ps.status = 'active'
+    )
+    and exists (
+      select 1
+      from pulso_iris.professional_appointment_types pat
+      where pat.tenant_id = r.tenant_id
+        and pat.professional_id = r.professional_id
+        and pat.appointment_type_id = r.appointment_type_id
+        and pat.status = 'active'
+    )
 ),
 candidate_slots as (
   select
@@ -126,7 +162,20 @@ booked_slots as (
     s.starts_at,
     s.ends_at,
     s.capacity,
-    count(a.id)::int as booked
+    (
+      count(a.id)::int +
+      (
+        select count(*)::int
+        from pulso_iris.appointment_holds h
+        where h.tenant_id = s.tenant_id
+          and h.site_id = s.site_id
+          and h.professional_id = s.professional_id
+          and h.appointment_type_id = s.appointment_type_id
+          and h.scheduled_at = s.starts_at
+          and h.status = 'active'
+          and h.expires_at > now()
+      )
+    )::int as booked
   from params p
   join candidate_slots s on true
   left join pulso_iris.appointments a
@@ -135,7 +184,7 @@ booked_slots as (
    and a.professional_id = s.professional_id
    and a.appointment_type_id = s.appointment_type_id
    and a.scheduled_at = s.starts_at
-   and a.status not in ('cancelled', 'no_show')
+   and a.status not in ('cancelled', 'no_show', 'rescheduled', 'external_rejected', 'expired', 'failed')
    and (p.exclude_appointment_id is null or a.id <> p.exclude_appointment_id)
   where s.starts_at >= p.from_ts
     and s.starts_at < p.to_ts
@@ -245,9 +294,21 @@ export async function reserveAppointmentSlotToken(
          and a.appointment_type_id = $4
          and a.scheduled_at = $5::timestamptz
          and a.slot_capacity_token = slots.token
-         and a.status not in ('cancelled', 'no_show')
-         and ($7::uuid is null or a.id <> $7::uuid)
-     )
+          and a.status not in ('cancelled', 'no_show', 'rescheduled', 'external_rejected', 'expired', 'failed')
+          and ($7::uuid is null or a.id <> $7::uuid)
+      )
+      and not exists (
+        select 1
+        from pulso_iris.appointment_holds h
+        where h.tenant_id = $1
+          and h.site_id = $2
+          and h.professional_id = $3
+          and h.appointment_type_id = $4
+          and h.scheduled_at = $5::timestamptz
+          and h.slot_capacity_token = slots.token
+          and h.status = 'active'
+          and h.expires_at > now()
+      )
      order by slots.token
      limit 1`,
     [
@@ -280,10 +341,13 @@ export async function listSlotAlternatives(
     payerId?: string;
     excludeAppointmentId?: string;
     limit?: number;
+    horizonEnd?: Date;
   }
 ): Promise<PulsoIrisSlotAlternative[]> {
   const from = new Date(request.from);
-  const to = new Date(from.getTime() + 14 * 24 * 60 * 60 * 1000);
+  const defaultTo = new Date(from.getTime() + 14 * 24 * 60 * 60 * 1000);
+  const to = request.horizonEnd && request.horizonEnd < defaultTo ? request.horizonEnd : defaultTo;
+  if (to <= from) return [];
   const availability = await listAvailabilitySlots(db, {
     tenantId: request.tenantId,
     from,

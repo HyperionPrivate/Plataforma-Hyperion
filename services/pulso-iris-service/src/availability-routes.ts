@@ -29,7 +29,32 @@ export const registerAvailabilityRoutes: RouteRegistrar = (app, context) => {
     }
 
     const from = parsed.data.from ? new Date(parsed.data.from) : new Date();
-    const to = parsed.data.to ? new Date(parsed.data.to) : addDays(from, 14);
+    let to = parsed.data.to ? new Date(parsed.data.to) : addDays(from, 14);
+    const settings = await scope.db.query<{
+      bookingHorizonDays: number;
+      status: string;
+      mode: string;
+    }>(
+      `select booking_horizon_days as "bookingHorizonDays", status, mode
+       from pulso_iris.agenda_settings
+       where tenant_id = $1`,
+      [scope.tenantId]
+    );
+    const agenda = settings.rows[0];
+    if (!agenda) {
+      return reply.code(409).send(envelope({ error: "Agenda settings are not configured" }, request.id));
+    }
+    if (agenda.status !== "active") {
+      return reply.code(409).send(envelope({ error: "Agenda is paused" }, request.id));
+    }
+    if (agenda.mode === "legacy_integrated") {
+      return reply.code(409).send(envelope({ error: "Legacy integrated mode requires a real provider" }, request.id));
+    }
+
+    const horizonEnd = addDays(new Date(), agenda.bookingHorizonDays);
+    if (!parsed.data.to && to > horizonEnd) {
+      to = horizonEnd;
+    }
 
     if (to.getTime() <= from.getTime()) {
       return reply.code(400).send(envelope({ error: "to must be after from" }, request.id));
@@ -37,6 +62,10 @@ export const registerAvailabilityRoutes: RouteRegistrar = (app, context) => {
 
     if (to.getTime() - from.getTime() > MAX_SLOT_RANGE_MS) {
       return reply.code(400).send(envelope({ error: "Slot query range cannot exceed 31 days" }, request.id));
+    }
+
+    if (from.getTime() >= horizonEnd.getTime() || to.getTime() > horizonEnd.getTime()) {
+      return reply.code(400).send(envelope({ error: "Slot query exceeds booking horizon" }, request.id));
     }
 
     const slots = await listAvailabilitySlots(scope.db, {
