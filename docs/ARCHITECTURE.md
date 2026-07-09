@@ -20,6 +20,8 @@ La plataforma se construye como monorepo TypeScript con microservicios HTTP. El 
 
 PostgreSQL arranca con el esquema core `platform` y el esquema de producto `pulso_iris` (sites, professionals, payers, administrative_patients, conversations, messages, appointments, rpa_actions, handoffs, operational_kpi_snapshots). No hay datos de muestra. Los productos reales se cargan cuando exista la informacion operativa real de cada cliente.
 
+El esquema es propiedad de `packages/migrations`: archivos SQL versionados en `packages/migrations/sql` aplicados en orden por un runner transaccional con tabla de control `platform.schema_migrations` y verificacion de checksum. En Docker corre como servicio one-shot antes de los servicios (`service_completed_successfully`); en local se ejecuta con `pnpm db:migrate`. Los servicios no ejecutan DDL en el arranque.
+
 ## Despliegue
 
 Una sola imagen multi-stage para los servicios Node (produccion sin devDependencies, proceso como usuario `node`) y una imagen nginx sin privilegios para la consola web estatica. Cada servicio expone `/health` y `/ready`; el compose usa healthchecks y `depends_on: service_healthy` para ordenar el arranque.

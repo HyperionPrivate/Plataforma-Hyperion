@@ -1,4 +1,4 @@
-name: plataforma-hyperion
+﻿name: plataforma-hyperion
 
 x-node-build: &node-build
   context: ..
@@ -29,12 +29,21 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-hyperion}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hyperion} -d ${POSTGRES_DB:-hyperion}"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  migrations:
+    build: *node-build
+    restart: "no"
+    command: ["node", "packages/migrations/dist/index.js"]
+    environment:
+      <<: *service-env
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   identity-service:
     build: *node-build
@@ -49,6 +58,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   tenant-service:
     build: *node-build
@@ -63,6 +74,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   agent-service:
     build: *node-build
@@ -77,6 +90,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   prompt-flow-service:
     build: *node-build
@@ -91,6 +106,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   knowledge-service:
     build: *node-build
@@ -105,6 +122,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   audit-service:
     build: *node-build
@@ -119,6 +138,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   integration-service:
     build: *node-build
@@ -133,6 +154,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   pulso-iris-service:
     build: *node-build
@@ -147,6 +170,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   api-gateway:
     build: *node-build

@@ -39,6 +39,7 @@ COPY packages/config/package.json packages/config/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/logger/package.json packages/logger/package.json
+COPY packages/migrations/package.json packages/migrations/package.json
 COPY packages/service-runtime/package.json packages/service-runtime/package.json
 COPY services/agent-service/package.json services/agent-service/package.json
 COPY services/audit-service/package.json services/audit-service/package.json
@@ -55,6 +56,8 @@ COPY --from=build /app/packages/config/dist packages/config/dist
 COPY --from=build /app/packages/contracts/dist packages/contracts/dist
 COPY --from=build /app/packages/database/dist packages/database/dist
 COPY --from=build /app/packages/logger/dist packages/logger/dist
+COPY --from=build /app/packages/migrations/dist packages/migrations/dist
+COPY --from=build /app/packages/migrations/sql packages/migrations/sql
 COPY --from=build /app/packages/service-runtime/dist packages/service-runtime/dist
 COPY --from=build /app/apps/api-gateway/dist apps/api-gateway/dist
 COPY --from=build /app/services/agent-service/dist services/agent-service/dist

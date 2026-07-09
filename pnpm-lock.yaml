@@ -99,6 +99,15 @@ importers:
 
   packages/logger: {}
 
+  packages/migrations:
+    dependencies:
+      '@hyperion/logger':
+        specifier: workspace:*
+        version: link:../logger
+      pg:
+        specifier: ^8.14.0
+        version: 8.22.0
+
   packages/service-runtime:
     dependencies:
       '@fastify/cors':

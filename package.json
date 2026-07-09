@@ -10,6 +10,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "check": "pnpm build && pnpm -r test",
+    "db:migrate": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/index.js",
     "dev:gateway": "pnpm build && pnpm --filter @hyperion/api-gateway dev",
     "dev:services": "pnpm build && pnpm --parallel --filter './services/*' dev",
     "dev:web": "pnpm --filter @hyperion/contracts build && pnpm --filter @hyperion/web-console dev",
