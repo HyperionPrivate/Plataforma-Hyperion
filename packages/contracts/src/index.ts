@@ -126,6 +126,7 @@ export const pulsoIrisConversationSchema = z.object({
   id: z.string().uuid(),
   tenantId: z.string().uuid(),
   patientId: optionalFromNull(z.string().uuid()),
+  siteId: optionalFromNull(z.string().uuid()),
   channel: pulsoIrisChannelSchema,
   direction: pulsoIrisDirectionSchema,
   status: pulsoIrisConversationStatusSchema,
@@ -153,7 +154,9 @@ export const pulsoIrisAppointmentSchema = z.object({
   siteId: optionalFromNull(z.string().uuid()),
   professionalId: optionalFromNull(z.string().uuid()),
   payerId: optionalFromNull(z.string().uuid()),
+  appointmentTypeId: optionalFromNull(z.string().uuid()),
   appointmentType: optionalFromNull(z.string().min(1)),
+  origin: z.string().min(1).default("sofia_wa"),
   status: pulsoIrisAppointmentStatusSchema,
   scheduledAt: isoDateTimeOptional,
   legacyReference: optionalFromNull(z.string().min(1)),
@@ -166,6 +169,7 @@ export const pulsoIrisRpaActionSchema = z.object({
   tenantId: z.string().uuid(),
   appointmentId: optionalFromNull(z.string().uuid()),
   conversationId: optionalFromNull(z.string().uuid()),
+  workerId: optionalFromNull(z.string().uuid()),
   actionType: z.enum([
     "check_availability",
     "register_appointment",
@@ -177,6 +181,9 @@ export const pulsoIrisRpaActionSchema = z.object({
   ]),
   status: pulsoIrisRpaActionStatusSchema,
   priority: z.number().int().min(0).default(50),
+  phase: optionalFromNull(z.string().min(1)),
+  durationMs: optionalFromNull(z.number().int().nonnegative()),
+  executedAt: isoDateTimeOptional,
   idempotencyKey: z.string().min(1),
   createdAt: isoDateTime,
   updatedAt: isoDateTime
@@ -302,6 +309,168 @@ export const pulsoIrisConversationListSchema = z.array(pulsoIrisConversationSche
 export const pulsoIrisAppointmentListSchema = z.array(pulsoIrisAppointmentSchema);
 export const pulsoIrisHandoffListSchema = z.array(pulsoIrisHandoffSchema);
 export const pulsoIrisRpaActionListSchema = z.array(pulsoIrisRpaActionSchema);
+
+// ----- Entradas de operacion (escritura controlada, sin proveedores reales) -----
+
+export const pulsoIrisPatientInputSchema = z.object({
+  fullName: z.string().min(2).optional(),
+  documentType: z.string().min(2).optional(),
+  documentNumberMasked: z.string().min(3).optional(),
+  phone: z.string().min(5).optional(),
+  preferredChannel: pulsoIrisChannelSchema.optional(),
+  status: pulsoIrisPatientStatusSchema.optional()
+});
+
+export const pulsoIrisConversationInputSchema = z.object({
+  patientId: z.string().uuid().optional(),
+  siteId: z.string().uuid().optional(),
+  channel: pulsoIrisChannelSchema,
+  direction: pulsoIrisDirectionSchema.optional(),
+  primaryIntent: z.string().min(2).optional(),
+  firstResponseSeconds: z.number().nonnegative().optional()
+});
+
+export const pulsoIrisConversationPatchSchema = z.object({
+  status: pulsoIrisConversationStatusSchema.optional(),
+  primaryIntent: z.string().min(2).optional(),
+  siteId: z.string().uuid().optional(),
+  ended: z.boolean().optional()
+});
+
+export const pulsoIrisMessageInputSchema = z.object({
+  sender: z.enum(["sofia", "patient", "advisor", "system"]),
+  body: z.string().min(1)
+});
+
+export const pulsoIrisAppointmentOriginSchema = z.enum(["sofia_voz", "sofia_wa", "advisor", "legacy"]);
+
+export const pulsoIrisAppointmentInputSchema = z.object({
+  patientId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  siteId: z.string().uuid().optional(),
+  professionalId: z.string().uuid().optional(),
+  payerId: z.string().uuid().optional(),
+  appointmentTypeId: z.string().uuid().optional(),
+  appointmentType: z.string().min(2).optional(),
+  scheduledAt: z.string().datetime().optional(),
+  origin: pulsoIrisAppointmentOriginSchema.optional()
+});
+
+export const pulsoIrisAppointmentPatchSchema = z.object({
+  status: pulsoIrisAppointmentStatusSchema.optional(),
+  scheduledAt: z.string().datetime().optional(),
+  siteId: z.string().uuid().optional(),
+  professionalId: z.string().uuid().optional()
+});
+
+export const pulsoIrisHandoffInputSchema = z.object({
+  conversationId: z.string().uuid().optional(),
+  patientId: z.string().uuid().optional(),
+  triggerCode: z.string().min(2),
+  priority: pulsoIrisHandoffPrioritySchema.optional(),
+  summary: z.string().min(2).optional(),
+  slaDueAt: z.string().datetime().optional()
+});
+
+export const pulsoIrisHandoffPatchSchema = z.object({
+  status: pulsoIrisHandoffStatusSchema.optional(),
+  priority: pulsoIrisHandoffPrioritySchema.optional(),
+  summary: z.string().min(2).optional()
+});
+
+export const pulsoIrisRpaActionTypeSchema = z.enum([
+  "check_availability",
+  "register_appointment",
+  "cancel",
+  "reschedule",
+  "confirm",
+  "sweep",
+  "create_patient"
+]);
+
+export const pulsoIrisRpaActionInputSchema = z.object({
+  actionType: pulsoIrisRpaActionTypeSchema,
+  appointmentId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  priority: z.number().int().min(0).max(100).optional(),
+  idempotencyKey: z.string().min(4)
+});
+
+export const pulsoIrisRpaActionPatchSchema = z.object({
+  status: pulsoIrisRpaActionStatusSchema.optional(),
+  workerId: z.string().uuid().optional(),
+  phase: z.string().min(2).optional(),
+  durationMs: z.number().int().nonnegative().optional()
+});
+
+export const pulsoIrisWorkerStatusSchema = z.enum(["active", "standby", "quarantine", "maintenance", "inactive"]);
+
+export const pulsoIrisWorkerSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  name: z.string().min(1),
+  vpsHost: optionalFromNull(z.string().min(1)),
+  status: pulsoIrisWorkerStatusSchema,
+  sessionStartedAt: isoDateTimeOptional,
+  lastKeepaliveAt: isoDateTimeOptional,
+  currentAction: optionalFromNull(z.string().min(1)),
+  cpuPct: z.number().int(),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisWorkerListSchema = z.array(pulsoIrisWorkerSchema);
+
+export const pulsoIrisCampaignTypeSchema = z.enum(["reminder", "reactivation", "confirmation", "survey", "reschedule"]);
+export const pulsoIrisCampaignStatusSchema = z.enum(["draft", "active", "paused", "finished"]);
+
+export const pulsoIrisCampaignSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  name: z.string().min(1),
+  campaignType: pulsoIrisCampaignTypeSchema,
+  status: pulsoIrisCampaignStatusSchema,
+  channels: z.array(z.string()).default([]),
+  segment: z.record(z.unknown()).default({}),
+  cadence: z.record(z.unknown()).default({}),
+  budgetCop: optionalFromNull(z.coerce.number()),
+  stats: z.record(z.unknown()).default({}),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisCampaignListSchema = z.array(pulsoIrisCampaignSchema);
+
+export const pulsoIrisCampaignInputSchema = z.object({
+  name: z.string().min(2),
+  campaignType: pulsoIrisCampaignTypeSchema,
+  status: pulsoIrisCampaignStatusSchema.optional(),
+  channels: z.array(z.string()).optional(),
+  segment: z.record(z.unknown()).optional(),
+  cadence: z.record(z.unknown()).optional(),
+  budgetCop: z.number().nonnegative().optional(),
+  stats: z.record(z.unknown()).optional()
+});
+
+export const pulsoIrisWaitlistStatusSchema = z.enum(["active", "offered", "fulfilled", "expired"]);
+
+export const pulsoIrisWaitlistInputSchema = z.object({
+  patientId: z.string().uuid().optional(),
+  appointmentTypeId: z.string().uuid().optional(),
+  sites: z.array(z.string().uuid()).optional(),
+  timeSlots: z.array(z.string()).optional(),
+  clinicalPriority: z.number().int().min(0).max(100).optional(),
+  deadline: z.string().optional(),
+  status: pulsoIrisWaitlistStatusSchema.optional()
+});
+
+export type PulsoIrisPatientInput = z.infer<typeof pulsoIrisPatientInputSchema>;
+export type PulsoIrisConversationInput = z.infer<typeof pulsoIrisConversationInputSchema>;
+export type PulsoIrisAppointmentInput = z.infer<typeof pulsoIrisAppointmentInputSchema>;
+export type PulsoIrisHandoffInput = z.infer<typeof pulsoIrisHandoffInputSchema>;
+export type PulsoIrisRpaActionInput = z.infer<typeof pulsoIrisRpaActionInputSchema>;
+export type PulsoIrisWorker = z.infer<typeof pulsoIrisWorkerSchema>;
+export type PulsoIrisCampaign = z.infer<typeof pulsoIrisCampaignSchema>;
 
 export const pulsoIrisOperationalKpisSchema = z.object({
   conversationsActive: z.number().int().nonnegative(),

@@ -10,7 +10,9 @@
   pulsoIrisRpaActionListSchema
 } from "@hyperion/contracts";
 import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import { registerAnalyticsRoutes } from "./analytics-routes.js";
 import { registerConfigRoutes } from "./config-routes.js";
+import { registerOperationsRoutes } from "./operations-routes.js";
 import { readTenantId } from "./shared.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
@@ -19,6 +21,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   }
 
   await registerConfigRoutes(app, context);
+  await registerOperationsRoutes(app, context);
+  await registerAnalyticsRoutes(app, context);
 
   app.get("/v1/pulso-iris/health", async (request) => {
     return envelope(
@@ -88,6 +92,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         id,
         tenant_id as "tenantId",
         patient_id as "patientId",
+        site_id as "siteId",
         channel,
         direction,
         status,
@@ -127,7 +132,9 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         site_id as "siteId",
         professional_id as "professionalId",
         payer_id as "payerId",
+        appointment_type_id as "appointmentTypeId",
         appointment_type as "appointmentType",
+        origin,
         status,
         scheduled_at as "scheduledAt",
         legacy_reference as "legacyReference",
@@ -196,9 +203,13 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         tenant_id as "tenantId",
         appointment_id as "appointmentId",
         conversation_id as "conversationId",
+        worker_id as "workerId",
         action_type as "actionType",
         status,
         priority,
+        phase,
+        duration_ms as "durationMs",
+        executed_at as "executedAt",
         idempotency_key as "idempotencyKey",
         created_at as "createdAt",
         updated_at as "updatedAt"
