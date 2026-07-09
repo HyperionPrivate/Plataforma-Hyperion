@@ -7,7 +7,8 @@ export class SessionExpiredError extends Error {}
 export class ApiError extends Error {
   constructor(
     public status: number,
-    message: string
+    message: string,
+    public data?: Record<string, unknown>
   ) {
     super(message);
   }
@@ -45,11 +46,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     ResponseEnvelope<{ error?: string } & Record<string, unknown>> | undefined;
 
   if (!response.ok) {
-    const message =
-      payload && typeof payload.data === "object" && payload.data && "error" in payload.data
-        ? String((payload.data as { error?: unknown }).error)
-        : `${response.status} ${response.statusText}`;
-    throw new ApiError(response.status, message);
+    const data =
+      payload && typeof payload.data === "object" && payload.data
+        ? (payload.data as Record<string, unknown>)
+        : undefined;
+    const message = data && "error" in data ? String(data.error) : `${response.status} ${response.statusText}`;
+    throw new ApiError(response.status, message, data);
   }
 
   return payload?.data as T;

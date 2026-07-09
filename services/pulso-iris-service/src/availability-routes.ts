@@ -46,6 +46,7 @@ export const registerAvailabilityRoutes: RouteRegistrar = (app, context) => {
       siteId: parsed.data.siteId,
       professionalId: parsed.data.professionalId,
       appointmentTypeId: parsed.data.appointmentTypeId,
+      payerId: parsed.data.payerId,
       includeFull: parsed.data.includeFull
     });
 

@@ -6,8 +6,8 @@ x-node-build: &node-build
   args:
     VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
 
-# INTERNAL_SERVICE_TOKEN se inyecta solo a los servicios que lo validan (audit-service),
-# para que una fuga en un contenedor no comprometa a los demas.
+# INTERNAL_SERVICE_TOKEN se inyecta a audit-service (valida) y pulso-iris-service (emite eventos).
+# Una fuga en pulso-iris permite emitir auditoria; tokens por servicio siguen fuera de alcance.
 x-service-env: &service-env
   NODE_ENV: production
   SERVICE_VERSION: ${SERVICE_VERSION:-0.1.0}
@@ -186,6 +186,9 @@ services:
     command: ["node", "services/pulso-iris-service/dist/index.js"]
     environment:
       <<: *service-env
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
+      AUDIT_SERVICE_URL: http://audit-service:8086
+      VERIFICATION_SIMULATOR_ENABLED: "true"
       PORT: 8088
     expose:
       - "8088"
@@ -195,6 +198,8 @@ services:
         condition: service_healthy
       migrations:
         condition: service_completed_successfully
+      audit-service:
+        condition: service_healthy
 
   api-gateway:
     build: *node-build

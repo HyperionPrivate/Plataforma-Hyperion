@@ -18,7 +18,10 @@ import {
   pulsoIrisRpaActionPatchSchema,
   pulsoIrisWaitlistInputSchema
 } from "@hyperion/contracts";
-import type { RouteRegistrar } from "@hyperion/service-runtime";
+import type { ServiceContext } from "@hyperion/service-runtime";
+import type { FastifyInstance } from "fastify";
+import type { AuditEmitter } from "./audit-client.js";
+import { readOperatorId } from "./audit-client.js";
 import {
   ensureTenantReferences,
   mapDatabaseError,
@@ -27,7 +30,11 @@ import {
   requireTenantDb,
   sendReferenceError
 } from "./shared.js";
-import { reserveAppointmentSlotToken } from "./availability-engine.js";
+import {
+  isProfessionalExcludedForPayer,
+  listSlotAlternatives,
+  reserveAppointmentSlotToken
+} from "./availability-engine.js";
 
 const CONVERSATION_COLUMNS = `
   id,
@@ -95,7 +102,11 @@ const RPA_ACTION_COLUMNS = `
 
 const ACTIVE_BOOKING_STATUSES = new Set(["offered", "registered", "verified", "confirmed", "rescheduled"]);
 
-export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
+export async function registerOperationsRoutes(
+  app: FastifyInstance,
+  context: ServiceContext,
+  emitAudit: AuditEmitter = () => undefined
+): Promise<void> {
   const base = "/v1/tenants/:tenantId/pulso-iris";
 
   // ----- Pacientes administrativos (sinteticos / de prueba) -----
@@ -240,6 +251,18 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     ]);
     if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
+    if (input.payerId && input.professionalId) {
+      const excluded = await isProfessionalExcludedForPayer(
+        scope.db,
+        scope.tenantId,
+        input.professionalId,
+        input.payerId
+      );
+      if (excluded) {
+        return reply.code(422).send(envelope({ error: "Professional is excluded for this payer" }, request.id));
+      }
+    }
+
     let slotCapacityToken: number | null = null;
     if (input.scheduledAt) {
       if (!input.siteId || !input.professionalId || !input.appointmentTypeId) {
@@ -258,10 +281,19 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
         siteId: input.siteId,
         professionalId: input.professionalId,
         appointmentTypeId: input.appointmentTypeId,
-        scheduledAt: input.scheduledAt
+        scheduledAt: input.scheduledAt,
+        payerId: input.payerId
       });
       if (!reservation) {
-        return reply.code(409).send(envelope({ error: "Appointment slot is not available" }, request.id));
+        const alternatives = await listSlotAlternatives(scope.db, {
+          tenantId: scope.tenantId,
+          siteId: input.siteId,
+          professionalId: input.professionalId,
+          appointmentTypeId: input.appointmentTypeId,
+          from: input.scheduledAt,
+          payerId: input.payerId
+        });
+        return reply.code(409).send(envelope({ error: "Appointment slot is not available", alternatives }, request.id));
       }
       slotCapacityToken = reservation.slotCapacityToken;
     }
@@ -290,20 +322,54 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
       );
     } catch (error) {
       const mapped = mapDatabaseError(error);
+      if (
+        mapped?.statusCode === 409 &&
+        input.scheduledAt &&
+        input.siteId &&
+        input.professionalId &&
+        input.appointmentTypeId
+      ) {
+        const alternatives = await listSlotAlternatives(scope.db, {
+          tenantId: scope.tenantId,
+          siteId: input.siteId,
+          professionalId: input.professionalId,
+          appointmentTypeId: input.appointmentTypeId,
+          from: input.scheduledAt,
+          payerId: input.payerId
+        });
+        return reply.code(409).send(envelope({ error: mapped.message, alternatives }, request.id));
+      }
       if (mapped) return reply.code(mapped.statusCode).send(envelope({ error: mapped.message }, request.id));
       throw error;
     }
     const appointment = pulsoIrisAppointmentListSchema.parse(result.rows)[0];
+    const operatorId = readOperatorId(request.headers as Record<string, unknown>);
 
     // Accion RPA simulada: el registro real contra el legado no existe todavia.
     if (appointment) {
       await scope.db.query(
+        `update pulso_iris.appointments
+         set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('created_by', $3::text)
+         where tenant_id = $1 and id = $2`,
+        [scope.tenantId, appointment.id, operatorId ?? "system"]
+      );
+
+      await scope.db.query(
         `insert into pulso_iris.rpa_actions
-           (tenant_id, appointment_id, conversation_id, action_type, priority, idempotency_key, payload)
-         values ($1, $2, $3, 'register_appointment', 20, $4, '{"simulated":true}'::jsonb)
+           (tenant_id, appointment_id, conversation_id, action_type, priority, idempotency_key, payload, metadata)
+         values ($1, $2, $3, 'register_appointment', 20, $4, '{"simulated":true}'::jsonb,
+           jsonb_build_object('simulated', true, 'verificationMode', 'simulator'))
          on conflict (tenant_id, idempotency_key) do nothing`,
         [scope.tenantId, appointment.id, input.conversationId ?? null, `register:${appointment.id}`]
       );
+
+      emitAudit({
+        tenantId: scope.tenantId,
+        actorId: operatorId,
+        eventType: "appointment.registered",
+        entityType: "appointment",
+        entityId: appointment.id
+      });
     }
 
     return reply.code(201).send(envelope(appointment, request.id));
@@ -336,12 +402,14 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
         siteId: string | null;
         professionalId: string | null;
         appointmentTypeId: string | null;
+        payerId: string | null;
         scheduledAt: Date | null;
         status: string;
       }>(
         `select site_id as "siteId",
                 professional_id as "professionalId",
                 appointment_type_id as "appointmentTypeId",
+                payer_id as "payerId",
                 scheduled_at as "scheduledAt",
                 status
          from pulso_iris.appointments
@@ -358,6 +426,7 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
       const siteId = input.siteId ?? row.siteId ?? undefined;
       const professionalId = input.professionalId ?? row.professionalId ?? undefined;
       const appointmentTypeId = row.appointmentTypeId ?? undefined;
+      const payerId = row.payerId ?? undefined;
       const targetStatus = input.status ?? row.status;
 
       if (scheduledAt && ACTIVE_BOOKING_STATUSES.has(targetStatus)) {
@@ -372,45 +441,108 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
             );
         }
 
+        if (payerId) {
+          const excluded = await isProfessionalExcludedForPayer(scope.db, scope.tenantId, professionalId, payerId);
+          if (excluded) {
+            return reply.code(422).send(envelope({ error: "Professional is excluded for this payer" }, request.id));
+          }
+        }
+
         const reservation = await reserveAppointmentSlotToken(scope.db, {
           tenantId: scope.tenantId,
           siteId,
           professionalId,
           appointmentTypeId,
           scheduledAt,
+          payerId,
           excludeAppointmentId: appointmentId
         });
         if (!reservation) {
-          return reply.code(409).send(envelope({ error: "Appointment slot is not available" }, request.id));
+          const alternatives = await listSlotAlternatives(scope.db, {
+            tenantId: scope.tenantId,
+            siteId,
+            professionalId,
+            appointmentTypeId,
+            from: scheduledAt,
+            payerId,
+            excludeAppointmentId: appointmentId
+          });
+          return reply
+            .code(409)
+            .send(envelope({ error: "Appointment slot is not available", alternatives }, request.id));
         }
         slotCapacityToken = reservation.slotCapacityToken;
       }
     }
 
-    const result = await scope.db.query(
-      `update pulso_iris.appointments set
-         status = coalesce($3, status),
-         scheduled_at = coalesce($4, scheduled_at),
-         site_id = coalesce($5, site_id),
-         professional_id = coalesce($6, professional_id),
-         slot_capacity_token = coalesce($7, slot_capacity_token),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-       returning ${APPOINTMENT_COLUMNS}`,
-      [
-        scope.tenantId,
-        appointmentId,
-        input.status ?? null,
-        input.scheduledAt ?? null,
-        input.siteId ?? null,
-        input.professionalId ?? null,
-        slotCapacityToken
-      ]
-    );
+    let result;
+    try {
+      result = await scope.db.query(
+        `update pulso_iris.appointments set
+           status = coalesce($3, status),
+           scheduled_at = coalesce($4, scheduled_at),
+           site_id = coalesce($5, site_id),
+           professional_id = coalesce($6, professional_id),
+           slot_capacity_token = coalesce($7, slot_capacity_token),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${APPOINTMENT_COLUMNS}`,
+        [
+          scope.tenantId,
+          appointmentId,
+          input.status ?? null,
+          input.scheduledAt ?? null,
+          input.siteId ?? null,
+          input.professionalId ?? null,
+          slotCapacityToken
+        ]
+      );
+    } catch (error) {
+      const mapped = mapDatabaseError(error);
+      if (mapped?.statusCode === 409 && input.scheduledAt) {
+        const current = await scope.db.query<{
+          siteId: string | null;
+          professionalId: string | null;
+          appointmentTypeId: string | null;
+          payerId: string | null;
+        }>(
+          `select site_id as "siteId", professional_id as "professionalId",
+                  appointment_type_id as "appointmentTypeId", payer_id as "payerId"
+           from pulso_iris.appointments where tenant_id = $1 and id = $2`,
+          [scope.tenantId, appointmentId]
+        );
+        const row = current.rows[0];
+        const siteId = input.siteId ?? row?.siteId ?? undefined;
+        const professionalId = input.professionalId ?? row?.professionalId ?? undefined;
+        const appointmentTypeId = row?.appointmentTypeId ?? undefined;
+        if (siteId && professionalId && appointmentTypeId) {
+          const alternatives = await listSlotAlternatives(scope.db, {
+            tenantId: scope.tenantId,
+            siteId,
+            professionalId,
+            appointmentTypeId,
+            from: input.scheduledAt,
+            payerId: row?.payerId ?? undefined,
+            excludeAppointmentId: appointmentId
+          });
+          return reply.code(409).send(envelope({ error: mapped.message, alternatives }, request.id));
+        }
+      }
+      if (mapped) return reply.code(mapped.statusCode).send(envelope({ error: mapped.message }, request.id));
+      throw error;
+    }
 
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Appointment not found" }, request.id));
     }
+
+    const operatorId = readOperatorId(request.headers as Record<string, unknown>);
+    await scope.db.query(
+      `update pulso_iris.appointments
+       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('updated_by', $3::text)
+       where tenant_id = $1 and id = $2`,
+      [scope.tenantId, appointmentId, operatorId ?? "system"]
+    );
 
     // Cambios de estado relevantes generan su accion RPA simulada idempotente.
     const statusToAction: Record<string, string> = {
@@ -427,6 +559,24 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
          on conflict (tenant_id, idempotency_key) do nothing`,
         [scope.tenantId, appointmentId, actionType, `${actionType}:${appointmentId}:${input.scheduledAt ?? "now"}`]
       );
+    }
+
+    if (input.status === "cancelled") {
+      emitAudit({
+        tenantId: scope.tenantId,
+        actorId: operatorId,
+        eventType: "appointment.cancelled",
+        entityType: "appointment",
+        entityId: appointmentId
+      });
+    } else if (input.status === "rescheduled" || Boolean(input.scheduledAt)) {
+      emitAudit({
+        tenantId: scope.tenantId,
+        actorId: operatorId,
+        eventType: "appointment.rescheduled",
+        entityType: "appointment",
+        entityId: appointmentId
+      });
     }
 
     return envelope(pulsoIrisAppointmentListSchema.parse(result.rows)[0], request.id);
@@ -496,6 +646,17 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Handoff not found" }, request.id));
     }
+
+    if (input.status === "assigned") {
+      emitAudit({
+        tenantId: scope.tenantId,
+        actorId: readOperatorId(request.headers as Record<string, unknown>),
+        eventType: "handoff.assigned",
+        entityType: "handoff",
+        entityId: handoffId
+      });
+    }
+
     return envelope(pulsoIrisHandoffListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -675,4 +836,4 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     );
     return reply.code(201).send(envelope(result.rows[0], request.id));
   });
-};
+}

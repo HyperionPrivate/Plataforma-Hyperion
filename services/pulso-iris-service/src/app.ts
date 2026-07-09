@@ -11,6 +11,8 @@
 } from "@hyperion/contracts";
 import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
+import { startAppointmentVerificationSimulator } from "./appointment-verification-simulator.js";
+import { createAuditClient } from "./audit-client.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
 import { registerConfigRoutes } from "./config-routes.js";
 import { registerOperationsRoutes } from "./operations-routes.js";
@@ -21,10 +23,21 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     await verifyPulsoIrisSchema(context);
   }
 
-  await registerConfigRoutes(app, context);
-  await registerOperationsRoutes(app, context);
+  const emitAudit = createAuditClient({
+    auditServiceUrl: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
+    internalServiceToken: context.config.internalServiceToken,
+    logger: context.logger
+  });
+
+  await registerConfigRoutes(app, context, emitAudit);
+  await registerOperationsRoutes(app, context, emitAudit);
   await registerAvailabilityRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
+
+  const stopSimulator = startAppointmentVerificationSimulator(context, emitAudit);
+  app.addHook("onClose", async () => {
+    stopSimulator();
+  });
 
   app.get("/v1/pulso-iris/health", async (request) => {
     return envelope(

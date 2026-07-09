@@ -6,6 +6,10 @@ import {
   pulsoIrisAvailabilityRuleListSchema,
   pulsoIrisAppointmentTypeInputSchema,
   pulsoIrisAppointmentTypeListSchema,
+  pulsoIrisHolidayInputSchema,
+  pulsoIrisHolidayListSchema,
+  pulsoIrisPayerExclusionInputSchema,
+  pulsoIrisPayerExclusionListSchema,
   pulsoIrisPayerInputSchema,
   pulsoIrisPayerListSchema,
   pulsoIrisProfessionalInputSchema,
@@ -13,8 +17,10 @@ import {
   pulsoIrisSiteInputSchema,
   pulsoIrisSiteListSchema
 } from "@hyperion/contracts";
-import type { RouteRegistrar } from "@hyperion/service-runtime";
-import type { FastifyReply } from "fastify";
+import type { ServiceContext } from "@hyperion/service-runtime";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import type { AuditEmitter } from "./audit-client.js";
+import { readOperatorId } from "./audit-client.js";
 import {
   ensureTenantReferences,
   mapDatabaseError,
@@ -23,6 +29,8 @@ import {
   requireTenantDb,
   sendReferenceError
 } from "./shared.js";
+
+type Database = NonNullable<ServiceContext["db"]>;
 
 const SITE_COLUMNS = `
   id,
@@ -106,8 +114,48 @@ const AGENDA_BLOCK_COLUMNS = `
   updated_at as "updatedAt"
 `;
 
-export const registerConfigRoutes: RouteRegistrar = (app, context) => {
+const HOLIDAY_COLUMNS = `
+  id,
+  tenant_id as "tenantId",
+  holiday_date::text as "holidayDate",
+  name,
+  status,
+  created_at as "createdAt",
+  updated_at as "updatedAt"
+`;
+
+const PAYER_EXCLUSION_COLUMNS = `
+  id,
+  tenant_id as "tenantId",
+  professional_id as "professionalId",
+  payer_id as "payerId",
+  status,
+  created_at as "createdAt",
+  updated_at as "updatedAt"
+`;
+
+export async function registerConfigRoutes(
+  app: FastifyInstance,
+  context: ServiceContext,
+  emitAudit: AuditEmitter = () => undefined
+): Promise<void> {
   const base = "/v1/tenants/:tenantId/pulso-iris/config";
+
+  const emitConfigUpdated = (
+    request: { id: string; headers: Record<string, unknown> | { [key: string]: unknown } },
+    tenantId: string,
+    entityType: string,
+    entityId: string
+  ) => {
+    emitAudit({
+      tenantId,
+      actorId: readOperatorId(request.headers as Record<string, unknown>),
+      eventType: "config.updated",
+      entityType,
+      entityId,
+      metadata: { requestId: request.id }
+    });
+  };
 
   // ----- Sedes -----
 
@@ -351,6 +399,23 @@ export const registerConfigRoutes: RouteRegistrar = (app, context) => {
     const input = parseBody(pulsoIrisAppointmentTypeInputSchema.partial(), request, reply);
     if (!input) return;
 
+    if (input.durationMin !== undefined) {
+      const conflict = await findSlotDurationConflict(scope.db, scope.tenantId, {
+        appointmentTypeId,
+        durationMin: input.durationMin
+      });
+      if (conflict) {
+        return reply.code(422).send(
+          envelope(
+            {
+              error: `durationMin ${input.durationMin} breaks active availability rule slotDurationMin ${conflict.slotDurationMin}`
+            },
+            request.id
+          )
+        );
+      }
+    }
+
     const result = await scope.db.query(
       `update pulso_iris.appointment_types set
          name = coalesce($3, name),
@@ -417,6 +482,14 @@ export const registerConfigRoutes: RouteRegistrar = (app, context) => {
       return sendReferenceError(reply, request, referenceError.label);
     }
 
+    const durationError = await validateRuleSlotDuration(scope.db, scope.tenantId, {
+      appointmentTypeId: input.appointmentTypeId,
+      slotDurationMin: input.slotDurationMin ?? 20
+    });
+    if (durationError) {
+      return reply.code(422).send(envelope({ error: durationError }, request.id));
+    }
+
     try {
       const result = await scope.db.query(
         `insert into pulso_iris.availability_rules
@@ -442,7 +515,9 @@ export const registerConfigRoutes: RouteRegistrar = (app, context) => {
           input.notes ?? null
         ]
       );
-      return reply.code(201).send(envelope(pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0], request.id));
+      const created = pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0];
+      if (created) emitConfigUpdated(request, scope.tenantId, "availability_rule", created.id);
+      return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
     }
@@ -469,6 +544,30 @@ export const registerConfigRoutes: RouteRegistrar = (app, context) => {
     ]);
     if (referenceError) {
       return sendReferenceError(reply, request, referenceError.label);
+    }
+
+    if (input.slotDurationMin !== undefined || input.appointmentTypeId !== undefined) {
+      const current = await scope.db.query<{
+        appointmentTypeId: string;
+        slotDurationMin: number;
+      }>(
+        `select appointment_type_id as "appointmentTypeId", slot_duration_min as "slotDurationMin"
+         from pulso_iris.availability_rules
+         where tenant_id = $1 and id = $2`,
+        [scope.tenantId, ruleId]
+      );
+      const existing = current.rows[0];
+      if (!existing) {
+        return reply.code(404).send(envelope({ error: "Availability rule not found" }, request.id));
+      }
+
+      const durationError = await validateRuleSlotDuration(scope.db, scope.tenantId, {
+        appointmentTypeId: input.appointmentTypeId ?? existing.appointmentTypeId,
+        slotDurationMin: input.slotDurationMin ?? existing.slotDurationMin
+      });
+      if (durationError) {
+        return reply.code(422).send(envelope({ error: durationError }, request.id));
+      }
     }
 
     try {
@@ -634,7 +733,202 @@ export const registerConfigRoutes: RouteRegistrar = (app, context) => {
       return sendDatabaseConfigError(error, reply, request.id);
     }
   });
-};
+
+  // ----- Festivos -----
+
+  app.get(`${base}/holidays`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+
+    const result = await scope.db.query(
+      `select ${HOLIDAY_COLUMNS}
+       from pulso_iris.holidays
+       where tenant_id = $1
+       order by holiday_date`,
+      [scope.tenantId]
+    );
+    return envelope(pulsoIrisHolidayListSchema.parse(result.rows), request.id);
+  });
+
+  app.post(`${base}/holidays`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const input = parseBody(pulsoIrisHolidayInputSchema, request, reply);
+    if (!input) return;
+
+    try {
+      const result = await scope.db.query(
+        `insert into pulso_iris.holidays (tenant_id, holiday_date, name, status)
+         values ($1, $2::date, $3, coalesce($4, 'active'))
+         returning ${HOLIDAY_COLUMNS}`,
+        [scope.tenantId, input.holidayDate, input.name, input.status ?? null]
+      );
+      const created = pulsoIrisHolidayListSchema.parse(result.rows)[0];
+      if (created) emitConfigUpdated(request, scope.tenantId, "holiday", created.id);
+      return reply.code(201).send(envelope(created, request.id));
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
+
+  app.patch(`${base}/holidays/:holidayId`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const holidayId = readUuidParam(request.params, "holidayId");
+    if (!holidayId) {
+      return reply.code(400).send(envelope({ error: "holidayId must be a UUID" }, request.id));
+    }
+    const input = parseBody(pulsoIrisHolidayInputSchema.partial(), request, reply);
+    if (!input) return;
+
+    try {
+      const result = await scope.db.query(
+        `update pulso_iris.holidays set
+           holiday_date = coalesce($3::date, holiday_date),
+           name = coalesce($4, name),
+           status = coalesce($5, status),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${HOLIDAY_COLUMNS}`,
+        [scope.tenantId, holidayId, input.holidayDate ?? null, input.name ?? null, input.status ?? null]
+      );
+
+      if (result.rows.length === 0) {
+        return reply.code(404).send(envelope({ error: "Holiday not found" }, request.id));
+      }
+      emitConfigUpdated(request, scope.tenantId, "holiday", holidayId);
+      return envelope(pulsoIrisHolidayListSchema.parse(result.rows)[0], request.id);
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
+
+  // ----- Exclusiones profesional x convenio -----
+
+  app.get(`${base}/payer-exclusions`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+
+    const result = await scope.db.query(
+      `select ${PAYER_EXCLUSION_COLUMNS}
+       from pulso_iris.professional_payer_exclusions
+       where tenant_id = $1
+       order by created_at desc`,
+      [scope.tenantId]
+    );
+    return envelope(pulsoIrisPayerExclusionListSchema.parse(result.rows), request.id);
+  });
+
+  app.post(`${base}/payer-exclusions`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const input = parseBody(pulsoIrisPayerExclusionInputSchema, request, reply);
+    if (!input) return;
+
+    const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.payerId, table: "pulso_iris.payers", label: "payerId" }
+    ]);
+    if (referenceError) {
+      return sendReferenceError(reply, request, referenceError.label);
+    }
+
+    try {
+      const result = await scope.db.query(
+        `insert into pulso_iris.professional_payer_exclusions
+           (tenant_id, professional_id, payer_id, status)
+         values ($1, $2, $3, coalesce($4, 'active'))
+         returning ${PAYER_EXCLUSION_COLUMNS}`,
+        [scope.tenantId, input.professionalId, input.payerId, input.status ?? null]
+      );
+      const created = pulsoIrisPayerExclusionListSchema.parse(result.rows)[0];
+      if (created) emitConfigUpdated(request, scope.tenantId, "payer_exclusion", created.id);
+      return reply.code(201).send(envelope(created, request.id));
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
+
+  app.patch(`${base}/payer-exclusions/:exclusionId`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const exclusionId = readUuidParam(request.params, "exclusionId");
+    if (!exclusionId) {
+      return reply.code(400).send(envelope({ error: "exclusionId must be a UUID" }, request.id));
+    }
+    const input = parseBody(pulsoIrisPayerExclusionInputSchema.partial(), request, reply);
+    if (!input) return;
+
+    const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.payerId, table: "pulso_iris.payers", label: "payerId" }
+    ]);
+    if (referenceError) {
+      return sendReferenceError(reply, request, referenceError.label);
+    }
+
+    try {
+      const result = await scope.db.query(
+        `update pulso_iris.professional_payer_exclusions set
+           professional_id = coalesce($3, professional_id),
+           payer_id = coalesce($4, payer_id),
+           status = coalesce($5, status),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${PAYER_EXCLUSION_COLUMNS}`,
+        [scope.tenantId, exclusionId, input.professionalId ?? null, input.payerId ?? null, input.status ?? null]
+      );
+
+      if (result.rows.length === 0) {
+        return reply.code(404).send(envelope({ error: "Payer exclusion not found" }, request.id));
+      }
+      emitConfigUpdated(request, scope.tenantId, "payer_exclusion", exclusionId);
+      return envelope(pulsoIrisPayerExclusionListSchema.parse(result.rows)[0], request.id);
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
+}
+
+async function validateRuleSlotDuration(
+  db: Database,
+  tenantId: string,
+  input: { appointmentTypeId: string; slotDurationMin: number }
+): Promise<string | undefined> {
+  const result = await db.query<{ durationMin: number }>(
+    `select duration_min as "durationMin"
+     from pulso_iris.appointment_types
+     where tenant_id = $1 and id = $2`,
+    [tenantId, input.appointmentTypeId]
+  );
+  const durationMin = result.rows[0]?.durationMin;
+  if (durationMin === undefined) {
+    return "appointmentTypeId does not belong to this tenant";
+  }
+  if (input.slotDurationMin < durationMin) {
+    return `slotDurationMin must be >= appointment type durationMin (${durationMin})`;
+  }
+  return undefined;
+}
+
+async function findSlotDurationConflict(
+  db: Database,
+  tenantId: string,
+  input: { appointmentTypeId: string; durationMin: number }
+): Promise<{ slotDurationMin: number } | undefined> {
+  const result = await db.query<{ slotDurationMin: number }>(
+    `select slot_duration_min as "slotDurationMin"
+     from pulso_iris.availability_rules
+     where tenant_id = $1
+       and appointment_type_id = $2
+       and status = 'active'
+       and slot_duration_min < $3
+     order by slot_duration_min
+     limit 1`,
+    [tenantId, input.appointmentTypeId, input.durationMin]
+  );
+  return result.rows[0];
+}
 
 function isTimeRange(startsAt: string, endsAt: string): boolean {
   return toMinutes(endsAt) > toMinutes(startsAt);

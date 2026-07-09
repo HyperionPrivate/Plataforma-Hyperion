@@ -245,6 +245,7 @@ describeIntegration("pulso-iris tenant isolation", () => {
       }
     });
     expect(duplicate.statusCode).toBe(409);
+    expect(Array.isArray(duplicate.json().data.alternatives)).toBe(true);
   });
 
   it("rejects scheduled appointments outside configured availability", async () => {
@@ -299,6 +300,181 @@ describeIntegration("pulso-iris tenant isolation", () => {
     const starts = slots.json().data.slots.map((slot: { startsAt: string }) => slot.startsAt);
     expect(starts).not.toContain("2026-09-14T20:00:00.000Z");
     expect(starts).toContain("2026-09-14T20:20:00.000Z");
+  });
+
+  it("excludes holidays from generated slots", async () => {
+    const rule = await createRule({
+      weekday: 1,
+      startsAt: "08:00",
+      endsAt: "10:00",
+      capacity: 1
+    });
+    expect(rule.statusCode).toBe(201);
+
+    const holiday = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/holidays`,
+      payload: { holidayDate: "2026-09-14", name: "Festivo de prueba" }
+    });
+    expect(holiday.statusCode).toBe(201);
+
+    const slots = await app.inject({
+      method: "GET",
+      url:
+        `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
+        `?from=2026-09-14T12:00:00.000Z&to=2026-09-14T16:00:00.000Z` +
+        `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}`
+    });
+    expect(slots.statusCode).toBe(200);
+    expect(slots.json().data.slots).toHaveLength(0);
+  });
+
+  it("filters payer exclusions from slots and blocks reservation", async () => {
+    const rule = await createRule({
+      weekday: 2,
+      startsAt: "09:00",
+      endsAt: "10:00",
+      capacity: 1
+    });
+    expect(rule.statusCode).toBe(201);
+
+    const exclusion = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/payer-exclusions`,
+      payload: { professionalId: professionalA, payerId: payerA }
+    });
+    expect(exclusion.statusCode).toBe(201);
+
+    const slots = await app.inject({
+      method: "GET",
+      url:
+        `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
+        `?from=2026-09-15T13:00:00.000Z&to=2026-09-15T16:00:00.000Z` +
+        `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}&payerId=${payerA}`
+    });
+    expect(slots.statusCode).toBe(200);
+    expect(slots.json().data.slots).toHaveLength(0);
+
+    const appointment = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/appointments`,
+      payload: {
+        patientId: patientA,
+        siteId: siteA,
+        professionalId: professionalA,
+        payerId: payerA,
+        appointmentTypeId: typeA,
+        scheduledAt: "2026-09-15T14:00:00.000Z"
+      }
+    });
+    expect(appointment.statusCode).toBe(422);
+    expect(appointment.json().data.error).toContain("excluded");
+  });
+
+  it("rejects availability rules with slot shorter than appointment type", async () => {
+    const response = await createRule({
+      weekday: 3,
+      startsAt: "08:00",
+      endsAt: "09:00",
+      capacity: 1,
+      slotDurationMin: 10
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().data.error).toContain("slotDurationMin");
+  });
+
+  it("rejects appointment type duration that breaks active rules", async () => {
+    const rule = await createRule({
+      weekday: 4,
+      startsAt: "08:00",
+      endsAt: "09:00",
+      capacity: 1,
+      slotDurationMin: 20
+    });
+    expect(rule.statusCode).toBe(201);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/appointment-types/${typeA}`,
+      payload: { durationMin: 30 }
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().data.error).toContain("durationMin");
+  });
+
+  it("rejects direct SQL cross-tenant holiday and payer exclusion inserts", async () => {
+    await expect(
+      client.query(
+        `insert into pulso_iris.professional_payer_exclusions
+           (tenant_id, professional_id, payer_id)
+         values ($1, $2, $3)`,
+        [tenantA, professionalA, (await createCoreCatalog(tenantB, "BX")).payerId]
+      )
+    ).rejects.toMatchObject({ code: "23503" });
+  });
+
+  it("verifies queued register_appointment actions through the simulator tick", async () => {
+    const { runSimulatorTick } = await import("./appointment-verification-simulator.js");
+    const events: Array<{ eventType: string; actorId?: string }> = [];
+
+    await createRule({
+      weekday: 5,
+      startsAt: "10:00",
+      endsAt: "11:00",
+      capacity: 1
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/appointments`,
+      headers: { "x-operator-id": "operator-test" },
+      payload: {
+        patientId: patientA,
+        siteId: siteA,
+        professionalId: professionalA,
+        appointmentTypeId: typeA,
+        scheduledAt: "2026-09-18T15:00:00.000Z",
+        origin: "advisor"
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    const appointmentId = created.json().data.id as string;
+
+    await client.query(
+      `insert into pulso_iris.rpa_workers (tenant_id, name, status, last_keepalive_at)
+       values ($1, 'SIM-WORKER', 'active', now())
+       on conflict (tenant_id, name) do update set status = 'active', last_keepalive_at = now()`,
+      [tenantA]
+    );
+
+    const completed = await runSimulatorTick(client as never, (event) => {
+      events.push({ eventType: event.eventType, actorId: event.actorId });
+    });
+    expect(completed).toBeGreaterThanOrEqual(1);
+
+    const appointment = await client.query<{ status: string; metadata: Record<string, unknown> }>(
+      `select status, metadata from pulso_iris.appointments where id = $1`,
+      [appointmentId]
+    );
+    expect(appointment.rows[0]?.status).toBe("verified");
+    expect(appointment.rows[0]?.metadata).toMatchObject({
+      simulated: true,
+      verificationMode: "simulator"
+    });
+
+    const action = await client.query<{ status: string; metadata: Record<string, unknown> }>(
+      `select status, metadata from pulso_iris.rpa_actions
+       where tenant_id = $1 and appointment_id = $2 and action_type = 'register_appointment'`,
+      [tenantA, appointmentId]
+    );
+    expect(action.rows[0]?.status).toBe("succeeded");
+    expect(action.rows[0]?.metadata).toMatchObject({
+      simulated: true,
+      verificationMode: "simulator"
+    });
+    expect(events.some((event) => event.eventType === "appointment.verified" && event.actorId === "simulator")).toBe(
+      true
+    );
   });
 
   it("rejects direct SQL cross-tenant agenda block inserts with composite foreign keys", async () => {
@@ -382,6 +558,7 @@ async function createRule(input: {
   startsAt: string;
   endsAt: string;
   capacity: number;
+  slotDurationMin?: number;
 }): Promise<Awaited<ReturnType<typeof app.inject>>> {
   return app.inject({
     method: "POST",
@@ -393,7 +570,7 @@ async function createRule(input: {
       weekday: input.weekday,
       startsAt: input.startsAt,
       endsAt: input.endsAt,
-      slotDurationMin: 20,
+      slotDurationMin: input.slotDurationMin ?? 20,
       capacity: input.capacity
     }
   });

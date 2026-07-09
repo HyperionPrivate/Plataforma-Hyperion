@@ -5,7 +5,9 @@ import type {
   PulsoIrisAgendaBlock,
   PulsoIrisAvailabilityRule,
   PulsoIrisAppointmentType,
+  PulsoIrisHoliday,
   PulsoIrisPayer,
+  PulsoIrisPayerExclusion,
   PulsoIrisProfessional,
   PulsoIrisSite
 } from "@hyperion/contracts";
@@ -515,13 +517,19 @@ function TypesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean 
 function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
   const rulesPath = tenantPath(tenantId, "config/availability-rules");
   const blocksPath = tenantPath(tenantId, "config/agenda-blocks");
+  const holidaysPath = tenantPath(tenantId, "config/holidays");
+  const exclusionsPath = tenantPath(tenantId, "config/payer-exclusions");
   const sitesPath = tenantPath(tenantId, "config/sites");
   const professionalsPath = tenantPath(tenantId, "config/professionals");
+  const payersPath = tenantPath(tenantId, "config/payers");
   const typesPath = tenantPath(tenantId, "config/appointment-types");
   const rules = useCatalog<PulsoIrisAvailabilityRule>(rulesPath);
   const blocks = useCatalog<PulsoIrisAgendaBlock>(blocksPath);
+  const holidays = useCatalog<PulsoIrisHoliday>(holidaysPath);
+  const exclusions = useCatalog<PulsoIrisPayerExclusion>(exclusionsPath);
   const sites = useCatalog<PulsoIrisSite>(sitesPath);
   const professionals = useCatalog<PulsoIrisProfessional>(professionalsPath);
+  const payers = useCatalog<PulsoIrisPayer>(payersPath);
   const appointmentTypes = useCatalog<PulsoIrisAppointmentType>(typesPath);
   const [siteId, setSiteId] = useState("");
   const [professionalId, setProfessionalId] = useState("");
@@ -536,15 +544,34 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
   const [blockEndsAt, setBlockEndsAt] = useState(() => defaultLocalDateTime(9));
   const [blockReason, setBlockReason] = useState("");
   const [savingBlock, setSavingBlock] = useState(false);
+  const [holidayDate, setHolidayDate] = useState("");
+  const [holidayName, setHolidayName] = useState("");
+  const [savingHoliday, setSavingHoliday] = useState(false);
+  const [exclusionProfessionalId, setExclusionProfessionalId] = useState("");
+  const [exclusionPayerId, setExclusionPayerId] = useState("");
+  const [savingExclusion, setSavingExclusion] = useState(false);
 
   useEffect(() => {
     if (!siteId && sites.items[0]) setSiteId(sites.items[0].id);
     if (!professionalId && professionals.items[0]) setProfessionalId(professionals.items[0].id);
     if (!appointmentTypeId && appointmentTypes.items[0]) setAppointmentTypeId(appointmentTypes.items[0].id);
-  }, [appointmentTypeId, appointmentTypes.items, professionalId, professionals.items, siteId, sites.items]);
+    if (!exclusionProfessionalId && professionals.items[0]) setExclusionProfessionalId(professionals.items[0].id);
+    if (!exclusionPayerId && payers.items[0]) setExclusionPayerId(payers.items[0].id);
+  }, [
+    appointmentTypeId,
+    appointmentTypes.items,
+    exclusionPayerId,
+    exclusionProfessionalId,
+    payers.items,
+    professionalId,
+    professionals.items,
+    siteId,
+    sites.items
+  ]);
 
   const siteById = new Map(sites.items.map((site) => [site.id, site.name]));
   const professionalById = new Map(professionals.items.map((professional) => [professional.id, professional.name]));
+  const payerById = new Map(payers.items.map((payer) => [payer.id, payer.name]));
   const typeById = new Map(appointmentTypes.items.map((type) => [type.id, type.name]));
 
   const add = async () => {
@@ -586,8 +613,50 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
     }
   };
 
-  const loading = rules.loading || blocks.loading || sites.loading || professionals.loading || appointmentTypes.loading;
-  const error = rules.error ?? blocks.error ?? sites.error ?? professionals.error ?? appointmentTypes.error;
+  const addHoliday = async () => {
+    if (!holidayDate || !holidayName.trim()) return;
+    setSavingHoliday(true);
+    try {
+      await api.post(holidaysPath, { holidayDate, name: holidayName.trim() });
+      setHolidayName("");
+      holidays.reload();
+    } finally {
+      setSavingHoliday(false);
+    }
+  };
+
+  const addExclusion = async () => {
+    if (!exclusionProfessionalId || !exclusionPayerId) return;
+    setSavingExclusion(true);
+    try {
+      await api.post(exclusionsPath, {
+        professionalId: exclusionProfessionalId,
+        payerId: exclusionPayerId
+      });
+      exclusions.reload();
+    } finally {
+      setSavingExclusion(false);
+    }
+  };
+
+  const loading =
+    rules.loading ||
+    blocks.loading ||
+    holidays.loading ||
+    exclusions.loading ||
+    sites.loading ||
+    professionals.loading ||
+    payers.loading ||
+    appointmentTypes.loading;
+  const error =
+    rules.error ??
+    blocks.error ??
+    holidays.error ??
+    exclusions.error ??
+    sites.error ??
+    professionals.error ??
+    payers.error ??
+    appointmentTypes.error;
   const canCreate = canWrite && siteId && professionalId && appointmentTypeId;
 
   return (
@@ -790,6 +859,153 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
                   {canWrite ? (
                     <td>
                       <BlockStatusToggle path={blocksPath} block={block} onDone={blocks.reload} />
+                    </td>
+                  ) : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card>
+        <CardHead title={`Festivos (${holidays.items.length})`} trailing={<ReloadButton onClick={holidays.reload} />} />
+        {canWrite ? (
+          <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+            <input
+              className="input"
+              type="date"
+              value={holidayDate}
+              onChange={(e) => setHolidayDate(e.target.value)}
+              style={{ maxWidth: 160 }}
+            />
+            <input
+              className="input"
+              placeholder="Nombre del festivo"
+              value={holidayName}
+              onChange={(e) => setHolidayName(e.target.value)}
+              style={{ maxWidth: 260 }}
+            />
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              onClick={addHoliday}
+              disabled={savingHoliday || !holidayDate || !holidayName.trim()}
+            >
+              <Plus size={15} /> Agregar
+            </button>
+          </div>
+        ) : null}
+        {loading ? (
+          <LoadingState />
+        ) : error ? (
+          <div className="banner">{error}</div>
+        ) : holidays.items.length === 0 ? (
+          <EmptyState label="Sin festivos configurados" />
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Nombre</th>
+                <th>Estado</th>
+                {canWrite ? <th>Acciones</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {holidays.items.map((holiday) => (
+                <tr key={holiday.id}>
+                  <td className="small">{holiday.holidayDate}</td>
+                  <td className="small muted">{holiday.name}</td>
+                  <td>
+                    <Pill tone={holiday.status === "active" ? "green" : "amber"}>{holiday.status}</Pill>
+                  </td>
+                  {canWrite ? (
+                    <td>
+                      <StatusToggle
+                        path={holidaysPath}
+                        id={holiday.id}
+                        status={holiday.status}
+                        onDone={holidays.reload}
+                      />
+                    </td>
+                  ) : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card>
+        <CardHead
+          title={`Exclusiones por convenio (${exclusions.items.length})`}
+          trailing={<ReloadButton onClick={exclusions.reload} />}
+        />
+        {canWrite ? (
+          <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+            <select
+              className="select"
+              value={exclusionProfessionalId}
+              onChange={(e) => setExclusionProfessionalId(e.target.value)}
+            >
+              {professionals.items.map((professional) => (
+                <option key={professional.id} value={professional.id}>
+                  {professional.name}
+                </option>
+              ))}
+            </select>
+            <select className="select" value={exclusionPayerId} onChange={(e) => setExclusionPayerId(e.target.value)}>
+              {payers.items.map((payer) => (
+                <option key={payer.id} value={payer.id}>
+                  {payer.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              onClick={addExclusion}
+              disabled={savingExclusion || !exclusionProfessionalId || !exclusionPayerId}
+            >
+              <Plus size={15} /> Excluir
+            </button>
+          </div>
+        ) : null}
+        {loading ? (
+          <LoadingState />
+        ) : error ? (
+          <div className="banner">{error}</div>
+        ) : exclusions.items.length === 0 ? (
+          <EmptyState label="Sin exclusiones por convenio" />
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Profesional</th>
+                <th>Convenio</th>
+                <th>Estado</th>
+                {canWrite ? <th>Acciones</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {exclusions.items.map((exclusion) => (
+                <tr key={exclusion.id}>
+                  <td className="small muted">
+                    {professionalById.get(exclusion.professionalId) ?? exclusion.professionalId}
+                  </td>
+                  <td className="small muted">{payerById.get(exclusion.payerId) ?? exclusion.payerId}</td>
+                  <td>
+                    <Pill tone={exclusion.status === "active" ? "green" : "amber"}>{exclusion.status}</Pill>
+                  </td>
+                  {canWrite ? (
+                    <td>
+                      <StatusToggle
+                        path={exclusionsPath}
+                        id={exclusion.id}
+                        status={exclusion.status}
+                        onDone={exclusions.reload}
+                      />
                     </td>
                   ) : null}
                 </tr>

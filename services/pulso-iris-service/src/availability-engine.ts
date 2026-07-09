@@ -1,7 +1,8 @@
 import {
   pulsoIrisAvailabilitySlotsSchema,
   type PulsoIrisAvailabilitySlot,
-  type PulsoIrisAvailabilitySlots
+  type PulsoIrisAvailabilitySlots,
+  type PulsoIrisSlotAlternative
 } from "@hyperion/contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 
@@ -14,6 +15,7 @@ export interface AvailabilitySlotFilters {
   siteId?: string;
   professionalId?: string;
   appointmentTypeId?: string;
+  payerId?: string;
   includeFull?: boolean;
   excludeAppointmentId?: string;
   limit?: number;
@@ -25,6 +27,7 @@ export interface SlotReservationRequest {
   professionalId: string;
   appointmentTypeId: string;
   scheduledAt: string;
+  payerId?: string;
   excludeAppointmentId?: string;
 }
 
@@ -44,7 +47,8 @@ with params as (
     $6::uuid as appointment_type_id,
     $7::boolean as include_full,
     $8::uuid as exclude_appointment_id,
-    $9::int as row_limit
+    $9::int as row_limit,
+    $10::uuid as payer_id
 ),
 local_days as (
   select generate_series(
@@ -76,6 +80,24 @@ rule_windows as (
     on extract(dow from d.local_date)::int = r.weekday
    and (r.effective_from is null or r.effective_from <= d.local_date)
    and (r.effective_to is null or r.effective_to >= d.local_date)
+   and not exists (
+     select 1
+     from pulso_iris.holidays h
+     where h.tenant_id = p.tenant_id
+       and h.status = 'active'
+       and h.holiday_date = d.local_date
+   )
+   and (
+     p.payer_id is null
+     or not exists (
+       select 1
+       from pulso_iris.professional_payer_exclusions e
+       where e.tenant_id = p.tenant_id
+         and e.status = 'active'
+         and e.professional_id = r.professional_id
+         and e.payer_id = p.payer_id
+     )
+   )
 ),
 candidate_slots as (
   select
@@ -176,7 +198,8 @@ export async function listAvailabilitySlots(
     filters.appointmentTypeId ?? null,
     filters.includeFull ?? false,
     filters.excludeAppointmentId ?? null,
-    filters.limit ?? 500
+    filters.limit ?? 500,
+    filters.payerId ?? null
   ]);
 
   return pulsoIrisAvailabilitySlotsSchema.parse({
@@ -199,6 +222,7 @@ export async function reserveAppointmentSlotToken(
     siteId: request.siteId,
     professionalId: request.professionalId,
     appointmentTypeId: request.appointmentTypeId,
+    payerId: request.payerId,
     includeFull: false,
     excludeAppointmentId: request.excludeAppointmentId,
     limit: 1
@@ -243,4 +267,68 @@ export async function reserveAppointmentSlotToken(
   }
 
   return { slot, slotCapacityToken };
+}
+
+export async function listSlotAlternatives(
+  db: Database,
+  request: {
+    tenantId: string;
+    siteId: string;
+    professionalId: string;
+    appointmentTypeId: string;
+    from: string;
+    payerId?: string;
+    excludeAppointmentId?: string;
+    limit?: number;
+  }
+): Promise<PulsoIrisSlotAlternative[]> {
+  const from = new Date(request.from);
+  const to = new Date(from.getTime() + 14 * 24 * 60 * 60 * 1000);
+  const availability = await listAvailabilitySlots(db, {
+    tenantId: request.tenantId,
+    from,
+    to,
+    siteId: request.siteId,
+    professionalId: request.professionalId,
+    appointmentTypeId: request.appointmentTypeId,
+    payerId: request.payerId,
+    includeFull: false,
+    excludeAppointmentId: request.excludeAppointmentId,
+    limit: request.limit ?? 3
+  });
+
+  return availability.slots
+    .filter((slot) => new Date(slot.startsAt).getTime() !== from.getTime())
+    .slice(0, request.limit ?? 3)
+    .map((slot) => ({
+      startsAt: slot.startsAt,
+      endsAt: slot.endsAt,
+      siteId: slot.siteId,
+      professionalId: slot.professionalId,
+      appointmentTypeId: slot.appointmentTypeId,
+      remaining: slot.remaining,
+      siteName: slot.siteName,
+      professionalName: slot.professionalName,
+      appointmentTypeName: slot.appointmentTypeName
+    }));
+}
+
+export async function isProfessionalExcludedForPayer(
+  db: Database,
+  tenantId: string,
+  professionalId: string,
+  payerId: string
+): Promise<boolean> {
+  const result = await db.query<{ exists: boolean }>(
+    `select exists(
+       select 1
+       from pulso_iris.professional_payer_exclusions
+       where tenant_id = $1
+         and professional_id = $2
+         and payer_id = $3
+         and status = 'active'
+     ) as "exists"`,
+    [tenantId, professionalId, payerId]
+  );
+  return Boolean(result.rows[0]?.exists);
 }

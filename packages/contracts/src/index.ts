@@ -387,7 +387,52 @@ export const pulsoIrisAvailabilitySlotQuerySchema = z.object({
   siteId: z.string().uuid().optional(),
   professionalId: z.string().uuid().optional(),
   appointmentTypeId: z.string().uuid().optional(),
+  payerId: z.string().uuid().optional(),
   includeFull: z.preprocess((value) => value === "true" || value === true, z.boolean()).default(false)
+});
+
+export const pulsoIrisHolidaySchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  holidayDate: dateOnlySchema,
+  name: z.string().min(1),
+  status: catalogStatusSchema.default("active"),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisHolidayInputSchema = z.object({
+  holidayDate: dateOnlySchema,
+  name: z.string().min(2),
+  status: catalogStatusSchema.optional()
+});
+
+export const pulsoIrisPayerExclusionSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  professionalId: z.string().uuid(),
+  payerId: z.string().uuid(),
+  status: catalogStatusSchema.default("active"),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const pulsoIrisPayerExclusionInputSchema = z.object({
+  professionalId: z.string().uuid(),
+  payerId: z.string().uuid(),
+  status: catalogStatusSchema.optional()
+});
+
+export const pulsoIrisSlotAlternativeSchema = z.object({
+  startsAt: isoDateTime,
+  endsAt: isoDateTime,
+  siteId: z.string().uuid(),
+  professionalId: z.string().uuid(),
+  appointmentTypeId: z.string().uuid(),
+  remaining: z.number().int().nonnegative(),
+  siteName: optionalFromNull(z.string().min(1)),
+  professionalName: optionalFromNull(z.string().min(1)),
+  appointmentTypeName: optionalFromNull(z.string().min(1))
 });
 
 export const pulsoIrisSiteListSchema = z.array(pulsoIrisSiteSchema);
@@ -396,6 +441,8 @@ export const pulsoIrisPayerListSchema = z.array(pulsoIrisPayerSchema);
 export const pulsoIrisAppointmentTypeListSchema = z.array(pulsoIrisAppointmentTypeSchema);
 export const pulsoIrisAvailabilityRuleListSchema = z.array(pulsoIrisAvailabilityRuleSchema);
 export const pulsoIrisAgendaBlockListSchema = z.array(pulsoIrisAgendaBlockSchema);
+export const pulsoIrisHolidayListSchema = z.array(pulsoIrisHolidaySchema);
+export const pulsoIrisPayerExclusionListSchema = z.array(pulsoIrisPayerExclusionSchema);
 
 export type PulsoIrisSite = z.infer<typeof pulsoIrisSiteSchema>;
 export type PulsoIrisSiteInput = z.infer<typeof pulsoIrisSiteInputSchema>;
@@ -411,6 +458,11 @@ export type PulsoIrisAgendaBlock = z.infer<typeof pulsoIrisAgendaBlockSchema>;
 export type PulsoIrisAgendaBlockInput = z.infer<typeof pulsoIrisAgendaBlockInputSchema>;
 export type PulsoIrisAvailabilitySlot = z.infer<typeof pulsoIrisAvailabilitySlotSchema>;
 export type PulsoIrisAvailabilitySlots = z.infer<typeof pulsoIrisAvailabilitySlotsSchema>;
+export type PulsoIrisHoliday = z.infer<typeof pulsoIrisHolidaySchema>;
+export type PulsoIrisHolidayInput = z.infer<typeof pulsoIrisHolidayInputSchema>;
+export type PulsoIrisPayerExclusion = z.infer<typeof pulsoIrisPayerExclusionSchema>;
+export type PulsoIrisPayerExclusionInput = z.infer<typeof pulsoIrisPayerExclusionInputSchema>;
+export type PulsoIrisSlotAlternative = z.infer<typeof pulsoIrisSlotAlternativeSchema>;
 
 export const pulsoIrisConversationListSchema = z.array(pulsoIrisConversationSchema);
 export const pulsoIrisAppointmentListSchema = z.array(pulsoIrisAppointmentSchema);

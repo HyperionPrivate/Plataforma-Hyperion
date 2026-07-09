@@ -132,6 +132,10 @@ async function clearDemoData(client: pg.Client, tenantId: string): Promise<void>
     `delete from pulso_iris.appointments where tenant_id = $1 and metadata @> '${DEMO}'::jsonb`,
     `delete from pulso_iris.conversations where tenant_id = $1 and metadata @> '${DEMO}'::jsonb`,
     `delete from pulso_iris.administrative_patients where tenant_id = $1 and metadata @> '${DEMO}'::jsonb`,
+    `delete from pulso_iris.agenda_blocks where tenant_id = $1 and metadata @> '${DEMO}'::jsonb`,
+    `delete from pulso_iris.availability_rules where tenant_id = $1 and metadata @> '${DEMO}'::jsonb`,
+    `delete from pulso_iris.professional_payer_exclusions where tenant_id = $1 and metadata @> '${DEMO}'::jsonb`,
+    `delete from pulso_iris.holidays where tenant_id = $1 and metadata @> '${DEMO}'::jsonb`,
     `delete from pulso_iris.professionals where tenant_id = $1 and metadata @> '${DEMO}'::jsonb`
   ];
 
@@ -162,6 +166,130 @@ async function seed(client: pg.Client, tenantId: string): Promise<void> {
   }
 
   logger.info("professionals and patients seeded");
+
+  // ----- Reglas de disponibilidad demo (L-V, manana y tarde) -----
+  await client.query(
+    `insert into pulso_iris.availability_rules
+       (tenant_id, site_id, professional_id, appointment_type_id, weekday, starts_at, ends_at,
+        slot_duration_min, capacity, timezone, status, metadata)
+     select
+       $1,
+       s.id,
+       p.id,
+       t.id,
+       w.weekday,
+       w.starts_at::time,
+       w.ends_at::time,
+       greatest(t.duration_min, 20),
+       case when p.professional_type = 'optometrist' then 2 else 1 end,
+       'America/Bogota',
+       'active',
+       '${DEMO}'::jsonb
+     from pulso_iris.professionals p
+     cross join lateral (
+       select id from pulso_iris.sites where tenant_id = $1 order by name limit 1
+     ) s
+     cross join lateral (
+       select id, duration_min
+       from pulso_iris.appointment_types
+       where tenant_id = $1 and status = 'active'
+       order by slot_priority, name
+       limit 1
+     ) t
+     cross join (values
+       (1, '07:00', '12:00'), (1, '14:00', '17:00'),
+       (2, '07:00', '12:00'), (2, '14:00', '17:00'),
+       (3, '07:00', '12:00'), (3, '14:00', '17:00'),
+       (4, '07:00', '12:00'), (4, '14:00', '17:00'),
+       (5, '07:00', '12:00'), (5, '14:00', '17:00')
+     ) as w(weekday, starts_at, ends_at)
+     where p.tenant_id = $1 and p.metadata @> '${DEMO}'::jsonb
+     on conflict do nothing`,
+    [tenantId]
+  );
+
+  // ----- Bloqueos demo -----
+  await client.query(
+    `insert into pulso_iris.agenda_blocks
+       (tenant_id, site_id, professional_id, starts_at, ends_at, reason, status, metadata)
+     select
+       $1,
+       (select id from pulso_iris.sites where tenant_id = $1 order by name limit 1),
+       p.id,
+       (date_trunc('week', current_date) + interval '2 days' + time '12:00') at time zone 'America/Bogota',
+       (date_trunc('week', current_date) + interval '2 days' + time '14:00') at time zone 'America/Bogota',
+       'Junta medica demo',
+       'active',
+       '${DEMO}'::jsonb
+     from pulso_iris.professionals p
+     where p.tenant_id = $1 and p.metadata @> '${DEMO}'::jsonb
+     order by p.name
+     limit 2`,
+    [tenantId]
+  );
+
+  await client.query(
+    `insert into pulso_iris.agenda_blocks
+       (tenant_id, site_id, starts_at, ends_at, reason, status, metadata)
+     values (
+       $1,
+       (select id from pulso_iris.sites where tenant_id = $1 order by name limit 1),
+       (date_trunc('week', current_date) + interval '4 days' + time '15:00') at time zone 'America/Bogota',
+       (date_trunc('week', current_date) + interval '4 days' + time '17:00') at time zone 'America/Bogota',
+       'Mantenimiento de agenda demo',
+       'active',
+       '${DEMO}'::jsonb
+     )`,
+    [tenantId]
+  );
+
+  // ----- Festivos Colombia jul-dic 2026 (solo demo local/staging) -----
+  const demoHolidays: Array<[string, string]> = [
+    ["2026-07-20", "Independencia de Colombia"],
+    ["2026-08-07", "Batalla de Boyaca"],
+    ["2026-08-17", "Asuncion de la Virgen"],
+    ["2026-10-12", "Dia de la Raza"],
+    ["2026-11-02", "Todos los Santos"],
+    ["2026-11-16", "Independencia de Cartagena"],
+    ["2026-12-08", "Inmaculada Concepcion"],
+    ["2026-12-25", "Navidad"]
+  ];
+  for (const [date, name] of demoHolidays) {
+    await client.query(
+      `insert into pulso_iris.holidays (tenant_id, holiday_date, name, status, metadata)
+       values ($1, $2::date, $3, 'active', '${DEMO}'::jsonb)
+       on conflict (tenant_id, holiday_date) do nothing`,
+      [tenantId, date, name]
+    );
+  }
+
+  // ----- Exclusiones profesional x convenio (2-3) -----
+  await client.query(
+    `insert into pulso_iris.professional_payer_exclusions
+       (tenant_id, professional_id, payer_id, status, metadata)
+     select
+       $1,
+       p.id,
+       pay.id,
+       'active',
+       '${DEMO}'::jsonb
+     from (
+       select id from pulso_iris.professionals
+       where tenant_id = $1 and metadata @> '${DEMO}'::jsonb
+       order by name
+       limit 3
+     ) p
+     cross join lateral (
+       select id from pulso_iris.payers
+       where tenant_id = $1 and payer_group = 'eps'
+       order by name
+       limit 1
+     ) pay
+     on conflict do nothing`,
+    [tenantId]
+  );
+
+  logger.info("availability rules, holidays and payer exclusions seeded");
 
   // ----- Historial de conversaciones (30 dias, ~600/dia habil) -----
   await client.query(

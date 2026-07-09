@@ -129,6 +129,24 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(502);
   });
 
+  it("allows coordinator to write holidays and payer exclusions", async () => {
+    const holiday = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/holidays`,
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
+      payload: { holidayDate: "2026-12-25", name: "Navidad" }
+    });
+    const exclusion = await app.inject({
+      method: "PATCH",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/payer-exclusions/00000000-0000-4000-8000-000000000001`,
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
+      payload: { status: "paused" }
+    });
+
+    expect(holiday.statusCode).toBe(502);
+    expect(exclusion.statusCode).toBe(502);
+  });
+
   it("forbids advisor from writing configuration", async () => {
     const response = await app.inject({
       method: "POST",
@@ -138,6 +156,27 @@ describe("api-gateway authentication", () => {
     });
 
     expect(response.statusCode).toBe(403);
+  });
+
+  it("forbids advisor from writing holidays and payer exclusions", async () => {
+    const holiday = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/holidays`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: { holidayDate: "2026-12-25", name: "Navidad" }
+    });
+    const exclusion = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/payer-exclusions`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: {
+        professionalId: "00000000-0000-4000-8000-000000000001",
+        payerId: "00000000-0000-4000-8000-000000000002"
+      }
+    });
+
+    expect(holiday.statusCode).toBe(403);
+    expect(exclusion.statusCode).toBe(403);
   });
 
   it("allows advisor to write operational records", async () => {
@@ -163,9 +202,22 @@ describe("api-gateway authentication", () => {
       headers: { authorization: `Bearer ${AUDITOR_TOKEN}` },
       payload: {}
     });
+    const holidayWrite = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/holidays`,
+      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` },
+      payload: { holidayDate: "2026-12-25", name: "Navidad" }
+    });
+    const holidayRead = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/holidays`,
+      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` }
+    });
 
     expect(read.statusCode).toBe(502);
     expect(write.statusCode).toBe(403);
+    expect(holidayWrite.statusCode).toBe(403);
+    expect(holidayRead.statusCode).toBe(502);
   });
 
   it("requires admin role for operator management", async () => {

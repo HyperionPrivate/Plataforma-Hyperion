@@ -5,11 +5,12 @@ import type {
   PulsoIrisAvailabilitySlot,
   PulsoIrisAvailabilitySlots,
   PulsoIrisProfessional,
-  PulsoIrisSite
+  PulsoIrisSite,
+  PulsoIrisSlotAlternative
 } from "@hyperion/contracts";
 import { Layout } from "../components/Layout.js";
 import { Card, CardHead, EmptyState, LoadingState, Pill } from "../components/ui.js";
-import { api, SessionExpiredError } from "../lib/api.js";
+import { api, ApiError, SessionExpiredError } from "../lib/api.js";
 import { tenantPath, useConsole } from "../lib/context.js";
 import { formatTime, LINE } from "../lib/format.js";
 import { usePolling } from "../lib/hooks.js";
@@ -212,6 +213,7 @@ function AvailabilityPanel({
   const [slots, setSlots] = useState<PulsoIrisAvailabilitySlot[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [alternatives, setAlternatives] = useState<PulsoIrisSlotAlternative[]>([]);
   const [reserving, setReserving] = useState<string>();
 
   useEffect(() => {
@@ -279,7 +281,12 @@ function AvailabilityPanel({
 
   useEffect(() => loadSlots(), [loadSlots]);
 
-  const reserve = async (slot: PulsoIrisAvailabilitySlot) => {
+  const reserve = async (slot: {
+    startsAt: string;
+    siteId: string;
+    professionalId: string;
+    appointmentTypeId: string;
+  }) => {
     setReserving(slot.startsAt);
     try {
       await api.post(tenantPath(tenantId, "appointments"), {
@@ -289,11 +296,21 @@ function AvailabilityPanel({
         scheduledAt: slot.startsAt,
         origin: "advisor"
       });
+      setAlternatives([]);
+      setError(undefined);
       onReserved();
       loadSlots();
     } catch (err) {
       if (err instanceof SessionExpiredError) logout();
-      else setError(err instanceof Error ? err.message : String(err));
+      else if (err instanceof ApiError) {
+        const nextAlternatives = Array.isArray(err.data?.alternatives)
+          ? (err.data.alternatives as PulsoIrisSlotAlternative[])
+          : [];
+        setAlternatives(nextAlternatives);
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setReserving(undefined);
     }
@@ -341,7 +358,32 @@ function AvailabilityPanel({
       {loading ? (
         <LoadingState />
       ) : error ? (
-        <div className="banner">{error}</div>
+        <div className="banner col" style={{ gap: 8 }}>
+          <div>{error}</div>
+          {alternatives.length > 0 ? (
+            <div className="col" style={{ gap: 6 }}>
+              <strong className="small">Alternativas disponibles</strong>
+              {alternatives.map((alternative) => (
+                <div key={alternative.startsAt} className="row between" style={{ gap: 8 }}>
+                  <span className="small">
+                    {formatTime(alternative.startsAt)} - {formatTime(alternative.endsAt)}
+                    {alternative.professionalName ? ` · ${alternative.professionalName}` : ""}
+                  </span>
+                  {canReserve ? (
+                    <button
+                      className="btn btn-outline btn-sm"
+                      type="button"
+                      onClick={() => void reserve(alternative)}
+                      disabled={reserving === alternative.startsAt}
+                    >
+                      <Plus size={14} /> Tomar
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
       ) : slots.length === 0 ? (
         <EmptyState label="Sin huecos para los filtros" />
       ) : (
