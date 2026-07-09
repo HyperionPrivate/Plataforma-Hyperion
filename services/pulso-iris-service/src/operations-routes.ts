@@ -19,7 +19,14 @@ import {
   pulsoIrisWaitlistInputSchema
 } from "@hyperion/contracts";
 import type { RouteRegistrar } from "@hyperion/service-runtime";
-import { parseBody, readUuidParam, requireTenantDb } from "./shared.js";
+import {
+  ensureTenantReferences,
+  mapDatabaseError,
+  parseBody,
+  readUuidParam,
+  requireTenantDb,
+  sendReferenceError
+} from "./shared.js";
 
 const CONVERSATION_COLUMNS = `
   id,
@@ -123,6 +130,11 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     if (!input) return;
 
     const metadata = input.firstResponseSeconds !== undefined ? { first_response_s: input.firstResponseSeconds } : {};
+    const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.patientId, table: "pulso_iris.administrative_patients", label: "patientId" },
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" }
+    ]);
+    if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
     const result = await scope.db.query(
       `insert into pulso_iris.conversations
@@ -151,6 +163,10 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     }
     const input = parseBody(pulsoIrisConversationPatchSchema, request, reply);
     if (!input) return;
+    const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" }
+    ]);
+    if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
     const result = await scope.db.query(
       `update pulso_iris.conversations set
@@ -196,10 +212,10 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     }
 
     const result = await scope.db.query(
-      `insert into pulso_iris.messages (conversation_id, sender, body)
-       values ($1, $2, $3)
-       returning id, conversation_id as "conversationId", sender, body, created_at as "createdAt"`,
-      [conversationId, input.sender, input.body]
+      `insert into pulso_iris.messages (tenant_id, conversation_id, sender, body)
+       values ($1, $2, $3, $4)
+       returning id, tenant_id as "tenantId", conversation_id as "conversationId", sender, body, created_at as "createdAt"`,
+      [scope.tenantId, conversationId, input.sender, input.body]
     );
     return reply.code(201).send(envelope(result.rows[0], request.id));
   });
@@ -211,26 +227,42 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     if (!scope) return;
     const input = parseBody(pulsoIrisAppointmentInputSchema, request, reply);
     if (!input) return;
+    const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.patientId, table: "pulso_iris.administrative_patients", label: "patientId" },
+      { id: input.conversationId, table: "pulso_iris.conversations", label: "conversationId" },
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" },
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.payerId, table: "pulso_iris.payers", label: "payerId" },
+      { id: input.appointmentTypeId, table: "pulso_iris.appointment_types", label: "appointmentTypeId" }
+    ]);
+    if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
-    const result = await scope.db.query(
-      `insert into pulso_iris.appointments
-         (tenant_id, patient_id, conversation_id, site_id, professional_id, payer_id,
-          appointment_type_id, appointment_type, origin, scheduled_at, status)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, 'sofia_wa'), $10, 'registered')
-       returning ${APPOINTMENT_COLUMNS}`,
-      [
-        scope.tenantId,
-        input.patientId ?? null,
-        input.conversationId ?? null,
-        input.siteId ?? null,
-        input.professionalId ?? null,
-        input.payerId ?? null,
-        input.appointmentTypeId ?? null,
-        input.appointmentType ?? null,
-        input.origin ?? null,
-        input.scheduledAt ?? null
-      ]
-    );
+    let result;
+    try {
+      result = await scope.db.query(
+        `insert into pulso_iris.appointments
+           (tenant_id, patient_id, conversation_id, site_id, professional_id, payer_id,
+            appointment_type_id, appointment_type, origin, scheduled_at, status)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, 'sofia_wa'), $10, 'registered')
+         returning ${APPOINTMENT_COLUMNS}`,
+        [
+          scope.tenantId,
+          input.patientId ?? null,
+          input.conversationId ?? null,
+          input.siteId ?? null,
+          input.professionalId ?? null,
+          input.payerId ?? null,
+          input.appointmentTypeId ?? null,
+          input.appointmentType ?? null,
+          input.origin ?? null,
+          input.scheduledAt ?? null
+        ]
+      );
+    } catch (error) {
+      const mapped = mapDatabaseError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(envelope({ error: mapped.message }, request.id));
+      throw error;
+    }
     const appointment = pulsoIrisAppointmentListSchema.parse(result.rows)[0];
 
     // Accion RPA simulada: el registro real contra el legado no existe todavia.
@@ -256,6 +288,11 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     }
     const input = parseBody(pulsoIrisAppointmentPatchSchema, request, reply);
     if (!input) return;
+    const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" },
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" }
+    ]);
+    if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
     const result = await scope.db.query(
       `update pulso_iris.appointments set
@@ -307,6 +344,11 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     if (!scope) return;
     const input = parseBody(pulsoIrisHandoffInputSchema, request, reply);
     if (!input) return;
+    const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.conversationId, table: "pulso_iris.conversations", label: "conversationId" },
+      { id: input.patientId, table: "pulso_iris.administrative_patients", label: "patientId" }
+    ]);
+    if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
     const result = await scope.db.query(
       `insert into pulso_iris.handoffs
@@ -369,6 +411,11 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     if (!scope) return;
     const input = parseBody(pulsoIrisRpaActionInputSchema, request, reply);
     if (!input) return;
+    const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.appointmentId, table: "pulso_iris.appointments", label: "appointmentId" },
+      { id: input.conversationId, table: "pulso_iris.conversations", label: "conversationId" }
+    ]);
+    if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
     const result = await scope.db.query(
       `insert into pulso_iris.rpa_actions
@@ -397,6 +444,10 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     }
     const input = parseBody(pulsoIrisRpaActionPatchSchema, request, reply);
     if (!input) return;
+    const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.workerId, table: "pulso_iris.rpa_workers", label: "workerId" }
+    ]);
+    if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
     const result = await scope.db.query(
       `update pulso_iris.rpa_actions set
@@ -504,6 +555,11 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     if (!scope) return;
     const input = parseBody(pulsoIrisWaitlistInputSchema, request, reply);
     if (!input) return;
+    const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.patientId, table: "pulso_iris.administrative_patients", label: "patientId" },
+      { id: input.appointmentTypeId, table: "pulso_iris.appointment_types", label: "appointmentTypeId" }
+    ]);
+    if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
     const result = await scope.db.query(
       `insert into pulso_iris.waitlist

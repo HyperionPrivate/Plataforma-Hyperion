@@ -476,9 +476,9 @@ async function seed(client: pg.Client, tenantId: string): Promise<void> {
     ];
     for (const [sender, body, ago] of messages) {
       await client.query(
-        `insert into pulso_iris.messages (conversation_id, sender, body, metadata, created_at)
-         values ($1, $2, $3, '${DEMO}'::jsonb, now() - $4::interval)`,
-        [convId, sender, body, ago]
+        `insert into pulso_iris.messages (tenant_id, conversation_id, sender, body, metadata, created_at)
+         values ($1, $2, $3, $4, '${DEMO}'::jsonb, now() - $5::interval)`,
+        [tenantId, convId, sender, body, ago]
       );
     }
 
