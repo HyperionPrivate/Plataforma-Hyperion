@@ -58,6 +58,8 @@ services:
     command: ["node", "services/identity-service/dist/index.js"]
     environment:
       <<: *service-env
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
       PORT: 8081
     expose:
       - "8081"

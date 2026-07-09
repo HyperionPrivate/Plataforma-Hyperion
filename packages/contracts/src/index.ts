@@ -337,6 +337,34 @@ export const platformCatalogSchema = z.object({
 
 export type PlatformCatalog = z.infer<typeof platformCatalogSchema>;
 
+export const authLoginRequestSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8)
+});
+
+export const authOperatorSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  displayName: z.string().min(1),
+  role: z.string().min(1)
+});
+
+export const authSessionSchema = z.object({
+  token: z.string().min(20),
+  expiresAt: isoDateTime,
+  operator: authOperatorSchema
+});
+
+export const authMeSchema = z.object({
+  operator: authOperatorSchema,
+  tenantIds: z.array(z.string().uuid())
+});
+
+export type AuthLoginRequest = z.infer<typeof authLoginRequestSchema>;
+export type AuthOperator = z.infer<typeof authOperatorSchema>;
+export type AuthSession = z.infer<typeof authSessionSchema>;
+export type AuthMe = z.infer<typeof authMeSchema>;
+
 export const auditEventSchema = z.object({
   tenantId: z.string().uuid().optional(),
   actorId: z.string().min(1).optional(),

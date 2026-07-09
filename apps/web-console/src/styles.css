@@ -43,6 +43,73 @@ select {
   padding: 14px 0 22px;
 }
 
+.login-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(380px, 100%);
+  padding: 32px;
+  background: #ffffff;
+  border: 1px solid #dfe6ee;
+  border-radius: 12px;
+}
+
+.login-copy {
+  color: #5d6d7e;
+  font-size: 14px;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #34495e;
+}
+
+.login-field input {
+  padding: 10px 12px;
+  border: 1px solid #cfd9e4;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.login-field input:focus {
+  outline: 2px solid #2f9e6e;
+  outline-offset: 1px;
+  border-color: #2f9e6e;
+}
+
+.login-error {
+  margin: 0;
+  color: #b03a2e;
+  font-size: 13px;
+}
+
+.login-button {
+  margin-top: 6px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #17202a;
+  color: #ffffff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: #5d6d7e;
