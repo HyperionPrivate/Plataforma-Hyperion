@@ -76,4 +76,38 @@ describe("identity-service routes", () => {
 
     expect(response.statusCode).toBe(401);
   });
+
+  it("requires admin role for operator creation", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/identity/operators",
+      headers: { "x-operator-role": "coordinator" },
+      payload: {
+        email: "asesor@hyperion.local",
+        displayName: "Asesor",
+        password: "clave-segura-123",
+        role: "advisor",
+        tenantIds: []
+      }
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("requires a database for admin operator creation", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/identity/operators",
+      headers: { "x-operator-role": "admin" },
+      payload: {
+        email: "correo-invalido",
+        displayName: "A",
+        password: "corta",
+        role: "unknown",
+        tenantIds: []
+      }
+    });
+
+    expect(response.statusCode).toBe(503);
+  });
 });

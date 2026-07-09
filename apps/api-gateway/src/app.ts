@@ -10,6 +10,7 @@ import {
   tenantIdSchema,
   type AuthMe,
   type HealthStatus,
+  type OperatorRole,
   type PlatformHealth,
   type ServiceHealth,
   type ServiceName
@@ -35,6 +36,10 @@ const HEALTH_CACHE_TTL_MS = 5_000;
 const SESSION_CACHE_TTL_MS = 30_000;
 const SESSION_CACHE_MAX_ENTRIES = 1_000;
 
+type HttpMethod = "GET" | "POST" | "PATCH";
+
+const PUBLIC_PATHS = new Set(["/v1/auth/login"]);
+
 let healthCache: { expiresAt: number; payload: PlatformHealth } | undefined;
 
 export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolver }): RouteRegistrar {
@@ -44,7 +49,7 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
 
     app.addHook("preHandler", async (request, reply) => {
       const path = (request.raw.url ?? request.url).split("?")[0] ?? "";
-      if (!path.startsWith("/v1/") || path === "/v1/auth/login") {
+      if (!path.startsWith("/v1/") || PUBLIC_PATHS.has(path)) {
         return;
       }
 
@@ -59,6 +64,11 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
       }
 
       request.session = session;
+
+      const denial = authorizeRequest(request.method as HttpMethod, path, session.operator.role);
+      if (denial) {
+        return reply.code(403).send(envelope({ error: denial }, request.id));
+      }
 
       const tenantMatch = path.match(/^\/v1\/tenants\/([^/]+)\//);
       if (tenantMatch) {
@@ -84,6 +94,25 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
 
     app.post("/v1/auth/logout", async (request, reply) => {
       return proxyJson(request, reply, `${urls.identity}/v1/auth/logout`, "POST");
+    });
+
+    app.get("/v1/identity/operators", async (request, reply) => {
+      return proxyJson(request, reply, `${urls.identity}/v1/identity/operators`, "GET");
+    });
+
+    app.post("/v1/identity/operators", async (request, reply) => {
+      return proxyJson(request, reply, `${urls.identity}/v1/identity/operators`, "POST", request.body);
+    });
+
+    app.patch("/v1/identity/operators/:operatorId", async (request, reply) => {
+      const params = request.params as { operatorId?: string };
+      return proxyJson(
+        request,
+        reply,
+        `${urls.identity}/v1/identity/operators/${params.operatorId ?? ""}`,
+        "PATCH",
+        request.body
+      );
     });
 
     app.get("/v1/platform/catalog", async (request) => {
@@ -193,6 +222,42 @@ function readBearerToken(authorization: string | undefined): string | undefined 
   return token.length >= 20 ? token : undefined;
 }
 
+function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole): string | undefined {
+  if (role === "admin") {
+    return undefined;
+  }
+
+  if (method === "GET") {
+    return undefined;
+  }
+
+  if (path === "/v1/auth/logout") {
+    return undefined;
+  }
+
+  if (path.startsWith("/v1/identity/operators")) {
+    return "Admin role required";
+  }
+
+  if (role === "auditor") {
+    return "Read-only role";
+  }
+
+  if (path.includes("/pulso-iris/config/")) {
+    return role === "coordinator" ? undefined : "Coordinator role required";
+  }
+
+  if (path.includes("/pulso-iris/campaigns") || path.includes("/pulso-iris/rpa/actions")) {
+    return role === "coordinator" ? undefined : "Coordinator role required";
+  }
+
+  if (path.includes("/pulso-iris/")) {
+    return role === "coordinator" || role === "advisor" ? undefined : "Forbidden";
+  }
+
+  return "Forbidden";
+}
+
 function createCachedSessionResolver(identityUrl: string): SessionResolver {
   const cache = new Map<string, { expiresAt: number; session: AuthMe }>();
 
@@ -269,6 +334,10 @@ async function proxyJson(
     const headers: Record<string, string> = { "x-request-id": request.id };
     if (request.headers.authorization) {
       headers.authorization = request.headers.authorization;
+    }
+    if (request.session) {
+      headers["x-operator-id"] = request.session.operator.id;
+      headers["x-operator-role"] = request.session.operator.role;
     }
     if (body !== undefined) {
       headers["content-type"] = "application/json";

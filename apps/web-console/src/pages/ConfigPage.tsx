@@ -1,6 +1,7 @@
 import { Plus, RefreshCw, Server } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
+  OperatorListItem,
   PulsoIrisAppointmentType,
   PulsoIrisPayer,
   PulsoIrisProfessional,
@@ -11,25 +12,29 @@ import { Card, CardHead, EmptyState, LoadingState, Pill } from "../components/ui
 import { api, SessionExpiredError } from "../lib/api.js";
 import { tenantPath, useConsole } from "../lib/context.js";
 import { LINE } from "../lib/format.js";
+import { can } from "../lib/rbac.js";
 
-type Tab = "sites" | "professionals" | "payers" | "types" | "platform";
+type Tab = "sites" | "professionals" | "payers" | "types" | "operators" | "platform";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "sites", label: "Sedes" },
   { id: "professionals", label: "Profesionales" },
   { id: "payers", label: "Convenios" },
   { id: "types", label: "Tipos de cita" },
+  { id: "operators", label: "Operadores" },
   { id: "platform", label: "Estado de plataforma" }
 ];
 
 export function ConfigPage() {
-  const { tenant } = useConsole();
+  const { session, tenant } = useConsole();
   const [tab, setTab] = useState<Tab>("sites");
+  const visibleTabs = TABS.filter((item) => item.id !== "operators" || can(session.operator.role, "manage:operators"));
+  const canWriteConfig = can(session.operator.role, "write:config");
 
   return (
     <Layout title="Configuracion" subtitle={`Catalogo operativo de ${tenant.displayName}`}>
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-        {TABS.map((item) => (
+        {visibleTabs.map((item) => (
           <button
             key={item.id}
             type="button"
@@ -41,10 +46,11 @@ export function ConfigPage() {
         ))}
       </div>
 
-      {tab === "sites" ? <SitesTab tenantId={tenant.id} /> : null}
-      {tab === "professionals" ? <ProfessionalsTab tenantId={tenant.id} /> : null}
+      {tab === "sites" ? <SitesTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
+      {tab === "professionals" ? <ProfessionalsTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
       {tab === "payers" ? <PayersTab tenantId={tenant.id} /> : null}
       {tab === "types" ? <TypesTab tenantId={tenant.id} /> : null}
+      {tab === "operators" && can(session.operator.role, "manage:operators") ? <OperatorsTab /> : null}
       {tab === "platform" ? <PlatformTab /> : null}
     </Layout>
   );
@@ -75,7 +81,7 @@ function useCatalog<T>(path: string) {
   return { items, loading, error, reload };
 }
 
-function SitesTab({ tenantId }: { tenantId: string }) {
+function SitesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
   const path = tenantPath(tenantId, "config/sites");
   const { items, loading, error, reload } = useCatalog<PulsoIrisSite>(path);
   const [name, setName] = useState("");
@@ -100,32 +106,34 @@ function SitesTab({ tenantId }: { tenantId: string }) {
   return (
     <Card>
       <CardHead title={`Sedes (${items.length})`} trailing={<ReloadButton onClick={reload} />} />
-      <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
-        <input
-          className="input"
-          placeholder="Nombre de la sede"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          style={{ maxWidth: 240 }}
-        />
-        <input
-          className="input"
-          placeholder="Ciudad"
-          value={city}
-          onChange={(e) => setCity(e.target.value)}
-          style={{ maxWidth: 160 }}
-        />
-        <input
-          className="input"
-          placeholder="Direccion"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          style={{ maxWidth: 260 }}
-        />
-        <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving}>
-          <Plus size={15} /> Agregar
-        </button>
-      </div>
+      {canWrite ? (
+        <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+          <input
+            className="input"
+            placeholder="Nombre de la sede"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{ maxWidth: 240 }}
+          />
+          <input
+            className="input"
+            placeholder="Ciudad"
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+            style={{ maxWidth: 160 }}
+          />
+          <input
+            className="input"
+            placeholder="Direccion"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            style={{ maxWidth: 260 }}
+          />
+          <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving}>
+            <Plus size={15} /> Agregar
+          </button>
+        </div>
+      ) : null}
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -162,7 +170,7 @@ function SitesTab({ tenantId }: { tenantId: string }) {
   );
 }
 
-function ProfessionalsTab({ tenantId }: { tenantId: string }) {
+function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
   const path = tenantPath(tenantId, "config/professionals");
   const { items, loading, error, reload } = useCatalog<PulsoIrisProfessional>(path);
   const [name, setName] = useState("");
@@ -186,29 +194,31 @@ function ProfessionalsTab({ tenantId }: { tenantId: string }) {
   return (
     <Card>
       <CardHead title={`Profesionales (${items.length})`} trailing={<ReloadButton onClick={reload} />} />
-      <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
-        <input
-          className="input"
-          placeholder="Nombre"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          style={{ maxWidth: 240 }}
-        />
-        <select className="select" value={type} onChange={(e) => setType(e.target.value as typeof type)}>
-          <option value="ophthalmologist">Oftalmologo</option>
-          <option value="optometrist">Optometra</option>
-        </select>
-        <input
-          className="input"
-          placeholder="Subespecialidad"
-          value={subspecialty}
-          onChange={(e) => setSubspecialty(e.target.value)}
-          style={{ maxWidth: 200 }}
-        />
-        <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving}>
-          <Plus size={15} /> Agregar
-        </button>
-      </div>
+      {canWrite ? (
+        <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+          <input
+            className="input"
+            placeholder="Nombre"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{ maxWidth: 240 }}
+          />
+          <select className="select" value={type} onChange={(e) => setType(e.target.value as typeof type)}>
+            <option value="ophthalmologist">Oftalmologo</option>
+            <option value="optometrist">Optometra</option>
+          </select>
+          <input
+            className="input"
+            placeholder="Subespecialidad"
+            value={subspecialty}
+            onChange={(e) => setSubspecialty(e.target.value)}
+            style={{ maxWidth: 200 }}
+          />
+          <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving}>
+            <Plus size={15} /> Agregar
+          </button>
+        </div>
+      ) : null}
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -342,6 +352,107 @@ function TypesTab({ tenantId }: { tenantId: string }) {
                 <td className="small muted">{categoryLabels[type.category] ?? type.category}</td>
                 <td className="small muted">{type.durationMin} min</td>
                 <td>{type.bookableByIa ? <Pill tone="green">Si</Pill> : <Pill tone="amber">Manual</Pill>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
+function OperatorsTab() {
+  const { tenants } = useConsole();
+  const { items, loading, error, reload } = useCatalog<OperatorListItem>("/v1/identity/operators");
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"coordinator" | "advisor" | "auditor">("advisor");
+  const [saving, setSaving] = useState(false);
+
+  const add = async () => {
+    if (!email || !displayName || password.length < 8) return;
+    setSaving(true);
+    try {
+      await api.post("/v1/identity/operators", {
+        email,
+        displayName,
+        password,
+        role,
+        tenantIds: tenants.map((tenant) => tenant.id)
+      });
+      setEmail("");
+      setDisplayName("");
+      setPassword("");
+      reload();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHead title={`Operadores (${items.length})`} trailing={<ReloadButton onClick={reload} />} />
+      <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+        <input
+          className="input"
+          placeholder="Correo"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          style={{ maxWidth: 220 }}
+        />
+        <input
+          className="input"
+          placeholder="Nombre visible"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          style={{ maxWidth: 190 }}
+        />
+        <input
+          className="input"
+          placeholder="Contrasena inicial"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          style={{ maxWidth: 180 }}
+        />
+        <select className="select" value={role} onChange={(e) => setRole(e.target.value as typeof role)}>
+          <option value="coordinator">Coordinador</option>
+          <option value="advisor">Asesor</option>
+          <option value="auditor">Auditor</option>
+        </select>
+        <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving}>
+          <Plus size={15} /> Crear
+        </button>
+      </div>
+      {loading ? (
+        <LoadingState />
+      ) : error ? (
+        <div className="banner">{error}</div>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Operador</th>
+              <th>Rol</th>
+              <th>Estado</th>
+              <th>Tenants</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((operator) => (
+              <tr key={operator.id}>
+                <td>
+                  <strong className="small">{operator.displayName}</strong>
+                  <div className="tiny muted">{operator.email}</div>
+                </td>
+                <td>
+                  <Pill>{operator.role}</Pill>
+                </td>
+                <td>
+                  <Pill tone={operator.status === "active" ? "green" : "amber"}>{operator.status}</Pill>
+                </td>
+                <td className="small muted">{operator.tenantIds.length}</td>
               </tr>
             ))}
           </tbody>

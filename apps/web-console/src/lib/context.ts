@@ -11,6 +11,7 @@ export interface TenantInfo {
 export interface ConsoleContextValue {
   session: StoredSession;
   tenant: TenantInfo;
+  tenants: TenantInfo[];
   sites: PulsoIrisSite[];
   activeSiteId: string | "all";
   setActiveSiteId: (siteId: string | "all") => void;

@@ -2,16 +2,17 @@ import { Activity, BarChart3, Bot, CalendarDays, Eye, LogOut, MessagesSquare, Me
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { useConsole } from "../lib/context.js";
+import { can, type Capability } from "../lib/rbac.js";
 
 const NAV = [
-  { to: "/operacion", label: "Operacion en vivo", icon: Activity },
-  { to: "/conversaciones", label: "Conversaciones", icon: MessagesSquare },
-  { to: "/agenda", label: "Agenda", icon: CalendarDays },
-  { to: "/rpa", label: "Workers RPA", icon: Bot },
-  { to: "/campanas", label: "Campanas", icon: Megaphone },
-  { to: "/bi", label: "BI y Reportes", icon: BarChart3 },
-  { to: "/configuracion", label: "Configuracion", icon: Settings }
-];
+  { to: "/operacion", label: "Operacion en vivo", icon: Activity, capability: "view:operation" },
+  { to: "/conversaciones", label: "Conversaciones", icon: MessagesSquare, capability: "view:conversations" },
+  { to: "/agenda", label: "Agenda", icon: CalendarDays, capability: "view:agenda" },
+  { to: "/rpa", label: "Workers RPA", icon: Bot, capability: "view:rpa" },
+  { to: "/campanas", label: "Campanas", icon: Megaphone, capability: "view:campaigns" },
+  { to: "/bi", label: "BI y Reportes", icon: BarChart3, capability: "view:bi" },
+  { to: "/configuracion", label: "Configuracion", icon: Settings, capability: "view:config" }
+] satisfies Array<{ to: string; label: string; icon: typeof Activity; capability: Capability }>;
 
 export function Layout({
   title,
@@ -34,7 +35,7 @@ export function Layout({
           PULSO IRIS
         </div>
         <nav className="col" style={{ gap: 4 }}>
-          {NAV.map((item) => (
+          {NAV.filter((item) => can(session.operator.role, item.capability)).map((item) => (
             <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
               <item.icon size={18} aria-hidden="true" />
               {item.label}

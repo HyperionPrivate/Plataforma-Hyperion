@@ -588,11 +588,14 @@ export const authLoginRequestSchema = z.object({
   password: z.string().min(8)
 });
 
+export const operatorRoleSchema = z.enum(["admin", "coordinator", "advisor", "auditor"]);
+export type OperatorRole = z.infer<typeof operatorRoleSchema>;
+
 export const authOperatorSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
   displayName: z.string().min(1),
-  role: z.string().min(1)
+  role: operatorRoleSchema
 });
 
 export const authSessionSchema = z.object({
@@ -610,6 +613,33 @@ export type AuthLoginRequest = z.infer<typeof authLoginRequestSchema>;
 export type AuthOperator = z.infer<typeof authOperatorSchema>;
 export type AuthSession = z.infer<typeof authSessionSchema>;
 export type AuthMe = z.infer<typeof authMeSchema>;
+
+export const operatorCreateSchema = z.object({
+  email: z.string().email(),
+  displayName: z.string().min(2),
+  password: z.string().min(8),
+  role: operatorRoleSchema,
+  tenantIds: z.array(z.string().uuid()).default([])
+});
+
+export const operatorPatchSchema = z.object({
+  displayName: z.string().min(2).optional(),
+  password: z.string().min(8).optional(),
+  role: operatorRoleSchema.optional(),
+  status: z.enum(["active", "disabled"]).optional(),
+  tenantIds: z.array(z.string().uuid()).optional()
+});
+
+export const operatorListItemSchema = authOperatorSchema.extend({
+  status: z.enum(["active", "disabled"]),
+  tenantIds: z.array(z.string().uuid()).default([]),
+  createdAt: isoDateTime
+});
+
+export const operatorListSchema = z.array(operatorListItemSchema);
+export type OperatorCreateInput = z.infer<typeof operatorCreateSchema>;
+export type OperatorPatchInput = z.infer<typeof operatorPatchSchema>;
+export type OperatorListItem = z.infer<typeof operatorListItemSchema>;
 
 export const auditEventSchema = z.object({
   tenantId: z.string().uuid().optional(),

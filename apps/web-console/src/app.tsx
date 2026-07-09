@@ -44,6 +44,7 @@ export function App() {
 
 function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout: () => void }) {
   const [tenant, setTenant] = useState<TenantInfo>();
+  const [tenants, setTenants] = useState<TenantInfo[]>([]);
   const [sites, setSites] = useState<PulsoIrisSite[]>([]);
   const [activeSiteId, setActiveSiteId] = useState<string | "all">("all");
   const [error, setError] = useState<string>();
@@ -67,6 +68,7 @@ function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout:
 
         if (!cancelled) {
           setTenant(info);
+          setTenants(tenants.map((row) => ({ id: row.id, slug: row.slug, displayName: row.display_name })));
           setSites(siteList);
           setReady(true);
         }
@@ -88,8 +90,8 @@ function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout:
 
   const contextValue = useMemo(() => {
     if (!tenant) return undefined;
-    return { session, tenant, sites, activeSiteId, setActiveSiteId, logout: onLogout };
-  }, [session, tenant, sites, activeSiteId, onLogout]);
+    return { session, tenant, tenants, sites, activeSiteId, setActiveSiteId, logout: onLogout };
+  }, [session, tenant, tenants, sites, activeSiteId, onLogout]);
 
   if (!ready) {
     return (

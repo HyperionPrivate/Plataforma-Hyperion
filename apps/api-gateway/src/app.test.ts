@@ -7,7 +7,9 @@ import { createGatewayRoutes } from "./app.js";
 const AUTHORIZED_TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";
 const OTHER_TENANT_ID = "3b8e6d4c-2a19-4f87-b6e5-1d0c9b8a7f6e";
 const ADMIN_TOKEN = "admin-test-token-1234567890";
-const OPERATOR_TOKEN = "operator-test-token-1234567890";
+const COORDINATOR_TOKEN = "coordinator-test-token-1234567890";
+const ADVISOR_TOKEN = "advisor-test-token-1234567890";
+const AUDITOR_TOKEN = "auditor-test-token-1234567890";
 
 const sessions: Record<string, AuthMe> = {
   [ADMIN_TOKEN]: {
@@ -19,12 +21,30 @@ const sessions: Record<string, AuthMe> = {
     },
     tenantIds: []
   },
-  [OPERATOR_TOKEN]: {
+  [COORDINATOR_TOKEN]: {
     operator: {
       id: "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
-      email: "operador@hyperion.local",
-      displayName: "Operador",
-      role: "operator"
+      email: "coordinador@hyperion.local",
+      displayName: "Coordinador",
+      role: "coordinator"
+    },
+    tenantIds: [AUTHORIZED_TENANT_ID]
+  },
+  [ADVISOR_TOKEN]: {
+    operator: {
+      id: "2b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d",
+      email: "asesor@hyperion.local",
+      displayName: "Asesor",
+      role: "advisor"
+    },
+    tenantIds: [AUTHORIZED_TENANT_ID]
+  },
+  [AUDITOR_TOKEN]: {
+    operator: {
+      id: "3c4d5e6f-7081-4a8b-9c0d-1e2f3a4b5c6d",
+      email: "auditor@hyperion.local",
+      displayName: "Auditor",
+      role: "auditor"
     },
     tenantIds: [AUTHORIZED_TENANT_ID]
   }
@@ -80,7 +100,7 @@ describe("api-gateway authentication", () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/tenants/${OTHER_TENANT_ID}/pulso-iris/overview`,
-      headers: { authorization: `Bearer ${OPERATOR_TOKEN}` }
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
     });
 
     expect(response.statusCode).toBe(403);
@@ -90,23 +110,80 @@ describe("api-gateway authentication", () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
-      headers: { authorization: `Bearer ${OPERATOR_TOKEN}` }
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
     });
 
     // Authorization passed; upstream is not running in tests.
     expect(response.statusCode).toBe(502);
   });
 
-  it("proxies write methods through the generic pulso-iris route", async () => {
+  it("allows coordinator to write configuration", async () => {
     const response = await app.inject({
       method: "POST",
       url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/sites`,
-      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
       payload: { name: "Sede de prueba" }
     });
 
     // Authorization and routing passed; upstream is not running in tests.
     expect(response.statusCode).toBe(502);
+  });
+
+  it("forbids advisor from writing configuration", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/sites`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: { name: "Sede de prueba" }
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("allows advisor to write operational records", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(502);
+  });
+
+  it("keeps auditor as read-only", async () => {
+    const read = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/dashboard/live`,
+      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` }
+    });
+    const write = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments`,
+      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` },
+      payload: {}
+    });
+
+    expect(read.statusCode).toBe(502);
+    expect(write.statusCode).toBe(403);
+  });
+
+  it("requires admin role for operator management", async () => {
+    const forbidden = await app.inject({
+      method: "POST",
+      url: "/v1/identity/operators",
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
+      payload: {}
+    });
+    const allowed = await app.inject({
+      method: "POST",
+      url: "/v1/identity/operators",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      payload: {}
+    });
+
+    expect(forbidden.statusCode).toBe(403);
+    expect(allowed.statusCode).toBe(502);
   });
 
   it("rejects path traversal in the proxied suffix", async () => {
