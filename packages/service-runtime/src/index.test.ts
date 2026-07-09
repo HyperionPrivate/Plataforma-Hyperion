@@ -39,4 +39,26 @@ describe("service runtime", () => {
 
     expect(response.json().status).toBe("ok");
   });
+
+  it("honors and echoes an incoming x-request-id header", async () => {
+    delete process.env.DATABASE_URL;
+    ({ app } = await createService({ serviceName: "tenant-service", databaseRequired: true }));
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/health",
+      headers: { "x-request-id": "corr-12345" }
+    });
+
+    expect(response.headers["x-request-id"]).toBe("corr-12345");
+  });
+
+  it("generates a request id when none is provided", async () => {
+    delete process.env.DATABASE_URL;
+    ({ app } = await createService({ serviceName: "tenant-service", databaseRequired: true }));
+
+    const response = await app.inject({ method: "GET", url: "/health" });
+
+    expect(String(response.headers["x-request-id"])).toMatch(/^[0-9a-f-]{36}$/);
+  });
 });

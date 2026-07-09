@@ -102,6 +102,7 @@ function buildRegistry(): DownstreamService[] {
 async function proxyGet(request: FastifyRequest, reply: FastifyReply, url: string): Promise<unknown> {
   try {
     const response = await fetch(url, {
+      headers: { "x-request-id": request.id },
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
     });
     const payload = await response.json();

@@ -54,11 +54,14 @@ describe("api-gateway routes", () => {
   it("returns an enveloped 502 when the upstream service is unavailable", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`,
+      headers: { "x-request-id": "corr-gateway-502" }
     });
 
     expect(response.statusCode).toBe(502);
-    expect(response.json().data.error).toBeTruthy();
+    const body = response.json();
+    expect(body.data.error).toBeTruthy();
+    expect(body.meta.requestId).toBe("corr-gateway-502");
   });
 
   it("reports platform health as down when no downstream responds", async () => {

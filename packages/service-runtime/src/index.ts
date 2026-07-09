@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -32,6 +33,7 @@ export interface RuntimeOptions {
 }
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+const ACCESS_LOG_EXCLUDED_PATHS = new Set(["/health", "/ready"]);
 
 export async function createService(options: RuntimeOptions): Promise<ServiceHandle> {
   const config = readServiceConfig(options.serviceName);
@@ -39,7 +41,28 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
   const app = Fastify({
     logger: false,
     trustProxy: true,
-    bodyLimit: 1_048_576
+    bodyLimit: 1_048_576,
+    requestIdHeader: "x-request-id",
+    genReqId: () => randomUUID()
+  });
+
+  app.addHook("onRequest", async (request, reply) => {
+    reply.header("x-request-id", request.id);
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    const path = (request.raw.url ?? request.url).split("?")[0] ?? "";
+    if (ACCESS_LOG_EXCLUDED_PATHS.has(path)) {
+      return;
+    }
+
+    logger.info("request completed", {
+      requestId: request.id,
+      method: request.method,
+      path,
+      statusCode: reply.statusCode,
+      durationMs: Math.round(reply.elapsedTime)
+    });
   });
 
   if (options.publicApi) {
