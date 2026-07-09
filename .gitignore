@@ -14,3 +14,4 @@ Dockerfile.local
 
 logs-*.txt
 backups/
+tmp/
