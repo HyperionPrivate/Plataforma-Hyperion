@@ -190,6 +190,32 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(502);
   });
 
+  it("reserves appointment verification and state changes for coordinators", async () => {
+    const appointmentId = "00000000-0000-4000-8000-000000000010";
+    const advisorVerify = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments/${appointmentId}/manual-verify`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: { externalReference: "masked-reference", externalSystem: "manual" }
+    });
+    const advisorPatch = await app.inject({
+      method: "PATCH",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments/${appointmentId}`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: { status: "verified" }
+    });
+    const coordinatorVerify = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments/${appointmentId}/manual-verify`,
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
+      payload: { externalReference: "masked-reference", externalSystem: "manual" }
+    });
+
+    expect(advisorVerify.statusCode).toBe(403);
+    expect(advisorPatch.statusCode).toBe(403);
+    expect(coordinatorVerify.statusCode).toBe(502);
+  });
+
   it("keeps auditor as read-only", async () => {
     const read = await app.inject({
       method: "GET",

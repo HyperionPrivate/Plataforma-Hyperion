@@ -100,7 +100,7 @@ const RPA_ACTION_COLUMNS = `
   updated_at as "updatedAt"
 `;
 
-const ACTIVE_BOOKING_STATUSES = new Set(["offered", "registered", "verified", "confirmed", "rescheduled"]);
+const ACTIVE_BOOKING_STATUSES = new Set(["offered", "registered", "verified", "confirmed"]);
 
 export async function registerOperationsRoutes(
   app: FastifyInstance,
@@ -236,7 +236,10 @@ export async function registerOperationsRoutes(
 
   // ----- Citas administrativas -----
 
-  app.post(`${base}/appointments`, async (request, reply) => {
+  app.post(`${base}/simulation/appointments`, async (request, reply) => {
+    if (process.env.NODE_ENV === "production") {
+      return reply.code(404).send(envelope({ error: "Simulation routes are disabled" }, request.id));
+    }
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisAppointmentInputSchema, request, reply);
@@ -375,7 +378,10 @@ export async function registerOperationsRoutes(
     return reply.code(201).send(envelope(appointment, request.id));
   });
 
-  app.patch(`${base}/appointments/:appointmentId`, async (request, reply) => {
+  app.patch(`${base}/simulation/appointments/:appointmentId`, async (request, reply) => {
+    if (process.env.NODE_ENV === "production") {
+      return reply.code(404).send(envelope({ error: "Simulation routes are disabled" }, request.id));
+    }
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     const appointmentId = readUuidParam(request.params, "appointmentId");

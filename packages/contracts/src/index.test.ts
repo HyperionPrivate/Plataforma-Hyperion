@@ -3,12 +3,18 @@ import {
   platformCatalogSchema,
   productModules,
   pulsoIrisAgendaBlockListSchema,
+  pulsoIrisAgendaSettingsInputSchema,
+  pulsoIrisAgendaSettingsSchema,
+  pulsoIrisAppointmentHoldSchema,
   pulsoIrisAvailabilityRuleListSchema,
   pulsoIrisAvailabilitySlotsSchema,
   pulsoIrisAppointmentListSchema,
   pulsoIrisCatalog,
   pulsoIrisCatalogSchema,
+  pulsoIrisConfigurationImportApplyInputSchema,
+  pulsoIrisConfigurationImportPreviewSchema,
   pulsoIrisConversationListSchema,
+  pulsoIrisManualVerificationInputSchema,
   serviceCatalog,
   tenantIdSchema
 } from "./index.js";
@@ -158,5 +164,85 @@ describe("platform contracts", () => {
 
     expect(slots.slots[0]?.remaining).toBe(1);
     expect(slots.slots[0]?.startsAt).toBe("2026-07-20T13:00:00.000Z");
+  });
+
+  it("validates configurable agenda settings and safe limits", () => {
+    const parsed = pulsoIrisAgendaSettingsSchema.parse({
+      tenantId: TENANT_ID,
+      mode: "hybrid_manual",
+      timezone: "America/Bogota",
+      bookingHorizonDays: 90,
+      holdDurationMinutes: 10,
+      maxAlternatives: 3,
+      maxReschedules: 3,
+      externalConfirmationSlaMinutes: 240,
+      externalReferenceRequired: true,
+      capacityPolicy: "strict",
+      status: "active",
+      updatedBy: null,
+      createdAt: new Date("2026-07-09T10:00:00Z"),
+      updatedAt: new Date("2026-07-09T10:00:00Z")
+    });
+
+    expect(parsed.mode).toBe("hybrid_manual");
+    expect(parsed.updatedBy).toBeUndefined();
+    expect(pulsoIrisAgendaSettingsInputSchema.safeParse({ bookingHorizonDays: 0 }).success).toBe(false);
+    expect(pulsoIrisAgendaSettingsInputSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("parses active holds and requires manual external evidence", () => {
+    const hold = pulsoIrisAppointmentHoldSchema.parse({
+      id: "1a6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      tenantId: TENANT_ID,
+      patientId: null,
+      conversationId: null,
+      siteId: "3e6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      professionalId: "4f6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      payerId: null,
+      appointmentTypeId: "5a6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      scheduledAt: new Date("2026-07-20T13:00:00Z"),
+      durationMin: 20,
+      slotCapacityToken: 1,
+      status: "active",
+      expiresAt: new Date("2026-07-20T12:10:00Z"),
+      idempotencyKey: "hold-request-1",
+      appointmentId: null,
+      createdBy: "operator-1",
+      consumedAt: null,
+      cancelledAt: null,
+      createdAt: new Date("2026-07-20T12:00:00Z"),
+      updatedAt: new Date("2026-07-20T12:00:00Z")
+    });
+
+    expect(hold.status).toBe("active");
+    expect(
+      pulsoIrisManualVerificationInputSchema.safeParse({ externalReference: "", externalSystem: "Agenda" }).success
+    ).toBe(false);
+    expect(
+      pulsoIrisManualVerificationInputSchema.safeParse({
+        externalReference: "REF-CONTROLADA",
+        externalSystem: "Sistema externo"
+      }).success
+    ).toBe(true);
+  });
+
+  it("validates CSV previews and idempotent apply requests", () => {
+    const preview = pulsoIrisConfigurationImportPreviewSchema.parse({
+      resource: "professionals",
+      accepted: [{ row: 2, data: { name: "Profesional controlado" } }],
+      rejected: [{ row: 3, reason: "professional_type is required" }],
+      summary: { total: 2, accepted: 1, rejected: 1 }
+    });
+
+    expect(preview.summary.rejected).toBe(1);
+    expect(
+      pulsoIrisConfigurationImportApplyInputSchema.safeParse({ csv: "name\nControl", idempotencyKey: "" }).success
+    ).toBe(false);
+    expect(
+      pulsoIrisConfigurationImportApplyInputSchema.safeParse({
+        csv: "name\nControl",
+        idempotencyKey: "import-control-1"
+      }).success
+    ).toBe(true);
   });
 });

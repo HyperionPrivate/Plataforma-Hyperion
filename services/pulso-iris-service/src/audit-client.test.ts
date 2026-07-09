@@ -4,6 +4,13 @@ import { createAuditClient, PULSO_AUDIT_EVENTS, readOperatorId } from "./audit-c
 describe("audit-client", () => {
   it("exposes the exact PULSO event catalog", () => {
     expect([...PULSO_AUDIT_EVENTS]).toEqual([
+      "agenda.settings.updated",
+      "agenda.configuration.imported",
+      "appointment.hold.created",
+      "appointment.hold.expired",
+      "appointment.pending_external_confirmation",
+      "appointment.manually_verified",
+      "appointment.external_rejected",
       "appointment.registered",
       "appointment.verified",
       "appointment.rescheduled",

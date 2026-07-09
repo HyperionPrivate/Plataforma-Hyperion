@@ -3,6 +3,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { EmitAuditEventInput } from "./audit-client.js";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
+import { registerAppointmentRoutes } from "./appointment-routes.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
 import { registerConfigRoutes } from "./config-routes.js";
 import { registerOperationsRoutes } from "./operations-routes.js";
@@ -53,6 +54,7 @@ describeIntegration("pulso-iris tenant isolation", () => {
           emittedEvents.push(event);
         };
         await registerConfigRoutes(serviceApp, context, emitAudit);
+        await registerAppointmentRoutes(serviceApp, context, emitAudit);
         await registerOperationsRoutes(serviceApp, context, emitAudit);
         await registerAvailabilityRoutes(serviceApp, context);
         await registerAnalyticsRoutes(serviceApp, context);
@@ -78,7 +80,8 @@ describeIntegration("pulso-iris tenant isolation", () => {
         professionalId: professionalA,
         payerId: payerA,
         appointmentTypeId: typeA,
-        scheduledAt: "2026-09-17T15:40:00.000Z"
+        scheduledAt: "2026-09-17T15:40:00.000Z",
+        idempotencyKey: "cross-tenant-patient"
       }
     });
 
@@ -189,7 +192,7 @@ describeIntegration("pulso-iris tenant isolation", () => {
          values ($1, $2, $3, $4, 3, '08:00', '12:00')`,
         [tenantA, siteB, professionalA, typeA]
       )
-    ).rejects.toMatchObject({ code: "23503" });
+    ).rejects.toMatchObject({ code: "23514" });
   });
 
   it("generates availability slots and consumes capacity when an appointment is registered", async () => {
@@ -227,7 +230,8 @@ describeIntegration("pulso-iris tenant isolation", () => {
         payerId: payerA,
         appointmentTypeId: typeA,
         scheduledAt: "2026-09-14T19:00:00.000Z",
-        origin: "advisor"
+        origin: "advisor",
+        idempotencyKey: "capacity-registration-1"
       }
     });
     expect(appointment.statusCode).toBe(201);
@@ -254,7 +258,8 @@ describeIntegration("pulso-iris tenant isolation", () => {
         payerId: payerA,
         appointmentTypeId: typeA,
         scheduledAt: "2026-09-14T19:00:00.000Z",
-        origin: "advisor"
+        origin: "advisor",
+        idempotencyKey: "capacity-registration-2"
       }
     });
     expect(duplicate.statusCode).toBe(409);
@@ -271,7 +276,8 @@ describeIntegration("pulso-iris tenant isolation", () => {
         professionalId: professionalA,
         payerId: payerA,
         appointmentTypeId: typeA,
-        scheduledAt: "2026-09-17T15:40:00.000Z"
+        scheduledAt: "2026-09-17T15:40:00.000Z",
+        idempotencyKey: "outside-availability"
       }
     });
 
@@ -387,7 +393,8 @@ describeIntegration("pulso-iris tenant isolation", () => {
         professionalId: professionalA,
         payerId: payerA,
         appointmentTypeId: typeA,
-        scheduledAt: "2026-09-15T14:00:00.000Z"
+        scheduledAt: "2026-09-15T14:00:00.000Z",
+        idempotencyKey: "excluded-payer"
       }
     });
     expect(appointment.statusCode).toBe(422);
@@ -449,7 +456,7 @@ describeIntegration("pulso-iris tenant isolation", () => {
 
     const created = await app.inject({
       method: "POST",
-      url: `/v1/tenants/${tenantA}/pulso-iris/appointments`,
+      url: `/v1/tenants/${tenantA}/pulso-iris/simulation/appointments`,
       headers: { "x-operator-id": "operator-test" },
       payload: {
         patientId: patientA,
@@ -610,6 +617,18 @@ async function createCoreCatalog(
     `insert into pulso_iris.conversations (tenant_id, patient_id, site_id, channel, primary_intent)
      values ($1, $2, $3, 'whatsapp', 'agendar_cita') returning id`,
     [tenantId, patient.rows[0]!.id, site.rows[0]!.id]
+  );
+
+  await client.query(
+    `insert into pulso_iris.professional_sites (tenant_id, professional_id, site_id)
+     values ($1, $2, $3)`,
+    [tenantId, professional.rows[0]!.id, site.rows[0]!.id]
+  );
+  await client.query(
+    `insert into pulso_iris.professional_appointment_types
+       (tenant_id, professional_id, appointment_type_id)
+     values ($1, $2, $3)`,
+    [tenantId, professional.rows[0]!.id, appointmentType.rows[0]!.id]
   );
 
   return {

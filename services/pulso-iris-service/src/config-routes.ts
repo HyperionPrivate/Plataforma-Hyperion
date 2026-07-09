@@ -2,10 +2,17 @@ import {
   envelope,
   pulsoIrisAgendaBlockInputSchema,
   pulsoIrisAgendaBlockListSchema,
+  pulsoIrisAgendaSettingsPatchSchema,
+  pulsoIrisAgendaSettingsSchema,
+  pulsoIrisAgendaStatusSchema,
   pulsoIrisAvailabilityRuleInputSchema,
   pulsoIrisAvailabilityRuleListSchema,
   pulsoIrisAppointmentTypeInputSchema,
   pulsoIrisAppointmentTypeListSchema,
+  pulsoIrisConfigurationImportApplyInputSchema,
+  pulsoIrisConfigurationImportApplyResultSchema,
+  pulsoIrisConfigurationImportPreviewInputSchema,
+  pulsoIrisConfigurationImportPreviewSchema,
   pulsoIrisHolidayInputSchema,
   pulsoIrisHolidayListSchema,
   pulsoIrisPayerExclusionInputSchema,
@@ -14,11 +21,24 @@ import {
   pulsoIrisPayerListSchema,
   pulsoIrisProfessionalInputSchema,
   pulsoIrisProfessionalListSchema,
+  pulsoIrisProfessionalAppointmentTypeInputSchema,
+  pulsoIrisProfessionalAppointmentTypeListSchema,
+  pulsoIrisProfessionalSiteInputSchema,
+  pulsoIrisProfessionalSiteListSchema,
   pulsoIrisSiteInputSchema,
   pulsoIrisSiteListSchema
 } from "@hyperion/contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { z } from "zod";
+import {
+  AgendaCsvError,
+  agendaImportTemplate,
+  applyAgendaImport,
+  exportAgendaResource,
+  parseAgendaImportResource,
+  previewAgendaImport
+} from "./agenda-config-csv.js";
 import type { AuditEmitter } from "./audit-client.js";
 import { readOperatorId } from "./audit-client.js";
 import {
@@ -108,6 +128,7 @@ const AGENDA_BLOCK_COLUMNS = `
   appointment_type_id as "appointmentTypeId",
   starts_at as "startsAt",
   ends_at as "endsAt",
+  block_type as "blockType",
   reason,
   status,
   created_at as "createdAt",
@@ -134,6 +155,45 @@ const PAYER_EXCLUSION_COLUMNS = `
   updated_at as "updatedAt"
 `;
 
+const AGENDA_SETTINGS_COLUMNS = `
+  tenant_id as "tenantId",
+  mode,
+  timezone,
+  booking_horizon_days as "bookingHorizonDays",
+  hold_duration_minutes as "holdDurationMinutes",
+  max_alternatives as "maxAlternatives",
+  max_reschedules as "maxReschedules",
+  external_confirmation_sla_minutes as "externalConfirmationSlaMinutes",
+  external_reference_required as "externalReferenceRequired",
+  capacity_policy as "capacityPolicy",
+  status,
+  updated_by as "updatedBy",
+  created_at as "createdAt",
+  updated_at as "updatedAt"
+`;
+
+const PROFESSIONAL_SITE_COLUMNS = `
+  id,
+  tenant_id as "tenantId",
+  professional_id as "professionalId",
+  site_id as "siteId",
+  status,
+  created_at as "createdAt",
+  updated_at as "updatedAt"
+`;
+
+const PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS = `
+  id,
+  tenant_id as "tenantId",
+  professional_id as "professionalId",
+  appointment_type_id as "appointmentTypeId",
+  status,
+  created_at as "createdAt",
+  updated_at as "updatedAt"
+`;
+
+const relationPatchSchema = z.object({ status: pulsoIrisAgendaStatusSchema });
+
 export async function registerConfigRoutes(
   app: FastifyInstance,
   context: ServiceContext,
@@ -156,6 +216,293 @@ export async function registerConfigRoutes(
       metadata: { requestId: request.id }
     });
   };
+
+  // ----- Configuracion general de agenda -----
+
+  app.get(`${base}/agenda-settings`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+
+    const settings = await ensureAgendaSettings(scope.db, scope.tenantId);
+    return envelope(pulsoIrisAgendaSettingsSchema.parse(settings), request.id);
+  });
+
+  app.patch(`${base}/agenda-settings`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const input = parseBody(pulsoIrisAgendaSettingsPatchSchema, request, reply);
+    if (!input) return;
+
+    const current = await ensureAgendaSettings(scope.db, scope.tenantId);
+    const effective = { ...current, ...input };
+    if (!isValidTimeZone(effective.timezone)) {
+      return reply.code(400).send(envelope({ error: "timezone must be a valid IANA timezone" }, request.id));
+    }
+    if (effective.mode === "hybrid_manual" && !effective.externalReferenceRequired) {
+      return reply.code(422).send(envelope({ error: "hybrid_manual requires an external reference" }, request.id));
+    }
+    if (effective.mode === "legacy_integrated" && effective.status === "active") {
+      return reply
+        .code(422)
+        .send(
+          envelope(
+            { error: "legacy_integrated cannot be active until a real agenda provider is configured" },
+            request.id
+          )
+        );
+    }
+
+    const operatorId = readOperatorId(request.headers as Record<string, unknown>);
+    const result = await scope.db.query<AgendaSettingsRow>(
+      `update pulso_iris.agenda_settings set
+         mode = $3,
+         timezone = $4,
+         booking_horizon_days = $5,
+         hold_duration_minutes = $6,
+         max_alternatives = $7,
+         max_reschedules = $8,
+         external_confirmation_sla_minutes = $9,
+         external_reference_required = $10,
+         capacity_policy = $11,
+         status = $12,
+         updated_by = $2,
+         updated_at = now()
+       where tenant_id = $1
+       returning ${AGENDA_SETTINGS_COLUMNS}`,
+      [
+        scope.tenantId,
+        operatorId ?? null,
+        effective.mode,
+        effective.timezone,
+        effective.bookingHorizonDays,
+        effective.holdDurationMinutes,
+        effective.maxAlternatives,
+        effective.maxReschedules,
+        effective.externalConfirmationSlaMinutes,
+        effective.externalReferenceRequired,
+        effective.capacityPolicy,
+        effective.status
+      ]
+    );
+    const updated = result.rows[0];
+    if (!updated) {
+      return reply.code(404).send(envelope({ error: "Agenda settings not found" }, request.id));
+    }
+
+    emitAudit({
+      tenantId: scope.tenantId,
+      actorId: operatorId,
+      eventType: "agenda.settings.updated",
+      entityType: "agenda_settings",
+      entityId: scope.tenantId,
+      metadata: { requestId: request.id, mode: updated.mode, status: updated.status }
+    });
+    return envelope(pulsoIrisAgendaSettingsSchema.parse(updated), request.id);
+  });
+
+  // ----- Relaciones profesional-sede y profesional-tipo de cita -----
+
+  app.get(`${base}/professional-sites`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const result = await scope.db.query(
+      `select ${PROFESSIONAL_SITE_COLUMNS}
+       from pulso_iris.professional_sites
+       where tenant_id = $1
+       order by professional_id, site_id`,
+      [scope.tenantId]
+    );
+    return envelope(pulsoIrisProfessionalSiteListSchema.parse(result.rows), request.id);
+  });
+
+  app.post(`${base}/professional-sites`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const input = parseBody(pulsoIrisProfessionalSiteInputSchema, request, reply);
+    if (!input) return;
+
+    const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" }
+    ]);
+    if (referenceError) return sendReferenceError(reply, request, referenceError.label);
+
+    try {
+      const result = await scope.db.query(
+        `insert into pulso_iris.professional_sites (tenant_id, professional_id, site_id, status)
+         values ($1, $2, $3, coalesce($4, 'active'))
+         returning ${PROFESSIONAL_SITE_COLUMNS}`,
+        [scope.tenantId, input.professionalId, input.siteId, input.status ?? null]
+      );
+      const created = result.rows[0] as { id?: string } | undefined;
+      if (created?.id) emitConfigUpdated(request, scope.tenantId, "professional_site", created.id);
+      return reply.code(201).send(envelope(pulsoIrisProfessionalSiteListSchema.parse(result.rows)[0], request.id));
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
+
+  app.patch(`${base}/professional-sites/:relationId`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const relationId = readUuidParam(request.params, "relationId");
+    if (!relationId) return reply.code(400).send(envelope({ error: "relationId must be a UUID" }, request.id));
+    const input = parseBody(relationPatchSchema, request, reply);
+    if (!input) return;
+
+    const result = await scope.db.query(
+      `update pulso_iris.professional_sites
+       set status = $3, updated_at = now()
+       where tenant_id = $1 and id = $2
+       returning ${PROFESSIONAL_SITE_COLUMNS}`,
+      [scope.tenantId, relationId, input.status]
+    );
+    if (result.rows.length === 0) {
+      return reply.code(404).send(envelope({ error: "Professional-site relation not found" }, request.id));
+    }
+    emitConfigUpdated(request, scope.tenantId, "professional_site", relationId);
+    return envelope(pulsoIrisProfessionalSiteListSchema.parse(result.rows)[0], request.id);
+  });
+
+  app.get(`${base}/professional-appointment-types`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const result = await scope.db.query(
+      `select ${PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS}
+       from pulso_iris.professional_appointment_types
+       where tenant_id = $1
+       order by professional_id, appointment_type_id`,
+      [scope.tenantId]
+    );
+    return envelope(pulsoIrisProfessionalAppointmentTypeListSchema.parse(result.rows), request.id);
+  });
+
+  app.post(`${base}/professional-appointment-types`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const input = parseBody(pulsoIrisProfessionalAppointmentTypeInputSchema, request, reply);
+    if (!input) return;
+
+    const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.appointmentTypeId, table: "pulso_iris.appointment_types", label: "appointmentTypeId" }
+    ]);
+    if (referenceError) return sendReferenceError(reply, request, referenceError.label);
+
+    try {
+      const result = await scope.db.query(
+        `insert into pulso_iris.professional_appointment_types
+           (tenant_id, professional_id, appointment_type_id, status)
+         values ($1, $2, $3, coalesce($4, 'active'))
+         returning ${PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS}`,
+        [scope.tenantId, input.professionalId, input.appointmentTypeId, input.status ?? null]
+      );
+      const created = result.rows[0] as { id?: string } | undefined;
+      if (created?.id) emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", created.id);
+      return reply
+        .code(201)
+        .send(envelope(pulsoIrisProfessionalAppointmentTypeListSchema.parse(result.rows)[0], request.id));
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
+
+  app.patch(`${base}/professional-appointment-types/:relationId`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const relationId = readUuidParam(request.params, "relationId");
+    if (!relationId) return reply.code(400).send(envelope({ error: "relationId must be a UUID" }, request.id));
+    const input = parseBody(relationPatchSchema, request, reply);
+    if (!input) return;
+
+    const result = await scope.db.query(
+      `update pulso_iris.professional_appointment_types
+       set status = $3, updated_at = now()
+       where tenant_id = $1 and id = $2
+       returning ${PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS}`,
+      [scope.tenantId, relationId, input.status]
+    );
+    if (result.rows.length === 0) {
+      return reply.code(404).send(envelope({ error: "Professional-appointment-type relation not found" }, request.id));
+    }
+    emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", relationId);
+    return envelope(pulsoIrisProfessionalAppointmentTypeListSchema.parse(result.rows)[0], request.id);
+  });
+
+  // ----- Importacion y exportacion CSV -----
+
+  app.get(`${base}/import/:resource/template`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const resource = readImportResource(request.params);
+    if (!resource) return reply.code(404).send(envelope({ error: "Unsupported import resource" }, request.id));
+    return envelope(agendaImportTemplate(resource), request.id);
+  });
+
+  app.post(`${base}/import/:resource/preview`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const resource = readImportResource(request.params);
+    if (!resource) return reply.code(404).send(envelope({ error: "Unsupported import resource" }, request.id));
+    const input = parseBody(pulsoIrisConfigurationImportPreviewInputSchema, request, reply);
+    if (!input) return;
+
+    try {
+      const preview = await previewAgendaImport(scope.db, scope.tenantId, resource, input.csv);
+      return envelope(pulsoIrisConfigurationImportPreviewSchema.parse(preview), request.id);
+    } catch (error) {
+      return sendAgendaCsvError(error, reply, request.id);
+    }
+  });
+
+  app.post(`${base}/import/:resource/apply`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const resource = readImportResource(request.params);
+    if (!resource) return reply.code(404).send(envelope({ error: "Unsupported import resource" }, request.id));
+    const input = parseBody(pulsoIrisConfigurationImportApplyInputSchema, request, reply);
+    if (!input) return;
+    const operatorId = readOperatorId(request.headers as Record<string, unknown>);
+
+    try {
+      const applied = await applyAgendaImport({
+        db: scope.db,
+        tenantId: scope.tenantId,
+        resource,
+        csv: input.csv,
+        idempotencyKey: input.idempotencyKey,
+        operatorId
+      });
+      if (!applied.idempotent) {
+        emitAudit({
+          tenantId: scope.tenantId,
+          actorId: operatorId,
+          eventType: "agenda.configuration.imported",
+          entityType: "configuration_import",
+          entityId: applied.importId,
+          metadata: {
+            requestId: request.id,
+            resource,
+            applied: applied.applied,
+            rejected: applied.summary.rejected
+          }
+        });
+      }
+      return reply
+        .code(applied.idempotent ? 200 : 201)
+        .send(envelope(pulsoIrisConfigurationImportApplyResultSchema.parse(applied), request.id));
+    } catch (error) {
+      return sendAgendaCsvError(error, reply, request.id);
+    }
+  });
+
+  app.get(`${base}/export/:resource`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const resource = readImportResource(request.params);
+    if (!resource) return reply.code(404).send(envelope({ error: "Unsupported export resource" }, request.id));
+    return envelope(await exportAgendaResource(scope.db, scope.tenantId, resource), request.id);
+  });
 
   // ----- Sedes -----
 
@@ -244,15 +591,19 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisProfessionalInputSchema, request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `insert into pulso_iris.professionals (tenant_id, name, professional_type, subspecialty, status)
-       values ($1, $2, $3, $4, coalesce($5, 'active'))
-       returning ${PROFESSIONAL_COLUMNS}`,
-      [scope.tenantId, input.name, input.professionalType, input.subspecialty ?? null, input.status ?? null]
-    );
-    const created = pulsoIrisProfessionalListSchema.parse(result.rows)[0];
-    if (created) emitConfigUpdated(request, scope.tenantId, "professional", created.id);
-    return reply.code(201).send(envelope(created, request.id));
+    try {
+      const result = await scope.db.query(
+        `insert into pulso_iris.professionals (tenant_id, name, professional_type, subspecialty, status)
+         values ($1, $2, $3, $4, coalesce($5, 'active'))
+         returning ${PROFESSIONAL_COLUMNS}`,
+        [scope.tenantId, input.name, input.professionalType, input.subspecialty ?? null, input.status ?? null]
+      );
+      const created = pulsoIrisProfessionalListSchema.parse(result.rows)[0];
+      if (created) emitConfigUpdated(request, scope.tenantId, "professional", created.id);
+      return reply.code(201).send(envelope(created, request.id));
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
   });
 
   app.patch(`${base}/professionals/:professionalId`, async (request, reply) => {
@@ -265,30 +616,34 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisProfessionalInputSchema.partial(), request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `update pulso_iris.professionals set
-         name = coalesce($3, name),
-         professional_type = coalesce($4, professional_type),
-         subspecialty = coalesce($5, subspecialty),
-         status = coalesce($6, status),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-       returning ${PROFESSIONAL_COLUMNS}`,
-      [
-        scope.tenantId,
-        professionalId,
-        input.name ?? null,
-        input.professionalType ?? null,
-        input.subspecialty ?? null,
-        input.status ?? null
-      ]
-    );
+    try {
+      const result = await scope.db.query(
+        `update pulso_iris.professionals set
+           name = coalesce($3, name),
+           professional_type = coalesce($4, professional_type),
+           subspecialty = coalesce($5, subspecialty),
+           status = coalesce($6, status),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${PROFESSIONAL_COLUMNS}`,
+        [
+          scope.tenantId,
+          professionalId,
+          input.name ?? null,
+          input.professionalType ?? null,
+          input.subspecialty ?? null,
+          input.status ?? null
+        ]
+      );
 
-    if (result.rows.length === 0) {
-      return reply.code(404).send(envelope({ error: "Professional not found" }, request.id));
+      if (result.rows.length === 0) {
+        return reply.code(404).send(envelope({ error: "Professional not found" }, request.id));
+      }
+      emitConfigUpdated(request, scope.tenantId, "professional", professionalId);
+      return envelope(pulsoIrisProfessionalListSchema.parse(result.rows)[0], request.id);
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
     }
-    emitConfigUpdated(request, scope.tenantId, "professional", professionalId);
-    return envelope(pulsoIrisProfessionalListSchema.parse(result.rows)[0], request.id);
   });
 
   // ----- Convenios -----
@@ -502,6 +857,22 @@ export async function registerConfigRoutes(
       return reply.code(422).send(envelope({ error: durationError }, request.id));
     }
 
+    const configurationError = await validateAvailabilityRuleConfiguration(scope.db, scope.tenantId, {
+      siteId: input.siteId,
+      professionalId: input.professionalId,
+      appointmentTypeId: input.appointmentTypeId,
+      weekday: input.weekday,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      slotDurationMin: input.slotDurationMin ?? 20,
+      effectiveFrom: input.effectiveFrom ?? null,
+      effectiveTo: input.effectiveTo ?? null,
+      status: input.status ?? "active"
+    });
+    if (configurationError) {
+      return reply.code(422).send(envelope({ error: configurationError }, request.id));
+    }
+
     try {
       const result = await scope.db.query(
         `insert into pulso_iris.availability_rules
@@ -545,10 +916,6 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisAvailabilityRuleInputSchema.partial(), request, reply);
     if (!input) return;
 
-    if (input.startsAt && input.endsAt && !isTimeRange(input.startsAt, input.endsAt)) {
-      return reply.code(400).send(envelope({ error: "endsAt must be after startsAt" }, request.id));
-    }
-
     const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
       { id: input.siteId, table: "pulso_iris.sites", label: "siteId" },
       { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
@@ -558,28 +925,39 @@ export async function registerConfigRoutes(
       return sendReferenceError(reply, request, referenceError.label);
     }
 
-    if (input.slotDurationMin !== undefined || input.appointmentTypeId !== undefined) {
-      const current = await scope.db.query<{
-        appointmentTypeId: string;
-        slotDurationMin: number;
-      }>(
-        `select appointment_type_id as "appointmentTypeId", slot_duration_min as "slotDurationMin"
-         from pulso_iris.availability_rules
-         where tenant_id = $1 and id = $2`,
-        [scope.tenantId, ruleId]
-      );
-      const existing = current.rows[0];
-      if (!existing) {
-        return reply.code(404).send(envelope({ error: "Availability rule not found" }, request.id));
-      }
-
-      const durationError = await validateRuleSlotDuration(scope.db, scope.tenantId, {
-        appointmentTypeId: input.appointmentTypeId ?? existing.appointmentTypeId,
-        slotDurationMin: input.slotDurationMin ?? existing.slotDurationMin
-      });
-      if (durationError) {
-        return reply.code(422).send(envelope({ error: durationError }, request.id));
-      }
+    const current = await scope.db.query<EffectiveAvailabilityRule>(
+      `select site_id as "siteId", professional_id as "professionalId",
+              appointment_type_id as "appointmentTypeId", weekday::int as weekday,
+              to_char(starts_at, 'HH24:MI:SS') as "startsAt",
+              to_char(ends_at, 'HH24:MI:SS') as "endsAt",
+              slot_duration_min as "slotDurationMin",
+              effective_from::text as "effectiveFrom", effective_to::text as "effectiveTo", status
+       from pulso_iris.availability_rules
+       where tenant_id = $1 and id = $2`,
+      [scope.tenantId, ruleId]
+    );
+    const existing = current.rows[0];
+    if (!existing) {
+      return reply.code(404).send(envelope({ error: "Availability rule not found" }, request.id));
+    }
+    const effective: EffectiveAvailabilityRule = {
+      siteId: input.siteId ?? existing.siteId,
+      professionalId: input.professionalId ?? existing.professionalId,
+      appointmentTypeId: input.appointmentTypeId ?? existing.appointmentTypeId,
+      weekday: input.weekday ?? existing.weekday,
+      startsAt: input.startsAt ?? existing.startsAt,
+      endsAt: input.endsAt ?? existing.endsAt,
+      slotDurationMin: input.slotDurationMin ?? existing.slotDurationMin,
+      effectiveFrom: input.effectiveFrom ?? existing.effectiveFrom,
+      effectiveTo: input.effectiveTo ?? existing.effectiveTo,
+      status: input.status ?? existing.status
+    };
+    if (!isTimeRange(effective.startsAt, effective.endsAt)) {
+      return reply.code(400).send(envelope({ error: "endsAt must be after startsAt" }, request.id));
+    }
+    const configurationError = await validateAvailabilityRuleConfiguration(scope.db, scope.tenantId, effective, ruleId);
+    if (configurationError) {
+      return reply.code(422).send(envelope({ error: configurationError }, request.id));
     }
 
     try {
@@ -669,8 +1047,8 @@ export async function registerConfigRoutes(
     try {
       const result = await scope.db.query(
         `insert into pulso_iris.agenda_blocks
-           (tenant_id, site_id, professional_id, appointment_type_id, starts_at, ends_at, reason, status)
-         values ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7, coalesce($8, 'active'))
+           (tenant_id, site_id, professional_id, appointment_type_id, starts_at, ends_at, block_type, reason, status)
+         values ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, coalesce($7, 'block'), $8, coalesce($9, 'active'))
          returning ${AGENDA_BLOCK_COLUMNS}`,
         [
           scope.tenantId,
@@ -679,6 +1057,7 @@ export async function registerConfigRoutes(
           input.appointmentTypeId ?? null,
           input.startsAt,
           input.endsAt,
+          input.blockType ?? null,
           input.reason,
           input.status ?? null
         ]
@@ -701,8 +1080,21 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisAgendaBlockInputSchema.partial(), request, reply);
     if (!input) return;
 
-    if (input.startsAt && input.endsAt && !isDateTimeRange(input.startsAt, input.endsAt)) {
-      return reply.code(400).send(envelope({ error: "endsAt must be after startsAt" }, request.id));
+    if (input.startsAt !== undefined || input.endsAt !== undefined) {
+      const current = await scope.db.query<{ startsAt: Date | string; endsAt: Date | string }>(
+        `select starts_at as "startsAt", ends_at as "endsAt"
+         from pulso_iris.agenda_blocks where tenant_id = $1 and id = $2`,
+        [scope.tenantId, blockId]
+      );
+      const existing = current.rows[0];
+      if (!existing) {
+        return reply.code(404).send(envelope({ error: "Agenda block not found" }, request.id));
+      }
+      const startsAt = input.startsAt ?? new Date(existing.startsAt).toISOString();
+      const endsAt = input.endsAt ?? new Date(existing.endsAt).toISOString();
+      if (!isDateTimeRange(startsAt, endsAt)) {
+        return reply.code(400).send(envelope({ error: "endsAt must be after startsAt" }, request.id));
+      }
     }
 
     const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
@@ -722,8 +1114,9 @@ export async function registerConfigRoutes(
            appointment_type_id = coalesce($5, appointment_type_id),
            starts_at = coalesce($6::timestamptz, starts_at),
            ends_at = coalesce($7::timestamptz, ends_at),
-           reason = coalesce($8, reason),
-           status = coalesce($9, status),
+           block_type = coalesce($8, block_type),
+           reason = coalesce($9, reason),
+           status = coalesce($10, status),
            updated_at = now()
          where tenant_id = $1 and id = $2
          returning ${AGENDA_BLOCK_COLUMNS}`,
@@ -735,6 +1128,7 @@ export async function registerConfigRoutes(
           input.appointmentTypeId ?? null,
           input.startsAt ?? null,
           input.endsAt ?? null,
+          input.blockType ?? null,
           input.reason ?? null,
           input.status ?? null
         ]
@@ -906,6 +1300,146 @@ export async function registerConfigRoutes(
   });
 }
 
+interface AgendaSettingsRow {
+  tenantId: string;
+  mode: "internal" | "hybrid_manual" | "legacy_integrated";
+  timezone: string;
+  bookingHorizonDays: number;
+  holdDurationMinutes: number;
+  maxAlternatives: number;
+  maxReschedules: number;
+  externalConfirmationSlaMinutes: number;
+  externalReferenceRequired: boolean;
+  capacityPolicy: "strict";
+  status: "active" | "paused";
+  updatedBy: string | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+}
+
+async function ensureAgendaSettings(db: Database, tenantId: string): Promise<AgendaSettingsRow> {
+  await db.query(
+    `insert into pulso_iris.agenda_settings (tenant_id, mode, external_reference_required)
+     values ($1, 'hybrid_manual', true)
+     on conflict (tenant_id) do nothing`,
+    [tenantId]
+  );
+  const result = await db.query<AgendaSettingsRow>(
+    `select ${AGENDA_SETTINGS_COLUMNS} from pulso_iris.agenda_settings where tenant_id = $1`,
+    [tenantId]
+  );
+  const settings = result.rows[0];
+  if (!settings) throw new Error("Could not initialize agenda settings");
+  return settings;
+}
+
+function readImportResource(params: unknown) {
+  const raw =
+    typeof params === "object" && params !== null && "resource" in params
+      ? (params as { resource?: unknown }).resource
+      : undefined;
+  return parseAgendaImportResource(raw);
+}
+
+function sendAgendaCsvError(error: unknown, reply: FastifyReply, requestId: string) {
+  if (error instanceof AgendaCsvError) {
+    return reply.code(error.statusCode).send(envelope({ error: error.message }, requestId));
+  }
+  throw error;
+}
+
+function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("es-CO", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface EffectiveAvailabilityRule {
+  siteId: string;
+  professionalId: string;
+  appointmentTypeId: string;
+  weekday: number;
+  startsAt: string;
+  endsAt: string;
+  slotDurationMin: number;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  status: "active" | "paused";
+}
+
+async function validateAvailabilityRuleConfiguration(
+  db: Database,
+  tenantId: string,
+  input: EffectiveAvailabilityRule,
+  excludeRuleId?: string
+): Promise<string | undefined> {
+  if (input.effectiveFrom && input.effectiveTo && input.effectiveTo < input.effectiveFrom) {
+    return "effectiveTo must be on or after effectiveFrom";
+  }
+
+  const durationError = await validateRuleSlotDuration(db, tenantId, {
+    appointmentTypeId: input.appointmentTypeId,
+    slotDurationMin: input.slotDurationMin
+  });
+  if (durationError) return durationError;
+
+  const result = await db.query<{
+    professionalSite: boolean;
+    professionalAppointmentType: boolean;
+    overlaps: boolean;
+  }>(
+    `select
+       exists(
+         select 1 from pulso_iris.professional_sites
+         where tenant_id = $1 and professional_id = $2 and site_id = $3 and status = 'active'
+       ) as "professionalSite",
+       exists(
+         select 1 from pulso_iris.professional_appointment_types
+         where tenant_id = $1 and professional_id = $2 and appointment_type_id = $4 and status = 'active'
+       ) as "professionalAppointmentType",
+       case when $10 = 'active' then exists(
+         select 1 from pulso_iris.availability_rules
+         where tenant_id = $1
+           and professional_id = $2
+           and weekday = $5
+           and status = 'active'
+           and starts_at < $7::time
+           and ends_at > $6::time
+           and daterange(
+             coalesce(effective_from, '-infinity'::date),
+             coalesce(effective_to, 'infinity'::date),
+             '[]'
+           ) && daterange(
+             coalesce($8::date, '-infinity'::date),
+             coalesce($9::date, 'infinity'::date),
+             '[]'
+           )
+           and ($11::uuid is null or id <> $11::uuid)
+       ) else false end as overlaps`,
+    [
+      tenantId,
+      input.professionalId,
+      input.siteId,
+      input.appointmentTypeId,
+      input.weekday,
+      input.startsAt,
+      input.endsAt,
+      input.effectiveFrom,
+      input.effectiveTo,
+      input.status,
+      excludeRuleId ?? null
+    ]
+  );
+  const validation = result.rows[0];
+  if (!validation?.professionalSite) return "Professional is not active at the selected site";
+  if (!validation.professionalAppointmentType) return "Professional is not authorized for the appointment type";
+  if (validation.overlaps) return "Availability rule overlaps another active rule for this professional";
+  return undefined;
+}
+
 async function validateRuleSlotDuration(
   db: Database,
   tenantId: string,
@@ -963,6 +1497,14 @@ function sendDatabaseConfigError(error: unknown, reply: FastifyReply, requestId:
   const mapped = mapDatabaseError(error);
   if (mapped) {
     return reply.code(mapped.statusCode).send(envelope({ error: mapped.message }, requestId));
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    String((error as { code?: unknown }).code) === "23P01"
+  ) {
+    return reply.code(409).send(envelope({ error: "Configuration overlaps an existing rule" }, requestId));
   }
   if (
     typeof error === "object" &&

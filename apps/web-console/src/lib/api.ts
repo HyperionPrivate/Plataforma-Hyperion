@@ -20,6 +20,18 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
+async function authorizedFetch(path: string, init?: RequestInit): Promise<Response> {
+  const session = loadSession();
+  const headers = new Headers(init?.headers);
+  if (session) headers.set("authorization", `Bearer ${session.token}`);
+  const response = await fetch(`${apiBaseUrl}${path}`, { ...init, headers });
+  if (response.status === 401) {
+    clearSession();
+    throw new SessionExpiredError("Sesion expirada");
+  }
+  return response;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const session = loadSession();
   const headers: Record<string, string> = {};
@@ -61,7 +73,31 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 export const api = {
   get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
   post: <T>(path: string, body: unknown) => request<T>(path, { method: "POST", body }),
-  patch: <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body })
+  patch: <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body }),
+  text: async (path: string): Promise<{ content: string; filename?: string }> => {
+    const response = await authorizedFetch(path);
+    const raw = await response.text();
+    if (!response.ok) {
+      let message = `${response.status} ${response.statusText}`;
+      try {
+        const payload = JSON.parse(raw) as { data?: { error?: string } };
+        message = payload.data?.error ?? message;
+      } catch {
+        // La exportacion puede responder texto plano; no lo mostramos como error sensible.
+      }
+      throw new ApiError(response.status, message);
+    }
+    let content = raw;
+    try {
+      const payload = JSON.parse(raw) as { data?: { csv?: string; content?: string; filename?: string } };
+      content = payload.data?.csv ?? payload.data?.content ?? raw;
+      return { content, filename: payload.data?.filename };
+    } catch {
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1];
+      return { content, filename };
+    }
+  }
 };
 
 /** Raw fetch para el login (todavia no hay sesion). */

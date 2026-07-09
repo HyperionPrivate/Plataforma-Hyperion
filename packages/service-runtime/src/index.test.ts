@@ -113,7 +113,7 @@ describe("service runtime", () => {
 });
 
 function createFakeDatabase(appliedMigrations: string[]): DatabaseClient {
-  return {
+  const database: DatabaseClient = {
     query: async (text: string) => {
       if (text === "select 1") {
         return { rows: [{ "?column?": 1 }] } as never;
@@ -125,6 +125,8 @@ function createFakeDatabase(appliedMigrations: string[]): DatabaseClient {
 
       return { rows: [] } as never;
     },
+    transaction: async (work) => work(database),
     close: async () => undefined
   };
+  return database;
 }

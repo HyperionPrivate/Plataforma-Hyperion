@@ -7,6 +7,9 @@ const TICK_MS = 4_000;
 const CLAIM_LIMIT = 5;
 
 export function isVerificationSimulatorEnabled(): boolean {
+  if (process.env.NODE_ENV?.trim().toLowerCase() === "production") {
+    return false;
+  }
   const value = process.env.VERIFICATION_SIMULATOR_ENABLED?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes";
 }
@@ -35,6 +38,11 @@ export async function runSimulatorTick(
   emitAudit: AuditEmitter,
   context?: Pick<ServiceContext, "logger">
 ): Promise<number> {
+  if (process.env.NODE_ENV?.trim().toLowerCase() === "production") {
+    context?.logger.warn("verification simulator blocked in production");
+    return 0;
+  }
+
   const claimed = await db.query<{
     id: string;
     tenantId: string;
@@ -109,6 +117,9 @@ export async function runSimulatorTick(
       const updated = await db.query<{ id: string }>(
         `update pulso_iris.appointments
          set status = 'verified',
+             verification_mode = 'simulated',
+             verified_at = now(),
+             verified_by = 'simulator',
              metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
                'simulated', true,
                'verificationMode', 'simulator'

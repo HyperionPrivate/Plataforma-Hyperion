@@ -119,6 +119,12 @@ export function mapDatabaseError(error: unknown): { statusCode: number; message:
   if (code === "23505") {
     return { statusCode: 409, message: "Resource already exists or slot is already reserved" };
   }
+  if (code === "23P01") {
+    return { statusCode: 409, message: "Configuration overlaps an existing rule" };
+  }
+  if (code === "23514" || code === "P0001") {
+    return { statusCode: 422, message: "Configuration violates an agenda rule" };
+  }
 
   return undefined;
 }

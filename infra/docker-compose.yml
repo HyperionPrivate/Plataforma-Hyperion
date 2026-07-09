@@ -188,7 +188,7 @@ services:
       <<: *service-env
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
       AUDIT_SERVICE_URL: http://audit-service:8086
-      VERIFICATION_SIMULATOR_ENABLED: "true"
+      VERIFICATION_SIMULATOR_ENABLED: ${VERIFICATION_SIMULATOR_ENABLED:-false}
       PORT: 8088
     expose:
       - "8088"
