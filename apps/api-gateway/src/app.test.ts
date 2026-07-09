@@ -264,6 +264,51 @@ describe("api-gateway authentication", () => {
     expect(allowed.statusCode).toBe(502);
   });
 
+  it("enforces WhatsApp integration RBAC at the gateway", async () => {
+    const base = `/v1/tenants/${AUTHORIZED_TENANT_ID}/integrations/whatsapp`;
+    const coordinatorStatus = await app.inject({
+      method: "GET",
+      url: `${base}/status`,
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+    });
+    const advisorStatus = await app.inject({
+      method: "GET",
+      url: `${base}/status`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` }
+    });
+    const auditorQr = await app.inject({
+      method: "GET",
+      url: `${base}/qr`,
+      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` }
+    });
+    const adminQr = await app.inject({
+      method: "GET",
+      url: `${base}/qr`,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+    });
+    const coordinatorConnect = await app.inject({
+      method: "POST",
+      url: `${base}/connect`,
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
+      payload: {}
+    });
+    const adminConnect = await app.inject({
+      method: "POST",
+      url: `${base}/connect`,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      payload: {}
+    });
+
+    expect(coordinatorStatus.statusCode).toBe(502);
+    expect(advisorStatus.statusCode).toBe(403);
+    expect(auditorQr.statusCode).toBe(403);
+    expect(adminQr.statusCode).toBe(502);
+    expect(adminQr.headers["cache-control"]).toContain("no-store");
+    expect(adminQr.headers.pragma).toBe("no-cache");
+    expect(coordinatorConnect.statusCode).toBe(403);
+    expect(adminConnect.statusCode).toBe(502);
+  });
+
   it("rejects path traversal in the proxied suffix", async () => {
     const response = await app.inject({
       method: "GET",
@@ -296,7 +341,7 @@ describe("api-gateway routes", () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.data.services).toHaveLength(9);
+    expect(body.data.services).toHaveLength(10);
     expect(body.meta.generatedAt).toBeTruthy();
   });
 
@@ -347,6 +392,6 @@ describe("api-gateway routes", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe("down");
-    expect(body.services).toHaveLength(8);
+    expect(body.services).toHaveLength(9);
   }, 15_000);
 });

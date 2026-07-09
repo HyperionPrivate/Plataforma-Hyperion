@@ -8,6 +8,7 @@ import {
   ExternalLink,
   History,
   ListChecks,
+  MessageCircle,
   Plus,
   RefreshCw,
   RotateCw,
@@ -30,6 +31,9 @@ import { Card, CardHead, EmptyState, LoadingState, Pill } from "../components/ui
 import { api, ApiError, SessionExpiredError } from "../lib/api.js";
 import {
   normalizeQueueResponse,
+  queueConfigurationLabel,
+  queuePrimaryLabel,
+  queueScheduleLabel,
   queueStatusLabel,
   queueTone,
   queueViewFor,
@@ -54,6 +58,7 @@ interface AgendaResponse {
     appointmentTypeLabel: string | null;
     appointmentCategory: string | null;
     patientName: string | null;
+    professionalIsPilot?: boolean;
   }>;
   summary: {
     total: number;
@@ -80,8 +85,9 @@ function statusStyle(status: string): { bg: string; border: string; label: strin
     case "confirmed":
       return { bg: "var(--green-soft)", border: "#2f9e6e", label: "Confirmada" };
     case "verified":
+      return { bg: "var(--green-soft)", border: "#2f9e6e", label: "Verificada" };
     case "registered":
-      return { bg: "#fff", border: "#8fd3b6", label: "Agendada" };
+      return { bg: "#fff", border: "#8fd3b6", label: "Registrada" };
     case "rescheduled":
       return {
         bg: "repeating-linear-gradient(45deg,#eef2f0,#eef2f0 4px,#fff 4px,#fff 8px)",
@@ -171,7 +177,8 @@ export function AgendaPage() {
               trailing={
                 <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
                   <LegendDot color="#2f9e6e" label="Confirmada" />
-                  <LegendDot color="#8fd3b6" label="Agendada" />
+                  <LegendDot color="#8fd3b6" label="Registrada" />
+                  <LegendDot color="#2f9e6e" label="Verificada" />
                   <LegendDot color="#d99a2b" label="Pendiente externa" />
                   <LegendDot color="#d99a2b" label="Reagendada" />
                   <LegendDot color="#d1584f" label="No-show" />
@@ -234,8 +241,10 @@ export function AgendaPage() {
                         {index + 1}
                       </span>
                       <div className="col" style={{ flex: 1 }}>
-                        <strong className="small">{entry.patientName ?? "Paciente"}</strong>
-                        <span className="tiny muted">{entry.appointmentTypeName ?? "Cita"}</span>
+                        <strong className="small">{entry.patientName ?? "Identidad pendiente"}</strong>
+                        <span className="tiny muted">
+                          {entry.appointmentTypeName ?? "Configuracion incompleta: falta el tipo de cita"}
+                        </span>
                       </div>
                       {entry.clinicalPriority <= 15 ? <Pill tone="amber">Prioridad</Pill> : null}
                     </div>
@@ -341,15 +350,18 @@ function AgendaQueue({
                             : item.verificationMode}
                       </Pill>
                     ) : null}
+                    {item.origin === "sofia_wa" ? (
+                      <Pill tone="green">
+                        <MessageCircle size={12} /> SOFIA WhatsApp
+                      </Pill>
+                    ) : null}
+                    {item.professionalIsPilot ? <Pill tone="blue">Piloto</Pill> : null}
                     <QueueDeadline item={item} />
                   </div>
-                  <strong>{item.patientName ?? "Paciente sin nombre disponible"}</strong>
-                  <span className="small muted">
-                    {[item.appointmentTypeName, item.professionalName, item.siteName].filter(Boolean).join(" · ") ||
-                      "Configuracion de cita no disponible"}
-                  </span>
+                  <strong>{queuePrimaryLabel(item)}</strong>
+                  <span className="small muted">{queueConfigurationLabel(item)}</span>
                   <span className="tiny muted">
-                    {item.scheduledAt ? formatAgendaDateTime(item.scheduledAt) : "Sin horario asignado"}
+                    {item.scheduledAt ? formatAgendaDateTime(item.scheduledAt) : queueScheduleLabel(item)}
                   </span>
                   {item.externalReference ? (
                     <span className="tiny muted">
@@ -571,7 +583,7 @@ function QueueActionDialog({
   const [appointmentTypeId, setAppointmentTypeId] = useState(action.item.appointmentTypeId ?? "");
   const [payerId, setPayerId] = useState(action.item.payerId ?? "");
   const [sites, setSites] = useState<PulsoIrisSite[]>([]);
-  const [professionals, setProfessionals] = useState<PulsoIrisProfessional[]>([]);
+  const [professionals, setProfessionals] = useState<ProfessionalView[]>([]);
   const [appointmentTypes, setAppointmentTypes] = useState<PulsoIrisAppointmentType[]>([]);
   const [payers, setPayers] = useState<PulsoIrisPayer[]>([]);
   const [alternatives, setAlternatives] = useState<PulsoIrisSlotAlternative[]>([]);
@@ -583,7 +595,7 @@ function QueueActionDialog({
     let cancelled = false;
     Promise.all([
       api.get<PulsoIrisSite[]>(tenantPath(tenantId, "config/sites")),
-      api.get<PulsoIrisProfessional[]>(tenantPath(tenantId, "config/professionals")),
+      api.get<ProfessionalView[]>(tenantPath(tenantId, "config/professionals")),
       api.get<PulsoIrisAppointmentType[]>(tenantPath(tenantId, "config/appointment-types")),
       api.get<PulsoIrisPayer[]>(tenantPath(tenantId, "config/payers"))
     ])
@@ -734,6 +746,7 @@ function QueueActionDialog({
                     {professionals.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
+                        {item.isPilot ? " · Piloto" : ""}
                       </option>
                     ))}
                   </select>
@@ -863,6 +876,9 @@ function toLocalDateTime(value: string | null): string {
   return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
 }
 
+type ProfessionalView = PulsoIrisProfessional & { isPilot?: boolean };
+type AvailabilitySlotView = PulsoIrisAvailabilitySlot & { professionalIsPilot?: boolean };
+
 function AvailabilityPanel({
   tenantId,
   activeSiteId,
@@ -878,7 +894,7 @@ function AvailabilityPanel({
   onReserved: () => void;
   logout: () => void;
 }) {
-  const [professionals, setProfessionals] = useState<PulsoIrisProfessional[]>([]);
+  const [professionals, setProfessionals] = useState<ProfessionalView[]>([]);
   const [appointmentTypes, setAppointmentTypes] = useState<PulsoIrisAppointmentType[]>([]);
   const [payers, setPayers] = useState<PulsoIrisPayer[]>([]);
   const [siteId, setSiteId] = useState("");
@@ -886,7 +902,7 @@ function AvailabilityPanel({
   const [appointmentTypeId, setAppointmentTypeId] = useState("");
   const [payerId, setPayerId] = useState("");
   const [date, setDate] = useState(() => todayBogotaDate());
-  const [slots, setSlots] = useState<PulsoIrisAvailabilitySlot[]>([]);
+  const [slots, setSlots] = useState<AvailabilitySlotView[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [alternatives, setAlternatives] = useState<PulsoIrisSlotAlternative[]>([]);
@@ -903,7 +919,7 @@ function AvailabilityPanel({
     let cancelled = false;
 
     Promise.all([
-      api.get<PulsoIrisProfessional[]>(tenantPath(tenantId, "config/professionals")),
+      api.get<ProfessionalView[]>(tenantPath(tenantId, "config/professionals")),
       api.get<PulsoIrisAppointmentType[]>(tenantPath(tenantId, "config/appointment-types")),
       api.get<PulsoIrisPayer[]>(tenantPath(tenantId, "config/payers"))
     ])
@@ -951,7 +967,7 @@ function AvailabilityPanel({
     api
       .get<PulsoIrisAvailabilitySlots>(tenantPath(tenantId, `availability/slots?${params.toString()}`))
       .then((data) => {
-        setSlots(data.slots.slice(0, 18));
+        setSlots(data.slots.slice(0, 18) as AvailabilitySlotView[]);
         setError(undefined);
       })
       .catch((err) => {
@@ -988,6 +1004,7 @@ function AvailabilityPanel({
             {professionals.map((professional) => (
               <option key={professional.id} value={professional.id}>
                 {professional.name}
+                {professional.isPilot ? " · Piloto" : ""}
               </option>
             ))}
           </select>
@@ -1053,7 +1070,10 @@ function AvailabilityPanel({
                   <strong className="small">
                     {formatTime(slot.startsAt)} - {formatTime(slot.endsAt)}
                   </strong>
-                  <span className="tiny muted">{slot.professionalName ?? slot.appointmentTypeName ?? "Agenda"}</span>
+                  <span className="tiny muted">
+                    {slot.professionalName ?? slot.appointmentTypeName ?? "Configuracion incompleta del slot"}
+                    {slot.professionalIsPilot ? " · Piloto" : ""}
+                  </span>
                 </div>
                 <div className="row" style={{ gap: 8 }}>
                   <Pill tone={slot.remaining > 0 ? "green" : "amber"}>
@@ -1103,6 +1123,7 @@ type ReservableSlot = {
   siteName?: string | null;
   professionalName?: string | null;
   appointmentTypeName?: string | null;
+  professionalIsPilot?: boolean;
 };
 
 function HoldRequestDialog({
@@ -1192,6 +1213,12 @@ function HoldRequestDialog({
             <strong className="small">{slot.siteName ?? "Sede seleccionada"}</strong>
             <span className="tiny muted">Profesional</span>
             <strong className="small">{slot.professionalName ?? "Profesional seleccionado"}</strong>
+            {slot.professionalIsPilot ? (
+              <>
+                <span className="tiny muted">Modalidad</span>
+                <strong className="small">Profesional piloto</strong>
+              </>
+            ) : null}
             <span className="tiny muted">Tipo de cita</span>
             <strong className="small">{slot.appointmentTypeName ?? "Tipo seleccionado"}</strong>
           </div>
@@ -1247,7 +1274,7 @@ function SlotCard({ appointment, extra }: { appointment: AgendaResponse["appoint
   const style = statusStyle(appointment.status);
   return (
     <div
-      title={`${appointment.patientName ?? "Paciente"} - ${style.label}`}
+      title={`${appointment.patientName ?? "Identidad no vinculada"} - ${style.label}`}
       style={{
         background: style.bg,
         borderLeft: `3px solid ${style.border}`,
@@ -1259,10 +1286,17 @@ function SlotCard({ appointment, extra }: { appointment: AgendaResponse["appoint
     >
       <div className="row between">
         <strong>{appointment.scheduledAt ? formatTime(appointment.scheduledAt) : ""}</strong>
-        {appointment.origin.startsWith("sofia") ? <span className="dot" title="Origen Sofia" /> : null}
+        <span className="row" style={{ gap: 4 }}>
+          {appointment.origin === "sofia_wa" ? (
+            <span title="Origen SOFIA WhatsApp" aria-label="Origen SOFIA WhatsApp">
+              <MessageCircle size={11} aria-hidden="true" />
+            </span>
+          ) : null}
+          {appointment.professionalIsPilot ? <span className="slot-pilot">Piloto</span> : null}
+        </span>
       </div>
       <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {appointment.professionalName ?? appointment.appointmentTypeLabel ?? "Cita"}
+        {appointment.professionalName ?? appointment.appointmentTypeLabel ?? "Configuracion incompleta"}
       </div>
       {extra > 0 ? <span className="tiny muted">+{extra} mas</span> : null}
     </div>

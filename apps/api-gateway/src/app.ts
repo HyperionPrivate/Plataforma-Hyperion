@@ -162,6 +162,61 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
       }
     });
 
+    app.get("/v1/tenants/:tenantId/integrations/whatsapp/status", async (request, reply) => {
+      const params = request.params as { tenantId?: string };
+      return proxyJson(
+        request,
+        reply,
+        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/integrations/whatsapp/status`,
+        "GET"
+      );
+    });
+
+    app.post("/v1/tenants/:tenantId/integrations/whatsapp/connect", async (request, reply) => {
+      const params = request.params as { tenantId?: string };
+      return proxyJson(
+        request,
+        reply,
+        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/integrations/whatsapp/connect`,
+        "POST",
+        request.body ?? {}
+      );
+    });
+
+    app.get("/v1/tenants/:tenantId/integrations/whatsapp/qr", async (request, reply) => {
+      const params = request.params as { tenantId?: string };
+      reply.header("cache-control", "no-store, private, max-age=0");
+      reply.header("pragma", "no-cache");
+      reply.header("expires", "0");
+      return proxyJson(
+        request,
+        reply,
+        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/integrations/whatsapp/qr`,
+        "GET"
+      );
+    });
+
+    app.post("/v1/tenants/:tenantId/integrations/whatsapp/disconnect", async (request, reply) => {
+      const params = request.params as { tenantId?: string };
+      return proxyJson(
+        request,
+        reply,
+        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/integrations/whatsapp/disconnect`,
+        "POST",
+        request.body ?? {}
+      );
+    });
+
+    app.get("/v1/tenants/:tenantId/pulso-iris/sofia/readiness", async (request, reply) => {
+      const params = request.params as { tenantId?: string };
+      return proxyJson(
+        request,
+        reply,
+        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/pulso-iris/sofia/readiness`,
+        "GET"
+      );
+    });
+
     // Proxy generico de PULSO IRIS: la validacion de tenant y la membresia
     // operador-tenant ya ocurrieron en el preHandler.
     app.route({
@@ -228,6 +283,9 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
   }
 
   if (method === "GET") {
+    if (path.includes("/integrations/whatsapp/") || path.endsWith("/pulso-iris/sofia/readiness")) {
+      return role === "coordinator" ? undefined : "Admin or coordinator role required";
+    }
     return undefined;
   }
 
@@ -241,6 +299,10 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
 
   if (role === "auditor") {
     return "Read-only role";
+  }
+
+  if (path.includes("/integrations/whatsapp/")) {
+    return "Admin role required";
   }
 
   if (path.includes("/pulso-iris/config/")) {
@@ -311,7 +373,8 @@ function buildRegistry(): DownstreamService[] {
     { name: "knowledge-service", url: urls.knowledge },
     { name: "audit-service", url: urls.audit },
     { name: "integration-service", url: urls.integration },
-    { name: "pulso-iris-service", url: urls.pulsoIris }
+    { name: "pulso-iris-service", url: urls.pulsoIris },
+    { name: "whatsapp-channel-service", url: urls.whatsappChannel }
   ];
 }
 

@@ -1,0 +1,26 @@
+{
+  "name": "@hyperion/whatsapp-channel-service",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hyperion/contracts": "workspace:*",
+    "@hyperion/database": "workspace:*",
+    "@hyperion/service-runtime": "workspace:*",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.5"
+  }
+}

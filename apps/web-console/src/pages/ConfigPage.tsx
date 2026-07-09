@@ -4,12 +4,16 @@ import {
   Download,
   FileSpreadsheet,
   Link2,
+  MessageCircle,
   PauseCircle,
   PlayCircle,
   Plus,
+  QrCode,
   RefreshCw,
   Save,
   Server,
+  ShieldCheck,
+  Unplug,
   Upload
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,7 +29,10 @@ import type {
   PulsoIrisProfessionalAppointmentType,
   PulsoIrisProfessional,
   PulsoIrisProfessionalSite,
-  PulsoIrisSite
+  PulsoIrisSite,
+  SofiaReadiness,
+  WhatsAppIntegrationStatus,
+  WhatsAppQr
 } from "@hyperion/contracts";
 import { Layout } from "../components/Layout.js";
 import { Card, CardHead, EmptyState, LoadingState, Pill } from "../components/ui.js";
@@ -33,14 +40,24 @@ import { api, SessionExpiredError } from "../lib/api.js";
 import { normalizeImportPreview, type ImportPreview } from "../lib/agenda-model.js";
 import { tenantPath, useConsole } from "../lib/context.js";
 import { LINE } from "../lib/format.js";
+import { usePolling } from "../lib/hooks.js";
 import { can } from "../lib/rbac.js";
+import {
+  canManageWhatsAppIntegration,
+  canViewWhatsAppIntegration,
+  isSafeQrDataUrl,
+  WHATSAPP_PRIVATE_CHANNEL_NOTICE,
+  whatsappStateLabel,
+  whatsappStateTone
+} from "../lib/whatsapp-model.js";
 
-type Tab = "agenda" | "sites" | "operators" | "platform";
+type Tab = "agenda" | "sites" | "integrations" | "operators" | "platform";
 type AgendaTab = "general" | "professionals" | "schedules" | "payers" | "holidays" | "blocks" | "imports";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "agenda", label: "Agenda" },
   { id: "sites", label: "Sedes" },
+  { id: "integrations", label: "Integraciones" },
   { id: "operators", label: "Operadores" },
   { id: "platform", label: "Estado de plataforma" }
 ];
@@ -68,7 +85,11 @@ const WEEKDAYS = [
 export function ConfigPage() {
   const { session, tenant } = useConsole();
   const [tab, setTab] = useState<Tab>("agenda");
-  const visibleTabs = TABS.filter((item) => item.id !== "operators" || can(session.operator.role, "manage:operators"));
+  const visibleTabs = TABS.filter((item) => {
+    if (item.id === "operators") return can(session.operator.role, "manage:operators");
+    if (item.id === "integrations") return canViewWhatsAppIntegration(session.operator.role);
+    return true;
+  });
   const canWriteConfig = can(session.operator.role, "write:config");
 
   return (
@@ -88,6 +109,9 @@ export function ConfigPage() {
 
       {tab === "agenda" ? <AgendaConfiguration tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
       {tab === "sites" ? <SitesTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
+      {tab === "integrations" && canViewWhatsAppIntegration(session.operator.role) ? (
+        <IntegrationsTab tenantId={tenant.id} isAdmin={canManageWhatsAppIntegration(session.operator.role)} />
+      ) : null}
       {tab === "operators" && can(session.operator.role, "manage:operators") ? <OperatorsTab /> : null}
       {tab === "platform" ? <PlatformTab /> : null}
     </Layout>
@@ -524,15 +548,17 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
   const [name, setName] = useState("");
   const [type, setType] = useState<"ophthalmologist" | "optometrist">("ophthalmologist");
   const [subspecialty, setSubspecialty] = useState("");
+  const [isPilot, setIsPilot] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const add = async () => {
     if (name.trim().length < 2) return;
     setSaving(true);
     try {
-      await api.post(path, { name, professionalType: type, subspecialty: subspecialty || undefined });
+      await api.post(path, { name, professionalType: type, subspecialty: subspecialty || undefined, isPilot });
       setName("");
       setSubspecialty("");
+      setIsPilot(false);
       reload();
     } finally {
       setSaving(false);
@@ -562,6 +588,10 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
             onChange={(e) => setSubspecialty(e.target.value)}
             style={{ maxWidth: 200 }}
           />
+          <label className="row small muted">
+            <input type="checkbox" checked={isPilot} onChange={(event) => setIsPilot(event.target.checked)} />
+            Piloto
+          </label>
           <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving}>
             <Plus size={15} /> Agregar
           </button>
@@ -580,6 +610,7 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
               <th>Nombre</th>
               <th>Tipo</th>
               <th>Subespecialidad</th>
+              <th>Modalidad</th>
               <th>Estado</th>
               {canWrite ? <th>Acciones</th> : null}
             </tr>
@@ -594,6 +625,7 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
                   {pro.professionalType === "ophthalmologist" ? "Oftalmologo" : "Optometra"}
                 </td>
                 <td className="small muted">{pro.subspecialty ?? "-"}</td>
+                <td>{pro.isPilot ? <Pill tone="blue">Piloto</Pill> : <span className="small muted">Regular</span>}</td>
                 <td>
                   <Pill tone={pro.status === "active" ? "green" : "amber"}>{pro.status}</Pill>
                 </td>
@@ -2005,6 +2037,319 @@ function downloadCsv(content: string, filename: string) {
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function IntegrationsTab({ tenantId, isAdmin }: { tenantId: string; isAdmin: boolean }) {
+  const { logout } = useConsole();
+  const whatsappBase = `/v1/tenants/${encodeURIComponent(tenantId)}/integrations/whatsapp`;
+  const { data, loading, error, refresh } = usePolling<WhatsAppIntegrationStatus>(
+    `${whatsappBase}/status`,
+    10_000,
+    logout
+  );
+  const readiness = usePolling<SofiaReadiness>(tenantPath(tenantId, "sofia/readiness"), 15_000, logout);
+  const [qr, setQr] = useState<WhatsAppQr>();
+  const [action, setAction] = useState<"connect" | "qr" | "disconnect">();
+  const [actionError, setActionError] = useState<string>();
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+
+  useEffect(() => {
+    if (data && data.state !== "qr_pending") setQr(undefined);
+  }, [data]);
+
+  const connect = async () => {
+    if (!isAdmin) return;
+    setAction("connect");
+    setActionError(undefined);
+    setQr(undefined);
+    try {
+      await api.post<{ status: WhatsAppIntegrationStatus }>(`${whatsappBase}/connect`, {});
+      refresh();
+      readiness.refresh();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAction(undefined);
+    }
+  };
+
+  const loadQr = async () => {
+    if (!isAdmin) return;
+    setAction("qr");
+    setActionError(undefined);
+    try {
+      const result = await api.get<WhatsAppQr>(`${whatsappBase}/qr`);
+      if (!isSafeQrDataUrl(result.qrDataUrl)) {
+        throw new Error("El proveedor devolvio un QR con formato invalido.");
+      }
+      setQr(result);
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAction(undefined);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!isAdmin) return;
+    setAction("disconnect");
+    setActionError(undefined);
+    try {
+      await api.post<{ status: WhatsAppIntegrationStatus }>(`${whatsappBase}/disconnect`, {});
+      setQr(undefined);
+      setConfirmDisconnect(false);
+      refresh();
+      readiness.refresh();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAction(undefined);
+    }
+  };
+
+  const canConnect = data?.state === "disconnected" || data?.state === "degraded";
+  const canShowQr = data?.state === "qr_pending";
+  const showDisconnect = Boolean(data && data.state !== "disconnected");
+
+  return (
+    <div className="col" style={{ gap: 16 }}>
+      <div className="channel-notice">
+        <ShieldCheck size={18} aria-hidden="true" />
+        <strong>{WHATSAPP_PRIVATE_CHANNEL_NOTICE}</strong>
+      </div>
+
+      <div className="integration-layout">
+        <Card>
+          <CardHead
+            title="WhatsApp de prueba"
+            icon={<MessageCircle size={18} />}
+            trailing={
+              <button className="icon-btn" type="button" onClick={refresh} aria-label="Actualizar estado de WhatsApp">
+                <RefreshCw size={16} />
+              </button>
+            }
+          />
+          {error ? (
+            <div className="banner">{error}</div>
+          ) : !data && loading ? (
+            <LoadingState label="Consultando canal..." />
+          ) : data ? (
+            <>
+              <div className="card-pad integration-status-grid">
+                <IntegrationDatum
+                  label="Estado"
+                  value={whatsappStateLabel(data.state)}
+                  tone={whatsappStateTone(data.state)}
+                />
+                <IntegrationDatum label="Proveedor" value="WhatsApp Web de prueba" />
+                <IntegrationDatum label="Identidad" value={data.phoneMasked ?? "Identidad de canal pendiente"} />
+                <IntegrationDatum
+                  label="Ultima actividad"
+                  value={data.lastActivityAt ? formatIntegrationDate(data.lastActivityAt) : "Sin actividad registrada"}
+                />
+                <IntegrationDatum
+                  label="Sesion recuperable"
+                  value={data.sessionRestorable ? "Disponible" : "No disponible"}
+                  tone={data.sessionRestorable ? "green" : "amber"}
+                />
+                <IntegrationDatum
+                  label="Vencimiento QR"
+                  value={data.qrExpiresAt ? formatIntegrationDate(data.qrExpiresAt) : "Sin QR activo"}
+                />
+              </div>
+              {data.lastError ? <div className="banner">{data.lastError}</div> : null}
+              {actionError ? <div className="banner">{actionError}</div> : null}
+              {isAdmin ? (
+                <div className="card-actions integration-actions">
+                  {canConnect ? (
+                    <button
+                      className="btn btn-primary"
+                      type="button"
+                      onClick={() => void connect()}
+                      disabled={Boolean(action)}
+                    >
+                      <MessageCircle size={16} /> {action === "connect" ? "Conectando..." : "Conectar"}
+                    </button>
+                  ) : null}
+                  {canShowQr ? (
+                    <button
+                      className="btn btn-outline"
+                      type="button"
+                      onClick={() => void loadQr()}
+                      disabled={Boolean(action)}
+                    >
+                      <QrCode size={16} /> {action === "qr" ? "Cargando QR..." : "Mostrar QR"}
+                    </button>
+                  ) : null}
+                  {showDisconnect && !confirmDisconnect ? (
+                    <button
+                      className="btn btn-outline danger-action"
+                      type="button"
+                      onClick={() => setConfirmDisconnect(true)}
+                      disabled={Boolean(action)}
+                    >
+                      <Unplug size={16} /> Desconectar
+                    </button>
+                  ) : null}
+                  {showDisconnect && confirmDisconnect ? (
+                    <div className="row integration-confirm">
+                      <span className="small muted">Confirmar desconexion</span>
+                      <button
+                        className="btn btn-outline btn-sm"
+                        type="button"
+                        onClick={() => setConfirmDisconnect(false)}
+                      >
+                        Volver
+                      </button>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        type="button"
+                        onClick={() => void disconnect()}
+                        disabled={Boolean(action)}
+                      >
+                        <Unplug size={15} /> {action === "disconnect" ? "Desconectando..." : "Confirmar"}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="card-actions">
+                  <span className="small muted">Operación disponible únicamente para administradores.</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <EmptyState label="Estado de WhatsApp no disponible" />
+          )}
+        </Card>
+
+        <Card>
+          <CardHead
+            title="Readiness de SOFIA"
+            icon={<ShieldCheck size={18} />}
+            trailing={
+              <button
+                className="icon-btn"
+                type="button"
+                onClick={readiness.refresh}
+                aria-label="Actualizar readiness de SOFIA"
+              >
+                <RefreshCw size={16} />
+              </button>
+            }
+          />
+          {readiness.error ? (
+            <div className="banner">{readiness.error}</div>
+          ) : !readiness.data && readiness.loading ? (
+            <LoadingState label="Consultando readiness..." />
+          ) : readiness.data ? (
+            <div className="card-pad col" style={{ gap: 14 }}>
+              <div className="row between">
+                <span className="small muted">Estado operativo</span>
+                <Pill tone={readiness.data.status === "ready" ? "green" : "amber"}>
+                  {readiness.data.status === "ready"
+                    ? "Lista"
+                    : readiness.data.status === "degraded"
+                      ? "Degradada"
+                      : "No lista"}
+                </Pill>
+              </div>
+              <div className="row between">
+                <span className="small muted">Recibir mensajes</span>
+                <Pill tone={readiness.data.canReceiveMessages ? "green" : "amber"}>
+                  {readiness.data.canReceiveMessages ? "Disponible" : "No disponible"}
+                </Pill>
+              </div>
+              <div className="row between">
+                <span className="small muted">Agendar citas</span>
+                <Pill tone={readiness.data.canBookAppointments ? "green" : "amber"}>
+                  {readiness.data.canBookAppointments ? "Disponible" : "No disponible"}
+                </Pill>
+              </div>
+              <div className="row between">
+                <span className="small muted">Comprobado</span>
+                <strong className="small">{formatIntegrationDate(readiness.data.checkedAt)}</strong>
+              </div>
+              {readiness.data.dependencies.map((dependency) => (
+                <div className="row between integration-dependency" key={dependency.name}>
+                  <span className="small muted">{sofiaDependencyLabel(dependency.name)}</span>
+                  <Pill tone={dependency.status === "ok" ? "green" : dependency.status === "down" ? "red" : "amber"}>
+                    {dependency.status === "ok"
+                      ? "Lista"
+                      : dependency.status === "down"
+                        ? "No disponible"
+                        : "Degradada"}
+                  </Pill>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState label="Readiness no disponible" />
+          )}
+        </Card>
+      </div>
+
+      {isAdmin && qr ? (
+        <Card>
+          <CardHead
+            title="Vinculacion por QR"
+            icon={<QrCode size={18} />}
+            trailing={<Pill tone={qr.state === "ready" ? "green" : "amber"}>{whatsappStateLabel(qr.state)}</Pill>}
+          />
+          <div className="qr-panel">
+            {qr.qrDataUrl ? <img src={qr.qrDataUrl} alt="Codigo QR temporal de vinculacion" /> : null}
+            <div className="col" style={{ gap: 6 }}>
+              <strong className="small">QR temporal</strong>
+              <span className="small muted">
+                {qr.qrExpiresAt ? `Vence ${formatIntegrationDate(qr.qrExpiresAt)}` : "Sin vencimiento informado"}
+              </span>
+              <button className="btn btn-outline btn-sm" type="button" onClick={() => setQr(undefined)}>
+                Ocultar QR
+              </button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+    </div>
+  );
+}
+
+function IntegrationDatum({
+  label,
+  value,
+  tone
+}: {
+  label: string;
+  value: string;
+  tone?: "green" | "red" | "amber" | "blue";
+}) {
+  return (
+    <div className="integration-datum">
+      <span>{label}</span>
+      {tone ? <Pill tone={tone}>{value}</Pill> : <strong>{value}</strong>}
+    </div>
+  );
+}
+
+function sofiaDependencyLabel(name: string): string {
+  const labels: Record<string, string> = {
+    channel: "Canal WhatsApp",
+    llm: "Motor de SOFIA",
+    prompt_flow: "Flujo conversacional",
+    agenda: "Agenda"
+  };
+  return labels[name] ?? name.replaceAll("_", " ");
+}
+
+function formatIntegrationDate(value: string): string {
+  return new Date(value).toLocaleString("es-CO", {
+    timeZone: "America/Bogota",
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
 }
 
 function OperatorsTab() {

@@ -70,6 +70,7 @@ const PROFESSIONAL_COLUMNS = `
   name,
   professional_type as "professionalType",
   subspecialty,
+  is_pilot as "isPilot",
   status,
   created_at as "createdAt",
   updated_at as "updatedAt"
@@ -593,10 +594,17 @@ export async function registerConfigRoutes(
 
     try {
       const result = await scope.db.query(
-        `insert into pulso_iris.professionals (tenant_id, name, professional_type, subspecialty, status)
-         values ($1, $2, $3, $4, coalesce($5, 'active'))
+        `insert into pulso_iris.professionals (tenant_id, name, professional_type, subspecialty, is_pilot, status)
+         values ($1, $2, $3, $4, coalesce($5, false), coalesce($6, 'active'))
          returning ${PROFESSIONAL_COLUMNS}`,
-        [scope.tenantId, input.name, input.professionalType, input.subspecialty ?? null, input.status ?? null]
+        [
+          scope.tenantId,
+          input.name,
+          input.professionalType,
+          input.subspecialty ?? null,
+          input.isPilot ?? null,
+          input.status ?? null
+        ]
       );
       const created = pulsoIrisProfessionalListSchema.parse(result.rows)[0];
       if (created) emitConfigUpdated(request, scope.tenantId, "professional", created.id);
@@ -622,7 +630,8 @@ export async function registerConfigRoutes(
            name = coalesce($3, name),
            professional_type = coalesce($4, professional_type),
            subspecialty = coalesce($5, subspecialty),
-           status = coalesce($6, status),
+           is_pilot = coalesce($6, is_pilot),
+           status = coalesce($7, status),
            updated_at = now()
          where tenant_id = $1 and id = $2
          returning ${PROFESSIONAL_COLUMNS}`,
@@ -632,6 +641,7 @@ export async function registerConfigRoutes(
           input.name ?? null,
           input.professionalType ?? null,
           input.subspecialty ?? null,
+          input.isPilot ?? null,
           input.status ?? null
         ]
       );

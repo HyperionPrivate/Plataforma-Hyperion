@@ -134,14 +134,14 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
       scope.db.query(
         `select a.id, a.scheduled_at as "scheduledAt", a.status, a.origin,
                 a.professional_id as "professionalId", a.site_id as "siteId",
-                pr.name as "professionalName", pr.subspecialty,
+                pr.name as "professionalName", pr.subspecialty, pr.is_pilot as "professionalIsPilot",
                 t.name as "appointmentTypeName", t.category as "appointmentCategory",
                 coalesce(a.appointment_type, t.name) as "appointmentTypeLabel",
                 p.full_name as "patientName"
          from pulso_iris.appointments a
-         left join pulso_iris.professionals pr on pr.id = a.professional_id
-         left join pulso_iris.appointment_types t on t.id = a.appointment_type_id
-         left join pulso_iris.administrative_patients p on p.id = a.patient_id
+         left join pulso_iris.professionals pr on pr.tenant_id = a.tenant_id and pr.id = a.professional_id
+         left join pulso_iris.appointment_types t on t.tenant_id = a.tenant_id and t.id = a.appointment_type_id
+         left join pulso_iris.administrative_patients p on p.tenant_id = a.tenant_id and p.id = a.patient_id
          where a.tenant_id = $1
            and a.scheduled_at >= coalesce($2::date, date_trunc('week', current_date))
            and a.scheduled_at < coalesce($2::date, date_trunc('week', current_date)) + interval '7 days'
@@ -201,9 +201,14 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
     const conversation = await scope.db.query(
       `select c.id, c.channel, c.direction, c.status, c.primary_intent as "primaryIntent",
               c.started_at as "startedAt", c.ended_at as "endedAt", c.patient_id as "patientId",
+              c.metadata->>'provider' as provider,
+              case when p.full_name is null then 'pending_name' else 'identified' end as "identityStatus",
+              c.metadata->>'sofiaStatus' as "sofiaStatus",
+              c.metadata->>'lastSofiaActivityAt' as "lastSofiaActivityAt",
               c.site_id as "siteId", s.name as "siteName"
        from pulso_iris.conversations c
-       left join pulso_iris.sites s on s.id = c.site_id
+       left join pulso_iris.sites s on s.tenant_id = c.tenant_id and s.id = c.site_id
+       left join pulso_iris.administrative_patients p on p.tenant_id = c.tenant_id and p.id = c.patient_id
        where c.tenant_id = $1 and c.id = $2`,
       [scope.tenantId, conversationId]
     );
@@ -216,9 +221,10 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
 
     const [messages, rpaActions, handoffs, patient, patientAppointments] = await Promise.all([
       scope.db.query(
-        `select id, sender, body, created_at as "createdAt"
-         from pulso_iris.messages where conversation_id = $1 order by created_at limit 200`,
-        [conversationId]
+        `select id, sender, body, provider, provider_message_id as "providerMessageId",
+                delivery_status as "deliveryStatus", delivered_at as "deliveredAt", created_at as "createdAt"
+         from pulso_iris.messages where tenant_id = $1 and conversation_id = $2 order by created_at limit 200`,
+        [scope.tenantId, conversationId]
       ),
       scope.db.query(
         `select id, action_type as "actionType", status, phase, duration_ms as "durationMs",
@@ -234,7 +240,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
       row.patientId
         ? scope.db.query(
             `select id, full_name as "fullName", document_type as "documentType",
-                    document_number_masked as "documentNumberMasked", phone,
+                    document_number_masked as "documentNumberMasked", phone_masked as "phoneMasked",
                     preferred_channel as "preferredChannel", status
              from pulso_iris.administrative_patients where tenant_id = $1 and id = $2`,
             [scope.tenantId, row.patientId]
@@ -279,13 +285,23 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
       `select c.id, c.channel, c.status, c.primary_intent as "primaryIntent",
               c.started_at as "startedAt", c.updated_at as "updatedAt",
               p.full_name as "patientName",
+              c.metadata->>'provider' as provider,
+              case when p.full_name is null then 'pending_name' else 'identified' end as "identityStatus",
+              c.metadata->>'sofiaStatus' as "sofiaStatus",
+              c.metadata->>'lastSofiaActivityAt' as "lastSofiaActivityAt",
               py.name as "payerName",
               (select body from pulso_iris.messages m where m.conversation_id = c.id order by m.created_at desc limit 1) as "lastMessage",
               exists (select 1 from pulso_iris.handoffs h where h.conversation_id = c.id and h.status in ('open','assigned','in_progress')) as "hasOpenHandoff"
        from pulso_iris.conversations c
-       left join pulso_iris.administrative_patients p on p.id = c.patient_id
-       left join pulso_iris.appointments a on a.conversation_id = c.id
-       left join pulso_iris.payers py on py.id = a.payer_id
+       left join pulso_iris.administrative_patients p on p.tenant_id = c.tenant_id and p.id = c.patient_id
+       left join lateral (
+         select appointment.payer_id
+         from pulso_iris.appointments appointment
+         where appointment.tenant_id = c.tenant_id and appointment.conversation_id = c.id
+         order by appointment.created_at desc, appointment.id desc
+         limit 1
+       ) a on true
+       left join pulso_iris.payers py on py.tenant_id = c.tenant_id and py.id = a.payer_id
        where c.tenant_id = $1
        order by c.updated_at desc
        limit 60`,

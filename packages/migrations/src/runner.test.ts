@@ -22,6 +22,7 @@ describe("migrations runner", () => {
     expect(files[0]).toBe("001-platform.sql");
     expect(files[1]).toBe("002-pulso-iris.sql");
     expect(files).toContain("011-configurable-agenda.sql");
+    expect(files).toContain("012-whatsapp-sofia-runtime.sql");
     expect([...files].sort()).toEqual(files);
   });
 });

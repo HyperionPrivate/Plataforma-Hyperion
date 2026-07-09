@@ -6,8 +6,7 @@ x-node-build: &node-build
   args:
     VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
 
-# INTERNAL_SERVICE_TOKEN se inyecta a audit-service (valida) y pulso-iris-service (emite eventos).
-# Una fuga en pulso-iris permite emitir auditoria; tokens por servicio siguen fuera de alcance.
+# INTERNAL_SERVICE_TOKEN autentica exclusivamente trafico interno entre servicios.
 x-service-env: &service-env
   NODE_ENV: production
   SERVICE_VERSION: ${SERVICE_VERSION:-0.1.0}
@@ -105,6 +104,15 @@ services:
     command: ["node", "services/agent-service/dist/index.js"]
     environment:
       <<: *service-env
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      SOFIA_WORKER_ENABLED: ${SOFIA_WORKER_ENABLED:-true}
+      WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
+      PROMPT_FLOW_SERVICE_URL: http://prompt-flow-service:8084
+      PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
+      AUDIT_SERVICE_URL: http://audit-service:8086
       PORT: 8083
     expose:
       - "8083"
@@ -121,6 +129,7 @@ services:
     command: ["node", "services/prompt-flow-service/dist/index.js"]
     environment:
       <<: *service-env
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
       PORT: 8084
     expose:
       - "8084"
@@ -170,6 +179,9 @@ services:
     command: ["node", "services/integration-service/dist/index.js"]
     environment:
       <<: *service-env
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
+      WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
+      AGENT_SERVICE_URL: http://agent-service:8083
       PORT: 8087
     expose:
       - "8087"
@@ -201,6 +213,30 @@ services:
       audit-service:
         condition: service_healthy
 
+  whatsapp-channel-service:
+    build: *node-build
+    restart: unless-stopped
+    command: ["node", "services/whatsapp-channel-service/dist/index.js"]
+    environment:
+      <<: *service-env
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
+      WHATSAPP_WEB_TEST_ENABLED: ${WHATSAPP_WEB_TEST_ENABLED:-false}
+      WHATSAPP_TEST_ALLOWED_NUMBERS: ${WHATSAPP_TEST_ALLOWED_NUMBERS:-}
+      WHATSAPP_PHONE_HASH_KEY: ${WHATSAPP_PHONE_HASH_KEY:-}
+      WHATSAPP_SESSION_DIR: /var/lib/hyperion/whatsapp-sessions
+      AUDIT_SERVICE_URL: http://audit-service:8086
+      PORT: 8089
+    expose:
+      - "8089"
+    volumes:
+      - whatsapp_sessions:/var/lib/hyperion/whatsapp-sessions
+    healthcheck: *node-readycheck
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
   api-gateway:
     build: *node-build
     restart: unless-stopped
@@ -218,6 +254,7 @@ services:
       AUDIT_SERVICE_URL: http://audit-service:8086
       INTEGRATION_SERVICE_URL: http://integration-service:8087
       PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
+      WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
     ports:
       - "${API_GATEWAY_HOST_PORT:-8080}:8080"
     healthcheck: *node-healthcheck
@@ -258,3 +295,4 @@ services:
 
 volumes:
   postgres_data:
+  whatsapp_sessions:
