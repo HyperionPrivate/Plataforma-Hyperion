@@ -83,4 +83,13 @@ describe("pulso-iris-service routes", () => {
 
     expect(response.statusCode).toBe(503);
   });
+
+  it("returns 503 for availability rules when the database is not configured", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/availability-rules`
+    });
+
+    expect(response.statusCode).toBe(503);
+  });
 });

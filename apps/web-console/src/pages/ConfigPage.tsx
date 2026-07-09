@@ -1,7 +1,8 @@
-import { Plus, RefreshCw, Server } from "lucide-react";
+import { CalendarClock, PauseCircle, PlayCircle, Plus, RefreshCw, Server } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
   OperatorListItem,
+  PulsoIrisAvailabilityRule,
   PulsoIrisAppointmentType,
   PulsoIrisPayer,
   PulsoIrisProfessional,
@@ -14,15 +15,26 @@ import { tenantPath, useConsole } from "../lib/context.js";
 import { LINE } from "../lib/format.js";
 import { can } from "../lib/rbac.js";
 
-type Tab = "sites" | "professionals" | "payers" | "types" | "operators" | "platform";
+type Tab = "sites" | "professionals" | "payers" | "types" | "availability" | "operators" | "platform";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "sites", label: "Sedes" },
   { id: "professionals", label: "Profesionales" },
   { id: "payers", label: "Convenios" },
   { id: "types", label: "Tipos de cita" },
+  { id: "availability", label: "Disponibilidad" },
   { id: "operators", label: "Operadores" },
   { id: "platform", label: "Estado de plataforma" }
+];
+
+const WEEKDAYS = [
+  { value: 1, label: "Lunes" },
+  { value: 2, label: "Martes" },
+  { value: 3, label: "Miercoles" },
+  { value: 4, label: "Jueves" },
+  { value: 5, label: "Viernes" },
+  { value: 6, label: "Sabado" },
+  { value: 0, label: "Domingo" }
 ];
 
 export function ConfigPage() {
@@ -48,8 +60,9 @@ export function ConfigPage() {
 
       {tab === "sites" ? <SitesTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
       {tab === "professionals" ? <ProfessionalsTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
-      {tab === "payers" ? <PayersTab tenantId={tenant.id} /> : null}
-      {tab === "types" ? <TypesTab tenantId={tenant.id} /> : null}
+      {tab === "payers" ? <PayersTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
+      {tab === "types" ? <TypesTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
+      {tab === "availability" ? <AvailabilityTab tenantId={tenant.id} canWrite={canWriteConfig} /> : null}
       {tab === "operators" && can(session.operator.role, "manage:operators") ? <OperatorsTab /> : null}
       {tab === "platform" ? <PlatformTab /> : null}
     </Layout>
@@ -148,6 +161,7 @@ function SitesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean 
               <th>Ciudad</th>
               <th>Direccion</th>
               <th>Estado</th>
+              {canWrite ? <th>Acciones</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -161,6 +175,11 @@ function SitesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean 
                 <td>
                   <Pill tone={site.status === "active" ? "green" : "amber"}>{site.status}</Pill>
                 </td>
+                {canWrite ? (
+                  <td>
+                    <StatusToggle path={path} id={site.id} status={site.status} onDone={reload} />
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -233,6 +252,7 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
               <th>Tipo</th>
               <th>Subespecialidad</th>
               <th>Estado</th>
+              {canWrite ? <th>Acciones</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -248,6 +268,11 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
                 <td>
                   <Pill tone={pro.status === "active" ? "green" : "amber"}>{pro.status}</Pill>
                 </td>
+                {canWrite ? (
+                  <td>
+                    <StatusToggle path={path} id={pro.id} status={pro.status} onDone={reload} />
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -257,9 +282,13 @@ function ProfessionalsTab({ tenantId, canWrite }: { tenantId: string; canWrite: 
   );
 }
 
-function PayersTab({ tenantId }: { tenantId: string }) {
+function PayersTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
   const path = tenantPath(tenantId, "config/payers");
   const { items, loading, error, reload } = useCatalog<PulsoIrisPayer>(path);
+  const [name, setName] = useState("");
+  const [group, setGroup] = useState<"eps" | "private_prepaid" | "policy" | "particular" | "other">("eps");
+  const [requiresAuthorization, setRequiresAuthorization] = useState(true);
+  const [saving, setSaving] = useState(false);
   const groupLabels: Record<string, string> = {
     eps: "EPS",
     private_prepaid: "Prepagada",
@@ -268,9 +297,50 @@ function PayersTab({ tenantId }: { tenantId: string }) {
     other: "Otro"
   };
 
+  const add = async () => {
+    if (name.trim().length < 2) return;
+    setSaving(true);
+    try {
+      await api.post(path, { name, group, requiresAuthorization });
+      setName("");
+      reload();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Card>
       <CardHead title={`Convenios (${items.length})`} trailing={<ReloadButton onClick={reload} />} />
+      {canWrite ? (
+        <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+          <input
+            className="input"
+            placeholder="Nombre del convenio"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{ maxWidth: 240 }}
+          />
+          <select className="select" value={group} onChange={(e) => setGroup(e.target.value as typeof group)}>
+            <option value="eps">EPS</option>
+            <option value="private_prepaid">Prepagada</option>
+            <option value="policy">Poliza</option>
+            <option value="particular">Particular</option>
+            <option value="other">Otro</option>
+          </select>
+          <label className="row small muted">
+            <input
+              type="checkbox"
+              checked={requiresAuthorization}
+              onChange={(e) => setRequiresAuthorization(e.target.checked)}
+            />
+            Autorizacion
+          </label>
+          <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving}>
+            <Plus size={15} /> Agregar
+          </button>
+        </div>
+      ) : null}
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -285,6 +355,7 @@ function PayersTab({ tenantId }: { tenantId: string }) {
               <th>Grupo</th>
               <th>Autorizacion</th>
               <th>Estado</th>
+              {canWrite ? <th>Acciones</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -304,6 +375,11 @@ function PayersTab({ tenantId }: { tenantId: string }) {
                 <td>
                   <Pill tone={payer.status === "active" ? "green" : "amber"}>{payer.status}</Pill>
                 </td>
+                {canWrite ? (
+                  <td>
+                    <StatusToggle path={path} id={payer.id} status={payer.status} onDone={reload} />
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -313,9 +389,15 @@ function PayersTab({ tenantId }: { tenantId: string }) {
   );
 }
 
-function TypesTab({ tenantId }: { tenantId: string }) {
+function TypesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
   const path = tenantPath(tenantId, "config/appointment-types");
   const { items, loading, error, reload } = useCatalog<PulsoIrisAppointmentType>(path);
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState<"consulta" | "ayuda_dx" | "valoracion_qx" | "control_post">("consulta");
+  const [durationMin, setDurationMin] = useState("20");
+  const [bookableByIa, setBookableByIa] = useState(true);
+  const [preparationText, setPreparationText] = useState("");
+  const [saving, setSaving] = useState(false);
   const categoryLabels: Record<string, string> = {
     consulta: "Consulta",
     ayuda_dx: "Ayuda diagnostica",
@@ -323,9 +405,67 @@ function TypesTab({ tenantId }: { tenantId: string }) {
     control_post: "Control post"
   };
 
+  const add = async () => {
+    if (name.trim().length < 2) return;
+    setSaving(true);
+    try {
+      await api.post(path, {
+        name,
+        category,
+        durationMin: Number(durationMin),
+        bookableByIa,
+        preparationText: preparationText || undefined
+      });
+      setName("");
+      setPreparationText("");
+      reload();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Card>
       <CardHead title={`Tipos de cita (${items.length})`} trailing={<ReloadButton onClick={reload} />} />
+      {canWrite ? (
+        <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+          <input
+            className="input"
+            placeholder="Nombre del tipo"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{ maxWidth: 240 }}
+          />
+          <select className="select" value={category} onChange={(e) => setCategory(e.target.value as typeof category)}>
+            <option value="consulta">Consulta</option>
+            <option value="ayuda_dx">Ayuda diagnostica</option>
+            <option value="valoracion_qx">Valoracion Qx</option>
+            <option value="control_post">Control post</option>
+          </select>
+          <input
+            className="input"
+            type="number"
+            min={5}
+            value={durationMin}
+            onChange={(e) => setDurationMin(e.target.value)}
+            style={{ maxWidth: 96 }}
+          />
+          <label className="row small muted">
+            <input type="checkbox" checked={bookableByIa} onChange={(e) => setBookableByIa(e.target.checked)} />
+            IA
+          </label>
+          <input
+            className="input"
+            placeholder="Preparacion"
+            value={preparationText}
+            onChange={(e) => setPreparationText(e.target.value)}
+            style={{ maxWidth: 260 }}
+          />
+          <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving}>
+            <Plus size={15} /> Agregar
+          </button>
+        </div>
+      ) : null}
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -340,6 +480,8 @@ function TypesTab({ tenantId }: { tenantId: string }) {
               <th>Categoria</th>
               <th>Duracion</th>
               <th>Agendable IA</th>
+              <th>Estado</th>
+              {canWrite ? <th>Acciones</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -352,6 +494,190 @@ function TypesTab({ tenantId }: { tenantId: string }) {
                 <td className="small muted">{categoryLabels[type.category] ?? type.category}</td>
                 <td className="small muted">{type.durationMin} min</td>
                 <td>{type.bookableByIa ? <Pill tone="green">Si</Pill> : <Pill tone="amber">Manual</Pill>}</td>
+                <td>
+                  <Pill tone={type.status === "active" ? "green" : "amber"}>{type.status}</Pill>
+                </td>
+                {canWrite ? (
+                  <td>
+                    <StatusToggle path={path} id={type.id} status={type.status} onDone={reload} />
+                  </td>
+                ) : null}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
+function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
+  const rulesPath = tenantPath(tenantId, "config/availability-rules");
+  const sitesPath = tenantPath(tenantId, "config/sites");
+  const professionalsPath = tenantPath(tenantId, "config/professionals");
+  const typesPath = tenantPath(tenantId, "config/appointment-types");
+  const rules = useCatalog<PulsoIrisAvailabilityRule>(rulesPath);
+  const sites = useCatalog<PulsoIrisSite>(sitesPath);
+  const professionals = useCatalog<PulsoIrisProfessional>(professionalsPath);
+  const appointmentTypes = useCatalog<PulsoIrisAppointmentType>(typesPath);
+  const [siteId, setSiteId] = useState("");
+  const [professionalId, setProfessionalId] = useState("");
+  const [appointmentTypeId, setAppointmentTypeId] = useState("");
+  const [weekday, setWeekday] = useState("1");
+  const [startsAt, setStartsAt] = useState("08:00");
+  const [endsAt, setEndsAt] = useState("12:00");
+  const [slotDurationMin, setSlotDurationMin] = useState("20");
+  const [capacity, setCapacity] = useState("1");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!siteId && sites.items[0]) setSiteId(sites.items[0].id);
+    if (!professionalId && professionals.items[0]) setProfessionalId(professionals.items[0].id);
+    if (!appointmentTypeId && appointmentTypes.items[0]) setAppointmentTypeId(appointmentTypes.items[0].id);
+  }, [appointmentTypeId, appointmentTypes.items, professionalId, professionals.items, siteId, sites.items]);
+
+  const siteById = new Map(sites.items.map((site) => [site.id, site.name]));
+  const professionalById = new Map(professionals.items.map((professional) => [professional.id, professional.name]));
+  const typeById = new Map(appointmentTypes.items.map((type) => [type.id, type.name]));
+
+  const add = async () => {
+    if (!siteId || !professionalId || !appointmentTypeId) return;
+    setSaving(true);
+    try {
+      await api.post(rulesPath, {
+        siteId,
+        professionalId,
+        appointmentTypeId,
+        weekday: Number(weekday),
+        startsAt,
+        endsAt,
+        slotDurationMin: Number(slotDurationMin),
+        capacity: Number(capacity)
+      });
+      rules.reload();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const loading = rules.loading || sites.loading || professionals.loading || appointmentTypes.loading;
+  const error = rules.error ?? sites.error ?? professionals.error ?? appointmentTypes.error;
+  const canCreate = canWrite && siteId && professionalId && appointmentTypeId;
+
+  return (
+    <Card>
+      <CardHead
+        title={`Reglas de disponibilidad (${rules.items.length})`}
+        icon={<CalendarClock size={18} />}
+        trailing={<ReloadButton onClick={rules.reload} />}
+      />
+      {canWrite ? (
+        <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+          <select className="select" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+            {sites.items.map((site) => (
+              <option key={site.id} value={site.id}>
+                {site.name}
+              </option>
+            ))}
+          </select>
+          <select className="select" value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
+            {professionals.items.map((professional) => (
+              <option key={professional.id} value={professional.id}>
+                {professional.name}
+              </option>
+            ))}
+          </select>
+          <select className="select" value={appointmentTypeId} onChange={(e) => setAppointmentTypeId(e.target.value)}>
+            {appointmentTypes.items.map((type) => (
+              <option key={type.id} value={type.id}>
+                {type.name}
+              </option>
+            ))}
+          </select>
+          <select className="select" value={weekday} onChange={(e) => setWeekday(e.target.value)}>
+            {WEEKDAYS.map((day) => (
+              <option key={day.value} value={day.value}>
+                {day.label}
+              </option>
+            ))}
+          </select>
+          <input
+            className="input"
+            type="time"
+            value={startsAt}
+            onChange={(e) => setStartsAt(e.target.value)}
+            style={{ maxWidth: 112 }}
+          />
+          <input
+            className="input"
+            type="time"
+            value={endsAt}
+            onChange={(e) => setEndsAt(e.target.value)}
+            style={{ maxWidth: 112 }}
+          />
+          <input
+            className="input"
+            type="number"
+            min={5}
+            value={slotDurationMin}
+            onChange={(e) => setSlotDurationMin(e.target.value)}
+            style={{ maxWidth: 92 }}
+          />
+          <input
+            className="input"
+            type="number"
+            min={1}
+            value={capacity}
+            onChange={(e) => setCapacity(e.target.value)}
+            style={{ maxWidth: 92 }}
+          />
+          <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving || !canCreate}>
+            <Plus size={15} /> Agregar
+          </button>
+        </div>
+      ) : null}
+      {loading ? (
+        <LoadingState />
+      ) : error ? (
+        <div className="banner">{error}</div>
+      ) : rules.items.length === 0 ? (
+        <EmptyState label="Sin reglas de disponibilidad" />
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Dia</th>
+              <th>Horario</th>
+              <th>Sede</th>
+              <th>Profesional</th>
+              <th>Tipo de cita</th>
+              <th>Capacidad</th>
+              <th>Estado</th>
+              {canWrite ? <th>Acciones</th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {rules.items.map((rule) => (
+              <tr key={rule.id}>
+                <td className="small">{weekdayLabel(rule.weekday)}</td>
+                <td>
+                  <strong className="small">
+                    {shortTime(rule.startsAt)} - {shortTime(rule.endsAt)}
+                  </strong>
+                  <div className="tiny muted">{rule.slotDurationMin} min por slot</div>
+                </td>
+                <td className="small muted">{siteById.get(rule.siteId) ?? rule.siteId}</td>
+                <td className="small muted">{professionalById.get(rule.professionalId) ?? rule.professionalId}</td>
+                <td className="small muted">{typeById.get(rule.appointmentTypeId) ?? rule.appointmentTypeId}</td>
+                <td className="small muted">{rule.capacity}</td>
+                <td>
+                  <Pill tone={rule.status === "active" ? "green" : "amber"}>{rule.status}</Pill>
+                </td>
+                {canWrite ? (
+                  <td>
+                    <StatusToggle path={rulesPath} id={rule.id} status={rule.status} onDone={rules.reload} />
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -522,6 +848,46 @@ function PlatformTab() {
       )}
     </Card>
   );
+}
+
+function StatusToggle({
+  path,
+  id,
+  status,
+  onDone
+}: {
+  path: string;
+  id: string;
+  status: "active" | "paused";
+  onDone: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const nextStatus = status === "active" ? "paused" : "active";
+
+  const toggle = async () => {
+    setSaving(true);
+    try {
+      await api.patch(`${path}/${id}`, { status: nextStatus });
+      onDone();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button className="btn btn-outline btn-sm" type="button" onClick={toggle} disabled={saving}>
+      {nextStatus === "paused" ? <PauseCircle size={15} /> : <PlayCircle size={15} />}
+      {nextStatus === "paused" ? "Pausar" : "Activar"}
+    </button>
+  );
+}
+
+function weekdayLabel(value: number): string {
+  return WEEKDAYS.find((day) => day.value === value)?.label ?? String(value);
+}
+
+function shortTime(value: string): string {
+  return value.slice(0, 5);
 }
 
 function ReloadButton({ onClick }: { onClick: () => void }) {

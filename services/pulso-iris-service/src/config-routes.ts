@@ -1,5 +1,7 @@
 import {
   envelope,
+  pulsoIrisAvailabilityRuleInputSchema,
+  pulsoIrisAvailabilityRuleListSchema,
   pulsoIrisAppointmentTypeInputSchema,
   pulsoIrisAppointmentTypeListSchema,
   pulsoIrisPayerInputSchema,
@@ -10,7 +12,15 @@ import {
   pulsoIrisSiteListSchema
 } from "@hyperion/contracts";
 import type { RouteRegistrar } from "@hyperion/service-runtime";
-import { parseBody, readUuidParam, requireTenantDb } from "./shared.js";
+import type { FastifyReply } from "fastify";
+import {
+  ensureTenantReferences,
+  mapDatabaseError,
+  parseBody,
+  readUuidParam,
+  requireTenantDb,
+  sendReferenceError
+} from "./shared.js";
 
 const SITE_COLUMNS = `
   id,
@@ -56,6 +66,26 @@ const APPOINTMENT_TYPE_COLUMNS = `
   bookable_by_ia as "bookableByIa",
   slot_priority as "slotPriority",
   status,
+  created_at as "createdAt",
+  updated_at as "updatedAt"
+`;
+
+const AVAILABILITY_RULE_COLUMNS = `
+  id,
+  tenant_id as "tenantId",
+  site_id as "siteId",
+  professional_id as "professionalId",
+  appointment_type_id as "appointmentTypeId",
+  weekday::int as weekday,
+  to_char(starts_at, 'HH24:MI:SS') as "startsAt",
+  to_char(ends_at, 'HH24:MI:SS') as "endsAt",
+  slot_duration_min as "slotDurationMin",
+  capacity,
+  timezone,
+  effective_from::text as "effectiveFrom",
+  effective_to::text as "effectiveTo",
+  status,
+  notes,
   created_at as "createdAt",
   updated_at as "updatedAt"
 `;
@@ -335,4 +365,165 @@ export const registerConfigRoutes: RouteRegistrar = (app, context) => {
     }
     return envelope(pulsoIrisAppointmentTypeListSchema.parse(result.rows)[0], request.id);
   });
+
+  // ----- Disponibilidad y capacidad -----
+
+  app.get(`${base}/availability-rules`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+
+    const result = await scope.db.query(
+      `select ${AVAILABILITY_RULE_COLUMNS}
+       from pulso_iris.availability_rules
+       where tenant_id = $1
+       order by weekday, starts_at, created_at`,
+      [scope.tenantId]
+    );
+    return envelope(pulsoIrisAvailabilityRuleListSchema.parse(result.rows), request.id);
+  });
+
+  app.post(`${base}/availability-rules`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const input = parseBody(pulsoIrisAvailabilityRuleInputSchema, request, reply);
+    if (!input) return;
+
+    if (!isTimeRange(input.startsAt, input.endsAt)) {
+      return reply.code(400).send(envelope({ error: "endsAt must be after startsAt" }, request.id));
+    }
+
+    const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" },
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.appointmentTypeId, table: "pulso_iris.appointment_types", label: "appointmentTypeId" }
+    ]);
+    if (referenceError) {
+      return sendReferenceError(reply, request, referenceError.label);
+    }
+
+    try {
+      const result = await scope.db.query(
+        `insert into pulso_iris.availability_rules
+           (tenant_id, site_id, professional_id, appointment_type_id, weekday, starts_at, ends_at,
+            slot_duration_min, capacity, timezone, effective_from, effective_to, status, notes)
+         values ($1, $2, $3, $4, $5, $6::time, $7::time, coalesce($8, 20), coalesce($9, 1),
+           coalesce($10, 'America/Bogota'), $11::date, $12::date, coalesce($13, 'active'), $14)
+         returning ${AVAILABILITY_RULE_COLUMNS}`,
+        [
+          scope.tenantId,
+          input.siteId,
+          input.professionalId,
+          input.appointmentTypeId,
+          input.weekday,
+          input.startsAt,
+          input.endsAt,
+          input.slotDurationMin ?? null,
+          input.capacity ?? null,
+          input.timezone ?? null,
+          input.effectiveFrom ?? null,
+          input.effectiveTo ?? null,
+          input.status ?? null,
+          input.notes ?? null
+        ]
+      );
+      return reply.code(201).send(envelope(pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0], request.id));
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
+
+  app.patch(`${base}/availability-rules/:ruleId`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const ruleId = readUuidParam(request.params, "ruleId");
+    if (!ruleId) {
+      return reply.code(400).send(envelope({ error: "ruleId must be a UUID" }, request.id));
+    }
+    const input = parseBody(pulsoIrisAvailabilityRuleInputSchema.partial(), request, reply);
+    if (!input) return;
+
+    if (input.startsAt && input.endsAt && !isTimeRange(input.startsAt, input.endsAt)) {
+      return reply.code(400).send(envelope({ error: "endsAt must be after startsAt" }, request.id));
+    }
+
+    const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" },
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.appointmentTypeId, table: "pulso_iris.appointment_types", label: "appointmentTypeId" }
+    ]);
+    if (referenceError) {
+      return sendReferenceError(reply, request, referenceError.label);
+    }
+
+    try {
+      const result = await scope.db.query(
+        `update pulso_iris.availability_rules set
+           site_id = coalesce($3, site_id),
+           professional_id = coalesce($4, professional_id),
+           appointment_type_id = coalesce($5, appointment_type_id),
+           weekday = coalesce($6, weekday),
+           starts_at = coalesce($7::time, starts_at),
+           ends_at = coalesce($8::time, ends_at),
+           slot_duration_min = coalesce($9, slot_duration_min),
+           capacity = coalesce($10, capacity),
+           timezone = coalesce($11, timezone),
+           effective_from = coalesce($12::date, effective_from),
+           effective_to = coalesce($13::date, effective_to),
+           status = coalesce($14, status),
+           notes = coalesce($15, notes),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${AVAILABILITY_RULE_COLUMNS}`,
+        [
+          scope.tenantId,
+          ruleId,
+          input.siteId ?? null,
+          input.professionalId ?? null,
+          input.appointmentTypeId ?? null,
+          input.weekday ?? null,
+          input.startsAt ?? null,
+          input.endsAt ?? null,
+          input.slotDurationMin ?? null,
+          input.capacity ?? null,
+          input.timezone ?? null,
+          input.effectiveFrom ?? null,
+          input.effectiveTo ?? null,
+          input.status ?? null,
+          input.notes ?? null
+        ]
+      );
+
+      if (result.rows.length === 0) {
+        return reply.code(404).send(envelope({ error: "Availability rule not found" }, request.id));
+      }
+      return envelope(pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0], request.id);
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
 };
+
+function isTimeRange(startsAt: string, endsAt: string): boolean {
+  return toMinutes(endsAt) > toMinutes(startsAt);
+}
+
+function toMinutes(value: string): number {
+  const [hours = "0", minutes = "0"] = value.split(":");
+  return Number(hours) * 60 + Number(minutes);
+}
+
+function sendDatabaseConfigError(error: unknown, reply: FastifyReply, requestId: string) {
+  const mapped = mapDatabaseError(error);
+  if (mapped) {
+    return reply.code(mapped.statusCode).send(envelope({ error: mapped.message }, requestId));
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    String((error as { code?: unknown }).code) === "23514"
+  ) {
+    return reply.code(400).send(envelope({ error: "Invalid availability rule range or capacity" }, requestId));
+  }
+  throw error;
+}

@@ -121,6 +121,63 @@ describeIntegration("pulso-iris tenant isolation", () => {
       )
     ).rejects.toMatchObject({ code: "23503" });
   });
+
+  it("creates agenda availability rules for same-tenant catalog references", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/availability-rules`,
+      payload: {
+        siteId: siteA,
+        professionalId: professionalA,
+        appointmentTypeId: typeA,
+        weekday: 1,
+        startsAt: "08:00",
+        endsAt: "12:00",
+        slotDurationMin: 20,
+        capacity: 2,
+        notes: "Agenda manana"
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().data.capacity).toBe(2);
+
+    const list = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/availability-rules`
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().data).toHaveLength(1);
+  });
+
+  it("rejects cross-tenant availability rule references through the API", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/availability-rules`,
+      payload: {
+        siteId: siteB,
+        professionalId: professionalA,
+        appointmentTypeId: typeA,
+        weekday: 2,
+        startsAt: "08:00",
+        endsAt: "12:00"
+      }
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().data.error).toContain("siteId");
+  });
+
+  it("rejects direct SQL cross-tenant availability rule inserts with composite foreign keys", async () => {
+    await expect(
+      client.query(
+        `insert into pulso_iris.availability_rules
+           (tenant_id, site_id, professional_id, appointment_type_id, weekday, starts_at, ends_at)
+         values ($1, $2, $3, $4, 3, '08:00', '12:00')`,
+        [tenantA, siteB, professionalA, typeA]
+      )
+    ).rejects.toMatchObject({ code: "23503" });
+  });
 });
 
 async function resetTenantFixtures(): Promise<void> {
