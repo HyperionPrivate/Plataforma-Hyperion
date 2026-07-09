@@ -19,9 +19,9 @@ El VPS debe quedar con acceso por llave SSH, firewall activo y login root por pa
 - Consola web: `${WEB_CONSOLE_HOST_PORT:-3000}`.
 - PostgreSQL no se publica al host; solo queda disponible dentro de la red Docker.
 
-## Backup antes de migraciones
+## Backup antes de migraciones y deploys
 
-Antes de aplicar cualquier migracion nueva en el VPS se debe crear un dump comprimido de PostgreSQL fuera de Git:
+Antes de aplicar cualquier migracion nueva o redeploy productivo en el VPS se debe crear un dump comprimido de PostgreSQL fuera de Git:
 
 ```bash
 mkdir -p /opt/hyperion-platform/backups
@@ -30,10 +30,10 @@ docker compose --env-file .env -f infra/docker-compose.yml exec -T postgres \
   | gzip > "/opt/hyperion-platform/backups/hyperion-$(date +%Y%m%d-%H%M%S).sql.gz"
 ```
 
-Luego se verifica el log del servicio `migrations`, se despliega y se validan endpoints publicos.
+Luego se verifica el log del servicio `migrations`, se despliega y se validan endpoints publicos. La carpeta `backups/` queda ignorada por Git.
 
 ## Comando base
 
 ```bash
-docker compose -f infra/docker-compose.yml up --build -d
+docker compose --env-file .env -f infra/docker-compose.yml up --build -d
 ```

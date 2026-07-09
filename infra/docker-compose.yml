@@ -26,6 +26,19 @@ x-node-healthcheck: &node-healthcheck
   retries: 5
   start_period: 20s
 
+x-node-readycheck: &node-readycheck
+  test:
+    [
+      "CMD",
+      "node",
+      "-e",
+      "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/ready').then((r)=>r.json()).then((body)=>process.exit(body.status==='ok'?0:1)).catch(()=>process.exit(1))"
+    ]
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 20s
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -63,7 +76,7 @@ services:
       PORT: 8081
     expose:
       - "8081"
-    healthcheck: *node-healthcheck
+    healthcheck: *node-readycheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,7 +92,7 @@ services:
       PORT: 8082
     expose:
       - "8082"
-    healthcheck: *node-healthcheck
+    healthcheck: *node-readycheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,7 +108,7 @@ services:
       PORT: 8083
     expose:
       - "8083"
-    healthcheck: *node-healthcheck
+    healthcheck: *node-readycheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,7 +124,7 @@ services:
       PORT: 8084
     expose:
       - "8084"
-    healthcheck: *node-healthcheck
+    healthcheck: *node-readycheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -127,7 +140,7 @@ services:
       PORT: 8085
     expose:
       - "8085"
-    healthcheck: *node-healthcheck
+    healthcheck: *node-readycheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -144,7 +157,7 @@ services:
       PORT: 8086
     expose:
       - "8086"
-    healthcheck: *node-healthcheck
+    healthcheck: *node-readycheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -160,7 +173,7 @@ services:
       PORT: 8087
     expose:
       - "8087"
-    healthcheck: *node-healthcheck
+    healthcheck: *node-readycheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -176,7 +189,7 @@ services:
       PORT: 8088
     expose:
       - "8088"
-    healthcheck: *node-healthcheck
+    healthcheck: *node-readycheck
     depends_on:
       postgres:
         condition: service_healthy

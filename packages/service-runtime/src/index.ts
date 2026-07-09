@@ -24,12 +24,14 @@ export type RouteRegistrar = (app: FastifyInstance, context: ServiceContext) => 
 export interface RuntimeOptions {
   serviceName: ServiceName;
   databaseRequired?: boolean;
+  requiredMigrations?: string[];
   /**
    * Marks the service as the public HTTP surface: enables security headers
    * and per-IP rate limiting. Internal services stay lean.
    */
   publicApi?: boolean;
   registerRoutes?: RouteRegistrar;
+  createDatabase?: (connectionString: string) => DatabaseClient;
 }
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -83,7 +85,7 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
     });
   }
 
-  const db = config.databaseUrl ? createDatabase(config.databaseUrl) : undefined;
+  const db = config.databaseUrl ? (options.createDatabase ?? createDatabase)(config.databaseUrl) : undefined;
   const context: ServiceContext = { config, db, logger };
 
   app.get("/health", async () => {
@@ -104,13 +106,34 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
 
     try {
       const latencyMs = await checkDatabase(db);
-      return buildHealth(options.serviceName, config.serviceVersion, "ok", [
+      const dependencies: ServiceHealth["dependencies"] = [
         {
           name: "postgres",
           status: "ok",
           latencyMs
         }
-      ]);
+      ];
+
+      const missingMigration = await findMissingMigration(db, options.requiredMigrations ?? []);
+      if (missingMigration) {
+        dependencies.push({
+          name: "schema_migrations",
+          status: "down",
+          detail: `missing migration: ${missingMigration}`
+        });
+
+        return buildHealth(options.serviceName, config.serviceVersion, "down", dependencies);
+      }
+
+      if ((options.requiredMigrations ?? []).length > 0) {
+        dependencies.push({
+          name: "schema_migrations",
+          status: "ok",
+          detail: "required migrations applied"
+        });
+      }
+
+      return buildHealth(options.serviceName, config.serviceVersion, "ok", dependencies);
     } catch (error) {
       logger.error("database readiness failed", { error: error instanceof Error ? error.message : String(error) });
       return buildHealth(options.serviceName, config.serviceVersion, "down", [
@@ -132,6 +155,23 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
   });
 
   return { app, context };
+}
+
+async function findMissingMigration(db: DatabaseClient, requiredMigrations: string[]): Promise<string | undefined> {
+  if (requiredMigrations.length === 0) {
+    return undefined;
+  }
+
+  try {
+    const result = await db.query<{ name: string }>(
+      "select name from platform.schema_migrations where name = any($1::text[])",
+      [requiredMigrations]
+    );
+    const applied = new Set(result.rows.map((row) => row.name));
+    return requiredMigrations.find((name) => !applied.has(name));
+  } catch {
+    return requiredMigrations[0];
+  }
 }
 
 export async function startService(options: RuntimeOptions): Promise<void> {

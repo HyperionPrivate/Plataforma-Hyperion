@@ -24,11 +24,11 @@ El esquema es propiedad de `packages/migrations`: archivos SQL versionados en `p
 
 ## Despliegue
 
-Una sola imagen multi-stage para los servicios Node (produccion sin devDependencies, proceso como usuario `node`) y una imagen nginx sin privilegios para la consola web estatica. Cada servicio expone `/health` y `/ready`; el compose usa healthchecks y `depends_on: service_healthy` para ordenar el arranque.
+Una sola imagen multi-stage para los servicios Node (produccion sin devDependencies, proceso como usuario `node`) y una imagen nginx sin privilegios para la consola web estatica. Cada servicio expone `/health` y `/ready`; los servicios con base de datos usan `/ready` como healthcheck y validan migraciones requeridas en `platform.schema_migrations` antes de quedar sanos. El gateway conserva `/health` como healthcheck publico agregado.
 
 ## Producto inicial
 
-La plataforma primero entrega el nucleo: identidad, tenants, agentes, integraciones y auditoria. CEDCO R02 se monta encima del `agent-service`, `prompt-flow-service`, `knowledge-service` e `integration-service`.
+El producto inicial operativo es PULSO IRIS para CEDCO. La plataforma conserva el nucleo de identidad, tenants, agentes, integraciones y auditoria, y PULSO IRIS vive en `pulso-iris-service` con esquema propio `pulso_iris`.
 
 ## Regla para agregar productos
 

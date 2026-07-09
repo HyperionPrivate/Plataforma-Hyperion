@@ -13,3 +13,4 @@ yarn-error.log*
 Dockerfile.local
 
 logs-*.txt
+backups/

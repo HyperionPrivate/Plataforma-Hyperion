@@ -21,5 +21,6 @@ const registerRoutes: RouteRegistrar = async (app, context) => {
 await startService({
   serviceName: "tenant-service",
   databaseRequired: true,
+  requiredMigrations: ["001-platform.sql"],
   registerRoutes
 });

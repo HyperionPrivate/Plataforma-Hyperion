@@ -24,7 +24,7 @@ Para levantar todo con contenedores:
 
 ```bash
 copy .env.example .env
-docker compose -f infra/docker-compose.yml up --build
+docker compose --env-file .env -f infra/docker-compose.yml up --build
 ```
 
 No se deben guardar credenciales reales en Git.
