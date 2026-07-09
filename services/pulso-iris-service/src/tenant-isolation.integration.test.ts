@@ -1,7 +1,11 @@
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { registerRoutes } from "./app.js";
+import type { EmitAuditEventInput } from "./audit-client.js";
+import { registerAnalyticsRoutes } from "./analytics-routes.js";
+import { registerAvailabilityRoutes } from "./availability-routes.js";
+import { registerConfigRoutes } from "./config-routes.js";
+import { registerOperationsRoutes } from "./operations-routes.js";
 
 const { Client } = pg;
 
@@ -20,6 +24,7 @@ let professionalA: string;
 let payerA: string;
 let typeA: string;
 let conversationA: string;
+const emittedEvents: EmitAuditEventInput[] = [];
 
 describeIntegration("pulso-iris tenant isolation", () => {
   beforeAll(async () => {
@@ -43,7 +48,15 @@ describeIntegration("pulso-iris tenant isolation", () => {
     const handle = await createService({
       serviceName: "pulso-iris-service",
       databaseRequired: true,
-      registerRoutes
+      registerRoutes: async (serviceApp, context) => {
+        const emitAudit = (event: EmitAuditEventInput) => {
+          emittedEvents.push(event);
+        };
+        await registerConfigRoutes(serviceApp, context, emitAudit);
+        await registerOperationsRoutes(serviceApp, context, emitAudit);
+        await registerAvailabilityRoutes(serviceApp, context);
+        await registerAnalyticsRoutes(serviceApp, context);
+      }
     });
     app = handle.app;
   });
@@ -304,17 +317,27 @@ describeIntegration("pulso-iris tenant isolation", () => {
 
   it("excludes holidays from generated slots", async () => {
     const rule = await createRule({
-      weekday: 1,
+      weekday: 3,
       startsAt: "08:00",
       endsAt: "10:00",
       capacity: 1
     });
     expect(rule.statusCode).toBe(201);
 
+    const before = await app.inject({
+      method: "GET",
+      url:
+        `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
+        `?from=2026-09-16T12:00:00.000Z&to=2026-09-16T16:00:00.000Z` +
+        `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}`
+    });
+    expect(before.statusCode).toBe(200);
+    expect(before.json().data.slots.length).toBeGreaterThan(0);
+
     const holiday = await app.inject({
       method: "POST",
       url: `/v1/tenants/${tenantA}/pulso-iris/config/holidays`,
-      payload: { holidayDate: "2026-09-14", name: "Festivo de prueba" }
+      payload: { holidayDate: "2026-09-16", name: "Festivo de prueba" }
     });
     expect(holiday.statusCode).toBe(201);
 
@@ -322,7 +345,7 @@ describeIntegration("pulso-iris tenant isolation", () => {
       method: "GET",
       url:
         `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
-        `?from=2026-09-14T12:00:00.000Z&to=2026-09-14T16:00:00.000Z` +
+        `?from=2026-09-16T12:00:00.000Z&to=2026-09-16T16:00:00.000Z` +
         `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}`
     });
     expect(slots.statusCode).toBe(200);
@@ -486,6 +509,52 @@ describeIntegration("pulso-iris tenant isolation", () => {
         [tenantA, siteB, professionalA, typeA]
       )
     ).rejects.toMatchObject({ code: "23503" });
+  });
+
+  it("emits config.updated when creating a holiday", async () => {
+    const before = emittedEvents.length;
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/holidays`,
+      headers: { "x-operator-id": "operator-config" },
+      payload: { holidayDate: "2026-12-08", name: "Inmaculada" }
+    });
+    expect(response.statusCode).toBe(201);
+    const events = emittedEvents.slice(before);
+    expect(events.some((event) => event.eventType === "config.updated" && event.entityType === "holiday")).toBe(true);
+    expect(events.find((event) => event.eventType === "config.updated")?.actorId).toBe("operator-config");
+  });
+
+  it("emits handoff.assigned when a handoff is assigned", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/handoffs`,
+      payload: {
+        conversationId: conversationA,
+        patientId: patientA,
+        triggerCode: "caso_sensible",
+        priority: "medium",
+        summary: "Caso de prueba de auditoria"
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    const handoffId = created.json().data.id as string;
+
+    const before = emittedEvents.length;
+    const assigned = await app.inject({
+      method: "PATCH",
+      url: `/v1/tenants/${tenantA}/pulso-iris/handoffs/${handoffId}`,
+      headers: { "x-operator-id": "operator-handoff" },
+      payload: { status: "assigned" }
+    });
+    expect(assigned.statusCode).toBe(200);
+    const events = emittedEvents.slice(before);
+    expect(
+      events.some(
+        (event) =>
+          event.eventType === "handoff.assigned" && event.entityId === handoffId && event.actorId === "operator-handoff"
+      )
+    ).toBe(true);
   });
 });
 

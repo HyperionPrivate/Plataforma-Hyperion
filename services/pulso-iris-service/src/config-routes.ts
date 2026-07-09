@@ -182,7 +182,9 @@ export async function registerConfigRoutes(
        returning ${SITE_COLUMNS}`,
       [scope.tenantId, input.name, input.city ?? null, input.address ?? null, input.phone ?? null, input.status ?? null]
     );
-    return reply.code(201).send(envelope(pulsoIrisSiteListSchema.parse(result.rows)[0], request.id));
+    const created = pulsoIrisSiteListSchema.parse(result.rows)[0];
+    if (created) emitConfigUpdated(request, scope.tenantId, "site", created.id);
+    return reply.code(201).send(envelope(created, request.id));
   });
 
   app.patch(`${base}/sites/:siteId`, async (request, reply) => {
@@ -219,6 +221,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Site not found" }, request.id));
     }
+    emitConfigUpdated(request, scope.tenantId, "site", siteId);
     return envelope(pulsoIrisSiteListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -247,7 +250,9 @@ export async function registerConfigRoutes(
        returning ${PROFESSIONAL_COLUMNS}`,
       [scope.tenantId, input.name, input.professionalType, input.subspecialty ?? null, input.status ?? null]
     );
-    return reply.code(201).send(envelope(pulsoIrisProfessionalListSchema.parse(result.rows)[0], request.id));
+    const created = pulsoIrisProfessionalListSchema.parse(result.rows)[0];
+    if (created) emitConfigUpdated(request, scope.tenantId, "professional", created.id);
+    return reply.code(201).send(envelope(created, request.id));
   });
 
   app.patch(`${base}/professionals/:professionalId`, async (request, reply) => {
@@ -282,6 +287,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Professional not found" }, request.id));
     }
+    emitConfigUpdated(request, scope.tenantId, "professional", professionalId);
     return envelope(pulsoIrisProfessionalListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -310,7 +316,9 @@ export async function registerConfigRoutes(
        returning ${PAYER_COLUMNS}`,
       [scope.tenantId, input.name, input.group, input.requiresAuthorization ?? null, input.status ?? null]
     );
-    return reply.code(201).send(envelope(pulsoIrisPayerListSchema.parse(result.rows)[0], request.id));
+    const created = pulsoIrisPayerListSchema.parse(result.rows)[0];
+    if (created) emitConfigUpdated(request, scope.tenantId, "payer", created.id);
+    return reply.code(201).send(envelope(created, request.id));
   });
 
   app.patch(`${base}/payers/:payerId`, async (request, reply) => {
@@ -345,6 +353,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Payer not found" }, request.id));
     }
+    emitConfigUpdated(request, scope.tenantId, "payer", payerId);
     return envelope(pulsoIrisPayerListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -386,7 +395,9 @@ export async function registerConfigRoutes(
         input.status ?? null
       ]
     );
-    return reply.code(201).send(envelope(pulsoIrisAppointmentTypeListSchema.parse(result.rows)[0], request.id));
+    const created = pulsoIrisAppointmentTypeListSchema.parse(result.rows)[0];
+    if (created) emitConfigUpdated(request, scope.tenantId, "appointment_type", created.id);
+    return reply.code(201).send(envelope(created, request.id));
   });
 
   app.patch(`${base}/appointment-types/:appointmentTypeId`, async (request, reply) => {
@@ -444,6 +455,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Appointment type not found" }, request.id));
     }
+    emitConfigUpdated(request, scope.tenantId, "appointment_type", appointmentTypeId);
     return envelope(pulsoIrisAppointmentTypeListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -611,6 +623,7 @@ export async function registerConfigRoutes(
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Availability rule not found" }, request.id));
       }
+      emitConfigUpdated(request, scope.tenantId, "availability_rule", ruleId);
       return envelope(pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -670,7 +683,9 @@ export async function registerConfigRoutes(
           input.status ?? null
         ]
       );
-      return reply.code(201).send(envelope(pulsoIrisAgendaBlockListSchema.parse(result.rows)[0], request.id));
+      const created = pulsoIrisAgendaBlockListSchema.parse(result.rows)[0];
+      if (created) emitConfigUpdated(request, scope.tenantId, "agenda_block", created.id);
+      return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
     }
@@ -728,6 +743,7 @@ export async function registerConfigRoutes(
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Agenda block not found" }, request.id));
       }
+      emitConfigUpdated(request, scope.tenantId, "agenda_block", blockId);
       return envelope(pulsoIrisAgendaBlockListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
