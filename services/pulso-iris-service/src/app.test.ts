@@ -92,4 +92,22 @@ describe("pulso-iris-service routes", () => {
 
     expect(response.statusCode).toBe(503);
   });
+
+  it("returns 503 for agenda blocks when the database is not configured", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/agenda-blocks`
+    });
+
+    expect(response.statusCode).toBe(503);
+  });
+
+  it("returns 503 for availability slots when the database is not configured", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/availability/slots`
+    });
+
+    expect(response.statusCode).toBe(503);
+  });
 });

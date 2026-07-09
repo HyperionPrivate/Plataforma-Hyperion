@@ -1,10 +1,19 @@
-import { CalendarDays, Clock } from "lucide-react";
-import { useMemo } from "react";
+import { CalendarCheck, CalendarDays, Clock, Plus, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type {
+  PulsoIrisAppointmentType,
+  PulsoIrisAvailabilitySlot,
+  PulsoIrisAvailabilitySlots,
+  PulsoIrisProfessional,
+  PulsoIrisSite
+} from "@hyperion/contracts";
 import { Layout } from "../components/Layout.js";
 import { Card, CardHead, EmptyState, LoadingState, Pill } from "../components/ui.js";
+import { api, SessionExpiredError } from "../lib/api.js";
 import { tenantPath, useConsole } from "../lib/context.js";
 import { formatTime, LINE } from "../lib/format.js";
 import { usePolling } from "../lib/hooks.js";
+import { can } from "../lib/rbac.js";
 
 interface AgendaResponse {
   appointments: Array<{
@@ -62,9 +71,9 @@ function statusStyle(status: string): { bg: string; border: string; label: strin
 }
 
 export function AgendaPage() {
-  const { tenant, activeSiteId, logout, sites } = useConsole();
+  const { tenant, activeSiteId, logout, sites, session } = useConsole();
   const suffix = activeSiteId === "all" ? "agenda/week" : `agenda/week?siteId=${activeSiteId}`;
-  const { data, loading, error } = usePolling<AgendaResponse>(tenantPath(tenant.id, suffix), 30_000, logout);
+  const { data, loading, error, refresh } = usePolling<AgendaResponse>(tenantPath(tenant.id, suffix), 30_000, logout);
 
   const siteLabel = activeSiteId === "all" ? "Todas las sedes" : (sites.find((s) => s.id === activeSiteId)?.name ?? "");
 
@@ -126,6 +135,15 @@ export function AgendaPage() {
           </Card>
 
           <div className="col" style={{ gap: 16 }}>
+            <AvailabilityPanel
+              tenantId={tenant.id}
+              activeSiteId={activeSiteId}
+              sites={sites}
+              canReserve={can(session.operator.role, "write:operation")}
+              onReserved={refresh}
+              logout={logout}
+            />
+
             <Card>
               <CardHead title="Resumen de la semana" />
               <div className="card-pad grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -167,6 +185,199 @@ export function AgendaPage() {
         <EmptyState label="Sin agenda" />
       )}
     </Layout>
+  );
+}
+
+function AvailabilityPanel({
+  tenantId,
+  activeSiteId,
+  sites,
+  canReserve,
+  onReserved,
+  logout
+}: {
+  tenantId: string;
+  activeSiteId: string | "all";
+  sites: PulsoIrisSite[];
+  canReserve: boolean;
+  onReserved: () => void;
+  logout: () => void;
+}) {
+  const [professionals, setProfessionals] = useState<PulsoIrisProfessional[]>([]);
+  const [appointmentTypes, setAppointmentTypes] = useState<PulsoIrisAppointmentType[]>([]);
+  const [siteId, setSiteId] = useState("");
+  const [professionalId, setProfessionalId] = useState("");
+  const [appointmentTypeId, setAppointmentTypeId] = useState("");
+  const [date, setDate] = useState(() => todayBogotaDate());
+  const [slots, setSlots] = useState<PulsoIrisAvailabilitySlot[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>();
+  const [reserving, setReserving] = useState<string>();
+
+  useEffect(() => {
+    const nextSiteId = activeSiteId === "all" ? (sites[0]?.id ?? "") : activeSiteId;
+    if (nextSiteId && siteId !== nextSiteId) {
+      setSiteId(nextSiteId);
+    }
+  }, [activeSiteId, siteId, sites]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    Promise.all([
+      api.get<PulsoIrisProfessional[]>(tenantPath(tenantId, "config/professionals")),
+      api.get<PulsoIrisAppointmentType[]>(tenantPath(tenantId, "config/appointment-types"))
+    ])
+      .then(([professionalRows, typeRows]) => {
+        if (cancelled) return;
+        setProfessionals(professionalRows);
+        setAppointmentTypes(typeRows);
+        setProfessionalId((current) => current || professionalRows[0]?.id || "");
+        setAppointmentTypeId((current) => current || typeRows[0]?.id || "");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err instanceof SessionExpiredError) logout();
+        else setError(err instanceof Error ? err.message : String(err));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [logout, tenantId]);
+
+  const loadSlots = useCallback(() => {
+    if (!siteId || !professionalId || !appointmentTypeId) {
+      setSlots([]);
+      return;
+    }
+
+    const from = new Date(`${date}T00:00:00-05:00`);
+    const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
+    const params = new URLSearchParams({
+      from: from.toISOString(),
+      to: to.toISOString(),
+      siteId,
+      professionalId,
+      appointmentTypeId,
+      includeFull: "true"
+    });
+
+    setLoading(true);
+    api
+      .get<PulsoIrisAvailabilitySlots>(tenantPath(tenantId, `availability/slots?${params.toString()}`))
+      .then((data) => {
+        setSlots(data.slots.slice(0, 18));
+        setError(undefined);
+      })
+      .catch((err) => {
+        if (err instanceof SessionExpiredError) logout();
+        else setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setLoading(false));
+  }, [appointmentTypeId, date, logout, professionalId, siteId, tenantId]);
+
+  useEffect(() => loadSlots(), [loadSlots]);
+
+  const reserve = async (slot: PulsoIrisAvailabilitySlot) => {
+    setReserving(slot.startsAt);
+    try {
+      await api.post(tenantPath(tenantId, "appointments"), {
+        siteId: slot.siteId,
+        professionalId: slot.professionalId,
+        appointmentTypeId: slot.appointmentTypeId,
+        scheduledAt: slot.startsAt,
+        origin: "advisor"
+      });
+      onReserved();
+      loadSlots();
+    } catch (err) {
+      if (err instanceof SessionExpiredError) logout();
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReserving(undefined);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHead
+        title="Disponibilidad"
+        icon={<CalendarCheck size={18} />}
+        trailing={
+          <button className="icon-btn" type="button" onClick={loadSlots} aria-label="Actualizar disponibilidad">
+            <RefreshCw size={16} />
+          </button>
+        }
+      />
+      <div className="card-pad col" style={{ gap: 10, borderBottom: `1px solid ${LINE}` }}>
+        <input className="input" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        <select className="select" value={siteId} onChange={(event) => setSiteId(event.target.value)}>
+          {sites.map((site) => (
+            <option key={site.id} value={site.id}>
+              {site.name}
+            </option>
+          ))}
+        </select>
+        <select className="select" value={professionalId} onChange={(event) => setProfessionalId(event.target.value)}>
+          {professionals.map((professional) => (
+            <option key={professional.id} value={professional.id}>
+              {professional.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="select"
+          value={appointmentTypeId}
+          onChange={(event) => setAppointmentTypeId(event.target.value)}
+        >
+          {appointmentTypes.map((type) => (
+            <option key={type.id} value={type.id}>
+              {type.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {loading ? (
+        <LoadingState />
+      ) : error ? (
+        <div className="banner">{error}</div>
+      ) : slots.length === 0 ? (
+        <EmptyState label="Sin huecos para los filtros" />
+      ) : (
+        <div>
+          {slots.map((slot) => (
+            <div
+              key={`${slot.ruleId}-${slot.startsAt}`}
+              className="row between"
+              style={{ padding: "10px 16px", borderBottom: `1px solid ${LINE}`, gap: 10 }}
+            >
+              <div className="col" style={{ gap: 2 }}>
+                <strong className="small">
+                  {formatTime(slot.startsAt)} - {formatTime(slot.endsAt)}
+                </strong>
+                <span className="tiny muted">{slot.professionalName ?? slot.appointmentTypeName ?? "Agenda"}</span>
+              </div>
+              <div className="row" style={{ gap: 8 }}>
+                <Pill tone={slot.remaining > 0 ? "green" : "amber"}>
+                  {slot.remaining}/{slot.capacity}
+                </Pill>
+                {canReserve && slot.remaining > 0 ? (
+                  <button
+                    className="btn btn-outline btn-sm"
+                    type="button"
+                    onClick={() => void reserve(slot)}
+                    disabled={reserving === slot.startsAt}
+                  >
+                    <Plus size={14} /> Reservar
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -240,4 +451,17 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 function pct(part: number, total: number): string {
   if (!total) return "0%";
   return `${Math.round((100 * part) / total)}%`;
+}
+
+function todayBogotaDate(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bogota",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const year = parts.find((part) => part.type === "year")?.value ?? "2026";
+  const month = parts.find((part) => part.type === "month")?.value ?? "01";
+  const day = parts.find((part) => part.type === "day")?.value ?? "01";
+  return `${year}-${month}-${day}`;
 }

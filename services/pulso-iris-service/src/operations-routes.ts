@@ -27,6 +27,7 @@ import {
   requireTenantDb,
   sendReferenceError
 } from "./shared.js";
+import { reserveAppointmentSlotToken } from "./availability-engine.js";
 
 const CONVERSATION_COLUMNS = `
   id,
@@ -91,6 +92,8 @@ const RPA_ACTION_COLUMNS = `
   created_at as "createdAt",
   updated_at as "updatedAt"
 `;
+
+const ACTIVE_BOOKING_STATUSES = new Set(["offered", "registered", "verified", "confirmed", "rescheduled"]);
 
 export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
   const base = "/v1/tenants/:tenantId/pulso-iris";
@@ -237,13 +240,39 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     ]);
     if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
+    let slotCapacityToken: number | null = null;
+    if (input.scheduledAt) {
+      if (!input.siteId || !input.professionalId || !input.appointmentTypeId) {
+        return reply
+          .code(422)
+          .send(
+            envelope(
+              { error: "Scheduled appointments require siteId, professionalId and appointmentTypeId" },
+              request.id
+            )
+          );
+      }
+
+      const reservation = await reserveAppointmentSlotToken(scope.db, {
+        tenantId: scope.tenantId,
+        siteId: input.siteId,
+        professionalId: input.professionalId,
+        appointmentTypeId: input.appointmentTypeId,
+        scheduledAt: input.scheduledAt
+      });
+      if (!reservation) {
+        return reply.code(409).send(envelope({ error: "Appointment slot is not available" }, request.id));
+      }
+      slotCapacityToken = reservation.slotCapacityToken;
+    }
+
     let result;
     try {
       result = await scope.db.query(
         `insert into pulso_iris.appointments
            (tenant_id, patient_id, conversation_id, site_id, professional_id, payer_id,
-            appointment_type_id, appointment_type, origin, scheduled_at, status)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, 'sofia_wa'), $10, 'registered')
+            appointment_type_id, appointment_type, origin, scheduled_at, status, slot_capacity_token)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, 'sofia_wa'), $10, 'registered', $11)
          returning ${APPOINTMENT_COLUMNS}`,
         [
           scope.tenantId,
@@ -255,7 +284,8 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
           input.appointmentTypeId ?? null,
           input.appointmentType ?? null,
           input.origin ?? null,
-          input.scheduledAt ?? null
+          input.scheduledAt ?? null,
+          slotCapacityToken
         ]
       );
     } catch (error) {
@@ -294,12 +324,76 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
     ]);
     if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
 
+    let slotCapacityToken: number | null = null;
+    const shouldValidateSlot =
+      input.scheduledAt !== undefined ||
+      input.siteId !== undefined ||
+      input.professionalId !== undefined ||
+      (input.status !== undefined && ACTIVE_BOOKING_STATUSES.has(input.status));
+
+    if (shouldValidateSlot) {
+      const current = await scope.db.query<{
+        siteId: string | null;
+        professionalId: string | null;
+        appointmentTypeId: string | null;
+        scheduledAt: Date | null;
+        status: string;
+      }>(
+        `select site_id as "siteId",
+                professional_id as "professionalId",
+                appointment_type_id as "appointmentTypeId",
+                scheduled_at as "scheduledAt",
+                status
+         from pulso_iris.appointments
+         where tenant_id = $1 and id = $2`,
+        [scope.tenantId, appointmentId]
+      );
+
+      if (current.rows.length === 0) {
+        return reply.code(404).send(envelope({ error: "Appointment not found" }, request.id));
+      }
+
+      const row = current.rows[0]!;
+      const scheduledAt = input.scheduledAt ?? row.scheduledAt?.toISOString();
+      const siteId = input.siteId ?? row.siteId ?? undefined;
+      const professionalId = input.professionalId ?? row.professionalId ?? undefined;
+      const appointmentTypeId = row.appointmentTypeId ?? undefined;
+      const targetStatus = input.status ?? row.status;
+
+      if (scheduledAt && ACTIVE_BOOKING_STATUSES.has(targetStatus)) {
+        if (!siteId || !professionalId || !appointmentTypeId) {
+          return reply
+            .code(422)
+            .send(
+              envelope(
+                { error: "Scheduled appointments require siteId, professionalId and appointmentTypeId" },
+                request.id
+              )
+            );
+        }
+
+        const reservation = await reserveAppointmentSlotToken(scope.db, {
+          tenantId: scope.tenantId,
+          siteId,
+          professionalId,
+          appointmentTypeId,
+          scheduledAt,
+          excludeAppointmentId: appointmentId
+        });
+        if (!reservation) {
+          return reply.code(409).send(envelope({ error: "Appointment slot is not available" }, request.id));
+        }
+        slotCapacityToken = reservation.slotCapacityToken;
+      }
+    }
+
     const result = await scope.db.query(
       `update pulso_iris.appointments set
          status = coalesce($3, status),
          scheduled_at = coalesce($4, scheduled_at),
          site_id = coalesce($5, site_id),
          professional_id = coalesce($6, professional_id),
+         slot_capacity_token = coalesce($7, slot_capacity_token),
          updated_at = now()
        where tenant_id = $1 and id = $2
        returning ${APPOINTMENT_COLUMNS}`,
@@ -309,7 +403,8 @@ export const registerOperationsRoutes: RouteRegistrar = (app, context) => {
         input.status ?? null,
         input.scheduledAt ?? null,
         input.siteId ?? null,
-        input.professionalId ?? null
+        input.professionalId ?? null,
+        slotCapacityToken
       ]
     );
 

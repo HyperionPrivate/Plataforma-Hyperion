@@ -2,6 +2,7 @@ import { CalendarClock, PauseCircle, PlayCircle, Plus, RefreshCw, Server } from 
 import { useCallback, useEffect, useState } from "react";
 import type {
   OperatorListItem,
+  PulsoIrisAgendaBlock,
   PulsoIrisAvailabilityRule,
   PulsoIrisAppointmentType,
   PulsoIrisPayer,
@@ -513,10 +514,12 @@ function TypesTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean 
 
 function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: boolean }) {
   const rulesPath = tenantPath(tenantId, "config/availability-rules");
+  const blocksPath = tenantPath(tenantId, "config/agenda-blocks");
   const sitesPath = tenantPath(tenantId, "config/sites");
   const professionalsPath = tenantPath(tenantId, "config/professionals");
   const typesPath = tenantPath(tenantId, "config/appointment-types");
   const rules = useCatalog<PulsoIrisAvailabilityRule>(rulesPath);
+  const blocks = useCatalog<PulsoIrisAgendaBlock>(blocksPath);
   const sites = useCatalog<PulsoIrisSite>(sitesPath);
   const professionals = useCatalog<PulsoIrisProfessional>(professionalsPath);
   const appointmentTypes = useCatalog<PulsoIrisAppointmentType>(typesPath);
@@ -529,6 +532,10 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
   const [slotDurationMin, setSlotDurationMin] = useState("20");
   const [capacity, setCapacity] = useState("1");
   const [saving, setSaving] = useState(false);
+  const [blockStartsAt, setBlockStartsAt] = useState(() => defaultLocalDateTime(8));
+  const [blockEndsAt, setBlockEndsAt] = useState(() => defaultLocalDateTime(9));
+  const [blockReason, setBlockReason] = useState("");
+  const [savingBlock, setSavingBlock] = useState(false);
 
   useEffect(() => {
     if (!siteId && sites.items[0]) setSiteId(sites.items[0].id);
@@ -560,130 +567,238 @@ function AvailabilityTab({ tenantId, canWrite }: { tenantId: string; canWrite: b
     }
   };
 
-  const loading = rules.loading || sites.loading || professionals.loading || appointmentTypes.loading;
-  const error = rules.error ?? sites.error ?? professionals.error ?? appointmentTypes.error;
+  const addBlock = async () => {
+    if (!blockReason.trim()) return;
+    setSavingBlock(true);
+    try {
+      await api.post(blocksPath, {
+        siteId: siteId || undefined,
+        professionalId: professionalId || undefined,
+        appointmentTypeId: appointmentTypeId || undefined,
+        startsAt: new Date(blockStartsAt).toISOString(),
+        endsAt: new Date(blockEndsAt).toISOString(),
+        reason: blockReason
+      });
+      setBlockReason("");
+      blocks.reload();
+    } finally {
+      setSavingBlock(false);
+    }
+  };
+
+  const loading = rules.loading || blocks.loading || sites.loading || professionals.loading || appointmentTypes.loading;
+  const error = rules.error ?? blocks.error ?? sites.error ?? professionals.error ?? appointmentTypes.error;
   const canCreate = canWrite && siteId && professionalId && appointmentTypeId;
 
   return (
-    <Card>
-      <CardHead
-        title={`Reglas de disponibilidad (${rules.items.length})`}
-        icon={<CalendarClock size={18} />}
-        trailing={<ReloadButton onClick={rules.reload} />}
-      />
-      {canWrite ? (
-        <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
-          <select className="select" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
-            {sites.items.map((site) => (
-              <option key={site.id} value={site.id}>
-                {site.name}
-              </option>
-            ))}
-          </select>
-          <select className="select" value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
-            {professionals.items.map((professional) => (
-              <option key={professional.id} value={professional.id}>
-                {professional.name}
-              </option>
-            ))}
-          </select>
-          <select className="select" value={appointmentTypeId} onChange={(e) => setAppointmentTypeId(e.target.value)}>
-            {appointmentTypes.items.map((type) => (
-              <option key={type.id} value={type.id}>
-                {type.name}
-              </option>
-            ))}
-          </select>
-          <select className="select" value={weekday} onChange={(e) => setWeekday(e.target.value)}>
-            {WEEKDAYS.map((day) => (
-              <option key={day.value} value={day.value}>
-                {day.label}
-              </option>
-            ))}
-          </select>
-          <input
-            className="input"
-            type="time"
-            value={startsAt}
-            onChange={(e) => setStartsAt(e.target.value)}
-            style={{ maxWidth: 112 }}
-          />
-          <input
-            className="input"
-            type="time"
-            value={endsAt}
-            onChange={(e) => setEndsAt(e.target.value)}
-            style={{ maxWidth: 112 }}
-          />
-          <input
-            className="input"
-            type="number"
-            min={5}
-            value={slotDurationMin}
-            onChange={(e) => setSlotDurationMin(e.target.value)}
-            style={{ maxWidth: 92 }}
-          />
-          <input
-            className="input"
-            type="number"
-            min={1}
-            value={capacity}
-            onChange={(e) => setCapacity(e.target.value)}
-            style={{ maxWidth: 92 }}
-          />
-          <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving || !canCreate}>
-            <Plus size={15} /> Agregar
-          </button>
-        </div>
-      ) : null}
-      {loading ? (
-        <LoadingState />
-      ) : error ? (
-        <div className="banner">{error}</div>
-      ) : rules.items.length === 0 ? (
-        <EmptyState label="Sin reglas de disponibilidad" />
-      ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Dia</th>
-              <th>Horario</th>
-              <th>Sede</th>
-              <th>Profesional</th>
-              <th>Tipo de cita</th>
-              <th>Capacidad</th>
-              <th>Estado</th>
-              {canWrite ? <th>Acciones</th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {rules.items.map((rule) => (
-              <tr key={rule.id}>
-                <td className="small">{weekdayLabel(rule.weekday)}</td>
-                <td>
-                  <strong className="small">
-                    {shortTime(rule.startsAt)} - {shortTime(rule.endsAt)}
-                  </strong>
-                  <div className="tiny muted">{rule.slotDurationMin} min por slot</div>
-                </td>
-                <td className="small muted">{siteById.get(rule.siteId) ?? rule.siteId}</td>
-                <td className="small muted">{professionalById.get(rule.professionalId) ?? rule.professionalId}</td>
-                <td className="small muted">{typeById.get(rule.appointmentTypeId) ?? rule.appointmentTypeId}</td>
-                <td className="small muted">{rule.capacity}</td>
-                <td>
-                  <Pill tone={rule.status === "active" ? "green" : "amber"}>{rule.status}</Pill>
-                </td>
-                {canWrite ? (
-                  <td>
-                    <StatusToggle path={rulesPath} id={rule.id} status={rule.status} onDone={rules.reload} />
-                  </td>
-                ) : null}
+    <div className="col" style={{ gap: 16 }}>
+      <Card>
+        <CardHead
+          title={`Reglas de disponibilidad (${rules.items.length})`}
+          icon={<CalendarClock size={18} />}
+          trailing={<ReloadButton onClick={rules.reload} />}
+        />
+        {canWrite ? (
+          <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+            <select className="select" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+              {sites.items.map((site) => (
+                <option key={site.id} value={site.id}>
+                  {site.name}
+                </option>
+              ))}
+            </select>
+            <select className="select" value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
+              {professionals.items.map((professional) => (
+                <option key={professional.id} value={professional.id}>
+                  {professional.name}
+                </option>
+              ))}
+            </select>
+            <select className="select" value={appointmentTypeId} onChange={(e) => setAppointmentTypeId(e.target.value)}>
+              {appointmentTypes.items.map((type) => (
+                <option key={type.id} value={type.id}>
+                  {type.name}
+                </option>
+              ))}
+            </select>
+            <select className="select" value={weekday} onChange={(e) => setWeekday(e.target.value)}>
+              {WEEKDAYS.map((day) => (
+                <option key={day.value} value={day.value}>
+                  {day.label}
+                </option>
+              ))}
+            </select>
+            <input
+              className="input"
+              type="time"
+              value={startsAt}
+              onChange={(e) => setStartsAt(e.target.value)}
+              style={{ maxWidth: 112 }}
+            />
+            <input
+              className="input"
+              type="time"
+              value={endsAt}
+              onChange={(e) => setEndsAt(e.target.value)}
+              style={{ maxWidth: 112 }}
+            />
+            <input
+              className="input"
+              type="number"
+              min={5}
+              value={slotDurationMin}
+              onChange={(e) => setSlotDurationMin(e.target.value)}
+              style={{ maxWidth: 92 }}
+            />
+            <input
+              className="input"
+              type="number"
+              min={1}
+              value={capacity}
+              onChange={(e) => setCapacity(e.target.value)}
+              style={{ maxWidth: 92 }}
+            />
+            <button className="btn btn-primary btn-sm" type="button" onClick={add} disabled={saving || !canCreate}>
+              <Plus size={15} /> Agregar
+            </button>
+          </div>
+        ) : null}
+        {loading ? (
+          <LoadingState />
+        ) : error ? (
+          <div className="banner">{error}</div>
+        ) : rules.items.length === 0 ? (
+          <EmptyState label="Sin reglas de disponibilidad" />
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Dia</th>
+                <th>Horario</th>
+                <th>Sede</th>
+                <th>Profesional</th>
+                <th>Tipo de cita</th>
+                <th>Capacidad</th>
+                <th>Estado</th>
+                {canWrite ? <th>Acciones</th> : null}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Card>
+            </thead>
+            <tbody>
+              {rules.items.map((rule) => (
+                <tr key={rule.id}>
+                  <td className="small">{weekdayLabel(rule.weekday)}</td>
+                  <td>
+                    <strong className="small">
+                      {shortTime(rule.startsAt)} - {shortTime(rule.endsAt)}
+                    </strong>
+                    <div className="tiny muted">{rule.slotDurationMin} min por slot</div>
+                  </td>
+                  <td className="small muted">{siteById.get(rule.siteId) ?? rule.siteId}</td>
+                  <td className="small muted">{professionalById.get(rule.professionalId) ?? rule.professionalId}</td>
+                  <td className="small muted">{typeById.get(rule.appointmentTypeId) ?? rule.appointmentTypeId}</td>
+                  <td className="small muted">{rule.capacity}</td>
+                  <td>
+                    <Pill tone={rule.status === "active" ? "green" : "amber"}>{rule.status}</Pill>
+                  </td>
+                  {canWrite ? (
+                    <td>
+                      <StatusToggle path={rulesPath} id={rule.id} status={rule.status} onDone={rules.reload} />
+                    </td>
+                  ) : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card>
+        <CardHead
+          title={`Bloqueos de agenda (${blocks.items.length})`}
+          trailing={<ReloadButton onClick={blocks.reload} />}
+        />
+        {canWrite ? (
+          <div className="card-pad row" style={{ gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+            <input
+              className="input"
+              type="datetime-local"
+              value={blockStartsAt}
+              onChange={(e) => setBlockStartsAt(e.target.value)}
+              style={{ maxWidth: 190 }}
+            />
+            <input
+              className="input"
+              type="datetime-local"
+              value={blockEndsAt}
+              onChange={(e) => setBlockEndsAt(e.target.value)}
+              style={{ maxWidth: 190 }}
+            />
+            <input
+              className="input"
+              placeholder="Motivo"
+              value={blockReason}
+              onChange={(e) => setBlockReason(e.target.value)}
+              style={{ maxWidth: 260 }}
+            />
+            <button className="btn btn-primary btn-sm" type="button" onClick={addBlock} disabled={savingBlock}>
+              <Plus size={15} /> Bloquear
+            </button>
+          </div>
+        ) : null}
+        {loading ? (
+          <LoadingState />
+        ) : error ? (
+          <div className="banner">{error}</div>
+        ) : blocks.items.length === 0 ? (
+          <EmptyState label="Sin bloqueos de agenda" />
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Franja</th>
+                <th>Motivo</th>
+                <th>Sede</th>
+                <th>Profesional</th>
+                <th>Tipo de cita</th>
+                <th>Estado</th>
+                {canWrite ? <th>Acciones</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {blocks.items.map((block) => (
+                <tr key={block.id}>
+                  <td>
+                    <strong className="small">{formatBlockRange(block.startsAt, block.endsAt)}</strong>
+                  </td>
+                  <td className="small muted">{block.reason}</td>
+                  <td className="small muted">
+                    {block.siteId ? (siteById.get(block.siteId) ?? block.siteId) : "Todas"}
+                  </td>
+                  <td className="small muted">
+                    {block.professionalId
+                      ? (professionalById.get(block.professionalId) ?? block.professionalId)
+                      : "Todos"}
+                  </td>
+                  <td className="small muted">
+                    {block.appointmentTypeId
+                      ? (typeById.get(block.appointmentTypeId) ?? block.appointmentTypeId)
+                      : "Todos"}
+                  </td>
+                  <td>
+                    <Pill tone={block.status === "active" ? "green" : "amber"}>{block.status}</Pill>
+                  </td>
+                  {canWrite ? (
+                    <td>
+                      <BlockStatusToggle path={blocksPath} block={block} onDone={blocks.reload} />
+                    </td>
+                  ) : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
   );
 }
 
@@ -882,12 +997,56 @@ function StatusToggle({
   );
 }
 
+function BlockStatusToggle({ path, block, onDone }: { path: string; block: PulsoIrisAgendaBlock; onDone: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const nextStatus = block.status === "active" ? "cancelled" : "active";
+
+  const toggle = async () => {
+    setSaving(true);
+    try {
+      await api.patch(`${path}/${block.id}`, { status: nextStatus });
+      onDone();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button className="btn btn-outline btn-sm" type="button" onClick={toggle} disabled={saving}>
+      {nextStatus === "cancelled" ? <PauseCircle size={15} /> : <PlayCircle size={15} />}
+      {nextStatus === "cancelled" ? "Cancelar" : "Activar"}
+    </button>
+  );
+}
+
 function weekdayLabel(value: number): string {
   return WEEKDAYS.find((day) => day.value === value)?.label ?? String(value);
 }
 
 function shortTime(value: string): string {
   return value.slice(0, 5);
+}
+
+function defaultLocalDateTime(hour: number): string {
+  const date = new Date();
+  date.setHours(hour, 0, 0, 0);
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function formatBlockRange(startsAt: string, endsAt: string): string {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  return `${start.toLocaleDateString("es-CO", {
+    month: "short",
+    day: "2-digit"
+  })} ${start.toLocaleTimeString("es-CO", {
+    hour: "2-digit",
+    minute: "2-digit"
+  })} - ${end.toLocaleTimeString("es-CO", {
+    hour: "2-digit",
+    minute: "2-digit"
+  })}`;
 }
 
 function ReloadButton({ onClick }: { onClick: () => void }) {

@@ -11,6 +11,7 @@
 } from "@hyperion/contracts";
 import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
+import { registerAvailabilityRoutes } from "./availability-routes.js";
 import { registerConfigRoutes } from "./config-routes.js";
 import { registerOperationsRoutes } from "./operations-routes.js";
 import { readTenantId } from "./shared.js";
@@ -22,6 +23,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 
   await registerConfigRoutes(app, context);
   await registerOperationsRoutes(app, context);
+  await registerAvailabilityRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
 
   app.get("/v1/pulso-iris/health", async (request) => {

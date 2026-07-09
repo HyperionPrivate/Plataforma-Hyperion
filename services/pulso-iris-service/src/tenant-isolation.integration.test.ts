@@ -178,6 +178,139 @@ describeIntegration("pulso-iris tenant isolation", () => {
       )
     ).rejects.toMatchObject({ code: "23503" });
   });
+
+  it("generates availability slots and consumes capacity when an appointment is registered", async () => {
+    const rule = await createRule({
+      weekday: 1,
+      startsAt: "14:00",
+      endsAt: "15:00",
+      capacity: 1
+    });
+    expect(rule.statusCode).toBe(201);
+
+    const before = await app.inject({
+      method: "GET",
+      url:
+        `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
+        `?from=2026-09-14T18:30:00.000Z&to=2026-09-14T20:00:00.000Z` +
+        `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}`
+    });
+    expect(before.statusCode).toBe(200);
+    expect(before.json().data.slots[0]).toMatchObject({
+      startsAt: "2026-09-14T19:00:00.000Z",
+      capacity: 1,
+      booked: 0,
+      remaining: 1,
+      status: "available"
+    });
+
+    const appointment = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/appointments`,
+      payload: {
+        patientId: patientA,
+        siteId: siteA,
+        professionalId: professionalA,
+        payerId: payerA,
+        appointmentTypeId: typeA,
+        scheduledAt: "2026-09-14T19:00:00.000Z",
+        origin: "advisor"
+      }
+    });
+    expect(appointment.statusCode).toBe(201);
+
+    const full = await app.inject({
+      method: "GET",
+      url:
+        `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
+        `?from=2026-09-14T18:30:00.000Z&to=2026-09-14T20:00:00.000Z` +
+        `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}&includeFull=true`
+    });
+    const consumed = full
+      .json()
+      .data.slots.find((slot: { startsAt: string }) => slot.startsAt === "2026-09-14T19:00:00.000Z");
+    expect(consumed).toMatchObject({ booked: 1, remaining: 0, status: "full" });
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/appointments`,
+      payload: {
+        patientId: patientA,
+        siteId: siteA,
+        professionalId: professionalA,
+        payerId: payerA,
+        appointmentTypeId: typeA,
+        scheduledAt: "2026-09-14T19:00:00.000Z",
+        origin: "advisor"
+      }
+    });
+    expect(duplicate.statusCode).toBe(409);
+  });
+
+  it("rejects scheduled appointments outside configured availability", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/appointments`,
+      payload: {
+        patientId: patientA,
+        siteId: siteA,
+        professionalId: professionalA,
+        payerId: payerA,
+        appointmentTypeId: typeA,
+        scheduledAt: "2026-09-17T15:40:00.000Z"
+      }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().data.error).toContain("not available");
+  });
+
+  it("excludes active agenda blocks from generated slots", async () => {
+    const rule = await createRule({
+      weekday: 1,
+      startsAt: "15:00",
+      endsAt: "16:00",
+      capacity: 1
+    });
+    expect(rule.statusCode).toBe(201);
+
+    const block = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/agenda-blocks`,
+      payload: {
+        siteId: siteA,
+        professionalId: professionalA,
+        appointmentTypeId: typeA,
+        startsAt: "2026-09-14T20:00:00.000Z",
+        endsAt: "2026-09-14T20:20:00.000Z",
+        reason: "Ausencia profesional"
+      }
+    });
+    expect(block.statusCode).toBe(201);
+
+    const slots = await app.inject({
+      method: "GET",
+      url:
+        `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
+        `?from=2026-09-14T19:30:00.000Z&to=2026-09-14T21:00:00.000Z` +
+        `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}`
+    });
+    expect(slots.statusCode).toBe(200);
+    const starts = slots.json().data.slots.map((slot: { startsAt: string }) => slot.startsAt);
+    expect(starts).not.toContain("2026-09-14T20:00:00.000Z");
+    expect(starts).toContain("2026-09-14T20:20:00.000Z");
+  });
+
+  it("rejects direct SQL cross-tenant agenda block inserts with composite foreign keys", async () => {
+    await expect(
+      client.query(
+        `insert into pulso_iris.agenda_blocks
+           (tenant_id, site_id, professional_id, appointment_type_id, starts_at, ends_at, reason)
+         values ($1, $2, $3, $4, '2026-09-14T20:00:00Z', '2026-09-14T20:20:00Z', 'cross tenant')`,
+        [tenantA, siteB, professionalA, typeA]
+      )
+    ).rejects.toMatchObject({ code: "23503" });
+  });
 });
 
 async function resetTenantFixtures(): Promise<void> {
@@ -242,4 +375,26 @@ async function createCoreCatalog(
     appointmentTypeId: appointmentType.rows[0]!.id,
     conversationId: conversation.rows[0]!.id
   };
+}
+
+async function createRule(input: {
+  weekday: number;
+  startsAt: string;
+  endsAt: string;
+  capacity: number;
+}): Promise<Awaited<ReturnType<typeof app.inject>>> {
+  return app.inject({
+    method: "POST",
+    url: `/v1/tenants/${tenantA}/pulso-iris/config/availability-rules`,
+    payload: {
+      siteId: siteA,
+      professionalId: professionalA,
+      appointmentTypeId: typeA,
+      weekday: input.weekday,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      slotDurationMin: 20,
+      capacity: input.capacity
+    }
+  });
 }

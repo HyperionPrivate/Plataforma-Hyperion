@@ -1,5 +1,7 @@
 import {
   envelope,
+  pulsoIrisAgendaBlockInputSchema,
+  pulsoIrisAgendaBlockListSchema,
   pulsoIrisAvailabilityRuleInputSchema,
   pulsoIrisAvailabilityRuleListSchema,
   pulsoIrisAppointmentTypeInputSchema,
@@ -86,6 +88,20 @@ const AVAILABILITY_RULE_COLUMNS = `
   effective_to::text as "effectiveTo",
   status,
   notes,
+  created_at as "createdAt",
+  updated_at as "updatedAt"
+`;
+
+const AGENDA_BLOCK_COLUMNS = `
+  id,
+  tenant_id as "tenantId",
+  site_id as "siteId",
+  professional_id as "professionalId",
+  appointment_type_id as "appointmentTypeId",
+  starts_at as "startsAt",
+  ends_at as "endsAt",
+  reason,
+  status,
   created_at as "createdAt",
   updated_at as "updatedAt"
 `;
@@ -501,6 +517,123 @@ export const registerConfigRoutes: RouteRegistrar = (app, context) => {
       return sendDatabaseConfigError(error, reply, request.id);
     }
   });
+
+  // ----- Bloqueos y excepciones de agenda -----
+
+  app.get(`${base}/agenda-blocks`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+
+    const result = await scope.db.query(
+      `select ${AGENDA_BLOCK_COLUMNS}
+       from pulso_iris.agenda_blocks
+       where tenant_id = $1
+       order by starts_at desc
+       limit 200`,
+      [scope.tenantId]
+    );
+    return envelope(pulsoIrisAgendaBlockListSchema.parse(result.rows), request.id);
+  });
+
+  app.post(`${base}/agenda-blocks`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const input = parseBody(pulsoIrisAgendaBlockInputSchema, request, reply);
+    if (!input) return;
+
+    if (!isDateTimeRange(input.startsAt, input.endsAt)) {
+      return reply.code(400).send(envelope({ error: "endsAt must be after startsAt" }, request.id));
+    }
+
+    const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" },
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.appointmentTypeId, table: "pulso_iris.appointment_types", label: "appointmentTypeId" }
+    ]);
+    if (referenceError) {
+      return sendReferenceError(reply, request, referenceError.label);
+    }
+
+    try {
+      const result = await scope.db.query(
+        `insert into pulso_iris.agenda_blocks
+           (tenant_id, site_id, professional_id, appointment_type_id, starts_at, ends_at, reason, status)
+         values ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7, coalesce($8, 'active'))
+         returning ${AGENDA_BLOCK_COLUMNS}`,
+        [
+          scope.tenantId,
+          input.siteId ?? null,
+          input.professionalId ?? null,
+          input.appointmentTypeId ?? null,
+          input.startsAt,
+          input.endsAt,
+          input.reason,
+          input.status ?? null
+        ]
+      );
+      return reply.code(201).send(envelope(pulsoIrisAgendaBlockListSchema.parse(result.rows)[0], request.id));
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
+
+  app.patch(`${base}/agenda-blocks/:blockId`, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const blockId = readUuidParam(request.params, "blockId");
+    if (!blockId) {
+      return reply.code(400).send(envelope({ error: "blockId must be a UUID" }, request.id));
+    }
+    const input = parseBody(pulsoIrisAgendaBlockInputSchema.partial(), request, reply);
+    if (!input) return;
+
+    if (input.startsAt && input.endsAt && !isDateTimeRange(input.startsAt, input.endsAt)) {
+      return reply.code(400).send(envelope({ error: "endsAt must be after startsAt" }, request.id));
+    }
+
+    const referenceError = await ensureTenantReferences(scope.db, scope.tenantId, [
+      { id: input.siteId, table: "pulso_iris.sites", label: "siteId" },
+      { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
+      { id: input.appointmentTypeId, table: "pulso_iris.appointment_types", label: "appointmentTypeId" }
+    ]);
+    if (referenceError) {
+      return sendReferenceError(reply, request, referenceError.label);
+    }
+
+    try {
+      const result = await scope.db.query(
+        `update pulso_iris.agenda_blocks set
+           site_id = coalesce($3, site_id),
+           professional_id = coalesce($4, professional_id),
+           appointment_type_id = coalesce($5, appointment_type_id),
+           starts_at = coalesce($6::timestamptz, starts_at),
+           ends_at = coalesce($7::timestamptz, ends_at),
+           reason = coalesce($8, reason),
+           status = coalesce($9, status),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${AGENDA_BLOCK_COLUMNS}`,
+        [
+          scope.tenantId,
+          blockId,
+          input.siteId ?? null,
+          input.professionalId ?? null,
+          input.appointmentTypeId ?? null,
+          input.startsAt ?? null,
+          input.endsAt ?? null,
+          input.reason ?? null,
+          input.status ?? null
+        ]
+      );
+
+      if (result.rows.length === 0) {
+        return reply.code(404).send(envelope({ error: "Agenda block not found" }, request.id));
+      }
+      return envelope(pulsoIrisAgendaBlockListSchema.parse(result.rows)[0], request.id);
+    } catch (error) {
+      return sendDatabaseConfigError(error, reply, request.id);
+    }
+  });
 };
 
 function isTimeRange(startsAt: string, endsAt: string): boolean {
@@ -510,6 +643,10 @@ function isTimeRange(startsAt: string, endsAt: string): boolean {
 function toMinutes(value: string): number {
   const [hours = "0", minutes = "0"] = value.split(":");
   return Number(hours) * 60 + Number(minutes);
+}
+
+function isDateTimeRange(startsAt: string, endsAt: string): boolean {
+  return new Date(endsAt).getTime() > new Date(startsAt).getTime();
 }
 
 function sendDatabaseConfigError(error: unknown, reply: FastifyReply, requestId: string) {
