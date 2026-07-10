@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { chmod, mkdir, readdir, rm } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import makeWASocket, {
+  areJidsSameUser,
   DisconnectReason,
   useMultiFileAuthState,
   type AuthenticationState,
@@ -61,6 +62,12 @@ interface SocketEvents {
 export interface WhatsAppSocket {
   ev: SocketEvents;
   user?: { id?: string | null };
+  signalRepository?: {
+    lidMapping: {
+      getLIDForPN(phoneJid: string): Promise<string | null>;
+      getPNForLID(lid: string): Promise<string | null>;
+    };
+  };
   sendMessage(address: string, content: { text: string }): Promise<{ key: { id?: string | null } } | undefined>;
   logout(): Promise<void>;
   end(error?: Error): void;
@@ -106,6 +113,7 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
   readonly mode = WHATSAPP_PROVIDER_MODE;
   private readonly connections = new Map<string, TenantConnection>();
   private readonly rateWindows = new Map<string, number[]>();
+  private readonly reportedDiagnostics = new Set<string>();
   private readonly allowedPhoneHashes: ReadonlySet<string>;
   private inboundHandler: (message: WhatsAppInboundText) => Promise<void> = async () => undefined;
   private statusHandler: (tenantId: string, status: WhatsAppConnectionStatus) => Promise<void> = async () => undefined;
@@ -113,7 +121,8 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
 
   constructor(
     private readonly config: WhatsAppProviderConfig,
-    private readonly runtime: BaileysRuntime = createBaileysRuntime()
+    private readonly runtime: BaileysRuntime = createBaileysRuntime(),
+    private readonly reportIgnored: (reason: string, metadata: Record<string, unknown>) => void = () => undefined
   ) {
     this.allowedPhoneHashes = new Set([...config.allowedNumbers].map((number) => this.hashPhone(number)));
   }
@@ -255,6 +264,7 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
   }
 
   private async openSocket(tenantId: string, connection: TenantConnection): Promise<void> {
+    this.resetDiagnostics(tenantId);
     const generation = connection.generation + 1;
     connection.generation = generation;
     connection.qr = undefined;
@@ -312,6 +322,7 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     if (update.connection === "open") {
       connection.qr = undefined;
       connection.reconnectAttempts = 0;
+      this.prewarmAllowedLidMappings(connection);
       await this.updateStatus(tenantId, {
         ...connection.status,
         state: "ready",
@@ -361,6 +372,14 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     connection.reconnectTimer.unref();
   }
 
+  private prewarmAllowedLidMappings(connection: TenantConnection): void {
+    const lidMapping = connection.socket?.signalRepository?.lidMapping;
+    if (!lidMapping) return;
+    for (const allowedNumber of this.config.allowedNumbers) {
+      void lidMapping.getLIDForPN(`${allowedNumber}@s.whatsapp.net`).catch(() => undefined);
+    }
+  }
+
   private prepareReplacementSocket(connection: TenantConnection): void {
     if (connection.reconnectTimer) {
       clearTimeout(connection.reconnectTimer);
@@ -374,11 +393,19 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
   }
 
   private async handleMessages(tenantId: string, connection: TenantConnection, event: MessageUpsert): Promise<void> {
-    if (event.type !== "notify") return;
+    if (event.type !== "notify") {
+      this.reportIgnoredOnce(tenantId, "unsupported_event_type", {
+        eventType: safeEventType(event.type)
+      });
+      return;
+    }
     for (const message of event.messages) {
-      const accepted = this.parseIncoming(tenantId, message);
+      const accepted = await this.parseIncoming(tenantId, connection, message);
       if (!accepted) continue;
-      if (!this.takeRateLimit(tenantId, accepted.providerAddress)) continue;
+      if (!this.takeRateLimit(tenantId, accepted.providerAddress)) {
+        this.reportIgnoredOnce(tenantId, "conversation_rate_limited", {});
+        continue;
+      }
       try {
         await this.inboundHandler(accepted);
         connection.status = {
@@ -397,16 +424,44 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     }
   }
 
-  private parseIncoming(tenantId: string, message: IncomingMessage): WhatsAppInboundText | undefined {
-    if (message.key.fromMe) return undefined;
+  private async parseIncoming(
+    tenantId: string,
+    connection: TenantConnection,
+    message: IncomingMessage
+  ): Promise<WhatsAppInboundText | undefined> {
+    if (message.key.fromMe) {
+      this.reportIgnoredOnce(tenantId, "own_message", {});
+      return undefined;
+    }
     const providerAddress = message.key.remoteJid ?? undefined;
-    if (!providerAddress || !isIndividualAddress(providerAddress)) return undefined;
-    const allowedNumber = authorizedNumber(message.key, this.config.allowedNumbers);
-    if (!allowedNumber) return undefined;
+    if (!providerAddress || !isIndividualAddress(providerAddress)) {
+      this.reportIgnoredOnce(tenantId, "unsupported_address", {
+        addressKind: addressKind(providerAddress)
+      });
+      return undefined;
+    }
+    const allowedNumber = await authorizedNumber(message.key, this.config.allowedNumbers, connection.socket);
+    if (!allowedNumber) {
+      this.reportIgnoredOnce(tenantId, "unauthorized_sender", {
+        addressKind: addressKind(providerAddress),
+        hasPhoneAlternate: hasPhoneAlternate(message.key),
+        lidResolverAvailable: Boolean(connection.socket?.signalRepository?.lidMapping)
+      });
+      return undefined;
+    }
     const body = extractPlainText(message.message)?.trim();
-    if (!body || body.length > this.config.maxMessageLength) return undefined;
+    if (!body || body.length > this.config.maxMessageLength) {
+      this.reportIgnoredOnce(tenantId, "unsupported_payload", {
+        payloadKinds: safePayloadKinds(message.message),
+        overLength: Boolean(body && body.length > this.config.maxMessageLength)
+      });
+      return undefined;
+    }
     const externalMessageId = message.key.id?.trim();
-    if (!externalMessageId) return undefined;
+    if (!externalMessageId) {
+      this.reportIgnoredOnce(tenantId, "missing_message_id", {});
+      return undefined;
+    }
     return {
       tenantId,
       provider: WHATSAPP_PROVIDER_MODE,
@@ -417,6 +472,25 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
       body,
       receivedAt: messageTimestamp(message.messageTimestamp)
     };
+  }
+
+  private reportIgnoredOnce(tenantId: string, reason: string, metadata: Record<string, unknown>): void {
+    const dimension = String(metadata.addressKind ?? metadata.eventType ?? "default");
+    const key = `${tenantId}:${reason}:${dimension}`;
+    if (this.reportedDiagnostics.has(key)) return;
+    this.reportedDiagnostics.add(key);
+    try {
+      this.reportIgnored(reason, metadata);
+    } catch {
+      // Diagnostics must never change channel behavior.
+    }
+  }
+
+  private resetDiagnostics(tenantId: string): void {
+    const prefix = `${tenantId}:`;
+    for (const key of this.reportedDiagnostics) {
+      if (key.startsWith(prefix)) this.reportedDiagnostics.delete(key);
+    }
   }
 
   private takeRateLimit(tenantId: string, providerAddress: string): boolean {
@@ -532,23 +606,72 @@ function isIndividualAddress(address: string): boolean {
   return address.endsWith("@s.whatsapp.net") || address.endsWith("@lid");
 }
 
+const NON_CONTENT_MESSAGE_KEYS = new Set(["messageContextInfo", "senderKeyDistributionMessage"]);
+
 function extractPlainText(message: IncomingMessage["message"]): string | undefined {
   if (!message) return undefined;
-  const keys = Object.keys(message).filter((key) => message[key] != null);
+  const keys = Object.keys(message).filter((key) => message[key] != null && !NON_CONTENT_MESSAGE_KEYS.has(key));
   if (keys.length !== 1) return undefined;
   if (keys[0] === "conversation") return message.conversation ?? undefined;
   if (keys[0] === "extendedTextMessage") return message.extendedTextMessage?.text ?? undefined;
   return undefined;
 }
 
-function authorizedNumber(key: IncomingMessage["key"], allowedNumbers: ReadonlySet<string>): string | undefined {
+async function authorizedNumber(
+  key: IncomingMessage["key"],
+  allowedNumbers: ReadonlySet<string>,
+  socket: WhatsAppSocket | undefined
+): Promise<string | undefined> {
   const candidates = [key.remoteJidAlt, key.participantAlt, key.remoteJid, key.participant];
   for (const candidate of candidates) {
     if (!candidate || !candidate.endsWith("@s.whatsapp.net")) continue;
     const number = candidate.slice(0, candidate.indexOf("@")).split(":")[0];
     if (number && allowedNumbers.has(number)) return number;
   }
+
+  const lidCandidates = candidates.filter((candidate): candidate is string => Boolean(candidate?.endsWith("@lid")));
+  const lidMapping = socket?.signalRepository?.lidMapping;
+  if (!lidMapping || lidCandidates.length === 0) return undefined;
+  for (const lid of lidCandidates) {
+    const phoneJid = await lidMapping.getPNForLID(lid).catch(() => null);
+    const phoneNumber = phoneJid?.endsWith("@s.whatsapp.net")
+      ? phoneJid.slice(0, phoneJid.indexOf("@")).split(":")[0]
+      : undefined;
+    if (phoneNumber && allowedNumbers.has(phoneNumber)) return phoneNumber;
+  }
+  for (const allowedNumber of allowedNumbers) {
+    const allowedLid = await lidMapping.getLIDForPN(`${allowedNumber}@s.whatsapp.net`).catch(() => null);
+    if (allowedLid && lidCandidates.some((candidate) => areJidsSameUser(candidate, allowedLid))) {
+      return allowedNumber;
+    }
+  }
   return undefined;
+}
+
+function hasPhoneAlternate(key: IncomingMessage["key"]): boolean {
+  return [key.remoteJidAlt, key.participantAlt].some((candidate) => candidate?.endsWith("@s.whatsapp.net"));
+}
+
+function addressKind(address: string | undefined): "pn" | "lid" | "group" | "broadcast" | "other" | "missing" {
+  if (!address) return "missing";
+  if (address.endsWith("@s.whatsapp.net")) return "pn";
+  if (address.endsWith("@lid")) return "lid";
+  if (address.endsWith("@g.us")) return "group";
+  if (address.endsWith("@broadcast")) return "broadcast";
+  return "other";
+}
+
+function safePayloadKinds(message: IncomingMessage["message"]): string[] {
+  return message
+    ? Object.keys(message)
+        .filter((key) => message[key] != null)
+        .sort()
+        .slice(0, 8)
+    : [];
+}
+
+function safeEventType(value: string | undefined): string {
+  return value && /^[a-z_]{1,24}$/i.test(value) ? value : "unknown";
 }
 
 function maskProviderId(id: string | null | undefined): string | undefined {

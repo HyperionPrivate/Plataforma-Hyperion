@@ -41,7 +41,9 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     internalServiceToken: context.config.internalServiceToken
   };
   if (context.db) {
-    const provider = new BaileysWhatsAppWebTestProvider(readWhatsAppProviderConfig());
+    const provider = new BaileysWhatsAppWebTestProvider(readWhatsAppProviderConfig(), undefined, (reason, metadata) =>
+      context.logger.info("whatsapp inbound ignored", { reason, ...metadata })
+    );
     const repository = new PostgresChannelRepository(context.db);
     const channel = new WhatsAppChannelService(
       provider,

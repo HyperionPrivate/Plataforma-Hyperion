@@ -62,6 +62,15 @@ describe("BaileysWhatsAppWebTestProvider", () => {
       ...messageEvent(ADDRESS, "history", "old"),
       type: "append"
     });
+    await socket.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "mixed-content", remoteJid: ADDRESS, fromMe: false },
+          message: { conversation: "ignored", imageMessage: { caption: "ignored" } }
+        }
+      ]
+    });
 
     expect(inbound).toHaveBeenCalledTimes(1);
     expect(inbound.mock.calls[0]?.[0]).toMatchObject({
@@ -72,6 +81,88 @@ describe("BaileysWhatsAppWebTestProvider", () => {
       body: "hello"
     });
     expect(inbound.mock.calls[0]?.[0].phoneHash).toMatch(/^[a-f0-9]{64}$/);
+    await provider.close();
+  });
+
+  it("uses a persisted reverse LID mapping before querying the allowed phone mapping", async () => {
+    const { runtime, socket } = createFakeRuntime(false);
+    socket.signalRepository.lidMapping.getPNForLID.mockResolvedValue(ADDRESS);
+    const provider = new BaileysWhatsAppWebTestProvider(await config(), runtime);
+    const inbound = vi.fn(async (_message: import("./types.js").WhatsAppInboundText) => undefined);
+    provider.setInboundHandler(inbound);
+    await provider.connect(TENANT_ID);
+
+    await socket.emit("messages.upsert", messageEvent("987654321@lid", "reverse-lid", "hello"));
+
+    expect(inbound).toHaveBeenCalledTimes(1);
+    expect(socket.signalRepository.lidMapping.getPNForLID).toHaveBeenCalledWith("987654321@lid");
+    expect(socket.signalRepository.lidMapping.getLIDForPN).not.toHaveBeenCalled();
+    await provider.close();
+  });
+
+  it("rejects a LID that maps to a sender outside the allowlist", async () => {
+    const { runtime, socket } = createFakeRuntime(false);
+    socket.signalRepository.lidMapping.getPNForLID.mockResolvedValue("573009999999@s.whatsapp.net");
+    socket.signalRepository.lidMapping.getLIDForPN.mockResolvedValue("111111111@lid");
+    const provider = new BaileysWhatsAppWebTestProvider(await config(), runtime);
+    const inbound = vi.fn(async (_message: import("./types.js").WhatsAppInboundText) => undefined);
+    provider.setInboundHandler(inbound);
+    await provider.connect(TENANT_ID);
+
+    await socket.emit("messages.upsert", messageEvent("987654321@lid", "foreign-lid", "ignored"));
+
+    expect(inbound).not.toHaveBeenCalled();
+    await provider.close();
+  });
+
+  it("authorizes LID conversations through the allowlisted phone mapping and tolerates metadata", async () => {
+    const { runtime, socket } = createFakeRuntime(false);
+    socket.signalRepository.lidMapping.getLIDForPN.mockResolvedValue("123456789@lid");
+    const provider = new BaileysWhatsAppWebTestProvider(await config(), runtime);
+    const inbound = vi.fn(async (_message: import("./types.js").WhatsAppInboundText) => undefined);
+    provider.setInboundHandler(inbound);
+    await provider.connect(TENANT_ID);
+
+    await socket.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "lid-text", remoteJid: "123456789@lid", fromMe: false },
+          message: {
+            conversation: "hello",
+            messageContextInfo: { deviceListMetadataVersion: 2 }
+          }
+        }
+      ]
+    });
+
+    expect(inbound).toHaveBeenCalledTimes(1);
+    expect(inbound.mock.calls[0]?.[0]).toMatchObject({
+      externalMessageId: "lid-text",
+      providerAddress: "123456789@lid",
+      phoneHash: providerHash(ALLOWED),
+      body: "hello"
+    });
+    expect(socket.signalRepository.lidMapping.getLIDForPN).toHaveBeenCalledWith(ADDRESS);
+    await provider.close();
+  });
+
+  it("reports ignored input using bounded metadata without bodies or phone numbers", async () => {
+    const { runtime, socket } = createFakeRuntime(false);
+    const ignored = vi.fn();
+    const provider = new BaileysWhatsAppWebTestProvider(await config(), runtime, ignored);
+    await provider.connect(TENANT_ID);
+
+    await socket.emit("messages.upsert", messageEvent("573009999999@s.whatsapp.net", "unauthorized", "private"));
+
+    expect(ignored).toHaveBeenCalledWith("unauthorized_sender", {
+      addressKind: "pn",
+      hasPhoneAlternate: false,
+      lidResolverAvailable: true
+    });
+    const serialized = JSON.stringify(ignored.mock.calls);
+    expect(serialized).not.toContain("573009999999");
+    expect(serialized).not.toContain("private");
     await provider.close();
   });
 
@@ -107,6 +198,7 @@ describe("BaileysWhatsAppWebTestProvider", () => {
     ).rejects.toMatchObject({ name: "WhatsAppProviderNotReadyError" });
 
     await socket.emit("connection.update", { connection: "open" });
+    expect(socket.signalRepository.lidMapping.getLIDForPN).toHaveBeenCalledWith(ADDRESS);
     const sent = await provider.sendText({
       tenantId: TENANT_ID,
       providerAddress: ADDRESS,
@@ -234,6 +326,12 @@ function createFakeSocket() {
   const handlers = new Map<string, Array<(payload: never) => unknown>>();
   return {
     user: { id: `${ALLOWED}:1@s.whatsapp.net` },
+    signalRepository: {
+      lidMapping: {
+        getLIDForPN: vi.fn(async (_phoneJid: string) => null as string | null),
+        getPNForLID: vi.fn(async (_lid: string) => null as string | null)
+      }
+    },
     ev: {
       on: (event: string, handler: (payload: never) => unknown) => {
         handlers.set(event, [...(handlers.get(event) ?? []), handler]);
