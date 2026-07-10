@@ -1,0 +1,272 @@
+import { lumenClinicalRecordContentSchema, type LumenClinicalRecordContent } from "@hyperion/contracts";
+import { z } from "zod";
+
+export class ProviderNotConfiguredError extends Error {
+  constructor(provider: string) {
+    super(`${provider} is not configured`);
+    this.name = "ProviderNotConfiguredError";
+  }
+}
+
+export class ProviderRequestError extends Error {
+  constructor(provider: string, detail?: string) {
+    super(`${provider} request failed${detail ? `: ${detail}` : ""}`);
+    this.name = "ProviderRequestError";
+  }
+}
+
+export interface TranscriptionResult {
+  transcript: string;
+  provider: string;
+  model: string;
+}
+
+export interface ClinicalStructureResult {
+  content: LumenClinicalRecordContent;
+  provider: string;
+  model: string;
+}
+
+export interface ClinicalTranscriber {
+  readonly name: string;
+  readonly model: string;
+  isConfigured(): boolean;
+  transcribe(audioBase64: string, mimeType: string): Promise<TranscriptionResult>;
+}
+
+export interface ClinicalStructurer {
+  readonly name: string;
+  readonly model: string;
+  isConfigured(): boolean;
+  structure(transcript: string): Promise<ClinicalStructureResult>;
+}
+
+export class OpenAiClinicalTranscriber implements ClinicalTranscriber {
+  readonly name = "openai";
+  readonly model: string;
+  private readonly apiKey?: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: { apiKey?: string; model?: string; fetchImpl?: typeof fetch } = {}) {
+    this.apiKey = options.apiKey ?? process.env.OPENAI_API_KEY?.trim();
+    this.model = options.model ?? process.env.OPENAI_STT_MODEL ?? "gpt-4o-transcribe";
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  isConfigured(): boolean {
+    return Boolean(this.apiKey);
+  }
+
+  async transcribe(audioBase64: string, mimeType: string): Promise<TranscriptionResult> {
+    if (!this.apiKey) throw new ProviderNotConfiguredError("OpenAI STT");
+
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(audioBase64, "base64");
+    } catch {
+      throw new ProviderRequestError("OpenAI STT", "invalid audio payload");
+    }
+    if (buffer.length === 0 || buffer.length > 675_000) {
+      throw new ProviderRequestError("OpenAI STT", "audio must be between 1 byte and 675 KB");
+    }
+
+    const form = new FormData();
+    const bytes = Uint8Array.from(buffer);
+    form.append("file", new Blob([bytes], { type: mimeType }), `dictation.${audioExtension(mimeType)}`);
+    form.append("model", this.model);
+    form.append("language", "es");
+    form.append("response_format", "json");
+    form.append(
+      "prompt",
+      "Consulta de oftalmologia en español. Conservar OD, OI, AO, PIO, agudeza visual, biomicroscopia, fondo de ojo, OCT y campimetria."
+    );
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.apiKey}` },
+        body: form,
+        signal: AbortSignal.timeout(60_000)
+      });
+    } catch (error) {
+      throw new ProviderRequestError("OpenAI STT", sanitizeProviderError(error));
+    }
+
+    if (!response.ok) throw new ProviderRequestError("OpenAI STT", `status ${response.status}`);
+    const payload = z.object({ text: z.string() }).parse(await response.json());
+    const transcript = payload.text.trim();
+    if (!transcript) throw new ProviderRequestError("OpenAI STT", "empty transcript");
+    return { transcript, provider: this.name, model: this.model };
+  }
+}
+
+const deepSeekResponseSchema = z.object({
+  model: z.string().optional(),
+  choices: z
+    .array(
+      z.object({
+        message: z.object({
+          content: z.string().nullable().optional(),
+          tool_calls: z
+            .array(
+              z.object({
+                function: z.object({ name: z.string(), arguments: z.string() })
+              })
+            )
+            .optional()
+        })
+      })
+    )
+    .min(1)
+});
+
+export class DeepSeekClinicalStructurer implements ClinicalStructurer {
+  readonly name = "deepseek";
+  readonly model: string;
+  private readonly apiKey?: string;
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: { apiKey?: string; model?: string; baseUrl?: string; fetchImpl?: typeof fetch } = {}) {
+    this.apiKey = options.apiKey ?? process.env.DEEPSEEK_API_KEY?.trim();
+    this.model = options.model ?? process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
+    this.baseUrl = (options.baseUrl ?? process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com").replace(/\/$/, "");
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  isConfigured(): boolean {
+    return Boolean(this.apiKey);
+  }
+
+  async structure(transcript: string): Promise<ClinicalStructureResult> {
+    if (!this.apiKey) throw new ProviderNotConfiguredError("DeepSeek");
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            {
+              role: "system",
+              content:
+                "Eres un estructurador documental de oftalmologia. Usa solamente el transcript. No diagnostiques, no prescribas y no completes datos ausentes. Conserva lateralidad OD/OI/AO. Un dato ausente debe ser null o lista vacia. Toda ambiguedad debe aparecer en uncertainties. Devuelve exclusivamente la llamada de herramienta solicitada."
+            },
+            { role: "user", content: transcript }
+          ],
+          tools: [clinicalRecordTool],
+          tool_choice: { type: "function", function: { name: "structure_lumen_record" } },
+          thinking: { type: "disabled" },
+          stream: false
+        }),
+        signal: AbortSignal.timeout(30_000)
+      });
+    } catch (error) {
+      throw new ProviderRequestError("DeepSeek", sanitizeProviderError(error));
+    }
+
+    if (!response.ok) throw new ProviderRequestError("DeepSeek", `status ${response.status}`);
+    const payload = deepSeekResponseSchema.parse(await response.json());
+    const message = payload.choices[0]!.message;
+    const raw = message.tool_calls?.find((call) => call.function.name === "structure_lumen_record")?.function.arguments;
+    const candidate = raw ?? extractJson(message.content ?? "");
+    if (!candidate) throw new ProviderRequestError("DeepSeek", "structured output missing");
+
+    let json: unknown;
+    try {
+      json = JSON.parse(candidate);
+    } catch {
+      throw new ProviderRequestError("DeepSeek", "structured output is not JSON");
+    }
+
+    const parsed = lumenClinicalRecordContentSchema.safeParse(json);
+    if (!parsed.success) throw new ProviderRequestError("DeepSeek", "structured output failed validation");
+    return { content: parsed.data, provider: this.name, model: payload.model ?? this.model };
+  }
+}
+
+const nullableEyeText = {
+  type: "object",
+  additionalProperties: false,
+  properties: { right: { type: ["string", "null"] }, left: { type: ["string", "null"] } },
+  required: ["right", "left"]
+};
+
+const clinicalRecordTool = {
+  type: "function",
+  function: {
+    name: "structure_lumen_record",
+    description: "Estructura un dictado oftalmologico sin inferir datos ausentes.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        reasonForVisit: { type: "string" },
+        history: { type: "string" },
+        visualAcuity: nullableEyeText,
+        intraocularPressure: nullableEyeText,
+        biomicroscopy: nullableEyeText,
+        fundus: nullableEyeText,
+        assessment: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              description: { type: "string" },
+              code: { type: ["string", "null"] },
+              confidence: { type: "number", minimum: 0, maximum: 1 }
+            },
+            required: ["description", "code", "confidence"]
+          }
+        },
+        plan: { type: "array", items: { type: "string" } },
+        uncertainties: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              field: { type: "string" },
+              message: { type: "string" },
+              sourceText: { type: ["string", "null"] }
+            },
+            required: ["field", "message", "sourceText"]
+          }
+        }
+      },
+      required: [
+        "reasonForVisit",
+        "history",
+        "visualAcuity",
+        "intraocularPressure",
+        "biomicroscopy",
+        "fundus",
+        "assessment",
+        "plan",
+        "uncertainties"
+      ]
+    }
+  }
+};
+
+function audioExtension(mimeType: string): string {
+  if (mimeType.includes("ogg")) return "ogg";
+  if (mimeType.includes("wav")) return "wav";
+  if (mimeType.includes("mpeg") || mimeType.includes("mp3")) return "mp3";
+  if (mimeType.includes("mp4") || mimeType.includes("m4a")) return "m4a";
+  return "webm";
+}
+
+function extractJson(text: string): string | undefined {
+  const match = text.match(/\{[\s\S]*\}/);
+  return match?.[0];
+}
+
+function sanitizeProviderError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 160);
+}

@@ -13,6 +13,7 @@ import { ConfigPage } from "./pages/ConfigPage.js";
 import { ConversationsPage } from "./pages/ConversationsPage.js";
 import { OperationPage } from "./pages/OperationPage.js";
 import { RpaPage } from "./pages/RpaPage.js";
+import { LumenPage } from "./pages/LumenPage.js";
 
 interface TenantRow {
   id: string;
@@ -122,6 +123,7 @@ function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout:
         <Route path="/operacion" element={<OperationPage />} />
         <Route path="/conversaciones" element={<ConversationsPage />} />
         <Route path="/agenda" element={<AgendaPage />} />
+        <Route path="/lumen" element={<LumenPage />} />
         <Route path="/rpa" element={<RpaPage />} />
         <Route path="/campanas" element={<CampaignsPage />} />
         <Route path="/bi" element={<BiPage />} />

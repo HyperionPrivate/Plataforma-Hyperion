@@ -1,4 +1,15 @@
-import { Activity, BarChart3, Bot, CalendarDays, Eye, LogOut, MessagesSquare, Megaphone, Settings } from "lucide-react";
+import {
+  Activity,
+  BarChart3,
+  Bot,
+  CalendarDays,
+  Eye,
+  LogOut,
+  MessagesSquare,
+  Megaphone,
+  Settings,
+  Stethoscope
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { useConsole } from "../lib/context.js";
@@ -8,6 +19,7 @@ const NAV = [
   { to: "/operacion", label: "Operacion en vivo", icon: Activity, capability: "view:operation" },
   { to: "/conversaciones", label: "Conversaciones", icon: MessagesSquare, capability: "view:conversations" },
   { to: "/agenda", label: "Agenda", icon: CalendarDays, capability: "view:agenda" },
+  { to: "/lumen", label: "LUMEN clinico", icon: Stethoscope, capability: "view:lumen" },
   { to: "/rpa", label: "Workers RPA", icon: Bot, capability: "view:rpa" },
   { to: "/campanas", label: "Campanas", icon: Megaphone, capability: "view:campaigns" },
   { to: "/bi", label: "BI y Reportes", icon: BarChart3, capability: "view:bi" },
@@ -32,7 +44,7 @@ export function Layout({
       <aside className="sidebar">
         <div className="sidebar-brand">
           <Eye size={22} aria-hidden="true" />
-          PULSO IRIS
+          HYPERION
         </div>
         <nav className="col" style={{ gap: 4 }}>
           {NAV.filter((item) => can(session.operator.role, item.capability)).map((item) => (

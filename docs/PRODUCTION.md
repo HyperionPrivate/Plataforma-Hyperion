@@ -68,6 +68,31 @@ ventana operativa propia.
 
 Luego se verifica el log del servicio `migrations`, se despliega y se validan endpoints publicos.
 
+## Demo clinica LUMEN
+
+LUMEN usa datos sinteticos separados de la operacion real. Despues de aplicar
+`018-lumen-clinical-demo.sql`, el unico seed autorizado para este vertical es:
+
+```bash
+pnpm db:seed:lumen-demo
+```
+
+El seed es idempotente y crea un paciente, un profesional y un encuentro marcados como demo. Para
+retirarlos se usa `pnpm db:seed:lumen-demo:clear`. No ejecutar el seed general de PULSO IRIS para
+habilitar LUMEN.
+
+La transcripcion requiere `OPENAI_API_KEY` y usa `OPENAI_STT_MODEL` (por defecto
+`gpt-4o-transcribe`). La estructuracion requiere `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL` y
+`DEEPSEEK_MODEL`. La ausencia de cualquiera de esos proveedores se muestra como no configurado y la
+operacion correspondiente falla cerrada; nunca se genera una salida simulada. El audio se procesa en
+memoria y no se guarda en PostgreSQL ni en volumenes Docker. Solo se conservan la transcripcion, el
+borrador estructurado y la trazabilidad de revision y aprobacion.
+
+La captura directa de microfono en navegador requiere HTTPS o `localhost`. Mientras la consola
+productiva se publique por HTTP, se debe usar la carga de un audio corto o habilitar TLS antes de usar
+el microfono. Ningun registro clinico pasa a `approved` sin una accion humana explicita y sin resolver
+las incertidumbres reportadas por el modelo.
+
 ## Durabilidad del canal WhatsApp privado
 
 En su camino normal el canal escribe los inbound aceptados y los receipts del proveedor en una spool
