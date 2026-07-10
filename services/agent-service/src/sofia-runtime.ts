@@ -67,6 +67,25 @@ const successfulAvailabilityResultSchema = z.object({
   ok: z.literal(true),
   data: z.object({ slots: z.array(authoritativeAvailabilitySlotSchema) })
 });
+const successfulAppointmentListResultSchema = z.object({
+  ok: z.literal(true),
+  data: z.object({
+    appointments: z.array(
+      z.object({
+        id: z.string().uuid(),
+        status: z.string().min(1),
+        scheduledAt: z.string().datetime().nullable().optional()
+      })
+    )
+  })
+});
+const RESCHEDULABLE_APPOINTMENT_STATUSES = new Set([
+  "pending_external_confirmation",
+  "verified",
+  "confirmed",
+  "deferred",
+  "verification_failed"
+]);
 
 type AvailabilitySearchArguments = z.infer<typeof availabilitySearchArgumentsSchema>;
 type AuthoritativeAvailabilitySlot = z.infer<typeof authoritativeAvailabilitySlotSchema>;
@@ -509,13 +528,88 @@ export class SofiaRuntime {
                     break roundLoop;
                   }
                 }
-                const rescheduleCanContinue =
+                const canPrepareReschedule =
                   requestConstraints.rescheduleIntent &&
                   canonicalSearch.localDate !== undefined &&
                   canonicalSearch.localTime !== undefined &&
                   exactSlots.length === 1 &&
                   hasMinimumAgendaSelection(canonicalSearch);
-                if (canonicalSearch.localDate && !rescheduleCanContinue) {
+                if (canPrepareReschedule) {
+                  const exactSlot = exactSlots[0]!;
+                  toolNames.push("list_patient_appointments");
+                  const listed = await this.tools.execute("list_patient_appointments", "{}", {
+                    tenantId: job.tenantId,
+                    patientId: input.patientId,
+                    conversationId: job.conversationId,
+                    currentMessageId: input.messageId,
+                    currentMessageBody: currentBody,
+                    jobId: job.id,
+                    sequence: toolNames.length
+                  });
+                  const parsedList = successfulAppointmentListResultSchema.safeParse(listed);
+                  const occurredAt = new Date(input.occurredAt).getTime();
+                  const activeAppointments = parsedList.success
+                    ? parsedList.data.data.appointments.filter(
+                        (appointment) =>
+                          RESCHEDULABLE_APPOINTMENT_STATUSES.has(appointment.status) &&
+                          typeof appointment.scheduledAt === "string" &&
+                          new Date(appointment.scheduledAt).getTime() > occurredAt
+                      )
+                    : [];
+                  if (!parsedList.success) {
+                    executionStatus = "fallback";
+                    responseText = deterministicFallback();
+                  } else if (activeAppointments.length === 0) {
+                    responseText =
+                      "No encontré una cita activa que pueda reagendar. Puedo ayudarte a agendar una nueva.";
+                  } else if (activeAppointments.length > 1) {
+                    responseText =
+                      "Tienes más de una cita futura activa. Por seguridad no elegiré una automáticamente; solicita apoyo de un coordinador para identificar la cita que deseas reagendar.";
+                  } else if (
+                    activeAppointments[0]!.scheduledAt &&
+                    new Date(activeAppointments[0]!.scheduledAt!).getTime() ===
+                      new Date(exactSlot.scheduledAt).getTime()
+                  ) {
+                    responseText =
+                      "Tu cita ya está agendada en ese horario. Dime una hora diferente si deseas cambiarla.";
+                  } else if (exactSlot.payerId) {
+                    toolNames.push("reschedule_appointment");
+                    const staged = await this.tools.execute(
+                      "reschedule_appointment",
+                      JSON.stringify({
+                        appointmentId: activeAppointments[0]!.id,
+                        siteId: exactSlot.siteId,
+                        professionalId: exactSlot.professionalId,
+                        payerId: exactSlot.payerId,
+                        appointmentTypeId: exactSlot.appointmentTypeId,
+                        scheduledAt: exactSlot.scheduledAt,
+                        reason: "Solicitud explícita del paciente"
+                      }),
+                      {
+                        tenantId: job.tenantId,
+                        patientId: input.patientId,
+                        conversationId: job.conversationId,
+                        currentMessageId: input.messageId,
+                        currentMessageBody: currentBody,
+                        jobId: job.id,
+                        sequence: toolNames.length
+                      }
+                    );
+                    if (isRecord(staged) && staged.code === "explicit_confirmation_required") {
+                      preparedAvailabilitySlot = exactSlot;
+                      preparedAvailabilityAction = "reschedule";
+                      responseText = renderAuthoritativeConfirmation(exactSlot, "reschedule");
+                    } else {
+                      executionStatus = "fallback";
+                      responseText = deterministicFallback();
+                    }
+                  } else {
+                    executionStatus = "fallback";
+                    responseText = deterministicFallback();
+                  }
+                  break roundLoop;
+                }
+                if (canonicalSearch.localDate) {
                   responseText = renderAuthoritativeAvailability(freshAvailability.slots);
                   break roundLoop;
                 }
