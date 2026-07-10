@@ -21,22 +21,52 @@ El VPS debe quedar con acceso por llave SSH, firewall activo y login root por pa
 
 ## Backup antes de migraciones y deploys
 
-Antes de aplicar cualquier migracion nueva o redeploy productivo en el VPS se debe crear un dump comprimido de PostgreSQL fuera de Git:
+Antes de aplicar cualquier migracion nueva o redeploy productivo en el VPS se debe crear un dump
+comprimido de PostgreSQL fuera de Git mediante el procedimiento versionado:
 
 ```bash
-mkdir -p /opt/hyperion-platform/backups
-docker compose --env-file .env -f infra/docker-compose.yml exec -T postgres \
-  sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
-  | gzip > "/opt/hyperion-platform/backups/hyperion-$(date +%Y%m%d-%H%M%S).dump.gz"
+cd /opt/hyperion-platform
+./scripts/ops/postgres-backup.sh
 ```
 
-Luego se verifica el log del servicio `migrations`, se despliega y se validan endpoints publicos. La carpeta `backups/` queda ignorada por Git.
+El script usa Bash estricto, `umask 077`, `pg_dump` custom sin compresion interna y `gzip -n`.
+Primero escribe un archivo temporal privado dentro de `backups/`; solo publica el nombre final mediante
+un hard link atomico despues de completar todas las validaciones. Un nombre existente se rechaza y
+nunca se sobrescribe. `EXIT`, `HUP`, `INT` y `TERM` limpian el temporal mediante `trap` sin dejar un
+backup final parcial; `sync` fuerza el archivo y el directorio antes de reportar exito. `SIGKILL` o una
+perdida de energia todavia pueden dejar un temporal oculto, que nunca se publica antes de validar.
 
-Para considerar valido el backup comprimido se deben comprobar las cuatro evidencias sin imprimir
-credenciales: `gzip -t`,
-`gzip -dc "$backup" | docker compose --env-file .env -f infra/docker-compose.yml exec -T postgres pg_restore --list`,
-tamano mayor que cero y SHA-256. Registrar el nombre, tamano, cantidad de entradas del catalogo y hash
-antes de desplegar.
+En cada ejecucion el procedimiento garantiza `0700` para `backups/`, aplica `0600` a todos sus archivos
+regulares existentes y crea el nuevo backup como `0600`. En produccion se ejecuta como `root`, por lo
+que exige `root:root` para el repositorio, scripts, Compose, archivo de entorno, carpeta y backups. Los
+archivos y directorios de control no pueden ser escribibles por grupo u otros, y `.env` debe ser
+privado. Un propietario inesperado, un enlace simbolico o un archivo con multiples hard links
+interrumpe la operacion. Fuera de pruebas aisladas exige el repositorio canonico
+`/opt/hyperion-platform` y no acepta rutas alternativas para backups, Compose ni el archivo de entorno.
+La carpeta `backups/` permanece ignorada por Git. El host debe proporcionar GNU `realpath`, `stat`,
+`ln`, `sync`, `sha256sum`, `gzip` y Docker Compose; son dependencias ya presentes en el VPS Linux.
+
+Antes de publicar, el script exige tamano mayor que cero, ejecuta `gzip -t`, descomprime por `stdin`
+hacia `pg_restore --list`, exige al menos una entrada de catalogo y calcula SHA-256. La salida registra
+unicamente nombre, tamano, numero de entradas, hash, modos y propietarios; no imprime variables ni
+credenciales. Conservar esa salida junto al registro del deploy.
+
+Comprobacion operativa de permisos y propietario, sin inspeccionar contenido:
+
+```bash
+stat -c '%a %U:%G %n' /opt/hyperion-platform/backups
+find /opt/hyperion-platform/backups -mindepth 1 -maxdepth 1 -type f \
+  -printf '%m %u:%g %f\n' | sort
+```
+
+Si el script falla antes de publicar, el temporal queda eliminado y el nombre final no aparece. Un
+fallo posterior al hard link puede conservar un backup final ya validado, pero nunca uno parcial;
+revisar el resultado sin borrarlo ni sobrescribirlo antes de volver a ejecutar. No borrar, renombrar ni
+reemplazar backups anteriores para recuperarse de un fallo. La restauracion no forma parte de este
+script: requiere un procedimiento separado, controlado, con destino explicitamente aprobado y una
+ventana operativa propia.
+
+Luego se verifica el log del servicio `migrations`, se despliega y se validan endpoints publicos.
 
 ## Durabilidad del canal WhatsApp privado
 
