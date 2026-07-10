@@ -42,7 +42,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   };
   if (context.db) {
     const provider = new BaileysWhatsAppWebTestProvider(readWhatsAppProviderConfig(), undefined, (reason, metadata) =>
-      context.logger.info("whatsapp inbound ignored", { reason, ...metadata })
+      context.logger.info("whatsapp channel diagnostic", { reason, ...metadata })
     );
     const repository = new PostgresChannelRepository(context.db);
     const channel = new WhatsAppChannelService(

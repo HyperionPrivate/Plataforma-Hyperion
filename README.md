@@ -35,7 +35,33 @@ No se deben guardar credenciales reales en Git.
 El adaptador `whatsapp_web_test` esta deshabilitado por defecto. Requiere configurar fuera de Git
 `DEEPSEEK_API_KEY`, `WHATSAPP_TEST_ALLOWED_NUMBERS` e `INTERNAL_SERVICE_TOKEN`; el numero solo se
 acepta desde la allowlist. El QR existe exclusivamente en memoria y la sesion de Linked Devices se
-guarda en el volumen privado `whatsapp_sessions`.
+guarda en el volumen privado `whatsapp_sessions`. Antes de intentar PostgreSQL, cada inbound aceptado
+y cada receipt de entrega se retiene en una spool cifrada AES-256-GCM dentro del mismo volumen. La
+spool esta acotada por cantidad y bytes; nunca expone cuerpos en logs o telemetria y nunca los guarda
+sin cifrar. Conserva el `externalMessageId` para
+que el indice unico de PostgreSQL haga seguro el replay tras una caida o reinicio.
+
+La entrega no se presenta como exactamente-una-vez en el borde no oficial de WhatsApp: una vez que el
+evento entra en la spool, el canal lo reprocesa al menos una vez y PostgreSQL evita el doble efecto. Si
+la spool no puede retener un evento, el canal intenta una proyeccion directa idempotente y se degrada
+sin reconectar automaticamente. Si tambien falla PostgreSQL, no existe una copia recuperable tras
+reinicio; este borde se reporta como perdida potencial y no como entrega garantizada. Un outbound
+`sent` solo prueba que Baileys devolvio un identificador; cambia a
+`delivered` o `read` unicamente al recibir evidencia del proveedor.
+
+Los receipts que se adelantan a la asociacion del identificador quedan en una cuarentena PostgreSQL
+sin cuerpos (maximo 2000 identidades por tenant con todos sus estados, retencion de 7 dias desde la
+evidencia mas reciente) y se reconcilian atomicamente al marcar el outbound como enviado.
+
+Controles operativos (los valores son limites, no secretos):
+
+- `WHATSAPP_INBOUND_PERSIST_MAX_ATTEMPTS` y `WHATSAPP_INBOUND_PERSIST_RETRY_BASE_DELAY_MS` controlan
+  el reintento inmediato con el mismo evento.
+- `WHATSAPP_INBOUND_PERSIST_ATTEMPT_TIMEOUT_MS` impide que una proyeccion bloqueada deje el canal en
+  estado listo indefinidamente.
+- `WHATSAPP_INBOUND_SPOOL_MAX_RECORDS` y `WHATSAPP_INBOUND_SPOOL_MAX_BYTES` limitan la spool durable.
+- `WHATSAPP_PHONE_HASH_KEY` debe mantenerse estable mientras existan entradas pendientes, porque
+  tambien deriva la clave de cifrado de la spool.
 
 La consola usa estas rutas tenant-scoped:
 

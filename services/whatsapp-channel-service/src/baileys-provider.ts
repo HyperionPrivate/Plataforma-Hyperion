@@ -9,6 +9,7 @@ import makeWASocket, {
   type WASocket
 } from "@whiskeysockets/baileys";
 import pino from "pino";
+import { EncryptedChannelEventSpool, type DurableChannelEvent } from "./durable-event-spool.js";
 import type { WhatsAppProviderConfig } from "./provider-config.js";
 import {
   WHATSAPP_PROVIDER_MODE,
@@ -48,7 +49,7 @@ type IncomingMessage = {
 
 type MessageUpsert = { type?: string; messages: IncomingMessage[] };
 type MessageUpdate = Array<{
-  key: { id?: string | null };
+  key: { id?: string | null; fromMe?: boolean | null };
   update: { status?: number | null };
 }>;
 
@@ -88,6 +89,11 @@ interface TenantConnection {
   reconnectTimer?: NodeJS.Timeout;
 }
 
+interface SpoolDrainResult {
+  inboundReady: boolean;
+  deferredDeliveries: boolean;
+}
+
 const silentBaileysLogger = pino({ level: "silent" });
 
 export function createBaileysRuntime(): BaileysRuntime {
@@ -114,10 +120,18 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
   private readonly connections = new Map<string, TenantConnection>();
   private readonly rateWindows = new Map<string, number[]>();
   private readonly reportedDiagnostics = new Set<string>();
+  private readonly spoolDrains = new Map<string, Promise<SpoolDrainResult>>();
+  private readonly spoolRetryTimers = new Map<string, NodeJS.Timeout>();
+  private readonly spoolRetryAttempts = new Map<string, number>();
+  private readonly reconnectAfterSpool = new Set<string>();
+  private readonly connectAttempts = new Map<string, Promise<WhatsAppConnectionStatus>>();
+  private readonly statusProjectionTails = new Map<string, Promise<void>>();
+  private readonly captureBarriers = new Set<Promise<void>>();
   private readonly allowedPhoneHashes: ReadonlySet<string>;
+  private eventSpool?: EncryptedChannelEventSpool;
   private inboundHandler: (message: WhatsAppInboundText) => Promise<void> = async () => undefined;
   private statusHandler: (tenantId: string, status: WhatsAppConnectionStatus) => Promise<void> = async () => undefined;
-  private deliveryHandler: (update: WhatsAppDeliveryUpdate) => Promise<void> = async () => undefined;
+  private deliveryHandler: (update: WhatsAppDeliveryUpdate) => Promise<boolean> = async () => true;
 
   constructor(
     private readonly config: WhatsAppProviderConfig,
@@ -135,14 +149,30 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     this.statusHandler = handler;
   }
 
-  setDeliveryHandler(handler: (update: WhatsAppDeliveryUpdate) => Promise<void>): void {
+  setDeliveryHandler(handler: (update: WhatsAppDeliveryUpdate) => Promise<boolean>): void {
     this.deliveryHandler = handler;
   }
 
-  async connect(tenantId: string): Promise<WhatsAppConnectionStatus> {
-    this.assertEnabled();
-    assertTenantId(tenantId);
+  connect(tenantId: string): Promise<WhatsAppConnectionStatus> {
+    try {
+      this.assertEnabled();
+      assertTenantId(tenantId);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const pending = this.connectAttempts.get(tenantId);
+    if (pending) return pending;
 
+    const attempt = this.connectOnce(tenantId);
+    this.connectAttempts.set(tenantId, attempt);
+    const clearAttempt = () => {
+      if (this.connectAttempts.get(tenantId) === attempt) this.connectAttempts.delete(tenantId);
+    };
+    void attempt.then(clearAttempt, clearAttempt);
+    return attempt;
+  }
+
+  private async connectOnce(tenantId: string): Promise<WhatsAppConnectionStatus> {
     const existing = this.connections.get(tenantId);
     if (existing?.status.state === "ready" || existing?.status.state === "connecting") {
       return this.status(tenantId);
@@ -157,8 +187,21 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
       reconnectAttempts: 0
     };
     this.connections.set(tenantId, connection);
-    if (existing) this.prepareReplacementSocket(existing);
+    if (existing) this.prepareReplacementSocket(tenantId, existing);
     try {
+      const drain = await this.queueSpoolDrain(tenantId);
+      if (this.connections.get(tenantId) !== connection) return this.status(tenantId);
+      if (!drain.inboundReady) {
+        this.reconnectAfterSpool.add(tenantId);
+        await this.updateStatus(tenantId, {
+          ...connection.status,
+          state: "degraded",
+          lastError: "inbound_persistence_failed"
+        });
+        this.scheduleSpoolRetry(tenantId, connection);
+        return this.status(tenantId);
+      }
+      if (drain.deferredDeliveries) this.scheduleSpoolRetry(tenantId, connection);
       await this.openSocket(tenantId, connection);
     } catch (error) {
       await this.updateStatus(tenantId, {
@@ -205,8 +248,11 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
 
   async disconnect(tenantId: string): Promise<void> {
     assertTenantId(tenantId);
+    this.connectAttempts.delete(tenantId);
     const connection = this.connections.get(tenantId);
     if (connection?.reconnectTimer) clearTimeout(connection.reconnectTimer);
+    this.clearSpoolRetry(tenantId);
+    this.reconnectAfterSpool.delete(tenantId);
     if (connection) connection.generation += 1;
     if (connection?.socket) {
       try {
@@ -255,15 +301,22 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
   }
 
   async close(): Promise<void> {
-    for (const connection of this.connections.values()) {
+    this.connectAttempts.clear();
+    for (const [tenantId, connection] of this.connections) {
       if (connection.reconnectTimer) clearTimeout(connection.reconnectTimer);
+      this.clearSpoolRetry(tenantId);
+      connection.generation += 1;
       connection.socket?.end();
     }
     this.connections.clear();
     this.rateWindows.clear();
+    this.reconnectAfterSpool.clear();
+    await withTimeout(Promise.allSettled([...this.captureBarriers]), 5_000).catch(() => undefined);
+    await Promise.allSettled(this.statusProjectionTails.values());
   }
 
   private async openSocket(tenantId: string, connection: TenantConnection): Promise<void> {
+    if (this.connections.get(tenantId) !== connection) return;
     this.resetDiagnostics(tenantId);
     const generation = connection.generation + 1;
     connection.generation = generation;
@@ -273,20 +326,31 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
       state: "connecting",
       lastError: undefined
     });
+    if (!this.isCurrentConnection(tenantId, connection, generation)) return;
 
     const sessionDirectory = this.sessionDirectory(tenantId);
     await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
+    if (!this.isCurrentConnection(tenantId, connection, generation)) return;
     await chmod(sessionDirectory, 0o700).catch(() => undefined);
+    if (!this.isCurrentConnection(tenantId, connection, generation)) return;
     const { state, saveCreds } = await this.runtime.loadAuthState(sessionDirectory);
+    if (!this.isCurrentConnection(tenantId, connection, generation)) return;
     const socket = this.runtime.createSocket(state);
+    if (!this.isCurrentConnection(tenantId, connection, generation)) {
+      socket.end(new Error("connection_replaced"));
+      return;
+    }
+    const previousSocket = connection.socket;
     connection.socket = socket;
+    if (previousSocket && previousSocket !== socket) previousSocket.end(new Error("connection_replaced"));
     connection.status.sessionRestorable = hasRestorableSession(state);
-    await this.emitStatus(tenantId);
 
     socket.ev.on("creds.update", async () => {
-      if (connection.generation !== generation) return;
+      if (!this.isCurrentConnection(tenantId, connection, generation)) return;
       await saveCreds();
+      if (!this.isCurrentConnection(tenantId, connection, generation)) return;
       await protectSessionDirectory(sessionDirectory);
+      if (!this.isCurrentConnection(tenantId, connection, generation)) return;
       connection.status.sessionRestorable =
         connection.status.sessionRestorable || connection.status.state === "ready" || hasRestorableSession(state);
       await this.emitStatus(tenantId);
@@ -294,14 +358,19 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     socket.ev.on("connection.update", (update) => {
       void this.handleConnectionUpdate(tenantId, connection, generation, update);
     });
-    socket.ev.on("messages.upsert", async (event) => {
-      if (connection.generation !== generation) return;
-      await this.handleMessages(tenantId, connection, event);
+    socket.ev.on("messages.upsert", (event) => {
+      if (!this.isCurrentConnection(tenantId, connection, generation)) return Promise.resolve();
+      return this.trackDurableCapture((captureComplete) =>
+        this.handleMessages(tenantId, connection, generation, event, captureComplete)
+      );
     });
-    socket.ev.on("messages.update", async (event) => {
-      if (connection.generation !== generation) return;
-      await this.handleDeliveryUpdates(tenantId, event);
+    socket.ev.on("messages.update", (event) => {
+      if (!this.isCurrentConnection(tenantId, connection, generation)) return Promise.resolve();
+      return this.trackDurableCapture((captureComplete) =>
+        this.handleDeliveryUpdates(tenantId, event, captureComplete)
+      );
     });
+    await this.emitStatus(tenantId);
   }
 
   private async handleConnectionUpdate(
@@ -310,10 +379,11 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     generation: number,
     update: ConnectionUpdate
   ): Promise<void> {
-    if (connection.generation !== generation) return;
+    if (!this.isCurrentConnection(tenantId, connection, generation)) return;
     if (update.qr) {
       connection.qr = { value: update.qr, expiresAt: Date.now() + this.config.qrTtlMs };
       await this.updateStatus(tenantId, { ...connection.status, state: "qr_pending" });
+      if (!this.isCurrentConnection(tenantId, connection, generation)) return;
     }
     if (update.connection === "connecting") {
       await this.updateStatus(tenantId, { ...connection.status, state: "connecting" });
@@ -339,6 +409,7 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     connection.qr = undefined;
     if (this.runtime.isLoggedOut(update.lastDisconnect?.error)) {
       await this.removeSession(tenantId);
+      if (!this.isCurrentConnection(tenantId, connection, generation)) return;
       connection.reconnectAttempts = 0;
       await this.updateStatus(tenantId, {
         ...disconnectedStatus(false),
@@ -351,6 +422,7 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
       state: "degraded",
       lastError: "connection_closed"
     });
+    if (!this.isCurrentConnection(tenantId, connection, generation)) return;
     this.scheduleReconnect(tenantId, connection);
   }
 
@@ -360,7 +432,9 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     connection.reconnectAttempts += 1;
     connection.reconnectTimer = setTimeout(() => {
       connection.reconnectTimer = undefined;
+      if (this.connections.get(tenantId) !== connection) return;
       void this.openSocket(tenantId, connection).catch(async () => {
+        if (this.connections.get(tenantId) !== connection) return;
         await this.updateStatus(tenantId, {
           ...connection.status,
           state: "degraded",
@@ -380,11 +454,13 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     }
   }
 
-  private prepareReplacementSocket(connection: TenantConnection): void {
+  private prepareReplacementSocket(tenantId: string, connection: TenantConnection): void {
     if (connection.reconnectTimer) {
       clearTimeout(connection.reconnectTimer);
       connection.reconnectTimer = undefined;
     }
+    this.clearSpoolRetry(tenantId);
+    this.reconnectAfterSpool.delete(tenantId);
     connection.generation += 1;
     connection.socket?.end(new Error("connection_replaced"));
     connection.socket = undefined;
@@ -392,13 +468,25 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     connection.reconnectAttempts = 0;
   }
 
-  private async handleMessages(tenantId: string, connection: TenantConnection, event: MessageUpsert): Promise<void> {
+  private isCurrentConnection(tenantId: string, connection: TenantConnection, generation: number): boolean {
+    return this.connections.get(tenantId) === connection && connection.generation === generation;
+  }
+
+  private async handleMessages(
+    tenantId: string,
+    connection: TenantConnection,
+    generation: number,
+    event: MessageUpsert,
+    captureComplete: () => void
+  ): Promise<void> {
     if (event.type !== "notify") {
       this.reportIgnoredOnce(tenantId, "unsupported_event_type", {
         eventType: safeEventType(event.type)
       });
+      captureComplete();
       return;
     }
+    const acceptedMessages: WhatsAppInboundText[] = [];
     for (const message of event.messages) {
       const accepted = await this.parseIncoming(tenantId, connection, message);
       if (!accepted) continue;
@@ -406,22 +494,186 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
         this.reportIgnoredOnce(tenantId, "conversation_rate_limited", {});
         continue;
       }
-      try {
-        await this.inboundHandler(accepted);
-        connection.status = {
-          ...connection.status,
-          lastActivityAt: accepted.receivedAt.toISOString(),
-          lastError: undefined
-        };
-        await this.emitStatus(tenantId);
-      } catch {
-        await this.updateStatus(tenantId, {
-          ...connection.status,
-          state: "degraded",
-          lastError: "inbound_persistence_failed"
-        });
+      acceptedMessages.push(accepted);
+    }
+    if (acceptedMessages.length === 0) {
+      captureComplete();
+      return;
+    }
+
+    let retained = true;
+    try {
+      await this.spool().retain(acceptedMessages.map((message) => ({ kind: "inbound", message })));
+    } catch {
+      retained = false;
+      this.reportIgnoredOnce(tenantId, "inbound_spool_unavailable", {});
+    }
+    captureComplete();
+    if (!retained) {
+      // Best effort only: without a successful fsync there is no crash-safe copy.
+      // The socket is latched degraded and requires an explicit reconnect after
+      // storage is repaired, regardless of whether this direct idempotent write wins.
+      await this.persistInboundBatchWithRetry(acceptedMessages);
+      await this.recoverFromInboundPersistenceFailure(tenantId, connection, generation, "inbound_spool_unavailable");
+      return;
+    }
+    const drain = await this.queueSpoolDrain(tenantId);
+    if (!drain.inboundReady) {
+      await this.recoverFromInboundPersistenceFailure(tenantId, connection, generation, "inbound_persistence_failed");
+      return;
+    }
+    if (drain.deferredDeliveries) this.scheduleSpoolRetry(tenantId, connection);
+    if (!this.isCurrentConnection(tenantId, connection, generation)) return;
+    const lastReceivedAt = acceptedMessages.reduce(
+      (latest, message) => Math.max(latest, message.receivedAt.getTime()),
+      0
+    );
+    connection.status = {
+      ...connection.status,
+      lastActivityAt: new Date(lastReceivedAt).toISOString(),
+      lastError: undefined
+    };
+    await this.emitStatus(tenantId);
+  }
+
+  private persistInboundBatchWithRetry(messages: WhatsAppInboundText[]): Promise<boolean> {
+    return this.persistWithRetry(async () => {
+      for (const message of messages) await this.inboundHandler(message);
+    });
+  }
+
+  private async recoverFromInboundPersistenceFailure(
+    tenantId: string,
+    connection: TenantConnection,
+    generation: number,
+    errorCode: "inbound_persistence_failed" | "inbound_spool_unavailable"
+  ): Promise<void> {
+    if (!this.isCurrentConnection(tenantId, connection, generation)) return;
+    connection.generation += 1;
+    const socket = connection.socket;
+    connection.socket = undefined;
+    connection.qr = undefined;
+    socket?.end(new Error(errorCode));
+    await this.updateStatus(tenantId, {
+      ...connection.status,
+      state: "degraded",
+      lastError: errorCode
+    });
+    if (this.connections.get(tenantId) !== connection) return;
+    if (errorCode === "inbound_persistence_failed") {
+      this.reconnectAfterSpool.add(tenantId);
+      this.scheduleSpoolRetry(tenantId, connection);
+    }
+  }
+
+  private spool(): EncryptedChannelEventSpool {
+    this.assertEnabled();
+    this.eventSpool ??= new EncryptedChannelEventSpool(
+      resolve(this.config.sessionRoot, ".channel-event-spool"),
+      this.config.phoneHashKey!,
+      {
+        maxRecords: this.config.inboundSpoolMaxRecords,
+        maxBytes: this.config.inboundSpoolMaxBytes
+      }
+    );
+    return this.eventSpool;
+  }
+
+  private queueSpoolDrain(tenantId: string): Promise<SpoolDrainResult> {
+    const previous =
+      this.spoolDrains.get(tenantId) ?? Promise.resolve({ inboundReady: true, deferredDeliveries: false });
+    const current = previous
+      .catch(() => ({ inboundReady: false, deferredDeliveries: false }))
+      .then(() => this.drainStoredEvents(tenantId))
+      .catch(() => ({ inboundReady: false, deferredDeliveries: false }));
+    this.spoolDrains.set(tenantId, current);
+    void current.finally(() => {
+      if (this.spoolDrains.get(tenantId) === current) this.spoolDrains.delete(tenantId);
+    });
+    return current;
+  }
+
+  private async drainStoredEvents(tenantId: string): Promise<SpoolDrainResult> {
+    let entries: Awaited<ReturnType<EncryptedChannelEventSpool["list"]>>;
+    try {
+      entries = await this.spool().list(tenantId);
+    } catch {
+      return { inboundReady: false, deferredDeliveries: false };
+    }
+    let deferredDeliveries = false;
+    for (const entry of entries) {
+      const persisted = await this.persistWithRetry(async () => {
+        if (!(await this.dispatchDurableEvent(entry.event))) throw new Error("durable_event_projection_deferred");
+        await this.spool().acknowledge(tenantId, entry.id);
+      });
+      if (!persisted) {
+        if (entry.event.kind === "inbound") return { inboundReady: false, deferredDeliveries };
+        deferredDeliveries = true;
       }
     }
+    return { inboundReady: true, deferredDeliveries };
+  }
+
+  private async dispatchDurableEvent(event: DurableChannelEvent): Promise<boolean> {
+    if (event.kind === "inbound") {
+      await this.inboundHandler(event.message);
+      return true;
+    }
+    return this.deliveryHandler(event.update);
+  }
+
+  private async persistWithRetry(operation: () => Promise<void>): Promise<boolean> {
+    for (let attempt = 1; attempt <= this.config.inboundPersistenceMaxAttempts; attempt += 1) {
+      try {
+        await withTimeout(operation(), this.config.inboundPersistenceAttemptTimeoutMs);
+        return true;
+      } catch {
+        if (attempt === this.config.inboundPersistenceMaxAttempts) return false;
+        const delay = Math.min(this.config.inboundPersistenceRetryBaseDelayMs * 2 ** (attempt - 1), 10_000);
+        if (delay > 0) await wait(delay);
+      }
+    }
+    return false;
+  }
+
+  private scheduleSpoolRetry(tenantId: string, connection: TenantConnection): void {
+    if (this.connections.get(tenantId) !== connection || this.spoolRetryTimers.has(tenantId)) return;
+    const attempt = this.spoolRetryAttempts.get(tenantId) ?? 0;
+    const delay = Math.min(this.config.inboundPersistenceRetryBaseDelayMs * 2 ** Math.min(attempt, 10), 60_000);
+    this.spoolRetryAttempts.set(tenantId, attempt + 1);
+    const timer = setTimeout(() => {
+      this.spoolRetryTimers.delete(tenantId);
+      void this.queueSpoolDrain(tenantId).then(async (drain) => {
+        if (this.connections.get(tenantId) !== connection) return;
+        if (!drain.inboundReady) {
+          this.scheduleSpoolRetry(tenantId, connection);
+          return;
+        }
+        this.spoolRetryAttempts.delete(tenantId);
+        if (this.reconnectAfterSpool.delete(tenantId)) {
+          try {
+            await this.openSocket(tenantId, connection);
+          } catch {
+            await this.updateStatus(tenantId, {
+              ...connection.status,
+              state: "degraded",
+              lastError: "reconnect_failed"
+            });
+            this.scheduleReconnect(tenantId, connection);
+          }
+        }
+        if (drain.deferredDeliveries) this.scheduleSpoolRetry(tenantId, connection);
+      });
+    }, delay);
+    timer.unref();
+    this.spoolRetryTimers.set(tenantId, timer);
+  }
+
+  private clearSpoolRetry(tenantId: string): void {
+    const timer = this.spoolRetryTimers.get(tenantId);
+    if (timer) clearTimeout(timer);
+    this.spoolRetryTimers.delete(tenantId);
+    this.spoolRetryAttempts.delete(tenantId);
   }
 
   private async parseIncoming(
@@ -506,23 +758,60 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     return true;
   }
 
-  private async handleDeliveryUpdates(tenantId: string, event: MessageUpdate): Promise<void> {
+  private async handleDeliveryUpdates(
+    tenantId: string,
+    event: MessageUpdate,
+    captureComplete: () => void
+  ): Promise<void> {
+    const updates: WhatsAppDeliveryUpdate[] = [];
     for (const item of event) {
+      if (item.key.fromMe !== true) continue;
       const providerMessageId = item.key.id?.trim();
       const status = deliveryStatus(item.update.status);
       if (!providerMessageId || !status) continue;
-      try {
-        await this.deliveryHandler({
-          tenantId,
-          provider: WHATSAPP_PROVIDER_MODE,
-          providerMessageId,
-          status,
-          occurredAt: new Date()
-        });
-      } catch {
-        // Delivery receipts are eventually reconciled from durable outbound state.
-      }
+      updates.push({
+        tenantId,
+        provider: WHATSAPP_PROVIDER_MODE,
+        providerMessageId,
+        status,
+        occurredAt: new Date()
+      });
     }
+    if (updates.length === 0) {
+      captureComplete();
+      return;
+    }
+    let retained = true;
+    try {
+      await this.spool().retain(updates.map((update) => ({ kind: "delivery", update })));
+    } catch {
+      retained = false;
+      this.reportIgnoredOnce(tenantId, "delivery_receipt_spool_unavailable", {});
+    }
+    captureComplete();
+    if (!retained) {
+      await this.persistWithRetry(async () => {
+        for (const update of updates) {
+          if (!(await this.deliveryHandler(update))) throw new Error("delivery_projection_deferred");
+        }
+      });
+      const connection = this.connections.get(tenantId);
+      if (connection) {
+        await this.recoverFromInboundPersistenceFailure(
+          tenantId,
+          connection,
+          connection.generation,
+          "inbound_spool_unavailable"
+        );
+      }
+      return;
+    }
+    const drain = await this.queueSpoolDrain(tenantId);
+    if (!drain.inboundReady || drain.deferredDeliveries) {
+      this.reportIgnoredOnce(tenantId, "delivery_receipt_persistence_deferred", {});
+    }
+    const connection = this.connections.get(tenantId);
+    if (connection && (!drain.inboundReady || drain.deferredDeliveries)) this.scheduleSpoolRetry(tenantId, connection);
   }
 
   private async updateStatus(tenantId: string, status: WhatsAppConnectionStatus): Promise<void> {
@@ -537,11 +826,33 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
   }
 
   private async emitStatus(tenantId: string): Promise<void> {
-    try {
-      await this.statusHandler(tenantId, this.status(tenantId));
-    } catch {
-      // A status projection failure must not expose connection material or stop Baileys.
-    }
+    const snapshot = this.status(tenantId);
+    const previous = this.statusProjectionTails.get(tenantId) ?? Promise.resolve();
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.statusHandler(tenantId, snapshot))
+      .catch(() => undefined);
+    this.statusProjectionTails.set(tenantId, current);
+    await current;
+    if (this.statusProjectionTails.get(tenantId) === current) this.statusProjectionTails.delete(tenantId);
+  }
+
+  private trackDurableCapture(operation: (captureComplete: () => void) => Promise<void>): Promise<void> {
+    let resolveBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      resolveBarrier = resolve;
+    });
+    let completed = false;
+    const captureComplete = () => {
+      if (completed) return;
+      completed = true;
+      this.captureBarriers.delete(barrier);
+      resolveBarrier();
+    };
+    this.captureBarriers.add(barrier);
+    const processing = operation(captureComplete).finally(captureComplete);
+    void processing.catch(() => undefined);
+    return processing;
   }
 
   private assertEnabled(): void {
@@ -578,6 +889,19 @@ function disconnectedStatus(sessionRestorable: boolean): WhatsAppConnectionStatu
     state: "disconnected",
     sessionRestorable
   };
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("channel_event_persistence_timeout")), timeoutMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function hasRestorableSession(state: AuthenticationState): boolean {
@@ -708,4 +1032,11 @@ async function protectSessionDirectory(directory: string): Promise<void> {
       if (entry.isFile()) await chmod(path, 0o600).catch(() => undefined);
     })
   );
+}
+
+async function wait(delayMs: number): Promise<void> {
+  await new Promise<void>((resolveDelay) => {
+    const timer = setTimeout(resolveDelay, delayMs);
+    timer.unref();
+  });
 }

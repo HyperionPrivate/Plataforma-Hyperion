@@ -556,8 +556,25 @@ export class SofiaToolClient {
         if (state.pendingAction?.jobId === context.jobId) {
           return confirmationRequired("La acción ya fue preparada en este mensaje.");
         }
+        if (
+          state.pendingAction &&
+          isConfirmableTool(toolName) &&
+          hasSameOperationalIdentity(state.pendingAction, toolName, toolArguments)
+        ) {
+          return confirmationRequired("La misma acción ya está preparada y espera confirmación.", true);
+        }
         const staged = await this.stagePendingAction(toolName, toolArguments, context, state);
-        if (!staged) return confirmationStateChanged();
+        if (!staged) {
+          const current = await this.loadConfirmationState(context.tenantId, context.conversationId);
+          if (
+            current.pendingAction &&
+            isConfirmableTool(toolName) &&
+            hasSameOperationalIdentity(current.pendingAction, toolName, toolArguments)
+          ) {
+            return confirmationRequired("La misma acción ya está preparada y espera confirmación.", true);
+          }
+          return confirmationStateChanged();
+        }
         return confirmationRequired("La acción fue preparada sin ejecutarse.");
       }
     }
@@ -1414,11 +1431,12 @@ function validateToolArguments(toolName: SofiaToolName, value: unknown): ParsedT
   return { ok: true, data: parsed.data as Record<string, unknown> };
 }
 
-function confirmationRequired(detail: string): Record<string, unknown> {
+function confirmationRequired(detail: string, pendingActionReused = false): Record<string, unknown> {
   return {
     ok: false,
     code: "explicit_confirmation_required",
-    message: `${detail} Pide al paciente que responda exactamente CONFIRMO en un mensaje nuevo.`
+    message: `${detail} Pide al paciente que responda exactamente CONFIRMO en un mensaje nuevo.`,
+    ...(pendingActionReused ? { pendingActionReused: true } : {})
   };
 }
 
@@ -1538,6 +1556,40 @@ function parseConfirmationState(value: unknown): ConfirmationState {
 function isConfirmableTool(toolName: SofiaToolName): toolName is ConfirmableToolName {
   return (
     toolName === "create_appointment_hold" || toolName === "cancel_appointment" || toolName === "reschedule_appointment"
+  );
+}
+
+function hasSameOperationalIdentity(
+  pending: PendingAction,
+  toolName: ConfirmableToolName,
+  incomingArguments: Record<string, unknown>
+): boolean {
+  if (pending.tool !== toolName) return false;
+  const persisted = operationalIdentity(toolName, pending.arguments);
+  const incoming = operationalIdentity(toolName, incomingArguments);
+  return persisted !== undefined && persisted === incoming;
+}
+
+function operationalIdentity(toolName: ConfirmableToolName, rawArguments: Record<string, unknown>): string | undefined {
+  const parsed = validateToolArguments(toolName, rawArguments);
+  if (!parsed.ok) return undefined;
+  const value = parsed.data;
+  const uuidValue = (key: string) => String(value[key]).toLowerCase();
+
+  if (toolName === "cancel_appointment") {
+    return JSON.stringify([toolName, uuidValue("appointmentId")]);
+  }
+
+  const scheduledAt = new Date(String(value.scheduledAt)).toISOString();
+  const slot = [
+    uuidValue("siteId"),
+    uuidValue("professionalId"),
+    uuidValue("payerId"),
+    uuidValue("appointmentTypeId"),
+    scheduledAt
+  ];
+  return JSON.stringify(
+    toolName === "reschedule_appointment" ? [toolName, uuidValue("appointmentId"), ...slot] : [toolName, ...slot]
   );
 }
 

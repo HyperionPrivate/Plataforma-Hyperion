@@ -285,6 +285,47 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("keeps the original action and TTL for an operationally identical request", async () => {
+    await db.query(
+      `update pulso_iris.conversations
+       set metadata = jsonb_set(metadata, '{sofiaState}', '{}'::jsonb)
+       where tenant_id = $1 and id = $2`,
+      [tenantId, conversationId]
+    );
+    const fetchImpl = vi.fn();
+    const client = createClient(db, fetchImpl);
+    const appointmentId = randomUUID();
+    const originalJobId = randomUUID();
+
+    const first = await client.execute(
+      "cancel_appointment",
+      JSON.stringify({ appointmentId, reason: "Solicitud inicial" }),
+      {
+        ...context(tenantId, patientId, conversationId, originalJobId),
+        currentMessageBody: "Quiero cancelar mi cita"
+      }
+    );
+    expect(first).toMatchObject({ code: "explicit_confirmation_required" });
+    const original = await readState(db, tenantId, conversationId);
+
+    const repeated = await client.execute(
+      "cancel_appointment",
+      JSON.stringify({ appointmentId, reason: "La misma solicitud reformulada" }),
+      {
+        ...context(tenantId, patientId, conversationId, randomUUID()),
+        currentMessageBody: "Quiero cancelar mi cita"
+      }
+    );
+    expect(repeated).toMatchObject({
+      code: "explicit_confirmation_required",
+      pendingActionReused: true
+    });
+    const persisted = await readState(db, tenantId, conversationId);
+    expect(persisted.pendingAction).toEqual(original.pendingAction);
+    expect(persisted.pendingAction).toMatchObject({ jobId: originalJobId });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("does not clear a newer action when an older mutation completes late", async () => {
     const oldActionId = randomUUID();
     const newActionId = randomUUID();
