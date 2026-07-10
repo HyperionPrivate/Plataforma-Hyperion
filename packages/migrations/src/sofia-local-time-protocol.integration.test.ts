@@ -16,21 +16,33 @@ describeIntegration("014 SOFIA local time protocol", () => {
     await client.end();
   });
 
-  it("activates only the v3 prompt with authoritative local slot fields", async () => {
-    const result = await client.query<{ runtimeKey: string; systemPrompt: string; activeCount: number }>(
+  it("preserves the superseded v3 prompt with authoritative local slot fields", async () => {
+    const result = await client.query<{
+      runtimeKey: string;
+      systemPrompt: string;
+      status: string;
+      activeCount: number;
+    }>(
       `select f.definition ->> 'runtimeKey' as "runtimeKey",
               f.definition ->> 'systemPrompt' as "systemPrompt",
-              count(*) over ()::int as "activeCount"
+              f.status,
+              (select count(*)::int
+               from platform.prompt_flows active
+               where active.tenant_id = f.tenant_id
+                 and active.agent_id = f.agent_id
+                 and active.status = 'active') as "activeCount"
        from platform.prompt_flows f
        join platform.agents a
          on a.tenant_id = f.tenant_id and a.id = f.agent_id
        join platform.tenants t on t.id = f.tenant_id
-       where t.slug = 'cedco' and a.code = 'SOFIA' and f.status = 'active'`
+       where t.slug = 'cedco'
+         and a.code = 'SOFIA'
+         and f.definition ->> 'runtimeKey' = 'sofia_whatsapp_internal_v3'`
     );
 
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]).toEqual(
-      expect.objectContaining({ runtimeKey: "sofia_whatsapp_internal_v3", activeCount: 1 })
+      expect.objectContaining({ runtimeKey: "sofia_whatsapp_internal_v3", status: "archived", activeCount: 1 })
     );
     expect(result.rows[0]!.systemPrompt).toContain("localDate, localTime y timeZone");
     expect(result.rows[0]!.systemPrompt).toContain("copia scheduledAt exactamente");

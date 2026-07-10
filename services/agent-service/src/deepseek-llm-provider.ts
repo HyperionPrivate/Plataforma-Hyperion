@@ -70,6 +70,7 @@ export class DeepSeekLlmProvider implements LlmProvider {
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
     if (!this.apiKey) throw new LlmProviderUnavailableError("DeepSeek is not configured");
     if (this.circuitOpenUntil > this.now()) throw new LlmProviderUnavailableError("DeepSeek circuit is open");
+    const toolChoice = toDeepSeekToolChoice(input);
 
     const started = performance.now();
     let lastError: unknown;
@@ -82,7 +83,7 @@ export class DeepSeekLlmProvider implements LlmProvider {
             model: this.model,
             messages: input.messages.map(toDeepSeekMessage),
             tools: input.tools,
-            tool_choice: "auto",
+            tool_choice: toolChoice,
             thinking: { type: "disabled" },
             stream: false
           }),
@@ -127,6 +128,15 @@ export class DeepSeekLlmProvider implements LlmProvider {
     if (this.consecutiveFailures >= 3) this.circuitOpenUntil = this.now() + 30_000;
     throw new LlmProviderUnavailableError(lastError instanceof Error ? sanitizeError(lastError.message) : undefined);
   }
+}
+
+function toDeepSeekToolChoice(input: LlmCompletionInput): string | Record<string, unknown> {
+  const choice = input.toolChoice ?? "auto";
+  if (typeof choice === "string") return choice;
+  if (!input.tools.some((tool) => tool.function.name === choice.name)) {
+    throw new TypeError(`Forced tool "${choice.name}" is not included in the offered tools`);
+  }
+  return { type: "function", function: { name: choice.name } };
 }
 
 function toDeepSeekMessage(message: LlmMessage): Record<string, unknown> {

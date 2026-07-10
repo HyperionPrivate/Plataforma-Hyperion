@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { LlmToolDefinition } from "./llm-provider.js";
 
 const uuid = z.string().uuid();
+const LAST_AVAILABILITY_SCHEMA_VERSION = 2;
 
 const businessSchemas = {
   get_catalog: z.object({}),
@@ -18,7 +19,7 @@ const businessSchemas = {
   create_appointment_hold: z.object({
     siteId: uuid,
     professionalId: uuid,
-    payerId: uuid.optional(),
+    payerId: uuid,
     appointmentTypeId: uuid,
     scheduledAt: z.string().datetime()
   }),
@@ -29,7 +30,7 @@ const businessSchemas = {
     appointmentId: uuid,
     siteId: uuid,
     professionalId: uuid,
-    payerId: uuid.optional(),
+    payerId: uuid,
     appointmentTypeId: uuid,
     scheduledAt: z.string().datetime(),
     reason: z.string().trim().min(2).max(300)
@@ -69,7 +70,7 @@ const definitions: Record<
     description:
       "Prepara la reserva del slot elegido. La plataforma bloqueará la escritura y pedirá confirmación si el mensaje actual no es una confirmación explícita.",
     properties: slotProperties(),
-    required: ["siteId", "professionalId", "appointmentTypeId", "scheduledAt"]
+    required: ["siteId", "professionalId", "payerId", "appointmentTypeId", "scheduledAt"]
   },
   book_appointment: {
     description: "Confirma en la agenda interna un hold creado en este turno explícitamente confirmado.",
@@ -94,7 +95,7 @@ const definitions: Record<
     description:
       "Reagenda atómicamente una cita a un slot disponible. Requiere confirmación explícita en el mensaje actual.",
     properties: { appointmentId: { type: "string", format: "uuid" }, ...slotProperties(), reason: { type: "string" } },
-    required: ["appointmentId", "siteId", "professionalId", "appointmentTypeId", "scheduledAt", "reason"]
+    required: ["appointmentId", "siteId", "professionalId", "payerId", "appointmentTypeId", "scheduledAt", "reason"]
   }
 };
 
@@ -296,7 +297,9 @@ export class SofiaToolClient {
     if (toolName === "search_availability") {
       await this.saveConversationState(context.tenantId, context.conversationId, {
         lastAvailability: data,
-        lastAvailabilityAt: new Date().toISOString()
+        lastAvailabilityAt: new Date().toISOString(),
+        lastAvailabilitySchemaVersion: LAST_AVAILABILITY_SCHEMA_VERSION,
+        lastAvailabilityJobId: context.jobId
       });
     } else if (toolName === "create_appointment_hold") {
       const holdId = readHoldId(data);
@@ -313,6 +316,7 @@ export class SofiaToolClient {
             }
           : null
       );
+      await this.clearLastAvailability(context.tenantId, context.conversationId);
     } else if (toolName === "book_appointment") {
       await this.clearConfirmedGrant(
         context.tenantId,
@@ -320,8 +324,10 @@ export class SofiaToolClient {
         confirmedActionId!,
         String(toolArguments.holdId)
       );
+      await this.clearLastAvailability(context.tenantId, context.conversationId);
     } else if (isMutation(toolName)) {
       await this.clearConfirmedPending(context.tenantId, context.conversationId, confirmedActionId!);
+      await this.clearLastAvailability(context.tenantId, context.conversationId);
     }
     return { ok: true, data };
   }
@@ -349,6 +355,22 @@ export class SofiaToolClient {
          updated_at = now()
        where tenant_id = $1 and id = $2`,
       [tenantId, conversationId, JSON.stringify(patch)]
+    );
+  }
+
+  private async clearLastAvailability(tenantId: string, conversationId: string): Promise<void> {
+    await this.options.db.query(
+      `update pulso_iris.conversations
+       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         'sofiaState',
+         coalesce(metadata->'sofiaState', '{}'::jsonb)
+           - 'lastAvailability'
+           - 'lastAvailabilityAt'
+           - 'lastAvailabilitySchemaVersion'
+           - 'lastAvailabilityJobId'
+       ), updated_at = now()
+       where tenant_id = $1 and id = $2`,
+      [tenantId, conversationId]
     );
   }
 

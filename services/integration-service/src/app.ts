@@ -125,10 +125,10 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
            order by f.version desc, f.updated_at desc
            limit 1
          ) selected
-         where selected.runtime_key = 'sofia_whatsapp_internal_v3'
+         where selected.runtime_key = 'sofia_whatsapp_internal_v4'
            and exists (
              select 1 from platform.schema_migrations
-             where name = '014-sofia-local-time-protocol.sql'
+             where name = '015-sofia-fresh-availability.sql'
            )`,
         [tenantId]
       )

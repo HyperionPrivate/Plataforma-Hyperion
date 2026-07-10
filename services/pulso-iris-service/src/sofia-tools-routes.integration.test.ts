@@ -164,6 +164,8 @@ describeIntegration("SOFIA internal agenda tools", () => {
     expect(availability.json().data.slots[0]).toMatchObject({
       startsAt: scheduledAt,
       scheduledAt,
+      payerId,
+      payerName: "Particular controlado",
       localDate: scheduledAt.slice(0, 10),
       localTime: "09:00",
       timeZone: "America/Bogota"
