@@ -42,7 +42,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     await db.close();
   });
 
-  it("clears an expired action with CAS and safely restages the confirmed request", async () => {
+  it("clears an expired action with CAS without rebuilding it from CONFIRMO arguments", async () => {
     const fetchImpl = vi.fn();
     const client = createClient(db, fetchImpl);
     const firstJobId = randomUUID();
@@ -64,20 +64,186 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     );
 
     const nextJobId = randomUUID();
-    const restaged = await client.execute("cancel_appointment", cancelArguments("Solicitud vigente"), {
+    const result = await client.execute("cancel_appointment", cancelArguments("Solicitud vigente"), {
       ...context(tenantId, patientId, conversationId, nextJobId),
       currentMessageBody: "CONFIRMO cancelar"
     });
-    expect(restaged).toMatchObject({ ok: false, code: "confirmation_action_staged" });
+    expect(result).toMatchObject({ ok: false, code: "confirmation_action_missing" });
 
     const state = await readState(db, tenantId, conversationId);
-    expect(state.pendingAction).toMatchObject({
-      tool: "cancel_appointment",
-      jobId: nextJobId,
-      arguments: { reason: "Solicitud vigente" }
-    });
+    expect(state.pendingAction).toBeNull();
     expect(state.confirmationGrant).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("claims one durable action and replays its receipt by confirmation message", async () => {
+    const actionId = randomUUID();
+    const appointmentId = randomUUID();
+    await db.query(
+      `update pulso_iris.conversations
+       set metadata = jsonb_set(metadata, '{sofiaState}', $3::jsonb)
+       where tenant_id = $1 and id = $2`,
+      [
+        tenantId,
+        conversationId,
+        JSON.stringify({
+          pendingAction: {
+            tool: "cancel_appointment",
+            arguments: { appointmentId, reason: "Solicitud controlada" },
+            stagedAt: new Date().toISOString(),
+            jobId: actionId
+          },
+          confirmationReceipts: {}
+        })
+      ]
+    );
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              appointment: {
+                id: appointmentId,
+                status: "cancelled",
+                verificationMode: "internal",
+                origin: "sofia_wa",
+                scheduledAt: "2026-07-13T14:00:00.000Z",
+                localDate: "2026-07-13",
+                localTime: "09:00",
+                timeZone: "America/Bogota"
+              }
+            }
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+    );
+    const client = createClient(db, fetchImpl);
+    const confirmationContext = {
+      ...context(tenantId, patientId, conversationId, randomUUID()),
+      currentMessageBody: "CONFIRMO cancelar"
+    };
+
+    const first = await client.confirmPendingAction(confirmationContext);
+    const replay = await client.confirmPendingAction(confirmationContext);
+
+    expect(first).toMatchObject({ ok: true, status: "completed", action: "cancel", replayed: false });
+    expect(replay).toMatchObject({ ok: true, status: "completed", action: "cancel", replayed: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const state = await readState(db, tenantId, conversationId);
+    expect(state).toMatchObject({
+      pendingAction: null,
+      confirmationExecution: null,
+      confirmationGrant: null,
+      confirmationReceipts: {
+        [confirmationContext.currentMessageId]: { actionId, action: "cancel", outcome: "completed" }
+      }
+    });
+  });
+
+  it("finalizes a compatible pending action by CAS without a domain call", async () => {
+    const actionId = randomUUID();
+    await db.query(
+      `update pulso_iris.conversations
+       set metadata = jsonb_set(metadata, '{sofiaState}', $3::jsonb)
+       where tenant_id = $1 and id = $2`,
+      [
+        tenantId,
+        conversationId,
+        JSON.stringify({
+          pendingAction: {
+            tool: "cancel_appointment",
+            arguments: { appointmentId: randomUUID(), reason: "Solicitud controlada" },
+            stagedAt: new Date().toISOString(),
+            jobId: actionId
+          },
+          confirmationReceipts: {}
+        })
+      ]
+    );
+    const fetchImpl = vi.fn();
+    const client = createClient(db, fetchImpl);
+    const confirmationContext = {
+      ...context(tenantId, patientId, conversationId, randomUUID()),
+      currentMessageBody: "CONFIRMO cancelar"
+    };
+
+    const finalized = await client.finalizePendingConfirmation(
+      confirmationContext,
+      "confirmation_retry_exhausted",
+      "No fue posible completar la cancelación."
+    );
+
+    expect(finalized).toMatchObject({
+      ok: false,
+      status: "terminal_failure",
+      action: "cancel",
+      actionId,
+      code: "confirmation_retry_exhausted"
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const state = await readState(db, tenantId, conversationId);
+    expect(state).toMatchObject({
+      pendingAction: null,
+      confirmationExecution: null,
+      confirmationGrant: null,
+      confirmationReceipts: {
+        [confirmationContext.currentMessageId]: { actionId, outcome: "terminal_failure" }
+      }
+    });
+  });
+
+  it("expires an orphan execution with CAS and leaves a durable terminal receipt", async () => {
+    const actionId = randomUUID();
+    const confirmationMessageId = randomUUID();
+    await db.query(
+      `update pulso_iris.conversations
+       set metadata = jsonb_set(metadata, '{sofiaState}', $3::jsonb)
+       where tenant_id = $1 and id = $2`,
+      [
+        tenantId,
+        conversationId,
+        JSON.stringify({
+          confirmationExecution: {
+            actionId,
+            tool: "cancel_appointment",
+            arguments: { appointmentId: randomUUID(), reason: "Solicitud controlada" },
+            confirmationMessageId,
+            claimedAt: new Date(Date.now() - 6 * 60 * 1_000).toISOString()
+          },
+          confirmationReceipts: {}
+        })
+      ]
+    );
+    const fetchImpl = vi.fn();
+    const client = createClient(db, fetchImpl);
+    const originalContext = {
+      ...context(tenantId, patientId, conversationId, randomUUID()),
+      currentMessageId: confirmationMessageId,
+      currentMessageBody: "CONFIRMO cancelar"
+    };
+
+    const expired = await client.confirmPendingAction(originalContext);
+    const unrelated = await client.confirmPendingAction({
+      ...originalContext,
+      currentMessageId: randomUUID(),
+      jobId: randomUUID()
+    });
+
+    expect(expired).toMatchObject({
+      ok: false,
+      status: "terminal_failure",
+      code: "confirmation_execution_expired",
+      actionId
+    });
+    expect(unrelated).toMatchObject({ ok: false, status: "no_action" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const state = await readState(db, tenantId, conversationId);
+    expect(state).toMatchObject({
+      confirmationExecution: null,
+      confirmationReceipts: {
+        [confirmationMessageId]: { actionId, outcome: "terminal_failure" }
+      }
+    });
   });
 
   it("removes an expired grant before preparing another action", async () => {
@@ -308,7 +474,9 @@ async function readState(db: DatabaseClient, tenantId: string, conversationId: s
   );
   return result.rows[0]!.state as {
     pendingAction?: Record<string, unknown> | null;
+    confirmationExecution?: Record<string, unknown> | null;
     confirmationGrant?: Record<string, unknown> | null;
+    confirmationReceipts?: Record<string, unknown>;
     lastAvailability?: Record<string, unknown>;
     lastAvailabilityAt?: string;
     lastAvailabilitySchemaVersion?: number;

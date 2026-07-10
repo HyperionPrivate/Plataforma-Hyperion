@@ -131,8 +131,10 @@ export interface SofiaToolContext {
   sequence: number;
 }
 
+type ConfirmableToolName = "create_appointment_hold" | "cancel_appointment" | "reschedule_appointment";
+
 interface PendingAction {
-  tool: SofiaToolName;
+  tool: ConfirmableToolName;
   arguments: Record<string, unknown>;
   stagedAt: string;
   jobId: string;
@@ -143,9 +145,100 @@ interface ConfirmationGrant {
   tool: "book_appointment";
   holdId: string;
   expiresAt: string;
+  confirmationMessageId?: string;
+  arguments?: Record<string, unknown>;
 }
 
+export type SofiaConfirmedAction = "book" | "cancel" | "reschedule";
+
+interface ConfirmationExecution {
+  actionId: string;
+  tool: ConfirmableToolName;
+  arguments: Record<string, unknown>;
+  confirmationMessageId: string;
+  claimedAt: string;
+}
+
+export interface SofiaConfirmationAppointment {
+  id?: string;
+  status: string;
+  verificationMode?: string;
+  origin?: string;
+  localDate?: string;
+  localTime?: string;
+  timeZone?: string;
+  siteName?: string | null;
+  professionalName?: string | null;
+  payerName?: string | null;
+  appointmentTypeName?: string | null;
+}
+
+export interface SofiaConfirmationReceipt {
+  schemaVersion: 1;
+  confirmationMessageId: string;
+  actionId: string;
+  action: SofiaConfirmedAction;
+  outcome: "completed" | "terminal_failure";
+  completedAt: string;
+  appointment?: SofiaConfirmationAppointment;
+  previousAppointmentId?: string;
+  code?: string;
+  message?: string;
+}
+
+interface ExpiredConfirmationAction {
+  actionId: string;
+  tool: ConfirmableToolName;
+}
+
+interface ConfirmationState {
+  pendingAction?: PendingAction;
+  confirmationExecution?: ConfirmationExecution;
+  confirmationGrant?: ConfirmationGrant;
+  confirmationReceipts: Record<string, SofiaConfirmationReceipt>;
+  expiredAction?: ExpiredConfirmationAction;
+}
+
+export type SofiaConfirmationResult =
+  | {
+      handled: false;
+      ok: false;
+      status: "not_confirmation";
+      code: "not_explicit_confirmation";
+      message: string;
+    }
+  | {
+      handled: true;
+      ok: false;
+      status: "no_action" | "action_mismatch" | "expired" | "state_changed" | "retryable_failure";
+      code: string;
+      message: string;
+      action?: SofiaConfirmedAction;
+      actionId?: string;
+    }
+  | {
+      handled: true;
+      ok: false;
+      status: "terminal_failure";
+      code: string;
+      message: string;
+      action: SofiaConfirmedAction;
+      actionId: string;
+      receipt: SofiaConfirmationReceipt;
+    }
+  | {
+      handled: true;
+      ok: true;
+      status: "completed";
+      action: SofiaConfirmedAction;
+      actionId: string;
+      data: Record<string, unknown>;
+      receipt: SofiaConfirmationReceipt;
+      replayed: boolean;
+    };
+
 const CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
+const CONFIRMATION_EXECUTION_LEASE_MS = 5 * 60 * 1_000;
 
 export class SofiaToolClient {
   constructor(
@@ -169,6 +262,193 @@ export class SofiaToolClient {
     return z.object({ patientId: uuid, conversationId: uuid, messageId: uuid }).parse(data);
   }
 
+  async confirmPendingAction(context: SofiaToolContext): Promise<SofiaConfirmationResult> {
+    const confirmationIntent = parseExplicitConfirmation(context.currentMessageBody);
+    if (!confirmationIntent) {
+      return {
+        handled: false,
+        ok: false,
+        status: "not_confirmation",
+        code: "not_explicit_confirmation",
+        message: "El mensaje actual no contiene una confirmación explícita."
+      };
+    }
+
+    let state = await this.loadConfirmationState(context.tenantId, context.conversationId);
+    const existingReceipt = state.confirmationReceipts[context.currentMessageId];
+    if (existingReceipt) return confirmationResultFromReceipt(existingReceipt, true);
+
+    if (state.expiredAction) {
+      return {
+        handled: true,
+        ok: false,
+        status: "expired",
+        code: "confirmation_action_expired",
+        message: "La acción pendiente venció. Consulta nuevamente la agenda antes de intentar confirmarla.",
+        action: confirmedActionForTool(state.expiredAction.tool),
+        actionId: state.expiredAction.actionId
+      };
+    }
+
+    if (state.confirmationExecution) {
+      if (state.confirmationExecution.confirmationMessageId !== context.currentMessageId) {
+        return confirmationBusy(state.confirmationExecution);
+      }
+      if (!confirmationMatchesTool(confirmationIntent, state.confirmationExecution.tool)) {
+        return confirmationMismatch(state.confirmationExecution.tool, state.confirmationExecution.actionId);
+      }
+      return this.resumeConfirmationExecution(context, state.confirmationExecution);
+    }
+
+    if (state.confirmationGrant) {
+      if (
+        state.confirmationGrant.confirmationMessageId &&
+        state.confirmationGrant.confirmationMessageId !== context.currentMessageId
+      ) {
+        return confirmationBusy({
+          actionId: state.confirmationGrant.actionId,
+          tool: "create_appointment_hold"
+        });
+      }
+      if (!confirmationMatchesTool(confirmationIntent, "book_appointment")) {
+        return confirmationMismatch("create_appointment_hold", state.confirmationGrant.actionId);
+      }
+      return this.bookGrantedHold(context, state.confirmationGrant);
+    }
+
+    const pending = state.pendingAction;
+    if (!pending) {
+      return {
+        handled: true,
+        ok: false,
+        status: "no_action",
+        code: "confirmation_action_missing",
+        message: "No hay una acción pendiente para confirmar."
+      };
+    }
+    if (pending.jobId === context.jobId) {
+      return {
+        handled: true,
+        ok: false,
+        status: "no_action",
+        code: "confirmation_same_message",
+        message: "Una acción no puede prepararse y confirmarse con el mismo mensaje.",
+        action: confirmedActionForTool(pending.tool),
+        actionId: pending.jobId
+      };
+    }
+    if (!confirmationMatchesTool(confirmationIntent, pending.tool)) {
+      return confirmationMismatch(pending.tool, pending.jobId);
+    }
+    const persisted = validateToolArguments(pending.tool, pending.arguments);
+    if (!persisted.ok || !isConfirmableTool(pending.tool)) {
+      return {
+        handled: true,
+        ok: false,
+        status: "state_changed",
+        code: "pending_action_invalid",
+        message: "La acción pendiente no es válida. Solicítala nuevamente.",
+        action: confirmedActionForTool(pending.tool),
+        actionId: pending.jobId
+      };
+    }
+
+    const execution: ConfirmationExecution = {
+      actionId: pending.jobId,
+      tool: pending.tool,
+      arguments: persisted.data,
+      confirmationMessageId: context.currentMessageId,
+      claimedAt: new Date().toISOString()
+    };
+    const claimed = await this.claimPendingAction(context, pending, execution);
+    if (!claimed) {
+      state = await this.loadConfirmationState(context.tenantId, context.conversationId);
+      const receipt = state.confirmationReceipts[context.currentMessageId];
+      if (receipt) return confirmationResultFromReceipt(receipt, true);
+      if (
+        state.confirmationExecution?.actionId === execution.actionId &&
+        state.confirmationExecution.confirmationMessageId === context.currentMessageId
+      ) {
+        return this.resumeConfirmationExecution(context, state.confirmationExecution);
+      }
+      return {
+        handled: true,
+        ok: false,
+        status: "state_changed",
+        code: "confirmation_state_changed",
+        message: "La acción pendiente cambió y no fue ejecutada.",
+        action: confirmedActionForTool(pending.tool),
+        actionId: pending.jobId
+      };
+    }
+    return this.resumeConfirmationExecution(context, execution);
+  }
+
+  async finalizePendingConfirmation(
+    context: SofiaToolContext,
+    code: string,
+    message: string
+  ): Promise<SofiaConfirmationResult> {
+    const state = await this.loadConfirmationState(context.tenantId, context.conversationId);
+    const existingReceipt = state.confirmationReceipts[context.currentMessageId];
+    if (existingReceipt) return confirmationResultFromReceipt(existingReceipt, true);
+
+    const terminalCode = /^[a-z0-9_.-]{1,100}$/i.test(code) ? code : "confirmation_retries_exhausted";
+    const terminalMessage = message.trim().slice(0, 300) || "La operación no pudo completarse de forma concluyente.";
+    if (state.confirmationExecution) {
+      if (state.confirmationExecution.confirmationMessageId !== context.currentMessageId) {
+        return confirmationBusy(state.confirmationExecution);
+      }
+      return this.finishTerminalExecution(context, state.confirmationExecution, terminalCode, terminalMessage);
+    }
+    if (state.confirmationGrant) {
+      if (
+        state.confirmationGrant.confirmationMessageId &&
+        state.confirmationGrant.confirmationMessageId !== context.currentMessageId
+      ) {
+        return confirmationBusy({
+          actionId: state.confirmationGrant.actionId,
+          tool: "create_appointment_hold"
+        });
+      }
+      return this.finishTerminalGrant(context, state.confirmationGrant, terminalCode, terminalMessage);
+    }
+    if (state.pendingAction) {
+      const confirmationIntent = parseExplicitConfirmation(context.currentMessageBody);
+      if (!confirmationIntent) {
+        return {
+          handled: false,
+          ok: false,
+          status: "not_confirmation",
+          code: "not_explicit_confirmation",
+          message: "El mensaje actual no contiene una confirmación explícita."
+        };
+      }
+      if (state.pendingAction.jobId === context.jobId) {
+        return {
+          handled: true,
+          ok: false,
+          status: "no_action",
+          code: "confirmation_same_message",
+          message: "Una acción no puede prepararse y finalizarse con el mismo mensaje.",
+          action: confirmedActionForTool(state.pendingAction.tool),
+          actionId: state.pendingAction.jobId
+        };
+      }
+      if (!confirmationMatchesTool(confirmationIntent, state.pendingAction.tool)) {
+        return confirmationMismatch(state.pendingAction.tool, state.pendingAction.jobId);
+      }
+      return this.finishTerminalPending(context, state.pendingAction, terminalCode, terminalMessage);
+    }
+    return {
+      handled: true,
+      ok: false,
+      status: "no_action",
+      code: "confirmation_action_missing",
+      message: "No hay una ejecución confirmada pendiente de finalizar."
+    };
+  }
+
   async execute(name: string, rawArguments: string, context: SofiaToolContext): Promise<unknown> {
     if (!(name in businessSchemas)) return { ok: false, code: "unknown_tool", message: "Herramienta no disponible" };
     const toolName = name as SofiaToolName;
@@ -185,7 +465,13 @@ export class SofiaToolClient {
         };
       }
       const state = await this.loadConfirmationState(context.tenantId, context.conversationId);
-      if (
+      if (state.confirmationExecution) {
+        return {
+          ok: false,
+          code: "confirmation_state_changed",
+          message: "La acción confirmada está en proceso y no puede reemplazarse."
+        };
+      } else if (
         toolName === "book_appointment" &&
         state.confirmationGrant?.tool === toolName &&
         Date.parse(state.confirmationGrant.expiresAt) >= Date.now()
@@ -227,11 +513,11 @@ export class SofiaToolClient {
         confirmedActionId = pending.jobId;
         toolArguments = persisted.data;
       } else {
-        const parsed = parseRawToolArguments(toolName, rawArguments);
-        if (!parsed.ok) return parsed.error;
-        const staged = await this.stagePendingAction(toolName, parsed.data, context, state);
-        if (!staged) return confirmationStateChanged();
-        return confirmationStaged("La acción no estaba preparada y no fue ejecutada.");
+        return {
+          ok: false,
+          code: "confirmation_action_missing",
+          message: "No hay una acción pendiente para confirmar."
+        };
       }
     } else {
       const parsed = parseRawToolArguments(toolName, rawArguments);
@@ -244,6 +530,13 @@ export class SofiaToolClient {
             ok: false,
             code: "confirmation_action_mismatch",
             message: "book_appointment solo puede usar el hold exacto autorizado por Hyperion."
+          };
+        }
+        if (state.confirmationExecution) {
+          return {
+            ok: false,
+            code: "confirmation_state_changed",
+            message: "Existe una acción confirmada en proceso; no la reemplaces con otra acción."
           };
         }
         if (state.confirmationGrant) {
@@ -333,6 +626,436 @@ export class SofiaToolClient {
       await this.clearLastAvailability(context.tenantId, context.conversationId);
     }
     return { ok: true, data };
+  }
+
+  private async claimPendingAction(
+    context: SofiaToolContext,
+    pending: PendingAction,
+    execution: ConfirmationExecution
+  ): Promise<boolean> {
+    const result = await this.options.db.query(
+      `update pulso_iris.conversations
+       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         'sofiaState',
+         coalesce(metadata->'sofiaState', '{}'::jsonb) || jsonb_build_object(
+           'pendingAction', null,
+           'confirmationGrant', null,
+           'confirmationExecution', $5::jsonb
+         )
+       ), updated_at = now()
+       where tenant_id = $1 and id = $2
+         and metadata #>> '{sofiaState,pendingAction,jobId}' = $3
+         and metadata #>> '{sofiaState,pendingAction,tool}' = $4
+         and coalesce(metadata #> '{sofiaState,confirmationExecution}', 'null'::jsonb) = 'null'::jsonb
+         and coalesce(metadata #> '{sofiaState,confirmationGrant}', 'null'::jsonb) = 'null'::jsonb`,
+      [context.tenantId, context.conversationId, pending.jobId, pending.tool, JSON.stringify(execution)]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private async resumeConfirmationExecution(
+    context: SofiaToolContext,
+    execution: ConfirmationExecution
+  ): Promise<SofiaConfirmationResult> {
+    const persisted = validateToolArguments(execution.tool, execution.arguments);
+    if (!persisted.ok) {
+      return this.finishTerminalExecution(
+        context,
+        execution,
+        "pending_action_invalid",
+        "La acción pendiente dejó de ser válida y no fue ejecutada."
+      );
+    }
+
+    const called = await this.callConfirmedMutation(
+      context,
+      execution.tool,
+      persisted.data,
+      execution.actionId,
+      execution.confirmationMessageId
+    );
+    if (!called.ok) {
+      if (called.retryable) {
+        return {
+          handled: true,
+          ok: false,
+          status: "retryable_failure",
+          code: called.code,
+          message: called.message,
+          action: confirmedActionForTool(execution.tool),
+          actionId: execution.actionId
+        };
+      }
+      return this.finishTerminalExecution(context, execution, called.code, called.message);
+    }
+
+    if (execution.tool === "create_appointment_hold") {
+      const holdId = readHoldId(called.data);
+      if (!holdId) {
+        return {
+          handled: true,
+          ok: false,
+          status: "retryable_failure",
+          code: "invalid_hold_response",
+          message: "La agenda no devolvió una reserva temporal válida. Se reintentará sin duplicar la operación.",
+          action: "book",
+          actionId: execution.actionId
+        };
+      }
+      const grant: ConfirmationGrant = {
+        actionId: execution.actionId,
+        tool: "book_appointment",
+        holdId,
+        expiresAt: readHoldExpiresAt(called.data) ?? new Date(Date.now() + CONFIRMATION_TTL_MS).toISOString(),
+        confirmationMessageId: execution.confirmationMessageId,
+        arguments: persisted.data
+      };
+      const moved = await this.moveExecutionToGrant(context, execution, grant);
+      if (!moved) {
+        const state = await this.loadConfirmationState(context.tenantId, context.conversationId);
+        const receipt = state.confirmationReceipts[context.currentMessageId];
+        if (receipt) return confirmationResultFromReceipt(receipt, true);
+        if (state.confirmationGrant?.actionId === grant.actionId && state.confirmationGrant.holdId === grant.holdId) {
+          return this.bookGrantedHold(context, state.confirmationGrant);
+        }
+        return confirmationStateChangedResult(execution);
+      }
+      return this.bookGrantedHold(context, grant);
+    }
+
+    const action = confirmedActionForTool(execution.tool);
+    const receipt = buildCompletedReceipt(
+      context.currentMessageId,
+      execution.actionId,
+      action,
+      persisted.data,
+      called.data
+    );
+    if (!receipt) {
+      return {
+        handled: true,
+        ok: false,
+        status: "retryable_failure",
+        code: "invalid_mutation_response",
+        message: "La agenda no devolvió evidencia completa de la operación. Se consultará nuevamente sin duplicarla.",
+        action,
+        actionId: execution.actionId
+      };
+    }
+    const stored = await this.storeExecutionReceipt(context, execution, receipt);
+    if (!stored) return this.readReceiptOrStateChanged(context, execution);
+    return confirmationResultFromReceipt(receipt, false, called.data);
+  }
+
+  private async bookGrantedHold(context: SofiaToolContext, grant: ConfirmationGrant): Promise<SofiaConfirmationResult> {
+    const called = await this.callConfirmedMutation(
+      context,
+      "book_appointment",
+      { holdId: grant.holdId },
+      grant.actionId,
+      grant.confirmationMessageId ?? context.currentMessageId
+    );
+    if (!called.ok) {
+      if (called.retryable) {
+        return {
+          handled: true,
+          ok: false,
+          status: "retryable_failure",
+          code: called.code,
+          message: called.message,
+          action: "book",
+          actionId: grant.actionId
+        };
+      }
+      return this.finishTerminalGrant(context, grant, called.code, called.message);
+    }
+
+    const receipt = buildCompletedReceipt(
+      context.currentMessageId,
+      grant.actionId,
+      "book",
+      grant.arguments,
+      called.data
+    );
+    if (!receipt) {
+      return {
+        handled: true,
+        ok: false,
+        status: "retryable_failure",
+        code: "invalid_mutation_response",
+        message: "La agenda no devolvió evidencia completa de la cita. Se consultará nuevamente sin duplicarla.",
+        action: "book",
+        actionId: grant.actionId
+      };
+    }
+    const stored = await this.storeGrantReceipt(context, grant, receipt);
+    if (!stored) {
+      return this.readReceiptOrStateChanged(context, {
+        actionId: grant.actionId,
+        tool: "create_appointment_hold",
+        arguments: {},
+        confirmationMessageId: context.currentMessageId,
+        claimedAt: new Date().toISOString()
+      });
+    }
+    return confirmationResultFromReceipt(receipt, false, called.data);
+  }
+
+  private async callConfirmedMutation(
+    context: SofiaToolContext,
+    toolName: ConfirmableToolName | "book_appointment",
+    toolArguments: Record<string, unknown>,
+    actionId: string,
+    confirmationMessageId: string
+  ): Promise<{ ok: true; data: unknown } | { ok: false; retryable: boolean; code: string; message: string }> {
+    try {
+      const data = await this.call(context.tenantId, toolName, {
+        ...toolArguments,
+        patientId: context.patientId,
+        conversationId: context.conversationId,
+        confirmationMessageId,
+        idempotencyKey: `${actionId}:${toolName}`
+      });
+      return { ok: true, data };
+    } catch (error) {
+      if (error instanceof ToolCallError) return classifyToolCallFailure(error);
+      return {
+        ok: false,
+        retryable: true,
+        code: "agenda_temporarily_unavailable",
+        message: "La agenda no respondió. La operación podrá reintentarse sin duplicarse."
+      };
+    }
+  }
+
+  private async moveExecutionToGrant(
+    context: SofiaToolContext,
+    execution: ConfirmationExecution,
+    grant: ConfirmationGrant
+  ): Promise<boolean> {
+    const result = await this.options.db.query(
+      `update pulso_iris.conversations
+       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         'sofiaState',
+         coalesce(metadata->'sofiaState', '{}'::jsonb) || jsonb_build_object(
+           'pendingAction', null,
+           'confirmationExecution', null,
+           'confirmationGrant', $6::jsonb
+         )
+       ), updated_at = now()
+       where tenant_id = $1 and id = $2
+         and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
+         and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
+         and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5`,
+      [
+        context.tenantId,
+        context.conversationId,
+        execution.actionId,
+        execution.confirmationMessageId,
+        execution.tool,
+        JSON.stringify(grant)
+      ]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private async finishTerminalExecution(
+    context: SofiaToolContext,
+    execution: ConfirmationExecution,
+    code: string,
+    message: string
+  ): Promise<SofiaConfirmationResult> {
+    const receipt = buildTerminalReceipt(
+      context.currentMessageId,
+      execution.actionId,
+      confirmedActionForTool(execution.tool),
+      code,
+      message
+    );
+    const stored = await this.storeExecutionReceipt(context, execution, receipt);
+    if (!stored) return this.readReceiptOrStateChanged(context, execution);
+    return confirmationResultFromReceipt(receipt, false);
+  }
+
+  private async finishTerminalPending(
+    context: SofiaToolContext,
+    pending: PendingAction,
+    code: string,
+    message: string
+  ): Promise<SofiaConfirmationResult> {
+    const receipt = buildTerminalReceipt(
+      context.currentMessageId,
+      pending.jobId,
+      confirmedActionForTool(pending.tool),
+      code,
+      message
+    );
+    const stored = await this.storePendingReceipt(context, pending, receipt);
+    if (!stored) {
+      const state = await this.loadConfirmationState(context.tenantId, context.conversationId);
+      const existingReceipt = state.confirmationReceipts[context.currentMessageId];
+      return existingReceipt
+        ? confirmationResultFromReceipt(existingReceipt, true)
+        : confirmationStateChangedResult({
+            actionId: pending.jobId,
+            tool: pending.tool,
+            arguments: pending.arguments,
+            confirmationMessageId: context.currentMessageId,
+            claimedAt: new Date().toISOString()
+          });
+    }
+    return confirmationResultFromReceipt(receipt, false);
+  }
+
+  private async finishTerminalGrant(
+    context: SofiaToolContext,
+    grant: ConfirmationGrant,
+    code: string,
+    message: string
+  ): Promise<SofiaConfirmationResult> {
+    const receipt = buildTerminalReceipt(context.currentMessageId, grant.actionId, "book", code, message);
+    const stored = await this.storeGrantReceipt(context, grant, receipt);
+    if (!stored) {
+      return this.readReceiptOrStateChanged(context, {
+        actionId: grant.actionId,
+        tool: "create_appointment_hold",
+        arguments: {},
+        confirmationMessageId: context.currentMessageId,
+        claimedAt: new Date().toISOString()
+      });
+    }
+    return confirmationResultFromReceipt(receipt, false);
+  }
+
+  private async storeExecutionReceipt(
+    context: SofiaToolContext,
+    execution: ConfirmationExecution,
+    receipt: SofiaConfirmationReceipt
+  ): Promise<boolean> {
+    const result = await this.options.db.query(
+      `update pulso_iris.conversations
+       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         'sofiaState',
+         (coalesce(metadata->'sofiaState', '{}'::jsonb)
+           - 'lastAvailability'
+           - 'lastAvailabilityAt'
+           - 'lastAvailabilitySchemaVersion'
+           - 'lastAvailabilityJobId'
+           - 'lastAvailabilityQuery')
+           || jsonb_build_object(
+                'pendingAction', null,
+                'confirmationExecution', null,
+                'confirmationGrant', null,
+                'confirmationReceipts',
+                  coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
+                    || jsonb_build_object($4::text, $6::jsonb)
+              )
+       ), updated_at = now()
+       where tenant_id = $1 and id = $2
+         and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
+         and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
+         and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5`,
+      [
+        context.tenantId,
+        context.conversationId,
+        execution.actionId,
+        execution.confirmationMessageId,
+        execution.tool,
+        JSON.stringify(receipt)
+      ]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private async storePendingReceipt(
+    context: SofiaToolContext,
+    pending: PendingAction,
+    receipt: SofiaConfirmationReceipt
+  ): Promise<boolean> {
+    const result = await this.options.db.query(
+      `update pulso_iris.conversations
+       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         'sofiaState',
+         (coalesce(metadata->'sofiaState', '{}'::jsonb)
+           - 'lastAvailability'
+           - 'lastAvailabilityAt'
+           - 'lastAvailabilitySchemaVersion'
+           - 'lastAvailabilityJobId'
+           - 'lastAvailabilityQuery')
+           || jsonb_build_object(
+                'pendingAction', null,
+                'confirmationExecution', null,
+                'confirmationGrant', null,
+                'confirmationReceipts',
+                  coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
+                    || jsonb_build_object($4::text, $6::jsonb)
+              )
+       ), updated_at = now()
+       where tenant_id = $1 and id = $2
+         and metadata #>> '{sofiaState,pendingAction,jobId}' = $3
+         and metadata #>> '{sofiaState,pendingAction,tool}' = $5`,
+      [
+        context.tenantId,
+        context.conversationId,
+        pending.jobId,
+        context.currentMessageId,
+        pending.tool,
+        JSON.stringify(receipt)
+      ]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private async storeGrantReceipt(
+    context: SofiaToolContext,
+    grant: ConfirmationGrant,
+    receipt: SofiaConfirmationReceipt
+  ): Promise<boolean> {
+    const result = await this.options.db.query(
+      `update pulso_iris.conversations
+       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         'sofiaState',
+         (coalesce(metadata->'sofiaState', '{}'::jsonb)
+           - 'lastAvailability'
+           - 'lastAvailabilityAt'
+           - 'lastAvailabilitySchemaVersion'
+           - 'lastAvailabilityJobId'
+           - 'lastAvailabilityQuery')
+           || jsonb_build_object(
+                'pendingAction', null,
+                'confirmationExecution', null,
+                'confirmationGrant', null,
+                'confirmationReceipts',
+                  coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
+                    || jsonb_build_object($4::text, $6::jsonb)
+              )
+       ), updated_at = now()
+       where tenant_id = $1 and id = $2
+         and coalesce(metadata #>> '{sofiaState,confirmationGrant,actionId}',
+                      metadata #>> '{sofiaState,confirmationGrant,jobId}') = $3
+         and ($7::text is null
+              or metadata #>> '{sofiaState,confirmationGrant,confirmationMessageId}' = $7)
+         and metadata #>> '{sofiaState,confirmationGrant,holdId}' = $5`,
+      [
+        context.tenantId,
+        context.conversationId,
+        grant.actionId,
+        context.currentMessageId,
+        grant.holdId,
+        JSON.stringify(receipt),
+        grant.confirmationMessageId ?? null
+      ]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private async readReceiptOrStateChanged(
+    context: SofiaToolContext,
+    execution: ConfirmationExecution
+  ): Promise<SofiaConfirmationResult> {
+    const state = await this.loadConfirmationState(context.tenantId, context.conversationId);
+    const receipt = state.confirmationReceipts[context.currentMessageId];
+    return receipt ? confirmationResultFromReceipt(receipt, true) : confirmationStateChangedResult(execution);
   }
 
   private async call(tenantId: string, toolName: string, body: unknown): Promise<unknown> {
@@ -433,6 +1156,7 @@ export class SofiaToolClient {
          coalesce(metadata->'sofiaState', '{}'::jsonb) || $5::jsonb),
          updated_at = now()
        where tenant_id = $1 and id = $2
+         and coalesce(metadata #> '{sofiaState,confirmationExecution}', 'null'::jsonb) = 'null'::jsonb
          and (($3::text is null
                and coalesce(metadata #> '{sofiaState,pendingAction}', 'null'::jsonb) = 'null'::jsonb)
               or metadata #>> '{sofiaState,pendingAction,jobId}' = $3)
@@ -507,18 +1231,71 @@ export class SofiaToolClient {
         state: unknown;
         pendingExpired: boolean;
         grantExpired: boolean;
+        executionExpired: boolean;
       }>(
         `select coalesce(metadata->'sofiaState', '{}'::jsonb) as state,
                 coalesce((metadata #>> '{sofiaState,pendingAction,stagedAt}')::timestamptz
                   + interval '15 minutes' <= now(), false) as "pendingExpired",
                 coalesce((metadata #>> '{sofiaState,confirmationGrant,expiresAt}')::timestamptz
-                  <= now(), false) as "grantExpired"
+                  <= now(), false) as "grantExpired",
+                coalesce((metadata #>> '{sofiaState,confirmationExecution,claimedAt}')::timestamptz
+                  + ($3::int * interval '1 millisecond') <= now(), false) as "executionExpired"
          from pulso_iris.conversations
          where tenant_id = $1 and id = $2`,
-        [tenantId, conversationId]
+        [tenantId, conversationId, CONFIRMATION_EXECUTION_LEASE_MS]
       );
       const row = result.rows[0];
       const state = parseConfirmationState(row?.state);
+      const expiredExecution = row?.executionExpired ? state.confirmationExecution : undefined;
+      if (expiredExecution) {
+        const receipt = buildTerminalReceipt(
+          expiredExecution.confirmationMessageId,
+          expiredExecution.actionId,
+          confirmedActionForTool(expiredExecution.tool),
+          "confirmation_execution_expired",
+          "La operación quedó sin evidencia concluyente. Consulta el estado actual antes de intentar otra acción."
+        );
+        const clearedExecution = await this.options.db.query<{ state: unknown }>(
+          `/* sofia-confirmation:expire-execution */
+           update pulso_iris.conversations
+           set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+             'sofiaState',
+             (coalesce(metadata->'sofiaState', '{}'::jsonb)
+               - 'lastAvailability'
+               - 'lastAvailabilityAt'
+               - 'lastAvailabilitySchemaVersion'
+               - 'lastAvailabilityJobId'
+               - 'lastAvailabilityQuery')
+               || jsonb_build_object(
+                    'confirmationExecution', null,
+                    'confirmationGrant', null,
+                    'confirmationReceipts',
+                      coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
+                        || jsonb_build_object($4::text, $8::jsonb)
+                  )
+           ), updated_at = now()
+           where tenant_id = $1 and id = $2
+             and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
+             and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
+             and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5
+             and metadata #>> '{sofiaState,confirmationExecution,claimedAt}' = $6
+             and (metadata #>> '{sofiaState,confirmationExecution,claimedAt}')::timestamptz
+               + ($7::int * interval '1 millisecond') <= now()
+           returning coalesce(metadata->'sofiaState', '{}'::jsonb) as state`,
+          [
+            tenantId,
+            conversationId,
+            expiredExecution.actionId,
+            expiredExecution.confirmationMessageId,
+            expiredExecution.tool,
+            expiredExecution.claimedAt,
+            CONFIRMATION_EXECUTION_LEASE_MS,
+            JSON.stringify(receipt)
+          ]
+        );
+        if (clearedExecution.rows[0]) return parseConfirmationState(clearedExecution.rows[0].state);
+        continue;
+      }
       const expiredPending = row?.pendingExpired ? state.pendingAction : undefined;
       const expiredGrant = row?.grantExpired ? state.confirmationGrant : undefined;
       if (!expiredPending && !expiredGrant) return state;
@@ -558,7 +1335,17 @@ export class SofiaToolClient {
           JSON.stringify(patch)
         ]
       );
-      if (cleared.rows[0]) return parseConfirmationState(cleared.rows[0].state);
+      if (cleared.rows[0]) {
+        const clearedState = parseConfirmationState(cleared.rows[0].state);
+        return {
+          ...clearedState,
+          expiredAction: expiredPending
+            ? { actionId: expiredPending.jobId, tool: expiredPending.tool }
+            : expiredGrant
+              ? { actionId: expiredGrant.actionId, tool: "create_appointment_hold" as const }
+              : undefined
+        };
+      }
     }
     throw new Error("Confirmation state changed concurrently");
   }
@@ -635,14 +1422,6 @@ function confirmationRequired(detail: string): Record<string, unknown> {
   };
 }
 
-function confirmationStaged(detail: string): Record<string, unknown> {
-  return {
-    ok: false,
-    code: "confirmation_action_staged",
-    message: `${detail} Presenta sus datos exactos y pide al paciente un nuevo mensaje CONFIRMO.`
-  };
-}
-
 function confirmationStateChanged(): Record<string, unknown> {
   return {
     ok: false,
@@ -678,53 +1457,336 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function parseConfirmationState(value: unknown): {
-  pendingAction?: PendingAction;
-  confirmationGrant?: ConfirmationGrant;
-} {
-  if (!isRecord(value)) return {};
+function parseConfirmationState(value: unknown): ConfirmationState {
+  if (!isRecord(value)) return { confirmationReceipts: {} };
   const pending = z
     .object({
-      tool: z.enum([
-        "get_catalog",
-        "update_patient_name",
-        "search_availability",
-        "create_appointment_hold",
-        "book_appointment",
-        "list_patient_appointments",
-        "cancel_appointment",
-        "reschedule_appointment"
-      ]),
+      tool: z.enum(["create_appointment_hold", "cancel_appointment", "reschedule_appointment"]),
       arguments: z.record(z.string(), z.unknown()),
       stagedAt: z.string().datetime(),
       jobId: uuid
     })
     .safeParse(value.pendingAction);
+  const execution = z
+    .object({
+      actionId: uuid,
+      tool: z.enum(["create_appointment_hold", "cancel_appointment", "reschedule_appointment"]),
+      arguments: z.record(z.string(), z.unknown()),
+      confirmationMessageId: uuid,
+      claimedAt: z.string().datetime()
+    })
+    .safeParse(value.confirmationExecution);
   const grant = z
     .object({
       actionId: uuid.optional(),
       jobId: uuid.optional(),
       tool: z.literal("book_appointment"),
       holdId: uuid,
-      expiresAt: z.string().datetime()
+      expiresAt: z.string().datetime(),
+      confirmationMessageId: uuid.optional(),
+      arguments: z.record(z.string(), z.unknown()).optional()
     })
     .refine((value) => Boolean(value.actionId ?? value.jobId))
     .safeParse(value.confirmationGrant);
+  const appointmentSchema = z.object({
+    id: uuid.optional(),
+    status: z.string().min(1),
+    verificationMode: z.string().min(1).optional(),
+    origin: z.string().min(1).optional(),
+    localDate: dateOnly.optional(),
+    localTime: localTime.optional(),
+    timeZone: z.string().min(1).optional(),
+    siteName: z.string().nullable().optional(),
+    professionalName: z.string().nullable().optional(),
+    payerName: z.string().nullable().optional(),
+    appointmentTypeName: z.string().nullable().optional()
+  });
+  const receiptSchema = z.object({
+    schemaVersion: z.literal(1),
+    confirmationMessageId: uuid,
+    actionId: uuid,
+    action: z.enum(["book", "cancel", "reschedule"]),
+    outcome: z.enum(["completed", "terminal_failure"]),
+    completedAt: z.string().datetime(),
+    appointment: appointmentSchema.optional(),
+    previousAppointmentId: uuid.optional(),
+    code: z.string().min(1).max(100).optional(),
+    message: z.string().min(1).max(300).optional()
+  });
+  const receipts = z.record(z.string(), receiptSchema).safeParse(value.confirmationReceipts);
   return {
     pendingAction: pending.success ? pending.data : undefined,
+    confirmationExecution: execution.success ? execution.data : undefined,
     confirmationGrant: grant.success
       ? {
           actionId: grant.data.actionId ?? grant.data.jobId!,
           tool: grant.data.tool,
           holdId: grant.data.holdId,
-          expiresAt: grant.data.expiresAt
+          expiresAt: grant.data.expiresAt,
+          ...(grant.data.confirmationMessageId ? { confirmationMessageId: grant.data.confirmationMessageId } : {}),
+          ...(grant.data.arguments ? { arguments: grant.data.arguments } : {})
         }
-      : undefined
+      : undefined,
+    confirmationReceipts: receipts.success
+      ? Object.fromEntries(
+          Object.entries(receipts.data).filter(([messageId, receipt]) => receipt.confirmationMessageId === messageId)
+        )
+      : {}
+  };
+}
+
+function isConfirmableTool(toolName: SofiaToolName): toolName is ConfirmableToolName {
+  return (
+    toolName === "create_appointment_hold" || toolName === "cancel_appointment" || toolName === "reschedule_appointment"
+  );
+}
+
+function confirmedActionForTool(toolName: ConfirmableToolName | "book_appointment"): SofiaConfirmedAction {
+  if (toolName === "cancel_appointment") return "cancel";
+  if (toolName === "reschedule_appointment") return "reschedule";
+  return "book";
+}
+
+function confirmationMismatch(toolName: ConfirmableToolName, actionId: string): SofiaConfirmationResult {
+  return {
+    handled: true,
+    ok: false,
+    status: "action_mismatch",
+    code: "confirmation_action_mismatch",
+    message: "La confirmación escrita corresponde a otra acción y no fue ejecutada.",
+    action: confirmedActionForTool(toolName),
+    actionId
+  };
+}
+
+function confirmationBusy(input: { actionId: string; tool: ConfirmableToolName }): SofiaConfirmationResult {
+  return {
+    handled: true,
+    ok: false,
+    status: "state_changed",
+    code: "confirmation_already_processing",
+    message: "La acción ya está siendo procesada por otro mensaje de confirmación.",
+    action: confirmedActionForTool(input.tool),
+    actionId: input.actionId
+  };
+}
+
+function confirmationStateChangedResult(execution: ConfirmationExecution): SofiaConfirmationResult {
+  return {
+    handled: true,
+    ok: false,
+    status: "state_changed",
+    code: "confirmation_state_changed",
+    message: "La acción pendiente cambió. No se ejecutó una operación adicional.",
+    action: confirmedActionForTool(execution.tool),
+    actionId: execution.actionId
+  };
+}
+
+function classifyToolCallFailure(error: ToolCallError): {
+  ok: false;
+  retryable: boolean;
+  code: string;
+  message: string;
+} {
+  const payloadCode = typeof error.payload.code === "string" ? error.payload.code : `agenda_http_${error.status}`;
+  const code = /^[a-z0-9_.-]{1,100}$/i.test(payloadCode) ? payloadCode : `agenda_http_${error.status}`;
+  const retryable = error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+  if (retryable) {
+    return {
+      ok: false,
+      retryable: true,
+      code,
+      message: "La agenda está temporalmente indisponible. La operación podrá reintentarse sin duplicarse."
+    };
+  }
+  const message =
+    code === "slot_unavailable" || code === "hold_expired"
+      ? "El horario seleccionado ya no está disponible. Consulta nuevas opciones antes de volver a confirmar."
+      : code === "invalid_transition" || code === "max_reschedules"
+        ? "La cita cambió de estado y esa operación ya no es válida."
+        : "La agenda rechazó la operación solicitada. Revisa el estado actual antes de intentarlo de nuevo.";
+  return { ok: false, retryable: false, code, message };
+}
+
+function buildCompletedReceipt(
+  confirmationMessageId: string,
+  actionId: string,
+  action: SofiaConfirmedAction,
+  actionArguments: unknown,
+  data: unknown
+): SofiaConfirmationReceipt | undefined {
+  if (!isRecord(data) || !isRecord(data.appointment)) return undefined;
+  let previousAppointmentId: string | undefined;
+  if (action === "cancel") {
+    const parsed = businessSchemas.cancel_appointment.safeParse(actionArguments);
+    if (
+      !parsed.success ||
+      data.appointment.status !== "cancelled" ||
+      data.appointment.id !== parsed.data.appointmentId ||
+      !hasValidAppointmentDetails(data.appointment)
+    ) {
+      return undefined;
+    }
+  } else {
+    if (action === "book") {
+      const parsed = businessSchemas.create_appointment_hold.safeParse(actionArguments);
+      if (
+        !(parsed.success
+          ? isExpectedVerifiedAppointment(data.appointment, parsed.data)
+          : isVerifiedAppointmentWithValidDetails(data.appointment))
+      ) {
+        return undefined;
+      }
+    } else {
+      const parsed = businessSchemas.reschedule_appointment.safeParse(actionArguments);
+      if (!parsed.success || !isExpectedVerifiedAppointment(data.appointment, parsed.data)) return undefined;
+      if (
+        !isRecord(data.previousAppointment) ||
+        data.previousAppointment.status !== "rescheduled" ||
+        data.previousAppointment.id !== parsed.data.appointmentId ||
+        data.appointment.id === parsed.data.appointmentId
+      ) {
+        return undefined;
+      }
+      previousAppointmentId = parsed.data.appointmentId;
+    }
+  }
+  const appointment = readAppointmentSummary(data.appointment);
+  if (!appointment) return undefined;
+  return {
+    schemaVersion: 1,
+    confirmationMessageId,
+    actionId,
+    action,
+    outcome: "completed",
+    completedAt: new Date().toISOString(),
+    appointment,
+    ...(previousAppointmentId ? { previousAppointmentId } : {})
+  };
+}
+
+function buildTerminalReceipt(
+  confirmationMessageId: string,
+  actionId: string,
+  action: SofiaConfirmedAction,
+  code: string,
+  message: string
+): SofiaConfirmationReceipt {
+  return {
+    schemaVersion: 1,
+    confirmationMessageId,
+    actionId,
+    action,
+    outcome: "terminal_failure",
+    completedAt: new Date().toISOString(),
+    code: code.slice(0, 100),
+    message: message.slice(0, 300)
+  };
+}
+
+function readAppointmentSummary(value: Record<string, unknown>): SofiaConfirmationAppointment | undefined {
+  if (typeof value.status !== "string" || value.status.length === 0) return undefined;
+  const summary: SofiaConfirmationAppointment = { status: value.status };
+  if (typeof value.id === "string") summary.id = value.id;
+  if (typeof value.verificationMode === "string") summary.verificationMode = value.verificationMode;
+  if (typeof value.origin === "string") summary.origin = value.origin;
+  if (typeof value.localDate === "string") summary.localDate = value.localDate;
+  if (typeof value.localTime === "string") summary.localTime = value.localTime;
+  if (typeof value.timeZone === "string") summary.timeZone = value.timeZone;
+  for (const key of ["siteName", "professionalName", "payerName", "appointmentTypeName"] as const) {
+    const field = value[key];
+    if (typeof field === "string" || field === null) summary[key] = field;
+  }
+  return summary;
+}
+
+function isVerifiedSofiaInternalAppointment(value: Record<string, unknown>): boolean {
+  const simulated =
+    value.simulated === true ||
+    value.verificationMode === "simulated" ||
+    (isRecord(value.metadata) && value.metadata.simulated === true);
+  return (
+    value.status === "verified" && value.verificationMode === "internal" && value.origin === "sofia_wa" && !simulated
+  );
+}
+
+function isExpectedVerifiedAppointment(
+  value: Record<string, unknown>,
+  expected: {
+    siteId: string;
+    professionalId: string;
+    payerId: string;
+    appointmentTypeId: string;
+    scheduledAt: string;
+  }
+): boolean {
+  const expectedTimestamp = Date.parse(expected.scheduledAt);
+  return (
+    isVerifiedAppointmentWithValidDetails(value) &&
+    value.siteId === expected.siteId &&
+    value.professionalId === expected.professionalId &&
+    value.payerId === expected.payerId &&
+    value.appointmentTypeId === expected.appointmentTypeId &&
+    Number.isFinite(expectedTimestamp) &&
+    Date.parse(String(value.scheduledAt)) === expectedTimestamp
+  );
+}
+
+function isVerifiedAppointmentWithValidDetails(value: Record<string, unknown>): boolean {
+  return hasValidAppointmentDetails(value) && isVerifiedSofiaInternalAppointment(value);
+}
+
+function hasValidAppointmentDetails(value: Record<string, unknown>): boolean {
+  return (
+    uuid.safeParse(value.id).success &&
+    typeof value.scheduledAt === "string" &&
+    Number.isFinite(Date.parse(value.scheduledAt)) &&
+    dateOnly.safeParse(value.localDate).success &&
+    localTime.safeParse(value.localTime).success &&
+    typeof value.timeZone === "string" &&
+    value.timeZone.trim().length > 0
+  );
+}
+
+function confirmationResultFromReceipt(
+  receipt: SofiaConfirmationReceipt,
+  replayed: boolean,
+  originalData?: unknown
+): SofiaConfirmationResult {
+  if (receipt.outcome === "terminal_failure") {
+    return {
+      handled: true,
+      ok: false,
+      status: "terminal_failure",
+      code: receipt.code ?? "agenda_operation_rejected",
+      message: receipt.message ?? "La agenda rechazó la operación solicitada.",
+      action: receipt.action,
+      actionId: receipt.actionId,
+      receipt
+    };
+  }
+  const reconstructed: Record<string, unknown> = { appointment: receipt.appointment };
+  if (receipt.previousAppointmentId) reconstructed.previousAppointment = { id: receipt.previousAppointmentId };
+  return {
+    handled: true,
+    ok: true,
+    status: "completed",
+    action: receipt.action,
+    actionId: receipt.actionId,
+    data: isRecord(originalData) ? originalData : reconstructed,
+    receipt,
+    replayed
   };
 }
 
 function readHoldId(value: unknown): string | undefined {
   return isRecord(value) && isRecord(value.hold) && typeof value.hold.id === "string" ? value.hold.id : undefined;
+}
+
+function readHoldExpiresAt(value: unknown): string | undefined {
+  if (!isRecord(value) || !isRecord(value.hold) || typeof value.hold.expiresAt !== "string") return undefined;
+  return Number.isFinite(Date.parse(value.hold.expiresAt)) ? value.hold.expiresAt : undefined;
 }
 
 class ToolCallError extends Error {

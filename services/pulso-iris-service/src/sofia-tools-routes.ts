@@ -510,14 +510,18 @@ async function cancelAppointment(
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "cancel");
   const result = await db.transaction(async (tx) => {
-    const current = await tx.query<{ id: string; status: string; key?: string }>(
-      `select id, status, metadata->>'sofiaCancelIdempotencyKey' as key
+    const current = await tx.query<{ id: string; status: string; key?: string; isFuture: boolean }>(
+      `select id, status, scheduled_at > now() as "isFuture", metadata->>'sofiaCancelIdempotencyKey' as key
        from pulso_iris.appointments
        where tenant_id = $1 and id = $2 and patient_id = $3 for update`,
       [tenantId, input.appointmentId, input.patientId]
     );
-    if (!current.rows[0]) throw new ToolError(404, "appointment_not_found", "Appointment not found");
-    if (current.rows[0].status === "cancelled" && current.rows[0].key === input.idempotencyKey) return true;
+    const appointment = current.rows[0];
+    if (!appointment) throw new ToolError(404, "appointment_not_found", "Appointment not found");
+    if (appointment.status === "cancelled" && appointment.key === input.idempotencyKey) return true;
+    if (isReschedulable(appointment.status) && !appointment.isFuture) {
+      throw new ToolError(409, "appointment_in_past", "Past appointments cannot be cancelled");
+    }
     const transactionalDb = asTransactionalDatabase(tx);
     await new InternalAgendaProvider(transactionalDb).cancel({
       tenantId,
@@ -554,8 +558,8 @@ async function rescheduleAppointment(
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "reschedule");
   const settings = await loadInternalSettings(db, tenantId);
-  const preflight = await db.query<{ status: string; rescheduleCount: number }>(
-    `select status, reschedule_count as "rescheduleCount"
+  const preflight = await db.query<{ status: string; rescheduleCount: number; isFuture: boolean }>(
+    `select status, reschedule_count as "rescheduleCount", scheduled_at > now() as "isFuture"
      from pulso_iris.appointments
      where tenant_id = $1 and id = $2 and patient_id = $3`,
     [tenantId, input.appointmentId, input.patientId]
@@ -575,6 +579,9 @@ async function rescheduleAppointment(
   }
   if (!isReschedulable(initial.status)) {
     throw new ToolError(409, "invalid_transition", "Appointment cannot be rescheduled");
+  }
+  if (!initial.isFuture) {
+    throw new ToolError(409, "appointment_in_past", "Past appointments cannot be rescheduled");
   }
   if (initial.rescheduleCount >= settings.maxReschedules) {
     throw new ToolError(409, "max_reschedules", "Maximum reschedules reached");
@@ -608,8 +615,9 @@ async function rescheduleAppointment(
   let outcome: { replacementId: string; idempotent: boolean };
   try {
     outcome = await db.transaction(async (tx) => {
-      const current = await tx.query<{ status: string; rescheduleCount: number }>(
-        `select status, reschedule_count as "rescheduleCount" from pulso_iris.appointments
+      const current = await tx.query<{ status: string; rescheduleCount: number; isFuture: boolean }>(
+        `select status, reschedule_count as "rescheduleCount", scheduled_at > now() as "isFuture"
+         from pulso_iris.appointments
          where tenant_id = $1 and id = $2 and patient_id = $3 for update`,
         [tenantId, input.appointmentId, input.patientId]
       );
@@ -625,6 +633,9 @@ async function rescheduleAppointment(
       }
       if (!isReschedulable(row.status)) {
         throw new ToolError(409, "invalid_transition", "Appointment cannot be rescheduled");
+      }
+      if (!row.isFuture) {
+        throw new ToolError(409, "appointment_in_past", "Past appointments cannot be rescheduled");
       }
       if (row.rescheduleCount >= settings.maxReschedules) {
         throw new ToolError(409, "max_reschedules", "Maximum reschedules reached");

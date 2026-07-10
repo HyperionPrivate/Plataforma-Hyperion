@@ -2,6 +2,38 @@ import { describe, expect, it, vi } from "vitest";
 import { InternalAgendaProvider } from "./internal-agenda-provider.js";
 
 describe("InternalAgendaProvider", () => {
+  it.each([
+    [
+      "cancel",
+      (provider: InternalAgendaProvider) =>
+        provider.cancel({
+          tenantId: "00000000-0000-4000-8000-000000000001",
+          appointmentId: "00000000-0000-4000-8000-000000000002",
+          actorId: "agent:SOFIA",
+          reason: "Solicitud controlada"
+        })
+    ],
+    [
+      "reschedule",
+      (provider: InternalAgendaProvider) =>
+        provider.reschedule({
+          tenantId: "00000000-0000-4000-8000-000000000001",
+          appointmentId: "00000000-0000-4000-8000-000000000002",
+          replacementAppointmentId: "00000000-0000-4000-8000-000000000003",
+          actorId: "agent:SOFIA",
+          reason: "Solicitud controlada"
+        })
+    ]
+  ])("enforces a future scheduled time in the atomic %s update", async (_operation, execute) => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const provider = new InternalAgendaProvider({ query } as unknown as ConstructorParameters<
+      typeof InternalAgendaProvider
+    >[0]);
+
+    await expect(execute(provider)).rejects.toMatchObject({ code: "invalid_transition" });
+    expect(String(query.mock.calls[0]?.[0])).toContain("scheduled_at > now()");
+  });
+
   it("rejects a new past slot before reserving capacity", async () => {
     const query = vi
       .fn()
