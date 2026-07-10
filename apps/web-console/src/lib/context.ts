@@ -32,3 +32,7 @@ export function useConsole(): ConsoleContextValue {
 export function tenantPath(tenantId: string, suffix: string): string {
   return `/v1/tenants/${tenantId}/pulso-iris/${suffix}`;
 }
+
+export function lumenPath(tenantId: string, suffix: string): string {
+  return `/v1/tenants/${tenantId}/lumen/${suffix}`;
+}

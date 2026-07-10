@@ -11,6 +11,23 @@ const COORDINATOR_TOKEN = "coordinator-test-token-1234567890";
 const ADVISOR_TOKEN = "advisor-test-token-1234567890";
 const AUDITOR_TOKEN = "auditor-test-token-1234567890";
 
+const isolatedServiceUrls = {
+  IDENTITY_SERVICE_URL: "http://127.0.0.1:65511",
+  TENANT_SERVICE_URL: "http://127.0.0.1:65512",
+  AGENT_SERVICE_URL: "http://127.0.0.1:65513",
+  PROMPT_FLOW_SERVICE_URL: "http://127.0.0.1:65514",
+  KNOWLEDGE_SERVICE_URL: "http://127.0.0.1:65515",
+  AUDIT_SERVICE_URL: "http://127.0.0.1:65516",
+  INTEGRATION_SERVICE_URL: "http://127.0.0.1:65517",
+  PULSO_IRIS_SERVICE_URL: "http://127.0.0.1:65518",
+  WHATSAPP_CHANNEL_SERVICE_URL: "http://127.0.0.1:65519",
+  LUMEN_SERVICE_URL: "http://127.0.0.1:65520"
+} as const;
+
+const previousServiceUrls = Object.fromEntries(
+  Object.keys(isolatedServiceUrls).map((name) => [name, process.env[name]])
+);
+
 const sessions: Record<string, AuthMe> = {
   [ADMIN_TOKEN]: {
     operator: {
@@ -54,6 +71,7 @@ let app: FastifyInstance;
 
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
+  Object.assign(process.env, isolatedServiceUrls);
   const handle = await createService({
     serviceName: "api-gateway",
     databaseRequired: false,
@@ -67,6 +85,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+  for (const [name, value] of Object.entries(previousServiceUrls)) {
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
 });
 
 describe("api-gateway authentication", () => {
@@ -329,6 +354,37 @@ describe("api-gateway authentication", () => {
     // Tenant service is not running in tests.
     expect(response.statusCode).toBe(502);
   });
+
+  it("enforces tenant membership and role permissions for LUMEN", async () => {
+    const encounterId = "00000000-0000-4000-8000-000000000020";
+    const advisorWrite = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/encounters/${encounterId}/start`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: {}
+    });
+    const auditorRead = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/worklist`,
+      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` }
+    });
+    const auditorWrite = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/encounters/${encounterId}/start`,
+      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` },
+      payload: {}
+    });
+    const foreignTenant = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${OTHER_TENANT_ID}/lumen/worklist`,
+      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+    });
+
+    expect(advisorWrite.statusCode).toBe(502);
+    expect(auditorRead.statusCode).toBe(502);
+    expect(auditorWrite.statusCode).toBe(403);
+    expect(foreignTenant.statusCode).toBe(403);
+  });
 });
 
 describe("api-gateway routes", () => {
@@ -341,7 +397,7 @@ describe("api-gateway routes", () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.data.services).toHaveLength(10);
+    expect(body.data.services).toHaveLength(11);
     expect(body.meta.generatedAt).toBeTruthy();
   });
 
@@ -392,6 +448,6 @@ describe("api-gateway routes", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe("down");
-    expect(body.services).toHaveLength(9);
+    expect(body.services).toHaveLength(10);
   }, 15_000);
 });

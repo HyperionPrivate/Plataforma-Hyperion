@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "migrate": "node dist/index.js",
+    "seed:lumen-demo": "node dist/seed-lumen-demo.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

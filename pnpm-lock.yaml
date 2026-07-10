@@ -210,6 +210,27 @@ importers:
         specifier: workspace:*
         version: link:../../packages/service-runtime
 
+  services/lumen-service:
+    dependencies:
+      '@hyperion/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@hyperion/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@hyperion/service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/service-runtime
+      fastify:
+        specifier: ^5.2.1
+        version: 5.10.0
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
   services/prompt-flow-service:
     dependencies:
       '@hyperion/contracts':

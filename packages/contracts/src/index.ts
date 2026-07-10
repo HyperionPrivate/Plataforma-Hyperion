@@ -10,7 +10,8 @@ export const serviceNameSchema = z.enum([
   "audit-service",
   "integration-service",
   "pulso-iris-service",
-  "whatsapp-channel-service"
+  "whatsapp-channel-service",
+  "lumen-service"
 ]);
 
 export type ServiceName = z.infer<typeof serviceNameSchema>;
@@ -50,6 +51,7 @@ export const productStatusSchema = z.enum(["foundation", "building", "active", "
 
 export const pulsoIrisProductCode = "PULSO_IRIS" as const;
 export const pulsoIrisAgentCode = "SOFIA" as const;
+export const lumenProductCode = "LUMEN" as const;
 
 export const tenantIdSchema = z.string().uuid();
 
@@ -1067,6 +1069,143 @@ export const pulsoIrisCatalog: PulsoIrisCatalog = pulsoIrisCatalogSchema.parse({
   ]
 });
 
+export const lumenEncounterStatusSchema = z.enum(["preconsultation", "in_progress", "review", "approved"]);
+export const lumenDictationStatusSchema = z.enum(["transcribed", "failed"]);
+export const lumenClinicalRecordStatusSchema = z.enum(["draft", "approved"]);
+
+const lumenEyeTextSchema = z.object({
+  right: z.string().max(2000).nullable(),
+  left: z.string().max(2000).nullable()
+});
+
+export const lumenClinicalRecordContentSchema = z.object({
+  reasonForVisit: z.string().max(4000),
+  history: z.string().max(8000),
+  visualAcuity: lumenEyeTextSchema,
+  intraocularPressure: lumenEyeTextSchema,
+  biomicroscopy: lumenEyeTextSchema,
+  fundus: lumenEyeTextSchema,
+  assessment: z.array(
+    z.object({
+      description: z.string().min(1).max(2000),
+      code: z.string().max(80).nullable(),
+      confidence: z.number().min(0).max(1)
+    })
+  ),
+  plan: z.array(z.string().min(1).max(2000)),
+  uncertainties: z.array(
+    z.object({
+      field: z.string().min(1).max(120),
+      message: z.string().min(1).max(1000),
+      sourceText: z.string().max(2000).nullable()
+    })
+  )
+});
+
+export const lumenPreconsultationSummarySchema = z.object({
+  summaryText: z.string().min(1).max(8000),
+  activeDiagnoses: z.array(z.string().min(1).max(500)),
+  medications: z.array(z.string().min(1).max(500)),
+  alerts: z.array(z.string().min(1).max(1000)),
+  trends: z.array(
+    z.object({
+      label: z.string().min(1).max(160),
+      unit: z.string().max(40),
+      points: z.array(z.object({ recordedAt: z.string(), value: z.number() }))
+    })
+  ),
+  sourceCount: z.number().int().nonnegative()
+});
+
+export const lumenWorklistEntrySchema = z.object({
+  encounterId: z.string().uuid(),
+  tenantId: tenantIdSchema,
+  patientId: z.string().uuid(),
+  patientDisplayName: z.string().min(1),
+  patientAge: z.number().int().nonnegative().nullable(),
+  professionalName: z.string().min(1),
+  siteName: z.string().min(1),
+  scheduledAt: isoDateTime,
+  status: lumenEncounterStatusSchema,
+  isDemo: z.boolean()
+});
+
+export const lumenDictationSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: tenantIdSchema,
+  encounterId: z.string().uuid(),
+  status: lumenDictationStatusSchema,
+  transcript: z.string(),
+  mimeType: z.string(),
+  provider: z.string().nullable(),
+  model: z.string().nullable(),
+  durationSeconds: z.number().int().nonnegative().nullable(),
+  createdAt: isoDateTime
+});
+
+export const lumenClinicalRecordSchema = z.object({
+  id: z.string().uuid(),
+  tenantId: tenantIdSchema,
+  encounterId: z.string().uuid(),
+  dictationId: z.string().uuid().nullable(),
+  status: lumenClinicalRecordStatusSchema,
+  schemaVersion: z.string().min(1),
+  content: lumenClinicalRecordContentSchema,
+  provider: z.string().nullable(),
+  model: z.string().nullable(),
+  approvedBy: z.string().uuid().nullable(),
+  approvedAt: isoDateTimeOptional,
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime
+});
+
+export const lumenEncounterDetailSchema = z.object({
+  encounter: lumenWorklistEntrySchema,
+  preconsultation: lumenPreconsultationSummarySchema.nullable(),
+  dictations: z.array(lumenDictationSchema),
+  clinicalRecord: lumenClinicalRecordSchema.nullable()
+});
+
+export const lumenTranscriptionInputSchema = z.object({
+  audioBase64: z.string().min(20).max(900_000),
+  mimeType: z.string().regex(/^audio\//),
+  durationSeconds: z.number().int().min(1).max(90).optional()
+});
+
+export const lumenStructureInputSchema = z.object({
+  transcript: z.string().trim().min(10).max(20_000),
+  dictationId: z.string().uuid().optional()
+});
+
+export const lumenClinicalRecordPatchSchema = z.object({
+  content: lumenClinicalRecordContentSchema
+});
+
+export type LumenEncounterStatus = z.infer<typeof lumenEncounterStatusSchema>;
+export type LumenClinicalRecordContent = z.infer<typeof lumenClinicalRecordContentSchema>;
+export type LumenPreconsultationSummary = z.infer<typeof lumenPreconsultationSummarySchema>;
+export type LumenWorklistEntry = z.infer<typeof lumenWorklistEntrySchema>;
+export type LumenDictation = z.infer<typeof lumenDictationSchema>;
+export type LumenClinicalRecord = z.infer<typeof lumenClinicalRecordSchema>;
+export type LumenEncounterDetail = z.infer<typeof lumenEncounterDetailSchema>;
+
+export const lumenCatalog = {
+  product: {
+    code: lumenProductCode,
+    name: "LUMEN",
+    status: "building" as const,
+    ownerService: "lumen-service" as const
+  },
+  modules: [
+    {
+      code: "CLINICAL_DEMO",
+      name: "Consulta clínica por voz",
+      status: "building" as const,
+      description: "Resumen preconsulta, dictado, historia estructurada y aprobación profesional."
+    }
+  ]
+};
+
 export const productModuleSchema = z.object({
   code: z.string().min(2),
   name: z.string().min(2),
@@ -1250,6 +1389,11 @@ export const serviceCatalog: PlatformCatalog["services"] = [
     name: "whatsapp-channel-service",
     port: 8089,
     responsibility: "Canal temporal WhatsApp Web de prueba: QR, sesion durable y entrega de texto autorizada."
+  },
+  {
+    name: "lumen-service",
+    port: 8090,
+    responsibility: "Producto LUMEN: resumen preconsulta, voz clínica, HC estructurada y aprobación profesional."
   }
 ];
 
@@ -1267,6 +1411,13 @@ export const productModules: ProductModule[] = [
     status: "building",
     ownerService: "pulso-iris-service",
     description: "Atencion y agendamiento inbound con IA para salud visual."
+  },
+  {
+    code: lumenProductCode,
+    name: "LUMEN",
+    status: "building",
+    ownerService: "lumen-service",
+    description: "Documentacion clinica por voz y expediente estructurado para salud visual."
   },
   {
     code: "CEDCO-R03",

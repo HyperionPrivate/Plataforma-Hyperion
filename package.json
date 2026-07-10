@@ -14,6 +14,8 @@
     "db:migrate": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/index.js",
     "db:seed:demo": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-demo.js",
     "db:seed:demo:clear": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-demo.js --clear",
+    "db:seed:lumen-demo": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-lumen-demo.js",
+    "db:seed:lumen-demo:clear": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-lumen-demo.js --clear",
     "dev:gateway": "pnpm --filter \"@hyperion/api-gateway...\" build && pnpm --filter @hyperion/api-gateway dev",
     "dev:services": "pnpm --filter \"{services/*}...\" build && pnpm --parallel --filter './services/*' dev",
     "dev:web": "pnpm --filter @hyperion/contracts build && pnpm --filter @hyperion/web-console dev",

@@ -32,6 +32,7 @@ declare module "fastify" {
 }
 
 const UPSTREAM_TIMEOUT_MS = 2_500;
+const LUMEN_AI_TIMEOUT_MS = 65_000;
 const HEALTH_CACHE_TTL_MS = 5_000;
 const SESSION_CACHE_TTL_MS = 30_000;
 const SESSION_CACHE_MAX_ENTRIES = 1_000;
@@ -131,6 +132,14 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
 
     app.get("/v1/pulso-iris/catalog", async (request, reply) => {
       return proxyGet(request, reply, `${urls.pulsoIris}/v1/pulso-iris/catalog`);
+    });
+
+    app.get("/v1/lumen/health", async (request, reply) => {
+      return proxyGet(request, reply, `${urls.lumen}/v1/lumen/health`);
+    });
+
+    app.get("/v1/lumen/catalog", async (request, reply) => {
+      return proxyGet(request, reply, `${urls.lumen}/v1/lumen/catalog`);
     });
 
     app.get("/v1/tenants", async (request, reply) => {
@@ -244,6 +253,36 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
       }
     });
 
+    app.route({
+      method: ["GET", "POST", "PATCH"],
+      url: "/v1/tenants/:tenantId/lumen/*",
+      handler: async (request, reply) => {
+        const params = request.params as { tenantId?: unknown; "*"?: string };
+        const tenantId = tenantIdSchema.safeParse(params.tenantId);
+        if (!tenantId.success) {
+          return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
+        }
+
+        const suffix = params["*"] ?? "";
+        if (suffix.includes("..") || suffix.includes("//")) {
+          return reply.code(400).send(envelope({ error: "Invalid path" }, request.id));
+        }
+        const query = (request.raw.url ?? "").split("?")[1];
+        const target = `${urls.lumen}/v1/tenants/${encodeURIComponent(tenantId.data)}/lumen/${suffix}${
+          query ? `?${query}` : ""
+        }`;
+        const method = request.method as "GET" | "POST" | "PATCH";
+        return proxyJson(
+          request,
+          reply,
+          target,
+          method,
+          method === "GET" ? undefined : request.body,
+          LUMEN_AI_TIMEOUT_MS
+        );
+      }
+    });
+
     app.get("/v1/platform/health", async () => {
       const now = Date.now();
       if (healthCache && healthCache.expiresAt > now) {
@@ -323,6 +362,10 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
     return role === "coordinator" || role === "advisor" ? undefined : "Forbidden";
   }
 
+  if (path.includes("/lumen/")) {
+    return role === "coordinator" || role === "advisor" ? undefined : "Forbidden";
+  }
+
   return "Forbidden";
 }
 
@@ -374,7 +417,8 @@ function buildRegistry(): DownstreamService[] {
     { name: "audit-service", url: urls.audit },
     { name: "integration-service", url: urls.integration },
     { name: "pulso-iris-service", url: urls.pulsoIris },
-    { name: "whatsapp-channel-service", url: urls.whatsappChannel }
+    { name: "whatsapp-channel-service", url: urls.whatsappChannel },
+    { name: "lumen-service", url: urls.lumen }
   ];
 }
 
@@ -397,7 +441,8 @@ async function proxyJson(
   reply: FastifyReply,
   url: string,
   method: "GET" | "POST" | "PATCH",
-  body?: unknown
+  body?: unknown,
+  timeoutMs = UPSTREAM_TIMEOUT_MS
 ): Promise<unknown> {
   try {
     const headers: Record<string, string> = { "x-request-id": request.id };
@@ -416,7 +461,7 @@ async function proxyJson(
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const payload = await response.json();
 

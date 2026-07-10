@@ -46,6 +46,7 @@ COPY services/audit-service/package.json services/audit-service/package.json
 COPY services/identity-service/package.json services/identity-service/package.json
 COPY services/integration-service/package.json services/integration-service/package.json
 COPY services/knowledge-service/package.json services/knowledge-service/package.json
+COPY services/lumen-service/package.json services/lumen-service/package.json
 COPY services/prompt-flow-service/package.json services/prompt-flow-service/package.json
 COPY services/pulso-iris-service/package.json services/pulso-iris-service/package.json
 COPY services/tenant-service/package.json services/tenant-service/package.json
@@ -66,6 +67,7 @@ COPY --from=build /app/services/audit-service/dist services/audit-service/dist
 COPY --from=build /app/services/identity-service/dist services/identity-service/dist
 COPY --from=build /app/services/integration-service/dist services/integration-service/dist
 COPY --from=build /app/services/knowledge-service/dist services/knowledge-service/dist
+COPY --from=build /app/services/lumen-service/dist services/lumen-service/dist
 COPY --from=build /app/services/prompt-flow-service/dist services/prompt-flow-service/dist
 COPY --from=build /app/services/pulso-iris-service/dist services/pulso-iris-service/dist
 COPY --from=build /app/services/tenant-service/dist services/tenant-service/dist
