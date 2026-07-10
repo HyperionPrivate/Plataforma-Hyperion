@@ -55,6 +55,7 @@ export class InternalAgendaProvider implements AgendaProvider {
   }
 
   async reserve(input: AgendaReservationInput): Promise<AgendaReservationResult> {
+    const scheduledAt = new Date(input.scheduledAt);
     return this.db.transaction(async (tx) => {
       const expired = await tx.query<AgendaExpiredHold>(
         `update pulso_iris.appointment_holds
@@ -83,8 +84,11 @@ export class InternalAgendaProvider implements AgendaProvider {
         }
         return { hold: prior, idempotent: true, expiredHolds: expired.rows };
       }
+      if (!Number.isFinite(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
+        throw new AgendaProviderError("slot_unavailable", "Appointment slot must be in the future");
+      }
 
-      const normalizedScheduledAt = new Date(input.scheduledAt).toISOString();
+      const normalizedScheduledAt = scheduledAt.toISOString();
       await tx.query(
         `select pg_advisory_xact_lock(
            hashtextextended(concat_ws(':', $1::text, $2::text, $3::text, $4::text, $5::text), 0)
@@ -191,7 +195,12 @@ export class InternalAgendaProvider implements AgendaProvider {
         [input.tenantId, input.holdId]
       );
       const row = hold.rows[0];
-      if (!row || row.status !== "active" || new Date(row.expiresAt).getTime() <= Date.now()) {
+      if (
+        !row ||
+        row.status !== "active" ||
+        new Date(row.expiresAt).getTime() <= Date.now() ||
+        new Date(row.scheduledAt).getTime() <= Date.now()
+      ) {
         throw new AgendaProviderError("hold_expired", "Appointment hold is not active");
       }
 
@@ -211,7 +220,7 @@ export class InternalAgendaProvider implements AgendaProvider {
          join pulso_iris.appointment_types t
            on t.tenant_id = h.tenant_id and t.id = h.appointment_type_id
           and t.status = 'active' and t.bookable_by_ia is true
-         where h.tenant_id = $1 and h.id = $2
+         where h.tenant_id = $1 and h.id = $2 and h.scheduled_at > now()
          returning ${APPOINTMENT_RESULT_COLUMNS}`,
         [
           input.tenantId,

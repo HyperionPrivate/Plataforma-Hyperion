@@ -2,6 +2,11 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { DatabaseClient } from "@hyperion/database";
 import type { RouteRegistrar } from "@hyperion/service-runtime";
 import { z } from "zod";
+import {
+  extractAgendaRequestConstraints,
+  isLocalDateTimeAtOrBeforeNow,
+  type AgendaRequestConstraints
+} from "./availability-request-constraints.js";
 import type { LlmMessage, LlmProvider } from "./llm-provider.js";
 import { isExplicitConfirmation, SOFIA_TOOL_DEFINITIONS, SofiaToolClient } from "./sofia-tools.js";
 
@@ -24,8 +29,25 @@ const jobInputSchema = z.object({
   occurredAt: z.string().datetime()
 });
 
-const AVAILABILITY_CONTEXT_SCHEMA_VERSION = 2;
+const AVAILABILITY_CONTEXT_SCHEMA_VERSION = 3;
 const AVAILABILITY_CONTEXT_TTL_MS = 10 * 60 * 1_000;
+const DEFAULT_AGENDA_TIME_ZONE = "America/Bogota";
+const availabilitySearchArgumentsSchema = z.object({
+  from: z.string().datetime().optional(),
+  localDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  localTime: z
+    .string()
+    .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
+    .optional(),
+  days: z.number().int().min(1).max(31).optional(),
+  siteId: z.string().uuid().optional(),
+  professionalId: z.string().uuid().optional(),
+  payerId: z.string().uuid().optional(),
+  appointmentTypeId: z.string().uuid().optional()
+});
 const authoritativeAvailabilitySlotSchema = z.object({
   siteId: z.string().uuid(),
   siteName: z.string().min(1),
@@ -45,6 +67,35 @@ const successfulAvailabilityResultSchema = z.object({
   ok: z.literal(true),
   data: z.object({ slots: z.array(authoritativeAvailabilitySlotSchema) })
 });
+
+type AvailabilitySearchArguments = z.infer<typeof availabilitySearchArgumentsSchema>;
+type AuthoritativeAvailabilitySlot = z.infer<typeof authoritativeAvailabilitySlotSchema>;
+type AgendaSelection = Partial<
+  Pick<AvailabilitySearchArguments, "siteId" | "professionalId" | "payerId" | "appointmentTypeId">
+>;
+
+interface CatalogEntity {
+  id: string;
+  name: string;
+}
+
+interface CatalogIndex {
+  sites: CatalogEntity[];
+  professionals: CatalogEntity[];
+  payers: CatalogEntity[];
+  appointmentTypes: CatalogEntity[];
+}
+
+interface AvailabilityRuntimeContext {
+  timeZone: string;
+  state: Record<string, unknown>;
+  catalog: unknown;
+}
+
+interface DerivedAgendaSelection {
+  selection: AgendaSelection;
+  unresolvedChangedDimensions: Array<keyof AgendaSelection>;
+}
 
 interface ClaimedJob {
   id: string;
@@ -237,7 +288,7 @@ export class SofiaRuntime {
     await this.setConversationRuntime(job.tenantId, job.conversationId, "processing");
     const prompt = await this.loadPrompt(job.tenantId);
     const startedAt = Date.now();
-    let responseText = "";
+    let responseText: string | undefined;
     let executionStatus: "completed" | "fallback" = "completed";
     let model = this.options.llm.model;
     let inputTokens = 0;
@@ -277,12 +328,35 @@ export class SofiaRuntime {
         const context = await this.buildMessages(job, input, prompt);
         const messages = context.messages;
         const freshAvailabilityRequired = requiresFreshAvailability(currentBody, context.hadAvailabilityContext);
+        const requestConstraints = extractAgendaRequestConstraints(currentBody, {
+          now: new Date(input.occurredAt),
+          timeZone: context.availabilityRuntime.timeZone
+        });
+        const catalogIndex = buildCatalogIndex(context.availabilityRuntime.catalog);
+        const derivedAgendaSelection = deriveAgendaSelection(
+          currentBody,
+          requestConstraints,
+          context.availabilityRuntime,
+          catalogIndex
+        );
+        const agendaSelection = derivedAgendaSelection.selection;
+        const previousAvailabilityQuery = readLastAvailabilityQuery(context.availabilityRuntime.state, catalogIndex);
+        const missingAgendaDimensions = missingMinimumAgendaSelection(agendaSelection);
         let availabilitySearchAttempted = false;
         let freshAvailabilitySucceeded = false;
         let freshAvailability: z.infer<typeof successfulAvailabilityResultSchema>["data"] | undefined;
+        let freshAvailabilityQuery: AvailabilitySearchArguments | undefined;
         let preparedAvailabilitySlot: z.infer<typeof authoritativeAvailabilitySlotSchema> | undefined;
         let preparedAvailabilityAction: "book" | "reschedule" | undefined;
-        roundLoop: for (let round = 0; round < 6; round += 1) {
+        if (freshAvailabilityRequired && requestConstraints.invalidReason) {
+          executionStatus = "fallback";
+          responseText = agendaConstraintFallback(requestConstraints.invalidReason);
+        } else if (freshAvailabilityRequired && derivedAgendaSelection.unresolvedChangedDimensions.length > 0) {
+          responseText = agendaDimensionClarification(derivedAgendaSelection.unresolvedChangedDimensions);
+        } else if (freshAvailabilityRequired && missingAgendaDimensions.length > 0) {
+          responseText = agendaSelectionClarification(missingAgendaDimensions);
+        }
+        roundLoop: for (let round = 0; responseText === undefined && round < 6; round += 1) {
           const completion = await this.options.llm.complete({
             messages,
             tools: SOFIA_TOOL_DEFINITIONS,
@@ -321,10 +395,39 @@ export class SofiaRuntime {
               });
               continue;
             }
+            let effectiveArguments = toolCall.arguments;
+            let canonicalSearch: AvailabilitySearchArguments | undefined;
+            if (toolCall.name === "search_availability") {
+              availabilitySearchAttempted = true;
+              freshAvailabilitySucceeded = false;
+              freshAvailability = undefined;
+              const canonical = canonicalizeAvailabilitySearchArguments(
+                toolCall.arguments,
+                requestConstraints,
+                agendaSelection,
+                catalogIndex,
+                previousAvailabilityQuery,
+                { now: new Date(input.occurredAt), timeZone: context.availabilityRuntime.timeZone }
+              );
+              if (!canonical.ok) {
+                messages.push({
+                  role: "tool",
+                  toolCallId: toolCall.id,
+                  content: JSON.stringify({ ok: false, code: canonical.code, message: canonical.message })
+                });
+                continue;
+              }
+              canonicalSearch = canonical.arguments;
+              effectiveArguments = JSON.stringify(canonical.arguments);
+            }
             if (
               !isExplicitConfirmation(currentBody) &&
               isSlotMutation(toolCall.name) &&
-              !matchesAuthoritativeAvailabilitySlot(toolCall.arguments, freshAvailability?.slots ?? [])
+              (!hasMinimumAgendaSelection(freshAvailabilityQuery) ||
+                !matchesAuthoritativeAvailabilitySlot(
+                  effectiveArguments,
+                  mutationEligibleSlots(freshAvailability?.slots ?? [], freshAvailabilityQuery)
+                ))
             ) {
               messages.push({
                 role: "tool",
@@ -338,15 +441,13 @@ export class SofiaRuntime {
               continue;
             }
             const matchedAvailabilitySlot = isSlotMutation(toolCall.name)
-              ? findAuthoritativeAvailabilitySlot(toolCall.arguments, freshAvailability?.slots ?? [])
+              ? findAuthoritativeAvailabilitySlot(
+                  effectiveArguments,
+                  mutationEligibleSlots(freshAvailability?.slots ?? [], freshAvailabilityQuery)
+                )
               : undefined;
-            if (toolCall.name === "search_availability") {
-              availabilitySearchAttempted = true;
-              freshAvailabilitySucceeded = false;
-              freshAvailability = undefined;
-            }
             toolNames.push(toolCall.name);
-            const result = await this.tools.execute(toolCall.name, toolCall.arguments, {
+            const result = await this.tools.execute(toolCall.name, effectiveArguments, {
               tenantId: job.tenantId,
               patientId: input.patientId,
               conversationId: job.conversationId,
@@ -357,9 +458,67 @@ export class SofiaRuntime {
             });
             if (toolCall.name === "search_availability") {
               const parsedAvailability = successfulAvailabilityResultSchema.safeParse(result);
-              if (parsedAvailability.success) {
+              if (
+                parsedAvailability.success &&
+                canonicalSearch &&
+                availabilityMatchesSearch(parsedAvailability.data.data.slots, canonicalSearch)
+              ) {
                 freshAvailabilitySucceeded = true;
                 freshAvailability = parsedAvailability.data.data;
+                freshAvailabilityQuery = canonicalSearch;
+                const exactSlots = canonicalSearch.localTime
+                  ? freshAvailability.slots.filter((slot) => slot.localTime === canonicalSearch.localTime)
+                  : [];
+                if (
+                  requestConstraints.bookingIntent &&
+                  !requestConstraints.rescheduleIntent &&
+                  canonicalSearch.localDate &&
+                  canonicalSearch.localTime &&
+                  hasMinimumAgendaSelection(canonicalSearch)
+                ) {
+                  const exactSlot = exactSlots.length === 1 ? exactSlots[0] : undefined;
+                  if (exactSlot?.payerId) {
+                    toolNames.push("create_appointment_hold");
+                    const staged = await this.tools.execute(
+                      "create_appointment_hold",
+                      JSON.stringify({
+                        siteId: exactSlot.siteId,
+                        professionalId: exactSlot.professionalId,
+                        payerId: exactSlot.payerId,
+                        appointmentTypeId: exactSlot.appointmentTypeId,
+                        scheduledAt: exactSlot.scheduledAt
+                      }),
+                      {
+                        tenantId: job.tenantId,
+                        patientId: input.patientId,
+                        conversationId: job.conversationId,
+                        currentMessageId: input.messageId,
+                        currentMessageBody: currentBody,
+                        jobId: job.id,
+                        sequence: toolNames.length
+                      }
+                    );
+                    if (isRecord(staged) && staged.code === "explicit_confirmation_required") {
+                      preparedAvailabilitySlot = exactSlot;
+                      preparedAvailabilityAction = "book";
+                      responseText = renderAuthoritativeConfirmation(exactSlot, "book");
+                    } else {
+                      executionStatus = "fallback";
+                      responseText = deterministicFallback();
+                    }
+                    break roundLoop;
+                  }
+                }
+                const rescheduleCanContinue =
+                  requestConstraints.rescheduleIntent &&
+                  canonicalSearch.localDate !== undefined &&
+                  canonicalSearch.localTime !== undefined &&
+                  exactSlots.length === 1 &&
+                  hasMinimumAgendaSelection(canonicalSearch);
+                if (canonicalSearch.localDate && !rescheduleCanContinue) {
+                  responseText = renderAuthoritativeAvailability(freshAvailability.slots);
+                  break roundLoop;
+                }
               }
             } else if (
               matchedAvailabilitySlot &&
@@ -401,7 +560,7 @@ export class SofiaRuntime {
       this.options.logger.warn("SOFIA used deterministic fallback", { error: sanitizeError(error) });
     }
 
-    const boundedResponse = boundText(responseText);
+    const boundedResponse = boundText(responseText ?? deterministicFallback());
     const elapsedMs = Date.now() - new Date(input.occurredAt).getTime();
     const messageId = await this.persistResponse(job, input, boundedResponse, {
       model,
@@ -457,7 +616,11 @@ export class SofiaRuntime {
     job: ClaimedJob,
     input: z.infer<typeof jobInputSchema>,
     prompt: PromptFlow
-  ): Promise<{ messages: LlmMessage[]; hadAvailabilityContext: boolean }> {
+  ): Promise<{
+    messages: LlmMessage[];
+    hadAvailabilityContext: boolean;
+    availabilityRuntime: AvailabilityRuntimeContext;
+  }> {
     const [history, state, patient, catalog] = await Promise.all([
       this.options.db.query<{ sender: string; body: string }>(
         `select sender, body from (
@@ -481,9 +644,10 @@ export class SofiaRuntime {
     ]);
     const now = Date.now();
     const sanitized = sanitizeSofiaState(state.rows[0]?.sofiaState, now);
+    const timeZone = readCatalogTimeZone(catalog);
     const runtimeContext = {
       now: new Date(now).toISOString(),
-      timezone: "America/Bogota",
+      timezone: timeZone,
       patientName: patient.rows[0]?.fullName ?? null,
       availabilityContextValid: sanitized.availabilityStatus === "valid",
       state: sanitized.state,
@@ -500,7 +664,12 @@ export class SofiaRuntime {
           content: message.body
         }))
       ],
-      hadAvailabilityContext: sanitized.availabilityStatus !== "absent"
+      hadAvailabilityContext: sanitized.availabilityStatus !== "absent",
+      availabilityRuntime: {
+        timeZone,
+        state: sanitized.state,
+        catalog
+      }
     };
   }
 
@@ -645,10 +814,10 @@ export function registerSofiaReadinessRoute(
          order by f.version desc, f.updated_at desc
          limit 1
        ) selected
-       where selected.runtime_key = 'sofia_whatsapp_internal_v4'
+       where selected.runtime_key = 'sofia_whatsapp_internal_v5'
          and exists (
            select 1 from platform.schema_migrations
-           where name = '015-sofia-fresh-availability.sql'
+           where name = '016-sofia-search-constraints.sql'
          )`,
       [tenantId.data]
     );
@@ -711,18 +880,29 @@ export function sanitizeSofiaState(
     "lastAvailability",
     "lastAvailabilityAt",
     "lastAvailabilitySchemaVersion",
-    "lastAvailabilityJobId"
+    "lastAvailabilityJobId",
+    "lastAvailabilityQuery"
   ] as const;
   const hasAvailabilityContext = availabilityKeys.some((key) => Object.prototype.hasOwnProperty.call(state, key));
   if (!hasAvailabilityContext) return { state, availabilityStatus: "absent" };
 
   const timestamp = typeof state.lastAvailabilityAt === "string" ? Date.parse(state.lastAvailabilityAt) : Number.NaN;
   const availability = state.lastAvailability;
+  const query = availabilitySearchArgumentsSchema.safeParse(state.lastAvailabilityQuery);
+  const slots =
+    isRecord(availability) && Array.isArray(availability.slots)
+      ? availability.slots
+          .map((slot) => authoritativeAvailabilitySlotSchema.safeParse(slot))
+          .filter((result): result is { success: true; data: AuthoritativeAvailabilitySlot } => result.success)
+          .map((result) => result.data)
+      : [];
   const valid =
     state.lastAvailabilitySchemaVersion === AVAILABILITY_CONTEXT_SCHEMA_VERSION &&
     isRecord(availability) &&
     Array.isArray(availability.slots) &&
-    availability.slots.every((slot) => authoritativeAvailabilitySlotSchema.safeParse(slot).success) &&
+    slots.length === availability.slots.length &&
+    query.success &&
+    availabilityMatchesSearch(slots, query.data) &&
     Number.isFinite(timestamp) &&
     timestamp <= now + 60_000 &&
     now - timestamp <= AVAILABILITY_CONTEXT_TTL_MS;
@@ -730,6 +910,275 @@ export function sanitizeSofiaState(
 
   for (const key of availabilityKeys) delete state[key];
   return { state, availabilityStatus: "invalid" };
+}
+
+export function canonicalizeAvailabilitySearchArguments(
+  rawArguments: string,
+  constraints: AgendaRequestConstraints,
+  selection: AgendaSelection,
+  catalog: CatalogIndex,
+  previousQuery?: AvailabilitySearchArguments,
+  clock?: { now: Date; timeZone: string }
+): { ok: true; arguments: AvailabilitySearchArguments } | { ok: false; code: string; message: string } {
+  if (constraints.invalidReason) {
+    return {
+      ok: false,
+      code: "invalid_patient_date_constraint",
+      message: "La fecha u hora expresada por el paciente requiere aclaración."
+    };
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(rawArguments || "{}");
+  } catch {
+    return { ok: false, code: "invalid_arguments", message: "Argumentos JSON inválidos." };
+  }
+  const parsed = availabilitySearchArgumentsSchema.safeParse(decoded);
+  if (!parsed.success) {
+    return { ok: false, code: "invalid_arguments", message: "Argumentos de disponibilidad inválidos." };
+  }
+  const argumentsValue: AvailabilitySearchArguments = { ...parsed.data };
+  const entitySets: Record<keyof AgendaSelection, Set<string>> = {
+    siteId: new Set(catalog.sites.map((entity) => entity.id)),
+    professionalId: new Set(catalog.professionals.map((entity) => entity.id)),
+    payerId: new Set(catalog.payers.map((entity) => entity.id)),
+    appointmentTypeId: new Set(catalog.appointmentTypes.map((entity) => entity.id))
+  };
+  for (const key of ["siteId", "professionalId", "payerId", "appointmentTypeId"] as const) {
+    const supplied = argumentsValue[key];
+    const selected = selection[key];
+    if (selected && !entitySets[key].has(selected)) {
+      return {
+        ok: false,
+        code: "invalid_catalog_reference",
+        message: "La búsqueda contiene una referencia que no pertenece al catálogo del tenant."
+      };
+    }
+    if (selected) {
+      argumentsValue[key] = selected;
+    } else if (supplied) {
+      if (key === "professionalId") {
+        delete argumentsValue.professionalId;
+        continue;
+      }
+      return {
+        ok: false,
+        code: "untrusted_catalog_reference",
+        message: "La referencia de catálogo no fue seleccionada por el paciente ni por el estado estructurado."
+      };
+    }
+  }
+
+  let localDate: string | undefined;
+  let localTime: string | undefined;
+  if (constraints.localDate) {
+    localDate = constraints.localDate;
+    localTime = constraints.localTime;
+  } else if (constraints.localTime) {
+    if (!previousQuery?.localDate) {
+      return {
+        ok: false,
+        code: "missing_structured_date",
+        message: "La hora requiere una fecha seleccionada previamente o expresada en el mensaje actual."
+      };
+    }
+    localDate = previousQuery.localDate;
+    localTime = constraints.localTime;
+  } else if (previousQuery?.localDate) {
+    localDate = previousQuery.localDate;
+    localTime = previousQuery.localTime;
+  } else if (argumentsValue.localDate || argumentsValue.from) {
+    return {
+      ok: false,
+      code: "untrusted_date_reference",
+      message: "La fecha debe provenir del mensaje actual o del estado estructurado."
+    };
+  }
+
+  delete argumentsValue.from;
+  delete argumentsValue.localDate;
+  delete argumentsValue.localTime;
+  if (localDate) {
+    argumentsValue.localDate = localDate;
+    argumentsValue.days = 1;
+    if (localTime) argumentsValue.localTime = localTime;
+  }
+  if (
+    clock &&
+    argumentsValue.localDate &&
+    argumentsValue.localTime &&
+    isLocalDateTimeAtOrBeforeNow(argumentsValue.localDate, argumentsValue.localTime, clock)
+  ) {
+    return {
+      ok: false,
+      code: "past_patient_date_constraint",
+      message: "La fecha y hora seleccionadas ya pasaron en la zona horaria de la agenda."
+    };
+  }
+  return { ok: true, arguments: argumentsValue };
+}
+
+export function availabilityMatchesSearch(
+  slots: AuthoritativeAvailabilitySlot[],
+  search: AvailabilitySearchArguments
+): boolean {
+  if (search.localTime && !search.localDate) return false;
+  return slots.every(
+    (slot) =>
+      (!search.localDate || slot.localDate === search.localDate) &&
+      (!search.localTime || slot.localTime >= search.localTime) &&
+      (!search.siteId || slot.siteId === search.siteId) &&
+      (!search.professionalId || slot.professionalId === search.professionalId) &&
+      (!search.payerId || slot.payerId === search.payerId) &&
+      (!search.appointmentTypeId || slot.appointmentTypeId === search.appointmentTypeId)
+  );
+}
+
+export function deriveAgendaSelection(
+  currentBody: string,
+  constraints: AgendaRequestConstraints,
+  runtime: AvailabilityRuntimeContext,
+  catalog: CatalogIndex
+): DerivedAgendaSelection {
+  const explicit = findCatalogSelection(currentBody, catalog);
+  const query = readLastAvailabilityQuery(runtime.state, catalog);
+  const stored = readStoredAgendaSelection(runtime.state, catalog);
+  const homogeneous = readHomogeneousAvailabilitySelection(runtime.state, catalog);
+  const changed = constraints.requestsChange
+    ? detectChangedAgendaDimensions(currentBody)
+    : new Set<keyof AgendaSelection>();
+  const selection: AgendaSelection = {};
+  const unresolvedChangedDimensions: Array<keyof AgendaSelection> = [];
+  for (const key of ["siteId", "professionalId", "payerId", "appointmentTypeId"] as const) {
+    if (changed.has(key)) {
+      if (explicit[key]) selection[key] = explicit[key];
+      else unresolvedChangedDimensions.push(key);
+      continue;
+    }
+    selection[key] = explicit[key] ?? query?.[key] ?? homogeneous[key] ?? stored[key];
+  }
+  return { selection, unresolvedChangedDimensions };
+}
+
+function findCatalogSelection(value: string, catalog: CatalogIndex): AgendaSelection {
+  const normalized = normalizeForIntent(value);
+  return {
+    siteId: findUniqueEntityMention(normalized, catalog.sites),
+    professionalId: findUniqueEntityMention(normalized, catalog.professionals),
+    payerId: findUniqueEntityMention(normalized, catalog.payers),
+    appointmentTypeId: findUniqueEntityMention(normalized, catalog.appointmentTypes)
+  };
+}
+
+function findUniqueEntityMention(value: string, entities: CatalogEntity[]): string | undefined {
+  const matches = entities.filter((entity) => {
+    const name = normalizeForIntent(entity.name);
+    return name.length >= 3 && value.includes(name);
+  });
+  return matches.length === 1 ? matches[0]!.id : undefined;
+}
+
+function readLastAvailabilityQuery(
+  state: Record<string, unknown>,
+  catalog: CatalogIndex
+): AvailabilitySearchArguments | undefined {
+  const parsed = availabilitySearchArgumentsSchema.safeParse(state.lastAvailabilityQuery);
+  if (!parsed.success) return undefined;
+  const trustedSelection = validateAgendaSelection(parsed.data, catalog);
+  return {
+    ...parsed.data,
+    siteId: trustedSelection.siteId,
+    professionalId: trustedSelection.professionalId,
+    payerId: trustedSelection.payerId,
+    appointmentTypeId: trustedSelection.appointmentTypeId
+  };
+}
+
+function detectChangedAgendaDimensions(value: string): Set<keyof AgendaSelection> {
+  const normalized = normalizeForIntent(value);
+  const changed = new Set<keyof AgendaSelection>();
+  const dimensions: Array<[keyof AgendaSelection, string]> = [
+    ["siteId", "sede"],
+    ["payerId", "convenio"],
+    ["professionalId", "(?:profesional|doctor|doctora|optometra|oftalmologo)"],
+    ["appointmentTypeId", "tipo(?:\\s+de\\s+cita)?"]
+  ];
+  for (const [key, term] of dimensions) {
+    const pattern = new RegExp(
+      `\\b(?:otra|otro|diferente|distinta|distinto|nueva|nuevo)\\s+${term}\\b|` +
+        `\\b${term}\\s+(?:diferente|distinta|distinto|nueva|nuevo)\\b|` +
+        `\\b(?:cambiar|cambio)\\s+(?:de|el|la)?\\s*${term}\\b`
+    );
+    if (pattern.test(normalized)) changed.add(key);
+  }
+  return changed;
+}
+
+function readStoredAgendaSelection(state: Record<string, unknown>, catalog: CatalogIndex): AgendaSelection {
+  if (!isRecord(state.agendaSelection)) return {};
+  return validateAgendaSelection(state.agendaSelection, catalog);
+}
+
+function readHomogeneousAvailabilitySelection(state: Record<string, unknown>, catalog: CatalogIndex): AgendaSelection {
+  if (!isRecord(state.lastAvailability) || !Array.isArray(state.lastAvailability.slots)) return {};
+  const slots = state.lastAvailability.slots
+    .map((slot) => authoritativeAvailabilitySlotSchema.safeParse(slot))
+    .filter((result): result is { success: true; data: AuthoritativeAvailabilitySlot } => result.success)
+    .map((result) => result.data);
+  if (slots.length === 0) return {};
+  const candidate: Record<string, unknown> = {};
+  for (const key of ["siteId", "professionalId", "payerId", "appointmentTypeId"] as const) {
+    const values = new Set(
+      slots.map((slot) => slot[key]).filter((value): value is string => typeof value === "string")
+    );
+    if (values.size === 1) candidate[key] = [...values][0];
+  }
+  return validateAgendaSelection(candidate, catalog);
+}
+
+function validateAgendaSelection(value: Record<string, unknown>, catalog: CatalogIndex): AgendaSelection {
+  const allowed: Record<keyof AgendaSelection, Set<string>> = {
+    siteId: new Set(catalog.sites.map((entity) => entity.id)),
+    professionalId: new Set(catalog.professionals.map((entity) => entity.id)),
+    payerId: new Set(catalog.payers.map((entity) => entity.id)),
+    appointmentTypeId: new Set(catalog.appointmentTypes.map((entity) => entity.id))
+  };
+  const selection: AgendaSelection = {};
+  for (const key of ["siteId", "professionalId", "payerId", "appointmentTypeId"] as const) {
+    const id = value[key];
+    if (typeof id === "string" && allowed[key].has(id)) selection[key] = id;
+  }
+  return selection;
+}
+
+function buildCatalogIndex(value: unknown): CatalogIndex {
+  return {
+    sites: readCatalogEntities(value, "sites"),
+    professionals: readCatalogEntities(value, "professionals"),
+    payers: readCatalogEntities(value, "payers"),
+    appointmentTypes: readCatalogEntities(value, "appointmentTypes")
+  };
+}
+
+function readCatalogEntities(value: unknown, key: string): CatalogEntity[] {
+  if (!isRecord(value) || !Array.isArray(value[key])) return [];
+  return value[key]
+    .map((entry) => z.object({ id: z.string().uuid(), name: z.string().min(1) }).safeParse(entry))
+    .filter((result): result is { success: true; data: CatalogEntity } => result.success)
+    .map((result) => result.data);
+}
+
+function readCatalogTimeZone(value: unknown): string {
+  const candidate =
+    isRecord(value) && isRecord(value.agendaSettings) && typeof value.agendaSettings.timezone === "string"
+      ? value.agendaSettings.timezone
+      : DEFAULT_AGENDA_TIME_ZONE;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format();
+    return candidate;
+  } catch {
+    return DEFAULT_AGENDA_TIME_ZONE;
+  }
 }
 
 function inferIntent(toolNames: string[]): string | undefined {
@@ -747,6 +1196,38 @@ function deterministicFallback(): string {
 
 function availabilityFallback(): string {
   return "En este momento no pude consultar la disponibilidad actual. No voy a ofrecer horarios sin verificarlos. Intenta nuevamente en unos minutos.";
+}
+
+function agendaConstraintFallback(reason: NonNullable<AgendaRequestConstraints["invalidReason"]>): string {
+  if (reason === "past_date" || reason === "past_datetime") {
+    return "La fecha u hora indicada ya pasó. Dime una fecha y hora futuras para consultar la agenda.";
+  }
+  if (reason === "weekday_mismatch") {
+    return "El día de la semana no coincide con la fecha indicada. Confírmame la fecha exacta antes de consultar.";
+  }
+  return "No pude determinar una única fecha y hora válidas. Escríbelas de forma exacta, por ejemplo: 13 de julio de 2026 a las 9:00 a. m.";
+}
+
+function agendaDimensionClarification(dimensions: Array<keyof AgendaSelection>): string {
+  const labels: Record<keyof AgendaSelection, string> = {
+    siteId: "la sede",
+    professionalId: "el profesional",
+    payerId: "el convenio",
+    appointmentTypeId: "el tipo de cita"
+  };
+  const requested = dimensions.map((dimension) => labels[dimension]).join(", ");
+  return `Indícame exactamente ${requested} que deseas cambiar antes de consultar nuevamente.`;
+}
+
+function agendaSelectionClarification(dimensions: Array<keyof AgendaSelection>): string {
+  const labels: Record<keyof AgendaSelection, string> = {
+    siteId: "la sede",
+    professionalId: "el profesional",
+    payerId: "el convenio",
+    appointmentTypeId: "el tipo de cita"
+  };
+  const requested = dimensions.map((dimension) => labels[dimension]).join(", ");
+  return `Antes de consultar la agenda, necesito que indiques ${requested}. No voy a elegir esos datos por ti.`;
 }
 
 export function hasUnverifiedAvailabilityClock(
@@ -797,6 +1278,22 @@ function findAuthoritativeAvailabilitySlot(
 
 function isSlotMutation(toolName: string): boolean {
   return toolName === "create_appointment_hold" || toolName === "reschedule_appointment";
+}
+
+function hasMinimumAgendaSelection(search?: AvailabilitySearchArguments): boolean {
+  return missingMinimumAgendaSelection(search).length === 0;
+}
+
+function missingMinimumAgendaSelection(search?: AvailabilitySearchArguments): Array<keyof AgendaSelection> {
+  return (["siteId", "payerId", "appointmentTypeId"] as const).filter((key) => !search?.[key]);
+}
+
+function mutationEligibleSlots(
+  slots: AuthoritativeAvailabilitySlot[],
+  search?: AvailabilitySearchArguments
+): AuthoritativeAvailabilitySlot[] {
+  if (!search?.localTime) return slots;
+  return slots.filter((slot) => slot.localTime === search.localTime);
 }
 
 function renderAuthoritativeAvailability(slots: Array<z.infer<typeof authoritativeAvailabilitySlotSchema>>): string {

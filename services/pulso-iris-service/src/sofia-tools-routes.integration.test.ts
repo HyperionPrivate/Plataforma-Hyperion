@@ -152,6 +152,25 @@ describeIntegration("SOFIA internal agenda tools", () => {
   });
 
   it("books once, reschedules atomically and cancels only with explicit confirmations", async () => {
+    const localAvailability = await callTool("search_availability", {
+      siteId,
+      professionalId,
+      payerId,
+      appointmentTypeId,
+      localDate: scheduledAt.slice(0, 10),
+      localTime: "09:00",
+      days: 1
+    });
+    expect(localAvailability.statusCode).toBe(200);
+    expect(localAvailability.json().data.slots[0]).toMatchObject({
+      startsAt: scheduledAt,
+      scheduledAt,
+      localDate: scheduledAt.slice(0, 10),
+      localTime: "09:00",
+      timeZone: "America/Bogota",
+      payerId
+    });
+
     const availability = await callTool("search_availability", {
       siteId,
       professionalId,

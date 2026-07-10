@@ -26,6 +26,7 @@ describe("migrations runner", () => {
     expect(files).toContain("013-sofia-confirmation-protocol.sql");
     expect(files).toContain("014-sofia-local-time-protocol.sql");
     expect(files).toContain("015-sofia-fresh-availability.sql");
+    expect(files).toContain("016-sofia-search-constraints.sql");
     expect([...files].sort()).toEqual(files);
   });
 });
