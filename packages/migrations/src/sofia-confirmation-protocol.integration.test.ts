@@ -16,26 +16,35 @@ describeIntegration("013 SOFIA explicit confirmation protocol", () => {
     await client.end();
   });
 
-  it("activates only the v2 prompt with staging before confirmation", async () => {
+  it("preserves the superseded v2 prompt with its confirmation protocol", async () => {
     const result = await client.query<{
       runtimeKey: string;
       systemPrompt: string;
+      status: string;
       activeCount: number;
     }>(
       `select f.definition ->> 'runtimeKey' as "runtimeKey",
               f.definition ->> 'systemPrompt' as "systemPrompt",
-              count(*) over ()::int as "activeCount"
+              f.status,
+              (select count(*)::int
+               from platform.prompt_flows active
+               where active.tenant_id = f.tenant_id
+                 and active.agent_id = f.agent_id
+                 and active.status = 'active') as "activeCount"
        from platform.prompt_flows f
        join platform.agents a
          on a.tenant_id = f.tenant_id and a.id = f.agent_id
        join platform.tenants t on t.id = f.tenant_id
-       where t.slug = 'cedco' and a.code = 'SOFIA' and f.status = 'active'`
+       where t.slug = 'cedco'
+         and a.code = 'SOFIA'
+         and f.definition ->> 'runtimeKey' = 'sofia_whatsapp_internal_v2'`
     );
 
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]).toEqual(
       expect.objectContaining({
         runtimeKey: "sofia_whatsapp_internal_v2",
+        status: "archived",
         activeCount: 1
       })
     );

@@ -4,6 +4,11 @@ import { registerRoutes } from "./app.js";
 await startService({
   serviceName: "prompt-flow-service",
   databaseRequired: true,
-  requiredMigrations: ["001-platform.sql", "012-whatsapp-sofia-runtime.sql", "013-sofia-confirmation-protocol.sql"],
+  requiredMigrations: [
+    "001-platform.sql",
+    "012-whatsapp-sofia-runtime.sql",
+    "013-sofia-confirmation-protocol.sql",
+    "014-sofia-local-time-protocol.sql"
+  ],
   registerRoutes
 });

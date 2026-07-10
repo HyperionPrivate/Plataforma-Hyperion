@@ -100,6 +100,11 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
 
     expect(responses.map((response) => response.statusCode)).toEqual([201, 409]);
     expect(responses[1]!.json().data.alternatives.length).toBeGreaterThan(0);
+    expect(responses[1]!.json().data.alternatives[0]).toMatchObject({
+      localDate: slotDate,
+      localTime: "09:00",
+      timeZone: "America/Bogota"
+    });
     const active = await client.query<{ count: number }>(
       `select count(*)::int as count from pulso_iris.appointment_holds
        where tenant_id = $1 and scheduled_at = $2 and status = 'active'`,

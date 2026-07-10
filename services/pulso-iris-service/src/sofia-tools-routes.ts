@@ -353,7 +353,13 @@ async function searchAvailability(
     appointmentTypeId: input.appointmentTypeId,
     includeFull: false
   });
-  return { ...result, slots: result.slots.slice(0, settings.maxAlternatives) };
+  return {
+    ...result,
+    slots: result.slots.slice(0, settings.maxAlternatives).map((slot) => ({
+      ...slot,
+      scheduledAt: slot.startsAt
+    }))
+  };
 }
 
 async function createHold(
@@ -818,12 +824,20 @@ function appointmentViewSql(): string {
   return `select a.id, a.patient_id as "patientId", a.conversation_id as "conversationId",
                  a.status, a.origin, a.verification_mode as "verificationMode",
                  a.scheduled_at as "scheduledAt", a.duration_min as "durationMin",
+                 to_char(a.scheduled_at at time zone
+                   coalesce(nullif(a.metadata ->> 'slotTimeZone', ''), settings.timezone),
+                   'YYYY-MM-DD') as "localDate",
+                 to_char(a.scheduled_at at time zone
+                   coalesce(nullif(a.metadata ->> 'slotTimeZone', ''), settings.timezone),
+                   'HH24:MI') as "localTime",
+                 coalesce(nullif(a.metadata ->> 'slotTimeZone', ''), settings.timezone) as "timeZone",
                  a.reschedule_count as "rescheduleCount", a.previous_appointment_id as "previousAppointmentId",
                  s.id as "siteId", s.name as "siteName",
                  p.id as "professionalId", p.name as "professionalName", p.is_pilot as "professionalIsPilot",
                  py.id as "payerId", py.name as "payerName",
                  t.id as "appointmentTypeId", t.name as "appointmentTypeName", t.preparation_text as "preparationText"
           from pulso_iris.appointments a
+          join pulso_iris.agenda_settings settings on settings.tenant_id = a.tenant_id
           left join pulso_iris.sites s on s.tenant_id = a.tenant_id and s.id = a.site_id
           left join pulso_iris.professionals p on p.tenant_id = a.tenant_id and p.id = a.professional_id
           left join pulso_iris.payers py on py.tenant_id = a.tenant_id and py.id = a.payer_id

@@ -152,6 +152,24 @@ describeIntegration("SOFIA internal agenda tools", () => {
   });
 
   it("books once, reschedules atomically and cancels only with explicit confirmations", async () => {
+    const availability = await callTool("search_availability", {
+      siteId,
+      professionalId,
+      payerId,
+      appointmentTypeId,
+      from: scheduledAt,
+      days: 1
+    });
+    expect(availability.statusCode).toBe(200);
+    expect(availability.json().data.slots[0]).toMatchObject({
+      startsAt: scheduledAt,
+      scheduledAt,
+      localDate: scheduledAt.slice(0, 10),
+      localTime: "09:00",
+      timeZone: "America/Bogota"
+    });
+    expect(availability.json().data.slots[0].scheduledAt).toBe(availability.json().data.slots[0].startsAt);
+
     const confirmation = await client.query<{ id: string }>(
       `insert into pulso_iris.messages (tenant_id, conversation_id, sender, body, provider, external_message_id)
        values ($1, $2, 'patient', 'CONFIRMO reservar', 'whatsapp_web_test', 'controlled-confirm-book') returning id`,
@@ -183,9 +201,33 @@ describeIntegration("SOFIA internal agenda tools", () => {
       status: "verified",
       origin: "sofia_wa",
       verificationMode: "internal",
-      professionalIsPilot: true
+      professionalIsPilot: true,
+      scheduledAt,
+      localDate: scheduledAt.slice(0, 10),
+      localTime: "09:00",
+      timeZone: "America/Bogota"
     });
     const originalAppointmentId = booked.json().data.appointment.id as string;
+    const storedSlotTimeZone = await client.query<{ slotTimeZone: string }>(
+      `select metadata ->> 'slotTimeZone' as "slotTimeZone"
+       from pulso_iris.appointments where tenant_id = $1 and id = $2`,
+      [tenantId, originalAppointmentId]
+    );
+    expect(storedSlotTimeZone.rows[0]?.slotTimeZone).toBe("America/Bogota");
+
+    const listedAfterBook = await callTool("list_patient_appointments", { patientId });
+    expect(listedAfterBook.statusCode).toBe(200);
+    expect(listedAfterBook.json().data.appointments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: originalAppointmentId,
+          scheduledAt,
+          localDate: scheduledAt.slice(0, 10),
+          localTime: "09:00",
+          timeZone: "America/Bogota"
+        })
+      ])
+    );
 
     const replay = await callTool("book_appointment", {
       patientId,
@@ -216,8 +258,21 @@ describeIntegration("SOFIA internal agenda tools", () => {
       idempotencyKey: "sofia-reschedule-confirmed"
     });
     expect(rescheduled.statusCode).toBe(200);
-    expect(rescheduled.json().data.previousAppointment.status).toBe("rescheduled");
-    expect(rescheduled.json().data.appointment).toMatchObject({ status: "verified", verificationMode: "internal" });
+    expect(rescheduled.json().data.previousAppointment).toMatchObject({
+      status: "rescheduled",
+      scheduledAt,
+      localDate: scheduledAt.slice(0, 10),
+      localTime: "09:00",
+      timeZone: "America/Bogota"
+    });
+    expect(rescheduled.json().data.appointment).toMatchObject({
+      status: "verified",
+      verificationMode: "internal",
+      scheduledAt: replacementAt,
+      localDate: replacementAt.slice(0, 10),
+      localTime: "09:20",
+      timeZone: "America/Bogota"
+    });
     const appointmentId = rescheduled.json().data.appointment.id as string;
 
     const rescheduleReplay = await callTool("reschedule_appointment", {
@@ -249,7 +304,13 @@ describeIntegration("SOFIA internal agenda tools", () => {
       idempotencyKey: "sofia-cancel-confirmed"
     });
     expect(cancelled.statusCode).toBe(200);
-    expect(cancelled.json().data.appointment.status).toBe("cancelled");
+    expect(cancelled.json().data.appointment).toMatchObject({
+      status: "cancelled",
+      scheduledAt: replacementAt,
+      localDate: replacementAt.slice(0, 10),
+      localTime: "09:20",
+      timeZone: "America/Bogota"
+    });
 
     const activeHoldsBefore = await client.query<{ count: number }>(
       `select count(*)::int as count from pulso_iris.appointment_holds where tenant_id = $1 and status = 'active'`,
