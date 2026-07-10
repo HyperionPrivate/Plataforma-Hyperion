@@ -33,11 +33,18 @@ const transcriber: ClinicalTranscriber = {
   })
 };
 
+let structureBarrier: { started: () => void; release: Promise<void> } | undefined;
+let structureCallCount = 0;
 const structurer: ClinicalStructurer = {
   name: "test-llm",
   model: "test-llm-v1",
   isConfigured: () => true,
-  structure: async () => ({ content: CONTENT, provider: "test-llm", model: "test-llm-v1" })
+  structure: async () => {
+    structureCallCount += 1;
+    structureBarrier?.started();
+    if (structureBarrier) await structureBarrier.release;
+    return { content: CONTENT, provider: "test-llm", model: "test-llm-v1" };
+  }
 };
 
 let app: ServiceHandle["app"];
@@ -45,8 +52,9 @@ let client: pg.Client;
 let tenantA: string;
 let tenantB: string;
 let encounterA: string;
+let patientA: string;
 let patientB: string;
-const operatorId = "00000000-0000-4000-8000-000000000001";
+let operatorId: string;
 const audits: LumenAuditEvent[] = [];
 
 describeIntegration("LUMEN clinical vertical", () => {
@@ -60,7 +68,9 @@ describeIntegration("LUMEN clinical vertical", () => {
     const fixtureA = await createFixture(tenantA, "A");
     const fixtureB = await createFixture(tenantB, "B");
     encounterA = fixtureA.encounterId;
+    patientA = fixtureA.patientId;
     patientB = fixtureB.patientId;
+    operatorId = await createOperator(tenantA);
 
     const handle = await createService({
       serviceName: "lumen-service",
@@ -94,15 +104,144 @@ describeIntegration("LUMEN clinical vertical", () => {
     );
     await expect(
       client.query(
-        `insert into lumen.encounters (tenant_id, patient_id, professional_id, site_id, scheduled_at)
-         values ($1, $2, $3, $4, now())`,
+        `insert into lumen.encounters
+           (tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
+         values ($1, $2, $3, $4, now(), true, 'cross-tenant', '{"synthetic":true}'::jsonb)`,
         [tenantA, patientB, catalog.rows[0].professional_id, catalog.rows[0].site_id]
       )
-    ).rejects.toMatchObject({ code: "23503" });
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("rejects clinical encounters for non-synthetic patients", async () => {
+    const patient = await client.query(
+      `insert into pulso_iris.administrative_patients (tenant_id, full_name, metadata)
+       values ($1, 'Paciente no demo de prueba', '{}'::jsonb) returning id`,
+      [tenantA]
+    );
+    const catalog = await client.query(
+      `select professional_id, site_id from lumen.encounters where tenant_id = $1 and id = $2`,
+      [tenantA, encounterA]
+    );
+    await expect(
+      client.query(
+        `insert into lumen.encounters
+           (tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
+         values ($1, $2, $3, $4, now(), true, 'non-demo-reference', '{"synthetic":true}'::jsonb)`,
+        [tenantA, patient.rows[0].id, catalog.rows[0].professional_id, catalog.rows[0].site_id]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("keeps synthetic identity markers and approval transitions database-enforced", async () => {
+    await expect(
+      client.query(
+        `update pulso_iris.administrative_patients
+         set metadata = metadata - 'is_demo'
+         where tenant_id = $1 and id = $2`,
+        [tenantA, patientA]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      client.query(`update lumen.encounters set status = 'approved' where tenant_id = $1 and id = $2`, [
+        tenantA,
+        encounterA
+      ])
+    ).rejects.toMatchObject({ code: "23514" });
+
+    const failedDictation = await client.query(
+      `insert into lumen.dictations
+         (tenant_id, encounter_id, status, mime_type, provider, error_code, metadata)
+       values ($1, $2, 'failed', 'audio/webm', 'test-stt', 'ProviderError', '{"audioStored":false}'::jsonb)
+       returning id`,
+      [tenantA, encounterA]
+    );
+    await expect(
+      client.query(
+        `insert into lumen.clinical_records
+           (tenant_id, encounter_id, dictation_id, status, content, provider, model)
+         values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
+        [tenantA, encounterA, failedDictation.rows[0].id, JSON.stringify(CONTENT)]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("serializes structuring against approval on the encounter row", async () => {
+    const fixture = await createFixture(tenantA, "C");
+    const resolvedContent = { ...CONTENT, uncertainties: [] };
+    const dictation = await client.query(
+      `insert into lumen.dictations
+         (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
+       values ($1, $2, 'transcribed', 'Dictado inicial sintético.', 'text/plain', 'manual',
+               '{"audioStored":false}'::jsonb)
+       returning id`,
+      [tenantA, fixture.encounterId]
+    );
+    await client.query(
+      `insert into lumen.clinical_records
+         (tenant_id, encounter_id, dictation_id, status, content, provider, model)
+       values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
+      [tenantA, fixture.encounterId, dictation.rows[0].id, JSON.stringify(resolvedContent)]
+    );
+    await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
+      tenantA,
+      fixture.encounterId
+    ]);
+
+    let notifyStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    let releaseProvider!: () => void;
+    const providerRelease = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    structureBarrier = { started: notifyStarted, release: providerRelease };
+    const headers = { "x-operator-role": "advisor", "x-operator-id": operatorId };
+    let approvalSettled = false;
+    try {
+      const structureRequest = app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/structure`,
+        headers,
+        payload: { transcript: "Dictado concurrente sintético sin PII." }
+      });
+      await providerStarted;
+      const approvalRequest = app
+        .inject({
+          method: "POST",
+          url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/approve`,
+          headers
+        })
+        .finally(() => {
+          approvalSettled = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(approvalSettled).toBe(false);
+      releaseProvider();
+      expect((await structureRequest).statusCode).toBe(201);
+      expect((await approvalRequest).statusCode).toBe(422);
+    } finally {
+      releaseProvider();
+      structureBarrier = undefined;
+    }
+
+    const state = await client.query(
+      `select record.status, jsonb_array_length(record.content->'uncertainties')::int as uncertainties
+       from lumen.clinical_records record
+       where record.tenant_id = $1 and record.encounter_id = $2`,
+      [tenantA, fixture.encounterId]
+    );
+    expect(state.rows[0]).toMatchObject({ status: "draft", uncertainties: 1 });
   });
 
   it("transcribes without persisting audio, structures, resolves uncertainties and approves", async () => {
     const headers = { "x-operator-role": "advisor", "x-operator-id": operatorId };
+    const started = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/start`,
+      headers
+    });
+    expect(started.statusCode).toBe(200);
     const transcription = await app.inject({
       method: "POST",
       url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/transcriptions`,
@@ -123,6 +262,14 @@ describeIntegration("LUMEN clinical vertical", () => {
     ]);
     expect(stored.rows[0].metadata).toMatchObject({ audioStored: false });
 
+    const mismatched = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/structure`,
+      headers,
+      payload: { transcript: `${dictation.transcript} Texto editado.`, dictationId: dictation.id }
+    });
+    expect(mismatched.statusCode).toBe(422);
+
     const structured = await app.inject({
       method: "POST",
       url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/structure`,
@@ -131,6 +278,29 @@ describeIntegration("LUMEN clinical vertical", () => {
     });
     expect(structured.statusCode).toBe(201);
     expect(structured.json().data.content.uncertainties).toHaveLength(1);
+
+    const durableProcessAudit = await client.query(
+      `select event_type, count(*)::int as count
+       from platform.audit_events
+       where tenant_id = $1
+         and event_type in ('lumen.encounter.started', 'lumen.dictation.transcribed', 'lumen.record.structured')
+         and (entity_id = $2 or metadata->>'encounterId' = $2)
+       group by event_type`,
+      [tenantA, encounterA]
+    );
+    expect(Object.fromEntries(durableProcessAudit.rows.map((row) => [row.event_type, row.count]))).toEqual({
+      "lumen.dictation.transcribed": 1,
+      "lumen.encounter.started": 1,
+      "lumen.record.structured": 1
+    });
+
+    await expect(
+      client.query(
+        `update lumen.clinical_records set approved_by = $3
+         where tenant_id = $1 and encounter_id = $2`,
+        [tenantA, encounterA, operatorId]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
 
     const blocked = await app.inject({
       method: "POST",
@@ -160,6 +330,23 @@ describeIntegration("LUMEN clinical vertical", () => {
     });
     expect(patched.statusCode).toBe(200);
 
+    const durableReviewAudit = await client.query(
+      `select metadata from platform.audit_events
+       where tenant_id = $1 and event_type = 'lumen.record.reviewed'
+         and entity_id = $2 and actor_id = $3`,
+      [tenantA, patched.json().data.id, operatorId]
+    );
+    expect(durableReviewAudit.rowCount).toBe(1);
+    expect(durableReviewAudit.rows[0].metadata).toMatchObject({
+      previousUncertainties: 1,
+      remainingUncertainties: 0,
+      resolvedUncertainties: 1,
+      resolvedFields: ["fundus.left"]
+    });
+    expect(durableReviewAudit.rows[0].metadata.reviewedSections).toEqual(
+      expect.arrayContaining(["fundus", "uncertainties"])
+    );
+
     const approved = await app.inject({
       method: "POST",
       url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/approve`,
@@ -167,7 +354,76 @@ describeIntegration("LUMEN clinical vertical", () => {
     });
     expect(approved.statusCode).toBe(200);
     expect(approved.json().data.status).toBe("approved");
-    expect(audits.map((event) => event.eventType)).toContain("lumen.record.approved");
+
+    const durableAudit = await client.query(
+      `select count(*)::int as count from platform.audit_events
+       where tenant_id = $1 and event_type = 'lumen.record.approved'
+         and entity_id = $2`,
+      [tenantA, approved.json().data.id]
+    );
+    expect(durableAudit.rows[0].count).toBe(1);
+
+    const beforeDictations = await client.query(
+      `select count(*)::int as count from lumen.dictations where tenant_id = $1 and encounter_id = $2`,
+      [tenantA, encounterA]
+    );
+    const structureCallsBeforeImmutableRequests = structureCallCount;
+    const immutableRequests = await Promise.all([
+      app.inject({ method: "POST", url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/start`, headers }),
+      app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/transcriptions`,
+        headers,
+        payload: {
+          audioBase64: Buffer.from("post-approval-audio").toString("base64"),
+          mimeType: "audio/webm",
+          durationSeconds: 2
+        }
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/structure`,
+        headers,
+        payload: { transcript: "Transcript manual posterior a aprobación." }
+      }),
+      app.inject({
+        method: "PATCH",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/record`,
+        headers,
+        payload: { content: resolved }
+      }),
+      app.inject({ method: "POST", url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/approve`, headers })
+    ]);
+    expect(immutableRequests.map((response) => response.statusCode)).toEqual([409, 409, 409, 409, 409]);
+    expect(structureCallCount).toBe(structureCallsBeforeImmutableRequests);
+
+    const afterDictations = await client.query(
+      `select count(*)::int as count from lumen.dictations where tenant_id = $1 and encounter_id = $2`,
+      [tenantA, encounterA]
+    );
+    expect(afterDictations.rows[0].count).toBe(beforeDictations.rows[0].count);
+
+    await expect(
+      client.query(
+        `update lumen.clinical_records set content = jsonb_set(content, '{history}', '"alterada"'::jsonb)
+         where tenant_id = $1 and encounter_id = $2`,
+        [tenantA, encounterA]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      client.query(`delete from lumen.clinical_records where tenant_id = $1 and encounter_id = $2`, [
+        tenantA,
+        encounterA
+      ])
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      client.query(
+        `insert into lumen.dictations
+           (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
+         values ($1, $2, 'transcribed', 'posterior', 'text/plain', 'manual', '{"audioStored":false}'::jsonb)`,
+        [tenantA, encounterA]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
   });
 
   it("keeps auditors read-only", async () => {
@@ -206,8 +462,9 @@ async function createFixture(tenantId: string, suffix: string): Promise<{ encoun
   );
   const encounter = await client.query(
     `insert into lumen.encounters
-       (tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key)
-     values ($1, $2, $3, $4, '2026-07-10T15:00:00Z', true, $5) returning id`,
+       (tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
+     values ($1, $2, $3, $4, '2026-07-10T15:00:00Z', true, $5, '{"synthetic":true}'::jsonb)
+     returning id`,
     [tenantId, patient.rows[0].id, professional.rows[0].id, site.rows[0].id, `integration-${suffix}`]
   );
   await client.query(
@@ -228,7 +485,21 @@ async function createFixture(tenantId: string, suffix: string): Promise<{ encoun
   return { encounterId: encounter.rows[0].id, patientId: patient.rows[0].id };
 }
 
+async function createOperator(tenantId: string): Promise<string> {
+  const operator = await client.query(
+    `insert into platform.operators (tenant_id, email, display_name, role, status)
+     values ($1, $2, 'Asesor LUMEN sintético', 'advisor', 'active') returning id`,
+    [tenantId, `lumen-int-${tenantId}`]
+  );
+  await client.query(`insert into platform.operator_tenants (operator_id, tenant_id) values ($1, $2)`, [
+    operator.rows[0].id,
+    tenantId
+  ]);
+  return operator.rows[0].id;
+}
+
 async function cleanup(): Promise<void> {
   if (!client) return;
   await client.query(`delete from platform.tenants where slug like 'lumen-int-%'`);
+  await client.query(`delete from platform.operators where email like 'lumen-int-%'`);
 }

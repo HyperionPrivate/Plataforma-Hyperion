@@ -34,11 +34,15 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 };
 
 async function verifySchema(context: ServiceContext): Promise<void> {
-  const result = await context.db!.query<{ encounters: string | null; records: string | null }>(
+  const result = await context.db!.query<{ encounters: string | null; records: string | null; invariants: boolean }>(
     `select to_regclass('lumen.encounters')::text as encounters,
-            to_regclass('lumen.clinical_records')::text as records`
+            to_regclass('lumen.clinical_records')::text as records,
+            exists (
+              select 1 from platform.schema_migrations
+              where name = '019-lumen-clinical-invariants.sql'
+            ) as invariants`
   );
-  if (!result.rows[0]?.encounters || !result.rows[0]?.records) {
+  if (!result.rows[0]?.encounters || !result.rows[0]?.records || !result.rows[0]?.invariants) {
     throw new Error("LUMEN schema is incomplete; run migrations");
   }
 }

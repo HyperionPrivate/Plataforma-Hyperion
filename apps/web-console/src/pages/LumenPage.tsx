@@ -26,6 +26,7 @@ import { Card, CardHead, EmptyState, LoadingState, Pill } from "../components/ui
 import { api } from "../lib/api.js";
 import { lumenPath, useConsole } from "../lib/context.js";
 import { lumenErrorMessage } from "../lib/lumen-model.js";
+import { can } from "../lib/rbac.js";
 
 interface LumenHealth {
   providers: { transcriptionConfigured: boolean; structuringConfigured: boolean };
@@ -34,7 +35,7 @@ interface LumenHealth {
 type Action = "loading" | "starting" | "transcribing" | "structuring" | "saving" | "approving";
 
 export function LumenPage() {
-  const { tenant } = useConsole();
+  const { tenant, session } = useConsole();
   const [worklist, setWorklist] = useState<LumenWorklistEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
   const [detail, setDetail] = useState<LumenEncounterDetail>();
@@ -261,6 +262,8 @@ export function LumenPage() {
 
   const busy = Boolean(action);
   const approved = detail?.clinicalRecord?.status === "approved";
+  const canWrite = can(session.operator.role, "write:operation");
+  const recordLocked = Boolean(approved || !canWrite);
 
   return (
     <Layout
@@ -274,6 +277,7 @@ export function LumenPage() {
           <Pill tone={health?.providers.structuringConfigured ? "green" : "amber"}>
             Estructuración {health?.providers.structuringConfigured ? "lista" : "sin configurar"}
           </Pill>
+          {!canWrite ? <Pill tone="blue">Solo lectura</Pill> : null}
         </div>
       }
     >
@@ -331,7 +335,7 @@ export function LumenPage() {
                 </div>
                 <div className="row">
                   <Pill tone={approved ? "green" : "blue"}>{statusLabel(detail.encounter.status)}</Pill>
-                  {detail.encounter.status === "preconsultation" ? (
+                  {detail.encounter.status === "preconsultation" && canWrite ? (
                     <button
                       className="btn btn-primary"
                       type="button"
@@ -386,7 +390,7 @@ export function LumenPage() {
                         className="btn btn-primary"
                         type="button"
                         onClick={() => void startRecording()}
-                        disabled={busy || approved}
+                        disabled={busy || recordLocked}
                       >
                         <Mic size={17} aria-hidden="true" /> Grabar
                       </button>
@@ -395,14 +399,14 @@ export function LumenPage() {
                         <Square size={15} aria-hidden="true" /> Detener
                       </button>
                     )}
-                    <label className={`btn btn-outline${busy || approved ? " disabled" : ""}`}>
+                    <label className={`btn btn-outline${busy || recordLocked ? " disabled" : ""}`}>
                       <Upload size={17} aria-hidden="true" /> Cargar audio
                       <input
                         className="visually-hidden"
                         type="file"
                         accept="audio/*"
                         capture="user"
-                        disabled={busy || approved}
+                        disabled={busy || recordLocked}
                         onChange={(event) => void uploadAudio(event.target.files?.[0])}
                       />
                     </label>
@@ -414,7 +418,7 @@ export function LumenPage() {
                       className="input lumen-transcript"
                       value={transcript}
                       onChange={(event) => setTranscript(event.target.value)}
-                      disabled={approved}
+                      disabled={recordLocked}
                       placeholder="El transcript aparecerá aquí."
                     />
                   </label>
@@ -426,7 +430,7 @@ export function LumenPage() {
                       className="btn btn-primary"
                       type="button"
                       onClick={() => void structureRecord()}
-                      disabled={busy || approved}
+                      disabled={busy || recordLocked}
                     >
                       <Sparkles size={17} aria-hidden="true" />
                       {action === "structuring" ? "Estructurando..." : "Estructurar HC"}
@@ -448,7 +452,7 @@ export function LumenPage() {
                       <textarea
                         className="input"
                         value={draft.reasonForVisit}
-                        disabled={approved}
+                        disabled={recordLocked}
                         onChange={(event) => setDraft({ ...draft, reasonForVisit: event.target.value })}
                       />
                     </label>
@@ -457,32 +461,32 @@ export function LumenPage() {
                       <textarea
                         className="input"
                         value={draft.history}
-                        disabled={approved}
+                        disabled={recordLocked}
                         onChange={(event) => setDraft({ ...draft, history: event.target.value })}
                       />
                     </label>
                     <EyeFields
                       title="Agudeza visual"
                       value={draft.visualAcuity}
-                      disabled={approved}
+                      disabled={recordLocked}
                       onChange={(eye, value) => updateEye("visualAcuity", eye, value)}
                     />
                     <EyeFields
                       title="Presión intraocular"
                       value={draft.intraocularPressure}
-                      disabled={approved}
+                      disabled={recordLocked}
                       onChange={(eye, value) => updateEye("intraocularPressure", eye, value)}
                     />
                     <EyeFields
                       title="Biomicroscopía"
                       value={draft.biomicroscopy}
-                      disabled={approved}
+                      disabled={recordLocked}
                       onChange={(eye, value) => updateEye("biomicroscopy", eye, value)}
                     />
                     <EyeFields
                       title="Fondo de ojo"
                       value={draft.fundus}
-                      disabled={approved}
+                      disabled={recordLocked}
                       onChange={(eye, value) => updateEye("fundus", eye, value)}
                     />
 
@@ -504,7 +508,7 @@ export function LumenPage() {
                       <textarea
                         className="input"
                         value={draft.plan.join("\n")}
-                        disabled={approved}
+                        disabled={recordLocked}
                         onChange={(event) =>
                           setDraft({
                             ...draft,
@@ -534,7 +538,7 @@ export function LumenPage() {
                             <button
                               className="btn btn-outline btn-sm"
                               type="button"
-                              disabled={approved}
+                              disabled={recordLocked}
                               onClick={() =>
                                 setDraft({
                                   ...draft,
@@ -555,7 +559,7 @@ export function LumenPage() {
                         ? "Sin pendientes de confirmación."
                         : `${draft.uncertainties.length} pendiente(s).`}
                     </span>
-                    {!approved ? (
+                    {!approved && canWrite ? (
                       <>
                         <button className="btn btn-outline" type="button" onClick={() => void save()} disabled={busy}>
                           <Save size={17} aria-hidden="true" /> Guardar borrador

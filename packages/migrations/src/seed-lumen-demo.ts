@@ -12,21 +12,32 @@ if (!databaseUrl) {
 
 const client = new Client({ connectionString: databaseUrl });
 const clearOnly = process.argv.includes("--clear");
+let transactionOpen = false;
 
 try {
   await client.connect();
+  await client.query("begin");
+  transactionOpen = true;
   const tenant = await client.query<{ id: string }>(`select id from platform.tenants where slug = 'cedco'`);
   const tenantId = tenant.rows[0]?.id;
   if (!tenantId) throw new Error("CEDCO tenant not found");
+  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${tenantId}|lumen-demo-001`]);
 
   if (clearOnly) {
     await clearLumenDemo(tenantId);
+    await client.query("commit");
+    transactionOpen = false;
     logger.info("LUMEN demo data cleared");
   } else {
-    const seeded = await seedLumenDemo(tenantId);
-    logger.info("LUMEN demo data ready", seeded);
+    await seedLumenDemo(tenantId);
+    await client.query("commit");
+    transactionOpen = false;
+    logger.info("LUMEN demo data ready", { seedKey: "lumen-demo-001" });
   }
 } catch (error) {
+  if (transactionOpen) {
+    await client.query("rollback").catch(() => undefined);
+  }
   logger.error("LUMEN demo seed failed", { error: error instanceof Error ? error.message : String(error) });
   process.exitCode = 1;
 } finally {
@@ -34,20 +45,27 @@ try {
 }
 
 async function clearLumenDemo(tenantId: string): Promise<void> {
-  await client.query(`delete from lumen.encounters where tenant_id = $1 and demo_key = 'lumen-demo-001'`, [tenantId]);
+  await client.query(
+    `delete from lumen.encounters
+     where tenant_id = $1 and demo_key = 'lumen-demo-001' and is_demo
+       and coalesce(metadata->>'synthetic', 'false') = 'true'`,
+    [tenantId]
+  );
   await client.query(
     `delete from pulso_iris.administrative_patients
-     where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-patient-001'`,
+     where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-patient-001'
+       and coalesce(metadata->>'is_demo', 'false') = 'true'`,
     [tenantId]
   );
   await client.query(
     `delete from pulso_iris.professionals
-     where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-professional-001'`,
+     where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-professional-001'
+       and coalesce(metadata->>'is_demo', 'false') = 'true'`,
     [tenantId]
   );
 }
 
-async function seedLumenDemo(tenantId: string): Promise<Record<string, string>> {
+async function seedLumenDemo(tenantId: string): Promise<void> {
   const site = await client.query<{ id: string; name: string }>(
     `select id, name from pulso_iris.sites where tenant_id = $1 and status = 'active' order by created_at limit 1`,
     [tenantId]
@@ -56,7 +74,8 @@ async function seedLumenDemo(tenantId: string): Promise<Record<string, string>> 
 
   let professional = await client.query<{ id: string }>(
     `select id from pulso_iris.professionals
-     where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-professional-001'`,
+     where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-professional-001'
+       and coalesce(metadata->>'is_demo', 'false') = 'true'`,
     [tenantId]
   );
   if (!professional.rows[0]) {
@@ -71,7 +90,8 @@ async function seedLumenDemo(tenantId: string): Promise<Record<string, string>> 
   }
   let patient = await client.query<{ id: string }>(
     `select id from pulso_iris.administrative_patients
-     where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-patient-001'`,
+     where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-patient-001'
+       and coalesce(metadata->>'is_demo', 'false') = 'true'`,
     [tenantId]
   );
   if (!patient.rows[0]) {
@@ -85,17 +105,22 @@ async function seedLumenDemo(tenantId: string): Promise<Record<string, string>> 
     );
   }
   const encounter = await client.query<{ id: string }>(
-    `insert into lumen.encounters
-       (tenant_id, patient_id, professional_id, site_id, status, scheduled_at, is_demo, demo_key,
-        metadata)
-     values (
-       $1, $2, $3, $4, 'preconsultation',
-       ((date_trunc('day', now() at time zone 'America/Bogota') + interval '10 hours') at time zone 'America/Bogota'),
-       true, 'lumen-demo-001', '{"synthetic":true}'::jsonb
+    `with inserted as (
+       insert into lumen.encounters
+         (tenant_id, patient_id, professional_id, site_id, status, scheduled_at, is_demo, demo_key,
+          metadata)
+       values (
+         $1, $2, $3, $4, 'preconsultation',
+         ((date_trunc('day', now() at time zone 'America/Bogota') + interval '10 hours') at time zone 'America/Bogota'),
+         true, 'lumen-demo-001', '{"synthetic":true}'::jsonb
+       )
+       on conflict (tenant_id, demo_key) where demo_key is not null do nothing
+       returning id
      )
-     on conflict (tenant_id, demo_key) where demo_key is not null
-       do update set demo_key = excluded.demo_key
-     returning id`,
+     select id from inserted
+     union all
+     select id from lumen.encounters where tenant_id = $1 and demo_key = 'lumen-demo-001'
+     limit 1`,
     [tenantId, patient.rows[0]!.id, professional.rows[0]!.id, site.rows[0].id]
   );
 
@@ -126,12 +151,4 @@ async function seedLumenDemo(tenantId: string): Promise<Record<string, string>> 
      on conflict (tenant_id, encounter_id) do nothing`,
     [tenantId, encounter.rows[0]!.id, JSON.stringify(summary)]
   );
-
-  return {
-    tenantId,
-    encounterId: encounter.rows[0]!.id,
-    patientId: patient.rows[0]!.id,
-    professionalId: professional.rows[0]!.id,
-    site: site.rows[0].name
-  };
 }
