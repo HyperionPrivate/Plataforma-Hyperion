@@ -1007,39 +1007,12 @@ describe("SOFIA fresh availability guard", () => {
       transaction: vi.fn(async (callback: (tx: { query: typeof query }) => Promise<unknown>) => callback({ query })),
       close: vi.fn()
     } as unknown as DatabaseClient;
-    const rescheduleCall = (id: string, slot: typeof exactSlot) => ({
-      id,
-      name: "reschedule_appointment",
-      arguments: JSON.stringify({
-        appointmentId,
-        siteId: slot.siteId,
-        professionalId: slot.professionalId,
-        payerId: slot.payerId,
-        appointmentTypeId: slot.appointmentTypeId,
-        scheduledAt: slot.scheduledAt,
-        reason: "Solicitud del paciente"
-      })
+    const complete = vi.fn().mockResolvedValueOnce({
+      content: null,
+      toolCalls: [{ id: "fresh-search", name: "search_availability", arguments: "{}" }],
+      model: "controlled",
+      latencyMs: 1
     });
-    const complete = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: null,
-        toolCalls: [{ id: "fresh-search", name: "search_availability", arguments: "{}" }],
-        model: "controlled",
-        latencyMs: 1
-      })
-      .mockResolvedValueOnce({
-        content: null,
-        toolCalls: [rescheduleCall("wrong-later-slot", laterSlot)],
-        model: "controlled",
-        latencyMs: 1
-      })
-      .mockResolvedValueOnce({
-        content: null,
-        toolCalls: [rescheduleCall("exact-slot", exactSlot)],
-        model: "controlled",
-        latencyMs: 1
-      });
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       const target = String(url);
       if (target.includes("prompt-flows/SOFIA/active")) {
@@ -1061,6 +1034,17 @@ describe("SOFIA fresh availability guard", () => {
       if (target.includes("/sofia/tools/search_availability")) {
         return jsonResponse({ slots: [exactSlot, laterSlot] });
       }
+      if (target.includes("/sofia/tools/list_patient_appointments")) {
+        return jsonResponse({
+          appointments: [
+            {
+              id: appointmentId,
+              status: "verified",
+              scheduledAt: "2026-07-13T13:40:00.000Z"
+            }
+          ]
+        });
+      }
       return jsonResponse({ accepted: true });
     });
     const runtime = new SofiaRuntime({
@@ -1077,8 +1061,11 @@ describe("SOFIA fresh availability guard", () => {
 
     await expect(runtime.processOne()).resolves.toBe(true);
 
-    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(1);
     expect(pendingActionUpdates).toBe(1);
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/sofia/tools/list_patient_appointments"))).toBe(
+      true
+    );
     expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/sofia/tools/reschedule_appointment"))).toBe(
       false
     );
@@ -1088,7 +1075,7 @@ describe("SOFIA fresh availability guard", () => {
     expect(persistedResponse).toContain("CONFIRMO");
   });
 
-  it("discards a successful snapshot when the last search in the job fails", async () => {
+  it("does not stage a reschedule for an appointment whose scheduled time already passed", async () => {
     const tenantId = "00000000-0000-4000-8000-000000000011";
     const conversationId = "00000000-0000-4000-8000-000000000012";
     const jobId = "00000000-0000-4000-8000-000000000013";
@@ -1210,6 +1197,17 @@ describe("SOFIA fresh availability guard", () => {
           headers: { "content-type": "application/json" }
         });
       }
+      if (target.includes("/sofia/tools/list_patient_appointments")) {
+        return jsonResponse({
+          appointments: [
+            {
+              id: "00000000-0000-4000-8000-000000000026",
+              status: "verified",
+              scheduledAt: "2000-01-01T14:00:00.000Z"
+            }
+          ]
+        });
+      }
       return jsonResponse({ accepted: true });
     });
     const runtime = new SofiaRuntime({
@@ -1226,8 +1224,8 @@ describe("SOFIA fresh availability guard", () => {
 
     await expect(runtime.processOne()).resolves.toBe(true);
 
-    expect(searchCalls).toBe(2);
-    expect(persistedResponse).toContain("no pude consultar la disponibilidad actual");
+    expect(searchCalls).toBe(1);
+    expect(persistedResponse).toContain("No encontré una cita activa");
     expect(persistedResponse).not.toContain("9:00");
   });
 });
