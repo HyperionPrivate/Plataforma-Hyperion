@@ -8,7 +8,14 @@ import {
   type AgendaRequestConstraints
 } from "./availability-request-constraints.js";
 import type { LlmMessage, LlmProvider } from "./llm-provider.js";
-import { isExplicitConfirmation, SOFIA_TOOL_DEFINITIONS, SofiaToolClient } from "./sofia-tools.js";
+import {
+  isExplicitConfirmation,
+  SOFIA_TOOL_DEFINITIONS,
+  SofiaToolClient,
+  type SofiaConfirmationAppointment,
+  type SofiaConfirmationResult,
+  type SofiaConfirmedAction
+} from "./sofia-tools.js";
 
 const inboundEventSchema = z.object({
   id: z.string().uuid(),
@@ -74,7 +81,22 @@ const successfulAppointmentListResultSchema = z.object({
       z.object({
         id: z.string().uuid(),
         status: z.string().min(1),
-        scheduledAt: z.string().datetime().nullable().optional()
+        scheduledAt: z.string().datetime().nullable().optional(),
+        localDate: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .nullable()
+          .optional(),
+        localTime: z
+          .string()
+          .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
+          .nullable()
+          .optional(),
+        timeZone: z.string().min(1).nullable().optional(),
+        siteName: z.string().min(1).nullable().optional(),
+        professionalName: z.string().min(1).nullable().optional(),
+        payerName: z.string().min(1).nullable().optional(),
+        appointmentTypeName: z.string().min(1).nullable().optional()
       })
     )
   })
@@ -124,6 +146,11 @@ interface ClaimedJob {
   attemptCount: number;
   maxAttempts: number;
   input: unknown;
+}
+
+interface RecoverableConfirmationJob extends ClaimedJob {
+  messageId: string;
+  messageBody: string;
 }
 
 interface PromptFlow {
@@ -247,14 +274,17 @@ export class SofiaRuntime {
   }
 
   async processOne(): Promise<boolean> {
-    const claimed = await this.options.db.query<ClaimedJob>(
-      `select id, tenant_id as "tenantId", conversation_id as "conversationId",
-              inbound_event_id as "inboundEventId", attempt_count as "attemptCount",
-              max_attempts as "maxAttempts", input
-       from agent_runtime.claim_next_job($1)`,
-      [this.workerId]
-    );
-    const job = claimed.rows[0];
+    const recovered = await this.claimRecoverableConfirmationJob();
+    const claimed = recovered
+      ? undefined
+      : await this.options.db.query<ClaimedJob>(
+          `select id, tenant_id as "tenantId", conversation_id as "conversationId",
+                  inbound_event_id as "inboundEventId", attempt_count as "attemptCount",
+                  max_attempts as "maxAttempts", input
+           from agent_runtime.claim_next_job($1)`,
+          [this.workerId]
+        );
+    const job = recovered ?? claimed?.rows[0];
     if (!job) return false;
     try {
       await this.processJob(job);
@@ -262,6 +292,94 @@ export class SofiaRuntime {
       await this.failJob(job, error);
     }
     return true;
+  }
+
+  private async claimRecoverableConfirmationJob(): Promise<ClaimedJob | undefined> {
+    return this.options.db.transaction(async (tx) => {
+      const candidates = await tx.query<RecoverableConfirmationJob>(
+        `/* sofia-confirmation:recovery-candidates */
+         select j.id, j.tenant_id as "tenantId", j.conversation_id as "conversationId",
+                j.inbound_event_id as "inboundEventId", j.attempt_count as "attemptCount",
+                j.max_attempts as "maxAttempts", j.input,
+                patient.id::text as "messageId", patient.body as "messageBody"
+         from agent_runtime.jobs j
+         join pulso_iris.messages patient
+           on patient.tenant_id = j.tenant_id
+          and patient.conversation_id = j.conversation_id
+          and patient.id::text = j.input->>'messageId'
+          and patient.sender = 'patient'
+         where (
+             j.status = 'dead_letter'
+             or (j.status = 'running' and j.locked_at < now() - interval '2 minutes')
+           )
+           and j.attempt_count >= j.max_attempts
+           and j.attempt_count < 10
+           and btrim(regexp_replace(
+                 translate(lower(patient.body), 'áéíóúüñ', 'aeiouun'),
+                 '[^a-z0-9]+', ' ', 'g'
+               )) ~ '^(si )?confirmo( (agendar|reservar|cancelar|reagendar|la cita|el cambio))?$'
+           and not exists (
+             select 1
+             from channel_runtime.outbound_messages outbound
+             where outbound.tenant_id = j.tenant_id
+               and outbound.provider = 'whatsapp_web_test'
+               and outbound.idempotency_key = 'sofia-job:' || j.id::text
+           )
+         order by j.updated_at, j.created_at
+         for update of j skip locked
+         limit 10`
+      );
+      const candidate = candidates.rows.find((row) => isExplicitConfirmation(row.messageBody));
+      if (!candidate) return undefined;
+
+      const claimed = await tx.query<ClaimedJob>(
+        `/* sofia-confirmation:claim-recovered */
+         update agent_runtime.jobs j
+         set status = 'running',
+             attempt_count = j.attempt_count + 1,
+             max_attempts = least(10, greatest(j.max_attempts, j.attempt_count + 1)),
+             locked_at = now(), locked_by = $1, completed_at = null, updated_at = now()
+         where j.tenant_id = $2
+           and j.id = $3
+           and j.conversation_id = $4
+           and j.input->>'messageId' = $5
+           and (
+             j.status = 'dead_letter'
+             or (j.status = 'running' and j.locked_at < now() - interval '2 minutes')
+           )
+           and j.attempt_count >= j.max_attempts
+           and j.attempt_count < 10
+           and exists (
+             select 1
+             from pulso_iris.messages patient
+             where patient.tenant_id = j.tenant_id
+               and patient.conversation_id = j.conversation_id
+               and patient.id::text = j.input->>'messageId'
+               and patient.id::text = $5
+               and patient.sender = 'patient'
+               and patient.body = $6
+           )
+           and not exists (
+             select 1
+             from channel_runtime.outbound_messages outbound
+             where outbound.tenant_id = j.tenant_id
+               and outbound.provider = 'whatsapp_web_test'
+               and outbound.idempotency_key = 'sofia-job:' || j.id::text
+           )
+         returning j.id, j.tenant_id as "tenantId", j.conversation_id as "conversationId",
+                   j.inbound_event_id as "inboundEventId", j.attempt_count as "attemptCount",
+                   j.max_attempts as "maxAttempts", j.input`,
+        [
+          this.workerId,
+          candidate.tenantId,
+          candidate.id,
+          candidate.conversationId,
+          candidate.messageId,
+          candidate.messageBody
+        ]
+      );
+      return claimed.rows[0];
+    });
   }
 
   private async ingestTick(): Promise<void> {
@@ -303,10 +421,11 @@ export class SofiaRuntime {
     const currentMessage = current.rows[0];
     const currentBody = currentMessage?.body;
     if (!currentBody) throw new Error("Inbound message is missing");
+    const explicitConfirmation = isExplicitConfirmation(currentBody);
 
     await this.setConversationRuntime(job.tenantId, job.conversationId, "processing");
-    const prompt = await this.loadPrompt(job.tenantId);
     const startedAt = Date.now();
+    let prompt: PromptFlow | undefined;
     let responseText: string | undefined;
     let executionStatus: "completed" | "fallback" = "completed";
     let model = this.options.llm.model;
@@ -326,6 +445,7 @@ export class SofiaRuntime {
     );
 
     try {
+      prompt = await this.loadPrompt(job.tenantId);
       if (currentMessage.conversationStatus === "handoff_required" || isUrgencySignal(currentBody)) {
         responseText =
           prompt.urgentMessage ??
@@ -361,13 +481,102 @@ export class SofiaRuntime {
         const agendaSelection = derivedAgendaSelection.selection;
         const previousAvailabilityQuery = readLastAvailabilityQuery(context.availabilityRuntime.state, catalogIndex);
         const missingAgendaDimensions = missingMinimumAgendaSelection(agendaSelection);
+        const cancellationRequest = isCancellationRequest(currentBody);
         let availabilitySearchAttempted = false;
         let freshAvailabilitySucceeded = false;
         let freshAvailability: z.infer<typeof successfulAvailabilityResultSchema>["data"] | undefined;
         let freshAvailabilityQuery: AvailabilitySearchArguments | undefined;
         let preparedAvailabilitySlot: z.infer<typeof authoritativeAvailabilitySlotSchema> | undefined;
         let preparedAvailabilityAction: "book" | "reschedule" | undefined;
-        if (freshAvailabilityRequired && requestConstraints.invalidReason) {
+        if (explicitConfirmation) {
+          const confirmationContext = {
+            tenantId: job.tenantId,
+            patientId: input.patientId,
+            conversationId: job.conversationId,
+            currentMessageId: input.messageId,
+            currentMessageBody: currentBody,
+            jobId: job.id,
+            sequence: 1
+          };
+          const confirmed = await this.tools.confirmPendingAction(confirmationContext);
+          if (confirmed.ok) {
+            if (!confirmed.replayed) toolNames.push(...confirmedActionToolNames(confirmed.action));
+            responseText = renderAuthoritativeConfirmedAction(confirmed.receipt.appointment, confirmed.action);
+          } else if (confirmed.status === "retryable_failure") {
+            if (job.attemptCount < job.maxAttempts) throw new RetryableSofiaError(confirmed.code);
+            const finalized = await this.tools.finalizePendingConfirmation(
+              confirmationContext,
+              "confirmation_retry_exhausted",
+              "No pude comprobar que la operación se completara después de varios intentos. No voy a afirmar que se realizó; solicita apoyo de un coordinador para revisar su estado."
+            );
+            executionStatus = "fallback";
+            responseText = confirmedActionFallback(finalized);
+          } else {
+            executionStatus = "fallback";
+            responseText = confirmedActionFallback(confirmed);
+          }
+        } else if (cancellationRequest) {
+          toolNames.push("list_patient_appointments");
+          const listed = await this.tools.execute("list_patient_appointments", "{}", {
+            tenantId: job.tenantId,
+            patientId: input.patientId,
+            conversationId: job.conversationId,
+            currentMessageId: input.messageId,
+            currentMessageBody: currentBody,
+            jobId: job.id,
+            sequence: toolNames.length
+          });
+          const parsedList = successfulAppointmentListResultSchema.safeParse(listed);
+          const now = Date.now();
+          const activeAppointments = parsedList.success
+            ? parsedList.data.data.appointments.filter(
+                (appointment) =>
+                  RESCHEDULABLE_APPOINTMENT_STATUSES.has(appointment.status) &&
+                  typeof appointment.scheduledAt === "string" &&
+                  new Date(appointment.scheduledAt).getTime() > now
+              )
+            : [];
+          if (!parsedList.success) {
+            executionStatus = "fallback";
+            responseText = deterministicFallback();
+          } else if (activeAppointments.length === 0) {
+            responseText = "No encontré una cita futura activa que pueda cancelar.";
+          } else if (activeAppointments.length > 1) {
+            responseText =
+              "Tienes más de una cita futura activa. Por seguridad no elegiré una automáticamente; solicita apoyo de un coordinador para identificar la cita que deseas cancelar.";
+          } else {
+            const appointment = activeAppointments[0]!;
+            const confirmation = renderAuthoritativeCancellationConfirmation(appointment);
+            if (!confirmation) {
+              executionStatus = "fallback";
+              responseText = deterministicFallback();
+            } else {
+              toolNames.push("cancel_appointment");
+              const staged = await this.tools.execute(
+                "cancel_appointment",
+                JSON.stringify({
+                  appointmentId: appointment.id,
+                  reason: "Solicitud explícita del paciente"
+                }),
+                {
+                  tenantId: job.tenantId,
+                  patientId: input.patientId,
+                  conversationId: job.conversationId,
+                  currentMessageId: input.messageId,
+                  currentMessageBody: currentBody,
+                  jobId: job.id,
+                  sequence: toolNames.length
+                }
+              );
+              if (isRecord(staged) && staged.code === "explicit_confirmation_required") {
+                responseText = confirmation;
+              } else {
+                executionStatus = "fallback";
+                responseText = deterministicFallback();
+              }
+            }
+          }
+        } else if (freshAvailabilityRequired && requestConstraints.invalidReason) {
           executionStatus = "fallback";
           responseText = agendaConstraintFallback(requestConstraints.invalidReason);
         } else if (freshAvailabilityRequired && derivedAgendaSelection.unresolvedChangedDimensions.length > 0) {
@@ -649,16 +858,39 @@ export class SofiaRuntime {
               : deterministicFallback();
       }
     } catch (error) {
-      executionStatus = "fallback";
-      responseText = deterministicFallback();
-      this.options.logger.warn("SOFIA used deterministic fallback", { error: sanitizeError(error) });
+      if (explicitConfirmation && job.attemptCount >= job.maxAttempts) {
+        const confirmationContext = {
+          tenantId: job.tenantId,
+          patientId: input.patientId,
+          conversationId: job.conversationId,
+          currentMessageId: input.messageId,
+          currentMessageBody: currentBody,
+          jobId: job.id,
+          sequence: 1
+        };
+        const finalized = await this.tools.finalizePendingConfirmation(
+          confirmationContext,
+          "confirmation_unexpected_failure",
+          "No pude comprobar que la operación se completara. No voy a afirmar que se realizó; solicita apoyo de un coordinador para revisar su estado."
+        );
+        executionStatus = finalized.ok ? "completed" : "fallback";
+        responseText = finalized.ok
+          ? renderAuthoritativeConfirmedAction(finalized.receipt.appointment, finalized.action)
+          : confirmationInconclusiveFallback();
+      } else if (explicitConfirmation || error instanceof RetryableSofiaError) {
+        throw error;
+      } else {
+        executionStatus = "fallback";
+        responseText = deterministicFallback();
+        this.options.logger.warn("SOFIA used deterministic fallback", { error: sanitizeError(error) });
+      }
     }
 
     const boundedResponse = boundText(responseText ?? deterministicFallback());
     const elapsedMs = Date.now() - new Date(input.occurredAt).getTime();
     const messageId = await this.persistResponse(job, input, boundedResponse, {
       model,
-      promptVersion: prompt.version,
+      promptVersion: prompt?.version ?? null,
       toolNames,
       latencyMs: elapsedMs
     });
@@ -816,13 +1048,20 @@ export class SofiaRuntime {
 
   private async failJob(job: ClaimedJob, error: unknown): Promise<void> {
     const terminal = job.attemptCount >= job.maxAttempts;
+    const errorCode = error instanceof RetryableSofiaError ? error.code : "job_failed";
+    await this.options.db.query(
+      `update agent_runtime.executions
+       set status = 'failed', error_code = $4, completed_at = now()
+       where tenant_id = $1 and job_id = $2 and attempt_number = $3 and status = 'running'`,
+      [job.tenantId, job.id, job.attemptCount, errorCode]
+    );
     await this.options.db.query(
       `update agent_runtime.jobs
        set status = $3, next_attempt_at = now() + interval '5 seconds',
-           locked_at = null, locked_by = null, last_error_code = 'job_failed',
+           locked_at = null, locked_by = null, last_error_code = $5,
            last_error_message = $4, updated_at = now()
        where tenant_id = $1 and id = $2`,
-      [job.tenantId, job.id, terminal ? "dead_letter" : "retry_scheduled", sanitizeError(error)]
+      [job.tenantId, job.id, terminal ? "dead_letter" : "retry_scheduled", sanitizeError(error), errorCode]
     );
     await this.setConversationRuntime(job.tenantId, job.conversationId, "failed");
     this.options.logger.warn("SOFIA job failed", { jobId: job.id, terminal, error: sanitizeError(error) });
@@ -875,6 +1114,12 @@ export class SofiaRuntime {
       body: JSON.stringify({ tenantId, actorId: "agent:SOFIA", eventType, entityType, entityId, metadata }),
       signal: AbortSignal.timeout(2_000)
     }).catch(() => undefined);
+  }
+}
+
+class RetryableSofiaError extends Error {
+  constructor(readonly code: string) {
+    super(`Retryable SOFIA operation failed: ${code}`);
   }
 }
 
@@ -959,6 +1204,17 @@ export function requiresFreshAvailability(body: string, hasAvailabilityContext =
       temporalReference);
 
   return availabilityRequest || (schedulingRequest && temporalReference) || contextualSelection;
+}
+
+export function isCancellationRequest(body: string): boolean {
+  const normalized = normalizeForIntent(body);
+  if (/\b(?:no|nunca)\s+(?:(?:quiero|deseo|necesito)\s+)?(?:cancelar|anular)\b/.test(normalized)) {
+    return false;
+  }
+  return (
+    /\b(?:quiero|deseo|necesito|solicito)\s+(?:cancelar|anular)\b/.test(normalized) ||
+    /\b(?:cancela|cancele|cancelar|anula|anule|anular)\s+(?:mi|la|el)\s+(?:cita|turno|reserva)\b/.test(normalized)
+  );
 }
 
 export function sanitizeSofiaState(
@@ -1284,6 +1540,47 @@ function inferIntent(toolNames: string[]): string | undefined {
   return undefined;
 }
 
+function confirmedActionToolNames(action: SofiaConfirmedAction): string[] {
+  if (action === "book") return ["create_appointment_hold", "book_appointment"];
+  if (action === "cancel") return ["cancel_appointment"];
+  return ["reschedule_appointment"];
+}
+
+function renderAuthoritativeConfirmedAction(
+  appointment: SofiaConfirmationAppointment | undefined,
+  action: SofiaConfirmedAction
+): string {
+  if (!appointment?.localDate || !appointment.localTime || !appointment.timeZone) {
+    return "La agenda completó la operación, pero no devolvió todos los datos necesarios para mostrarla. Consulta tus citas antes de continuar.";
+  }
+  const appointmentType = appointment.appointmentTypeName ?? "Cita";
+  const site = appointment.siteName ? ` en ${appointment.siteName}` : "";
+  const professional = appointment.professionalName ? `, con ${appointment.professionalName}` : "";
+  const payer = appointment.payerName ? `, convenio ${appointment.payerName}` : "";
+  const details = `${appointmentType}${site}${professional}${payer}, el ${appointment.localDate} a las ${formatLocalClock(appointment.localTime)} (${appointment.timeZone})`;
+  if (action === "cancel") return `Tu cita fue cancelada correctamente: ${details}.`;
+  if (action === "reschedule") return `Tu cita fue reagendada correctamente: ${details}.`;
+  return `Tu cita fue agendada correctamente: ${details}.`;
+}
+
+function confirmedActionFallback(result: SofiaConfirmationResult): string {
+  if (!result.handled || result.status === "no_action") {
+    return "No hay una acción pendiente para confirmar. Solicita primero una reserva, cancelación o reagenda.";
+  }
+  if (result.status === "expired") {
+    return "La acción pendiente venció y no fue ejecutada. Consulta nuevamente la agenda antes de confirmar.";
+  }
+  if (result.status === "action_mismatch") {
+    return "La confirmación no corresponde a la acción pendiente y no se ejecutó ningún cambio.";
+  }
+  if (result.status === "terminal_failure") return result.message;
+  return "La acción pendiente cambió y no se ejecutó ningún cambio. Consulta nuevamente antes de confirmar.";
+}
+
+function confirmationInconclusiveFallback(): string {
+  return "No pude comprobar que la operación se completara. No voy a afirmar que se realizó; solicita apoyo de un coordinador para revisar su estado.";
+}
+
 function deterministicFallback(): string {
   return "En este momento no pude completar la consulta. No voy a inventar información. Intenta nuevamente en unos minutos.";
 }
@@ -1411,6 +1708,17 @@ function renderAuthoritativeConfirmation(
   const verb = action === "reschedule" ? "reagendar tu cita" : "agendar tu cita";
   const payer = slot.payerName ? `, convenio ${slot.payerName}` : "";
   return `Encontré el horario solicitado: ${slot.appointmentTypeName} en ${slot.siteName}, con ${slot.professionalName}${payer}, el ${slot.localDate} a las ${formatLocalClock(slot.localTime)} (${slot.timeZone}). ¿Confirmas que deseas ${verb} con estos datos? Responde CONFIRMO para continuar.`;
+}
+
+function renderAuthoritativeCancellationConfirmation(
+  appointment: z.infer<typeof successfulAppointmentListResultSchema>["data"]["appointments"][number]
+): string | undefined {
+  if (!appointment.localDate || !appointment.localTime || !appointment.timeZone) return undefined;
+  const appointmentType = appointment.appointmentTypeName ?? "tu cita";
+  const site = appointment.siteName ? ` en ${appointment.siteName}` : "";
+  const professional = appointment.professionalName ? `, con ${appointment.professionalName}` : "";
+  const payer = appointment.payerName ? `, convenio ${appointment.payerName}` : "";
+  return `Encontré esta cita activa: ${appointmentType}${site}${professional}${payer}, el ${appointment.localDate} a las ${formatLocalClock(appointment.localTime)} (${appointment.timeZone}). ¿Confirmas que deseas cancelarla? Responde CONFIRMO para continuar.`;
 }
 
 function extractClockTimes(value: string): string[] {

@@ -6,6 +6,7 @@ import {
   canonicalizeAvailabilitySearchArguments,
   deriveAgendaSelection,
   hasUnverifiedAvailabilityClock,
+  isCancellationRequest,
   isUrgencySignal,
   matchesAuthoritativeAvailabilitySlot,
   registerSofiaReadinessRoute,
@@ -1229,6 +1230,741 @@ describe("SOFIA fresh availability guard", () => {
     expect(persistedResponse).not.toContain("9:00");
   });
 });
+
+describe("SOFIA deterministic confirmation execution", () => {
+  it("does not treat a negated cancellation as a cancellation command", () => {
+    expect(isCancellationRequest("No quiero cancelar mi cita")).toBe(false);
+    expect(isCancellationRequest("Nunca anular mi turno")).toBe(false);
+    expect(isCancellationRequest("Quiero cancelar mi cita")).toBe(true);
+  });
+
+  it("does not call the model or mutate the agenda when CONFIRMO has no pending action", async () => {
+    const result = await runConfirmationScenario({ state: {}, toolResults: {} });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.mutationCalls).toEqual([]);
+    expect(result.responseText).toContain("No hay una acción pendiente para confirmar");
+    expect(result.executionStatus).toBe("fallback");
+    expect(result.executionToolNames).toEqual([]);
+  });
+
+  it("does not attribute a tool when the confirmation does not match the pending action", async () => {
+    const result = await runConfirmationScenario({
+      body: "CONFIRMO reagendar",
+      state: {
+        pendingAction: pendingConfirmation("cancel_appointment", {
+          appointmentId: CONFIRMATION_IDS.appointment,
+          reason: "Solicitud del paciente"
+        })
+      },
+      toolResults: {}
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.mutationCalls).toEqual([]);
+    expect(result.responseText).toContain("no corresponde a la acción pendiente");
+    expect(result.executionStatus).toBe("fallback");
+    expect(result.executionToolNames).toEqual([]);
+  });
+
+  it("does not attribute a tool when the pending confirmation expired", async () => {
+    const result = await runConfirmationScenario({
+      state: {
+        pendingAction: pendingConfirmation("cancel_appointment", {
+          appointmentId: CONFIRMATION_IDS.appointment,
+          reason: "Solicitud del paciente"
+        })
+      },
+      pendingExpired: true,
+      toolResults: {}
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.mutationCalls).toEqual([]);
+    expect(result.responseText).toContain("acción pendiente venció");
+    expect(result.executionStatus).toBe("fallback");
+    expect(result.executionToolNames).toEqual([]);
+  });
+
+  it("executes one pending reschedule and renders only its validated result", async () => {
+    const pending = pendingConfirmation("reschedule_appointment", {
+      appointmentId: CONFIRMATION_IDS.appointment,
+      siteId: CONFIRMATION_IDS.site,
+      professionalId: CONFIRMATION_IDS.professional,
+      payerId: CONFIRMATION_IDS.payer,
+      appointmentTypeId: CONFIRMATION_IDS.appointmentType,
+      scheduledAt: "2026-07-14T15:20:00.000Z",
+      reason: "Solicitud del paciente"
+    });
+    const result = await runConfirmationScenario({
+      state: { pendingAction: pending },
+      toolResults: {
+        reschedule_appointment: appointmentMutationResult({
+          localDate: "2026-07-14",
+          localTime: "10:20",
+          scheduledAt: "2026-07-14T15:20:00.000Z"
+        })
+      }
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.mutationCalls.map((call) => call.tool)).toEqual(["reschedule_appointment"]);
+    expect(result.mutationCalls[0]?.body).toMatchObject({
+      appointmentId: CONFIRMATION_IDS.appointment,
+      scheduledAt: "2026-07-14T15:20:00.000Z"
+    });
+    expect(result.responseText, result.jobFailure).toContain("2026-07-14");
+    expect(result.responseText).toContain("10:20");
+    expect(result.responseText).not.toContain("2026-07-13");
+    expect(result.responseText).not.toContain("9:00");
+    expect(result.executionStatus).toBe("completed");
+  });
+
+  it("chains a pending reservation through hold and book exactly once", async () => {
+    const pending = pendingConfirmation("create_appointment_hold", {
+      siteId: CONFIRMATION_IDS.site,
+      professionalId: CONFIRMATION_IDS.professional,
+      payerId: CONFIRMATION_IDS.payer,
+      appointmentTypeId: CONFIRMATION_IDS.appointmentType,
+      scheduledAt: "2026-07-13T14:00:00.000Z"
+    });
+    const result = await runConfirmationScenario({
+      state: { pendingAction: pending },
+      toolResults: {
+        create_appointment_hold: { hold: { id: CONFIRMATION_IDS.hold } },
+        book_appointment: appointmentMutationResult({
+          localDate: "2026-07-13",
+          localTime: "09:00",
+          scheduledAt: "2026-07-13T14:00:00.000Z"
+        })
+      }
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.mutationCalls.map((call) => call.tool)).toEqual(["create_appointment_hold", "book_appointment"]);
+    expect(result.mutationCalls[1]?.body).toMatchObject({ holdId: CONFIRMATION_IDS.hold });
+    expect(result.responseText, result.jobFailure).toContain("2026-07-13");
+    expect(result.responseText).toContain("9:00");
+    expect(result.executionStatus).toBe("completed");
+  });
+
+  it("never claims success when the confirmed mutation result is incomplete", async () => {
+    const result = await runConfirmationScenario({
+      state: {
+        pendingAction: pendingConfirmation("reschedule_appointment", {
+          appointmentId: CONFIRMATION_IDS.appointment,
+          siteId: CONFIRMATION_IDS.site,
+          professionalId: CONFIRMATION_IDS.professional,
+          payerId: CONFIRMATION_IDS.payer,
+          appointmentTypeId: CONFIRMATION_IDS.appointmentType,
+          scheduledAt: "2026-07-13T14:00:00.000Z",
+          reason: "Solicitud del paciente"
+        })
+      },
+      toolResults: { reschedule_appointment: { appointment: { status: "verified" } } }
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.mutationCalls.map((call) => call.tool)).toEqual(["reschedule_appointment"]);
+    expect(result.executionStatus).toBe("");
+    expect(result.responseText).toBe("");
+    expect(result.jobFailure).toContain("invalid_mutation_response");
+    expect(result.failedExecutionStatus).toBe("failed");
+    expect(result.failedExecutionCode).toBe("invalid_mutation_response");
+  });
+
+  it("finalizes an inconclusive confirmation after exhausting the job attempts", async () => {
+    const result = await runConfirmationScenario({
+      attemptCount: 2,
+      maxAttempts: 2,
+      state: {
+        pendingAction: pendingConfirmation("reschedule_appointment", {
+          appointmentId: CONFIRMATION_IDS.appointment,
+          siteId: CONFIRMATION_IDS.site,
+          professionalId: CONFIRMATION_IDS.professional,
+          payerId: CONFIRMATION_IDS.payer,
+          appointmentTypeId: CONFIRMATION_IDS.appointmentType,
+          scheduledAt: "2026-07-13T14:00:00.000Z",
+          reason: "Solicitud del paciente"
+        })
+      },
+      toolResults: { reschedule_appointment: { appointment: { status: "verified" } } }
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.mutationCalls.map((call) => call.tool)).toEqual(["reschedule_appointment"]);
+    expect(result.executionStatus).toBe("fallback");
+    expect(result.jobFailure).toBe("");
+    expect(result.responseText).toContain("No pude comprobar que la operación se completara");
+    expect(result.responseText).toContain("coordinador");
+    expect(result.responseText).not.toContain("correctamente");
+    expect(result.executionToolNames).toEqual([]);
+    expect(result.confirmationState).toMatchObject({
+      pendingAction: null,
+      confirmationExecution: null,
+      confirmationReceipts: {
+        [CONFIRMATION_IDS.message]: {
+          outcome: "terminal_failure",
+          code: "confirmation_retry_exhausted"
+        }
+      }
+    });
+  });
+
+  it("rethrows unexpected errors while processing an explicit confirmation", async () => {
+    const result = await runConfirmationScenario({
+      state: {
+        pendingAction: pendingConfirmation("cancel_appointment", {
+          appointmentId: CONFIRMATION_IDS.appointment,
+          reason: "Solicitud del paciente"
+        })
+      },
+      confirmationStateError: new Error("controlled_confirmation_state_failure"),
+      toolResults: {}
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.responseText).toBe("");
+    expect(result.executionStatus).toBe("");
+    expect(result.jobFailure).toContain("controlled_confirmation_state_failure");
+    expect(result.failedExecutionStatus).toBe("failed");
+    expect(result.failedExecutionCode).toBe("job_failed");
+  });
+
+  it("closes an unexpected final confirmation attempt with a controlled response", async () => {
+    const result = await runConfirmationScenario({
+      attemptCount: 2,
+      maxAttempts: 2,
+      state: {
+        pendingAction: pendingConfirmation("cancel_appointment", {
+          appointmentId: CONFIRMATION_IDS.appointment,
+          reason: "Solicitud del paciente"
+        })
+      },
+      confirmationStateError: new Error("controlled_final_confirmation_failure"),
+      toolResults: {}
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.jobFailure).toBe("");
+    expect(result.executionStatus).toBe("fallback");
+    expect(result.responseText).toContain("No pude comprobar que la operación se completara");
+    expect(result.responseText).toContain("coordinador");
+    expect(result.responseText).not.toContain("correctamente");
+    expect(result.confirmationState).toMatchObject({
+      pendingAction: null,
+      confirmationExecution: null,
+      confirmationReceipts: {
+        [CONFIRMATION_IDS.message]: {
+          outcome: "terminal_failure",
+          code: "confirmation_unexpected_failure"
+        }
+      }
+    });
+  });
+
+  it("closes the final confirmation when prompt loading is unavailable", async () => {
+    const result = await runConfirmationScenario({
+      attemptCount: 2,
+      maxAttempts: 2,
+      state: {
+        pendingAction: pendingConfirmation("cancel_appointment", {
+          appointmentId: CONFIRMATION_IDS.appointment,
+          reason: "Solicitud del paciente"
+        })
+      },
+      promptError: new Error("controlled_prompt_failure"),
+      toolResults: {}
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.jobFailure).toBe("");
+    expect(result.executionStatus).toBe("fallback");
+    expect(result.responseText).toContain("No pude comprobar que la operación se completara");
+    expect(result.responseText).not.toContain("correctamente");
+    expect(result.confirmationState).toMatchObject({
+      pendingAction: null,
+      confirmationReceipts: {
+        [CONFIRMATION_IDS.message]: {
+          outcome: "terminal_failure",
+          code: "confirmation_unexpected_failure"
+        }
+      }
+    });
+  });
+
+  it("recovers an exhausted confirmation execution after a worker crash", async () => {
+    const scheduledAt = "2026-07-14T15:20:00.000Z";
+    const result = await runConfirmationScenario({
+      recovery: "available",
+      attemptCount: 2,
+      maxAttempts: 2,
+      state: {
+        confirmationExecution: {
+          actionId: CONFIRMATION_IDS.action,
+          tool: "reschedule_appointment",
+          arguments: {
+            appointmentId: CONFIRMATION_IDS.appointment,
+            siteId: CONFIRMATION_IDS.site,
+            professionalId: CONFIRMATION_IDS.professional,
+            payerId: CONFIRMATION_IDS.payer,
+            appointmentTypeId: CONFIRMATION_IDS.appointmentType,
+            scheduledAt,
+            reason: "Solicitud del paciente"
+          },
+          confirmationMessageId: CONFIRMATION_IDS.message,
+          claimedAt: new Date(Date.now() - 180_000).toISOString()
+        }
+      },
+      toolResults: {
+        reschedule_appointment: appointmentMutationResult({
+          localDate: "2026-07-14",
+          localTime: "10:20",
+          scheduledAt
+        })
+      }
+    });
+
+    expect(result.processed).toBe(true);
+    expect(result.recoveryClaimCalls).toBe(1);
+    expect(result.normalClaimCalls).toBe(0);
+    expect(result.mutationCalls.map((call) => call.tool)).toEqual(["reschedule_appointment"]);
+    expect(result.responseText).toContain("reagendada correctamente");
+    expect(result.responseText).toContain("2026-07-14");
+    expect(result.confirmationState).toMatchObject({
+      confirmationExecution: null,
+      confirmationReceipts: {
+        [CONFIRMATION_IDS.message]: { outcome: "completed", action: "reschedule" }
+      }
+    });
+    expect(result.recoveryCandidateSql).toContain("for update of j skip locked");
+    expect(result.recoveryCandidateSql).toContain("patient.tenant_id = j.tenant_id");
+    expect(result.recoveryCandidateSql).toContain("patient.conversation_id = j.conversation_id");
+    expect(result.recoveryCandidateSql).toContain("patient.id::text = j.input->>'messageId'");
+    expect(result.recoveryClaimSql).toContain("j.tenant_id = $2");
+    expect(result.recoveryClaimSql).toContain("j.conversation_id = $4");
+    expect(result.recoveryClaimSql).toContain("j.input->>'messageId' = $5");
+    expect(result.recoveryClaimParameters?.slice(1, 5)).toEqual([
+      CONFIRMATION_IDS.tenant,
+      CONFIRMATION_IDS.job,
+      CONFIRMATION_IDS.conversation,
+      CONFIRMATION_IDS.message
+    ]);
+  });
+
+  it("does not recover an exhausted confirmation when its idempotent outbound already exists", async () => {
+    const result = await runConfirmationScenario({
+      recovery: "outbound_exists",
+      attemptCount: 2,
+      maxAttempts: 2,
+      state: {},
+      toolResults: {}
+    });
+
+    expect(result.processed).toBe(false);
+    expect(result.recoveryClaimCalls).toBe(1);
+    expect(result.normalClaimCalls).toBe(1);
+    expect(result.mutationCalls).toEqual([]);
+    expect(result.responseText).toBe("");
+    expect(result.recoveryCandidateSql).toContain("and not exists");
+    expect(result.recoveryCandidateSql).toContain("from channel_runtime.outbound_messages outbound");
+    expect(result.recoveryCandidateSql).toContain("outbound.tenant_id = j.tenant_id");
+    expect(result.recoveryCandidateSql).toContain("outbound.provider = 'whatsapp_web_test'");
+    expect(result.recoveryCandidateSql).toContain("outbound.idempotency_key = 'sofia-job:' || j.id::text");
+    expect(result.recoveryClaimSql).toContain("and not exists");
+  });
+
+  it("stages cancellation only for the single future active appointment", async () => {
+    const result = await runConfirmationScenario({
+      body: "Quiero cancelar mi cita",
+      state: {},
+      toolResults: {
+        list_patient_appointments: {
+          appointments: [
+            {
+              id: CONFIRMATION_IDS.appointment,
+              status: "verified",
+              scheduledAt: "2027-07-13T14:00:00.000Z",
+              localDate: "2027-07-13",
+              localTime: "09:00",
+              timeZone: "America/Bogota",
+              siteName: "Sede validada",
+              professionalName: "Profesional validado",
+              payerName: "Convenio validado",
+              appointmentTypeName: "Tipo validado"
+            }
+          ]
+        }
+      }
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.toolCalls).toEqual(["list_patient_appointments"]);
+    expect(result.mutationCalls).toEqual([]);
+    expect(result.confirmationState.pendingAction).toMatchObject({
+      tool: "cancel_appointment",
+      arguments: {
+        appointmentId: CONFIRMATION_IDS.appointment,
+        reason: "Solicitud explícita del paciente"
+      }
+    });
+    expect(result.responseText).toContain("2027-07-13");
+    expect(result.responseText).toContain("9:00");
+    expect(result.responseText).toContain("CONFIRMO");
+  });
+
+  it("routes ambiguous cancellation to a coordinator instead of requesting unused date details", async () => {
+    const result = await runConfirmationScenario({
+      body: "Quiero cancelar mi cita",
+      state: {},
+      toolResults: {
+        list_patient_appointments: {
+          appointments: [
+            {
+              id: CONFIRMATION_IDS.appointment,
+              status: "verified",
+              scheduledAt: "2027-07-13T14:00:00.000Z",
+              localDate: "2027-07-13",
+              localTime: "09:00",
+              timeZone: "America/Bogota"
+            },
+            {
+              id: "00000000-0000-4000-8000-000000000129",
+              status: "verified",
+              scheduledAt: "2027-07-14T15:00:00.000Z",
+              localDate: "2027-07-14",
+              localTime: "10:00",
+              timeZone: "America/Bogota"
+            }
+          ]
+        }
+      }
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.mutationCalls).toEqual([]);
+    expect(result.responseText).toContain("coordinador");
+    expect(result.responseText).not.toContain("fecha y hora exactas");
+  });
+});
+
+const CONFIRMATION_IDS = {
+  tenant: "00000000-0000-4000-8000-000000000111",
+  conversation: "00000000-0000-4000-8000-000000000112",
+  job: "00000000-0000-4000-8000-000000000113",
+  message: "00000000-0000-4000-8000-000000000114",
+  inboundEvent: "00000000-0000-4000-8000-000000000115",
+  patient: "00000000-0000-4000-8000-000000000116",
+  threadBinding: "00000000-0000-4000-8000-000000000117",
+  execution: "00000000-0000-4000-8000-000000000118",
+  responseMessage: "00000000-0000-4000-8000-000000000119",
+  action: "00000000-0000-4000-8000-000000000120",
+  appointment: "00000000-0000-4000-8000-000000000121",
+  site: "00000000-0000-4000-8000-000000000122",
+  professional: "00000000-0000-4000-8000-000000000123",
+  payer: "00000000-0000-4000-8000-000000000124",
+  appointmentType: "00000000-0000-4000-8000-000000000125",
+  hold: "00000000-0000-4000-8000-000000000126"
+} as const;
+
+type ConfirmedTool = "create_appointment_hold" | "cancel_appointment" | "reschedule_appointment";
+
+function pendingConfirmation(tool: ConfirmedTool, args: Record<string, unknown>) {
+  return {
+    tool,
+    arguments: args,
+    stagedAt: new Date(Date.now() - 60_000).toISOString(),
+    jobId: CONFIRMATION_IDS.action
+  };
+}
+
+function appointmentMutationResult(overrides: { localDate: string; localTime: string; scheduledAt: string }) {
+  return {
+    appointment: {
+      id: "00000000-0000-4000-8000-000000000128",
+      status: "verified",
+      verificationMode: "internal",
+      origin: "sofia_wa",
+      simulated: false,
+      siteId: CONFIRMATION_IDS.site,
+      professionalId: CONFIRMATION_IDS.professional,
+      payerId: CONFIRMATION_IDS.payer,
+      appointmentTypeId: CONFIRMATION_IDS.appointmentType,
+      scheduledAt: overrides.scheduledAt,
+      localDate: overrides.localDate,
+      localTime: overrides.localTime,
+      timeZone: "America/Bogota",
+      siteName: "Sede validada",
+      professionalName: "Profesional validado",
+      payerName: "Convenio validado",
+      appointmentTypeName: "Tipo validado"
+    },
+    previousAppointment: {
+      id: CONFIRMATION_IDS.appointment,
+      status: "rescheduled"
+    }
+  };
+}
+
+async function runConfirmationScenario(input: {
+  body?: string;
+  attemptCount?: number;
+  maxAttempts?: number;
+  recovery?: "available" | "outbound_exists";
+  pendingExpired?: boolean;
+  confirmationStateError?: Error;
+  promptError?: Error;
+  state: Record<string, unknown>;
+  toolResults: Partial<Record<ConfirmedTool | "book_appointment" | "list_patient_appointments", unknown>>;
+}) {
+  let confirmationState = structuredClone(input.state);
+  let responseText = "";
+  let executionStatus = "";
+  let executionToolNames: string[] = [];
+  let failedExecutionStatus = "";
+  let failedExecutionCode = "";
+  let jobFailure = "";
+  let confirmationStateErrorThrown = false;
+  let recoveryCandidateSql = "";
+  let recoveryClaimSql = "";
+  let recoveryClaimParameters: unknown[] | undefined;
+  let recoveryClaimCalls = 0;
+  let normalClaimCalls = 0;
+  const mutationCalls: Array<{ tool: string; body: Record<string, unknown> }> = [];
+  const toolCalls: string[] = [];
+  const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
+    if (sql.includes("sofia-confirmation:recovery-candidates")) {
+      recoveryCandidateSql = sql;
+      if (!input.recovery) return dbResult([]);
+      return dbResult([
+        {
+          id: CONFIRMATION_IDS.job,
+          tenantId: CONFIRMATION_IDS.tenant,
+          conversationId: CONFIRMATION_IDS.conversation,
+          inboundEventId: CONFIRMATION_IDS.inboundEvent,
+          attemptCount: input.attemptCount ?? 2,
+          maxAttempts: input.maxAttempts ?? 2,
+          input: {
+            patientId: CONFIRMATION_IDS.patient,
+            messageId: CONFIRMATION_IDS.message,
+            threadBindingId: CONFIRMATION_IDS.threadBinding,
+            occurredAt: new Date().toISOString()
+          },
+          messageId: CONFIRMATION_IDS.message,
+          messageBody: input.body ?? "CONFIRMO"
+        }
+      ]);
+    }
+    if (sql.includes("sofia-confirmation:claim-recovered")) {
+      recoveryClaimSql = sql;
+      recoveryClaimParameters = parameters;
+      recoveryClaimCalls += 1;
+      if (input.recovery !== "available") return dbResult([]);
+      const attemptCount = (input.attemptCount ?? 2) + 1;
+      return dbResult([
+        {
+          id: CONFIRMATION_IDS.job,
+          tenantId: CONFIRMATION_IDS.tenant,
+          conversationId: CONFIRMATION_IDS.conversation,
+          inboundEventId: CONFIRMATION_IDS.inboundEvent,
+          attemptCount,
+          maxAttempts: Math.min(10, Math.max(input.maxAttempts ?? 2, attemptCount)),
+          input: {
+            patientId: CONFIRMATION_IDS.patient,
+            messageId: CONFIRMATION_IDS.message,
+            threadBindingId: CONFIRMATION_IDS.threadBinding,
+            occurredAt: new Date().toISOString()
+          }
+        }
+      ]);
+    }
+    if (sql.includes("claim_next_job")) {
+      normalClaimCalls += 1;
+      if (input.recovery) return dbResult([]);
+      return dbResult([
+        {
+          id: CONFIRMATION_IDS.job,
+          tenantId: CONFIRMATION_IDS.tenant,
+          conversationId: CONFIRMATION_IDS.conversation,
+          inboundEventId: CONFIRMATION_IDS.inboundEvent,
+          attemptCount: input.attemptCount ?? 1,
+          maxAttempts: input.maxAttempts ?? 4,
+          input: {
+            patientId: CONFIRMATION_IDS.patient,
+            messageId: CONFIRMATION_IDS.message,
+            threadBindingId: CONFIRMATION_IDS.threadBinding,
+            occurredAt: new Date().toISOString()
+          }
+        }
+      ]);
+    }
+    if (sql.includes("select m.body")) {
+      return dbResult([{ body: input.body ?? "CONFIRMO", conversationStatus: "active" }]);
+    }
+    if (sql.includes("select sender, body from")) {
+      return dbResult([{ sender: "patient", body: input.body ?? "CONFIRMO" }]);
+    }
+    if (sql.includes('as "sofiaState"')) return dbResult([{ sofiaState: confirmationState }]);
+    if (sql.includes(" as state,")) {
+      if (input.confirmationStateError && !confirmationStateErrorThrown) {
+        confirmationStateErrorThrown = true;
+        throw input.confirmationStateError;
+      }
+      return dbResult([
+        { state: confirmationState, pendingExpired: input.pendingExpired ?? false, grantExpired: false }
+      ]);
+    }
+    if (sql.includes("select full_name")) return dbResult([{ fullName: "Paciente controlado" }]);
+    if (sql.includes("insert into agent_runtime.executions")) return dbResult([{ id: CONFIRMATION_IDS.execution }]);
+    if (sql.includes("'confirmationExecution', $5::jsonb")) {
+      confirmationState = {
+        ...confirmationState,
+        pendingAction: null,
+        confirmationGrant: null,
+        confirmationExecution: JSON.parse(String(parameters?.[4]))
+      };
+      return dbResult([{}]);
+    }
+    if (sql.includes("'confirmationGrant', $6::jsonb")) {
+      confirmationState = {
+        ...confirmationState,
+        pendingAction: null,
+        confirmationExecution: null,
+        confirmationGrant: JSON.parse(String(parameters?.[5]))
+      };
+      return dbResult([{}]);
+    }
+    if (sql.includes("'confirmationReceipts'") && sql.includes("$6::jsonb")) {
+      const messageId = String(parameters?.[3]);
+      const receipt = JSON.parse(String(parameters?.[5])) as Record<string, unknown>;
+      const existingReceipts =
+        typeof confirmationState.confirmationReceipts === "object" && confirmationState.confirmationReceipts !== null
+          ? (confirmationState.confirmationReceipts as Record<string, unknown>)
+          : {};
+      confirmationState = {
+        ...confirmationState,
+        pendingAction: null,
+        confirmationExecution: null,
+        confirmationGrant: null,
+        confirmationReceipts: { ...existingReceipts, [messageId]: receipt }
+      };
+      return dbResult([{}]);
+    }
+    if (sql.includes("and (($3::text is null")) {
+      confirmationState = {
+        ...confirmationState,
+        ...(JSON.parse(String(parameters?.[4])) as Record<string, unknown>)
+      };
+      return dbResult([{}]);
+    }
+    if (sql.includes("metadata #>> '{sofiaState,pendingAction,jobId}' = $3") && sql.includes("$4::jsonb")) {
+      confirmationState = { ...confirmationState, ...(JSON.parse(String(parameters?.[3])) as Record<string, unknown>) };
+      return dbResult([]);
+    }
+    if (sql.includes("$8::jsonb") && sql.includes("returning coalesce(metadata->'sofiaState'")) {
+      confirmationState = {
+        ...confirmationState,
+        ...(JSON.parse(String(parameters?.[7])) as Record<string, unknown>)
+      };
+      return dbResult([{ state: confirmationState }]);
+    }
+    if (sql.includes("metadata #>> '{sofiaState,confirmationGrant,holdId}' = $4")) {
+      confirmationState = { ...confirmationState, pendingAction: null, confirmationGrant: null };
+      return dbResult([]);
+    }
+    if (sql.includes("metadata #>> '{sofiaState,pendingAction,jobId}' = $3")) {
+      confirmationState = { ...confirmationState, pendingAction: null, confirmationGrant: null };
+      return dbResult([]);
+    }
+    if (sql.includes("insert into pulso_iris.messages")) {
+      responseText = String(parameters?.[2] ?? "");
+      return dbResult([{ id: CONFIRMATION_IDS.responseMessage }]);
+    }
+    if (sql.includes("update agent_runtime.executions") && sql.includes("set status = $3")) {
+      executionStatus = String(parameters?.[2] ?? "");
+      executionToolNames = JSON.parse(String(parameters?.[7] ?? "[]")) as string[];
+      return dbResult([]);
+    }
+    if (sql.includes("update agent_runtime.executions") && sql.includes("set status = 'failed'")) {
+      failedExecutionStatus = "failed";
+      failedExecutionCode = String(parameters?.[3] ?? "");
+      return dbResult([]);
+    }
+    if (sql.includes("update agent_runtime.jobs") && sql.includes("last_error_code = $5")) {
+      jobFailure = String(parameters?.[3] ?? "");
+      return dbResult([]);
+    }
+    return dbResult([]);
+  });
+  const db = {
+    query,
+    transaction: vi.fn(async (callback: (tx: { query: typeof query }) => Promise<unknown>) => callback({ query })),
+    close: vi.fn()
+  } as unknown as DatabaseClient;
+  const complete = vi.fn(async () => ({
+    content: "El modelo no debe responder confirmaciones.",
+    toolCalls: [],
+    model: "controlled",
+    latencyMs: 1
+  }));
+  const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const target = String(url);
+    if (target.includes("prompt-flows/SOFIA/active")) {
+      if (input.promptError) throw input.promptError;
+      return jsonResponse({
+        id: "00000000-0000-4000-8000-000000000127",
+        version: 6,
+        systemPrompt: "Prompt administrativo controlado para las pruebas de SOFIA."
+      });
+    }
+    if (target.includes("/sofia/tools/get_catalog")) {
+      return jsonResponse({ sites: [], professionals: [], payers: [], appointmentTypes: [] });
+    }
+    const toolMatch =
+      /\/sofia\/tools\/(create_appointment_hold|book_appointment|cancel_appointment|reschedule_appointment|list_patient_appointments)$/.exec(
+        target
+      );
+    if (toolMatch) {
+      const tool = toolMatch[1]! as ConfirmedTool | "book_appointment" | "list_patient_appointments";
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      toolCalls.push(tool);
+      if (tool !== "list_patient_appointments") mutationCalls.push({ tool, body });
+      return jsonResponse(input.toolResults[tool] ?? {});
+    }
+    return jsonResponse({ accepted: true });
+  });
+  const runtime = new SofiaRuntime({
+    db,
+    logger: { warn: vi.fn() },
+    llm: { name: "controlled", model: "controlled", isConfigured: () => true, complete },
+    internalServiceToken: "controlled-token",
+    channelUrl: "http://channel.test",
+    promptFlowUrl: "http://prompt.test",
+    pulsoIrisUrl: "http://pulso.test",
+    auditUrl: "http://audit.test",
+    fetchImpl: fetchImpl as typeof fetch
+  });
+
+  const processed = await runtime.processOne();
+  return {
+    processed,
+    complete,
+    mutationCalls,
+    toolCalls,
+    responseText,
+    executionStatus,
+    executionToolNames,
+    failedExecutionStatus,
+    failedExecutionCode,
+    confirmationState,
+    jobFailure,
+    recoveryCandidateSql,
+    recoveryClaimSql,
+    recoveryClaimParameters,
+    recoveryClaimCalls,
+    normalClaimCalls
+  };
+}
 
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });

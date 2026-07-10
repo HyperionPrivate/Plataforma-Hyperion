@@ -369,6 +369,119 @@ describeIntegration("SOFIA internal agenda tools", () => {
     );
   });
 
+  it("rejects past cancellation and reschedule before side effects while preserving cancellation replay", async () => {
+    const pastAppointmentId = randomUUID();
+    const cancelledAppointmentId = randomUUID();
+    const pastScheduledAt = new Date(Date.now() - 60 * 60_000).toISOString();
+    const replayKey = "sofia-past-cancel-replay";
+    const cancellationEventsBefore = events.filter((event) => event.eventType === "appointment.cancelled").length;
+    const holdEventsBefore = events.filter((event) => event.eventType === "appointment.hold.created").length;
+
+    await client.query(
+      `insert into pulso_iris.appointments (
+         id, tenant_id, patient_id, conversation_id, site_id, professional_id, payer_id,
+         appointment_type_id, appointment_type, origin, status, scheduled_at, duration_min,
+         idempotency_key, verification_mode, verified_at, verified_by, metadata
+       ) values
+         ($1, $3, $4, $5, $6, $7, $8, $9, 'Tipo controlado', 'sofia_wa', 'verified',
+          $10, 20, $11, 'internal', now(), 'agent:SOFIA', '{}'::jsonb),
+         ($2, $3, $4, $5, $6, $7, $8, $9, 'Tipo controlado', 'sofia_wa', 'cancelled',
+          $10, 20, $12, 'internal', now(), 'agent:SOFIA',
+          jsonb_build_object('sofiaCancelIdempotencyKey', $13::text))`,
+      [
+        pastAppointmentId,
+        cancelledAppointmentId,
+        tenantId,
+        patientId,
+        conversationId,
+        siteId,
+        professionalId,
+        payerId,
+        appointmentTypeId,
+        pastScheduledAt,
+        `past-active-${randomUUID()}`,
+        `past-cancelled-${randomUUID()}`,
+        replayKey
+      ]
+    );
+    const confirmation = await client.query<{ id: string }>(
+      `insert into pulso_iris.messages (tenant_id, conversation_id, sender, body, provider, external_message_id)
+       values ($1, $2, 'patient', 'CONFIRMO cancelar', 'whatsapp_web_test', $3) returning id`,
+      [tenantId, conversationId, `controlled-confirm-past-${randomUUID()}`]
+    );
+    const rescheduleConfirmation = await client.query<{ id: string }>(
+      `insert into pulso_iris.messages (tenant_id, conversation_id, sender, body, provider, external_message_id)
+       values ($1, $2, 'patient', 'CONFIRMO reagendar', 'whatsapp_web_test', $3) returning id`,
+      [tenantId, conversationId, `controlled-confirm-past-reschedule-${randomUUID()}`]
+    );
+
+    try {
+      const rejected = await callTool("cancel_appointment", {
+        patientId,
+        conversationId,
+        appointmentId: pastAppointmentId,
+        reason: "Solicitud controlada del paciente",
+        confirmationMessageId: confirmation.rows[0]!.id,
+        idempotencyKey: "sofia-past-cancel-attempt"
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json().data).toMatchObject({ code: "appointment_in_past" });
+      const unchanged = await client.query<{ status: string }>(
+        `select status from pulso_iris.appointments where tenant_id = $1 and id = $2`,
+        [tenantId, pastAppointmentId]
+      );
+      expect(unchanged.rows[0]?.status).toBe("verified");
+
+      const activeHoldsBefore = await client.query<{ count: number }>(
+        `select count(*)::int as count
+         from pulso_iris.appointment_holds where tenant_id = $1 and status = 'active'`,
+        [tenantId]
+      );
+      const rejectedReschedule = await callTool("reschedule_appointment", {
+        patientId,
+        conversationId,
+        appointmentId: pastAppointmentId,
+        siteId,
+        professionalId,
+        payerId,
+        appointmentTypeId,
+        scheduledAt,
+        reason: "Solicitud controlada del paciente",
+        confirmationMessageId: rescheduleConfirmation.rows[0]!.id,
+        idempotencyKey: "sofia-past-reschedule-attempt"
+      });
+      expect(rejectedReschedule.statusCode).toBe(409);
+      expect(rejectedReschedule.json().data).toMatchObject({ code: "appointment_in_past" });
+      const activeHoldsAfter = await client.query<{ count: number }>(
+        `select count(*)::int as count
+         from pulso_iris.appointment_holds where tenant_id = $1 and status = 'active'`,
+        [tenantId]
+      );
+      expect(activeHoldsAfter.rows[0]?.count).toBe(activeHoldsBefore.rows[0]?.count);
+      expect(events.filter((event) => event.eventType === "appointment.hold.created")).toHaveLength(holdEventsBefore);
+
+      const replay = await callTool("cancel_appointment", {
+        patientId,
+        conversationId,
+        appointmentId: cancelledAppointmentId,
+        reason: "Solicitud controlada del paciente",
+        confirmationMessageId: confirmation.rows[0]!.id,
+        idempotencyKey: replayKey
+      });
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json().data).toMatchObject({ idempotent: true, appointment: { status: "cancelled" } });
+      expect(events.filter((event) => event.eventType === "appointment.cancelled")).toHaveLength(
+        cancellationEventsBefore
+      );
+    } finally {
+      await client.query(`delete from pulso_iris.appointments where tenant_id = $1 and id in ($2, $3)`, [
+        tenantId,
+        pastAppointmentId,
+        cancelledAppointmentId
+      ]);
+    }
+  });
+
   async function callTool(toolName: string, payload: Record<string, unknown>) {
     return await app.inject({
       method: "POST",

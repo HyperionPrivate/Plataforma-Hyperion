@@ -255,6 +255,7 @@ export class InternalAgendaProvider implements AgendaProvider {
            cancelled_by = $4, updated_at = now()
        where tenant_id = $1 and id = $2
          and status in ('pending_external_confirmation', 'verified', 'confirmed', 'deferred', 'verification_failed')
+         and scheduled_at > now()
        returning ${APPOINTMENT_RESULT_COLUMNS}`,
       [input.tenantId, input.appointmentId, input.reason, input.actorId ?? "system"]
     );
@@ -271,6 +272,7 @@ export class InternalAgendaProvider implements AgendaProvider {
            updated_at = now()
        where tenant_id = $1 and id = $2
          and status in ('pending_external_confirmation', 'verified', 'confirmed', 'deferred', 'verification_failed')
+         and scheduled_at > now()
        returning ${APPOINTMENT_RESULT_COLUMNS}`,
       [input.tenantId, input.appointmentId, input.replacementAppointmentId, input.reason, input.actorId ?? "system"]
     );
