@@ -109,6 +109,8 @@ const RESCHEDULABLE_APPOINTMENT_STATUSES = new Set([
   "verification_failed"
 ]);
 
+type AppointmentListItem = z.infer<typeof successfulAppointmentListResultSchema>["data"]["appointments"][number];
+
 type AvailabilitySearchArguments = z.infer<typeof availabilitySearchArgumentsSchema>;
 type AuthoritativeAvailabilitySlot = z.infer<typeof authoritativeAvailabilitySlotSchema>;
 type AgendaSelection = Partial<
@@ -482,6 +484,7 @@ export class SofiaRuntime {
         const previousAvailabilityQuery = readLastAvailabilityQuery(context.availabilityRuntime.state, catalogIndex);
         const missingAgendaDimensions = missingMinimumAgendaSelection(agendaSelection);
         const cancellationRequest = isCancellationRequest(currentBody);
+        const appointmentQuery = isAppointmentQuery(currentBody);
         let availabilitySearchAttempted = false;
         let freshAvailabilitySucceeded = false;
         let freshAvailability: z.infer<typeof successfulAvailabilityResultSchema>["data"] | undefined;
@@ -574,6 +577,42 @@ export class SofiaRuntime {
                 executionStatus = "fallback";
                 responseText = deterministicFallback();
               }
+            }
+          }
+        } else if (appointmentQuery) {
+          toolNames.push("list_patient_appointments");
+          const listed = await this.tools.execute("list_patient_appointments", "{}", {
+            tenantId: job.tenantId,
+            patientId: input.patientId,
+            conversationId: job.conversationId,
+            currentMessageId: input.messageId,
+            currentMessageBody: currentBody,
+            jobId: job.id,
+            sequence: toolNames.length
+          });
+          const parsedList = successfulAppointmentListResultSchema.safeParse(listed);
+          if (!parsedList.success) {
+            executionStatus = "fallback";
+            responseText = deterministicFallback();
+          } else {
+            // Appointment state is operational data: a delayed/replayed inbound must
+            // not make an appointment that has already elapsed look active again.
+            const now = Date.now();
+            const activeAppointments = parsedList.data.data.appointments.filter(
+              (appointment) =>
+                RESCHEDULABLE_APPOINTMENT_STATUSES.has(appointment.status) &&
+                typeof appointment.scheduledAt === "string" &&
+                new Date(appointment.scheduledAt).getTime() > now
+            );
+            activeAppointments.sort(
+              (left, right) =>
+                new Date(left.scheduledAt!).getTime() - new Date(right.scheduledAt!).getTime() ||
+                left.id.localeCompare(right.id)
+            );
+            responseText = renderAuthoritativeActiveAppointments(activeAppointments);
+            if (!responseText) {
+              executionStatus = "fallback";
+              responseText = deterministicFallback();
             }
           }
         } else if (freshAvailabilityRequired && requestConstraints.invalidReason) {
@@ -888,7 +927,7 @@ export class SofiaRuntime {
 
     const boundedResponse = boundText(responseText ?? deterministicFallback());
     const elapsedMs = Date.now() - new Date(input.occurredAt).getTime();
-    const messageId = await this.persistResponse(job, input, boundedResponse, {
+    const persistedResponse = await this.persistResponse(job, input, boundedResponse, {
       model,
       promptVersion: prompt?.version ?? null,
       toolNames,
@@ -896,8 +935,8 @@ export class SofiaRuntime {
     });
     await this.callChannel(`/internal/v1/tenants/${job.tenantId}/whatsapp/messages`, "POST", {
       threadBindingId: input.threadBindingId,
-      messageId,
-      text: boundedResponse,
+      messageId: persistedResponse.id,
+      text: persistedResponse.body,
       idempotencyKey: `sofia-job:${job.id}`
     });
 
@@ -932,7 +971,7 @@ export class SofiaRuntime {
       latencyMs: totalLatencyMs,
       fallback: executionStatus === "fallback"
     });
-    this.emitAudit(job.tenantId, "agent.response.created", "message", messageId, {
+    this.emitAudit(job.tenantId, "agent.response.created", "message", persistedResponse.id, {
       provider: "whatsapp_web_test",
       latencyMs: elapsedMs
     });
@@ -1019,19 +1058,19 @@ export class SofiaRuntime {
     input: z.infer<typeof jobInputSchema>,
     body: string,
     metadata: Record<string, unknown>
-  ): Promise<string> {
+  ): Promise<{ id: string; body: string }> {
     const externalId = `sofia-job:${job.id}`;
-    const inserted = await this.options.db.query<{ id: string }>(
+    const inserted = await this.options.db.query<{ id: string; body: string }>(
       `insert into pulso_iris.messages
          (tenant_id, conversation_id, sender, body, provider, external_message_id, delivery_status, metadata)
        values ($1, $2, 'sofia', $3, 'whatsapp_web_test', $4, 'queued', $5::jsonb)
        on conflict (tenant_id, provider, external_message_id)
          where provider is not null and external_message_id is not null
        do update set body = pulso_iris.messages.body
-       returning id`,
+        returning id, body`,
       [job.tenantId, job.conversationId, body, externalId, JSON.stringify(metadata)]
     );
-    return inserted.rows[0]!.id;
+    return inserted.rows[0]!;
   }
 
   private async failInbound(tenantId: string, eventId: string, error: unknown): Promise<void> {
@@ -1186,9 +1225,11 @@ export function requiresFreshAvailability(body: string, hasAvailabilityContext =
   if (isExplicitConfirmation(body)) return false;
   const normalized = normalizeForIntent(body);
   if (/\b(cancel\w*|anul\w*)\b/.test(normalized)) return false;
-  if (/\b(mis citas|que citas|consult\w* citas)\b/.test(normalized)) return false;
+  if (hasExistingAppointmentQueryIntent(normalized)) return false;
 
-  const availabilityRequest = /\b(disponib\w*|horarios?|cupos?|turnos?|espacios?|atend\w*)\b/.test(normalized);
+  const availabilityRequest = /\b(disponib\w*|horarios?|cupos?|turnos?|espacios?|atend\w*|atiend\w*)\b/.test(
+    normalized
+  );
   const schedulingRequest = /\b(citas?|agend\w*|reserv\w*|reagend\w*)\b/.test(normalized);
   const temporalReference =
     /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|fecha|dia|semana|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/.test(
@@ -1214,6 +1255,25 @@ export function isCancellationRequest(body: string): boolean {
   return (
     /\b(?:quiero|deseo|necesito|solicito)\s+(?:cancelar|anular)\b/.test(normalized) ||
     /\b(?:cancela|cancele|cancelar|anula|anule|anular)\s+(?:mi|la|el)\s+(?:cita|turno|reserva)\b/.test(normalized)
+  );
+}
+
+export function isAppointmentQuery(body: string): boolean {
+  const normalized = normalizeForIntent(body);
+  return hasExistingAppointmentQueryIntent(normalized);
+}
+
+function hasExistingAppointmentQueryIntent(normalized: string): boolean {
+  if (!/\bcitas?\b/.test(normalized)) return false;
+  if (/\b(cancel\w*|anul\w*|reagend\w*|agend\w*|reserv\w*)\b/.test(normalized)) return false;
+  if (/\b(disponib\w*|horarios?|cupos?|turnos?|espacios?|atend\w*|atiend\w*)\b/.test(normalized)) {
+    return false;
+  }
+  const ownedAppointment = /\b(?:mi|mis)\s+citas?\b/.test(normalized);
+  return (
+    (ownedAppointment &&
+      /\b(?:cual|cuando|donde|que|consult\w*|revis\w*|ver|activ\w*|vigent\w*|tengo|programad\w*)\b/.test(normalized)) ||
+    /\bque\s+citas?\s+tengo\b/.test(normalized)
   );
 }
 
@@ -1710,15 +1770,30 @@ function renderAuthoritativeConfirmation(
   return `Encontré el horario solicitado: ${slot.appointmentTypeName} en ${slot.siteName}, con ${slot.professionalName}${payer}, el ${slot.localDate} a las ${formatLocalClock(slot.localTime)} (${slot.timeZone}). ¿Confirmas que deseas ${verb} con estos datos? Responde CONFIRMO para continuar.`;
 }
 
-function renderAuthoritativeCancellationConfirmation(
-  appointment: z.infer<typeof successfulAppointmentListResultSchema>["data"]["appointments"][number]
-): string | undefined {
+function renderAuthoritativeCancellationConfirmation(appointment: AppointmentListItem): string | undefined {
   if (!appointment.localDate || !appointment.localTime || !appointment.timeZone) return undefined;
   const appointmentType = appointment.appointmentTypeName ?? "tu cita";
   const site = appointment.siteName ? ` en ${appointment.siteName}` : "";
   const professional = appointment.professionalName ? `, con ${appointment.professionalName}` : "";
   const payer = appointment.payerName ? `, convenio ${appointment.payerName}` : "";
   return `Encontré esta cita activa: ${appointmentType}${site}${professional}${payer}, el ${appointment.localDate} a las ${formatLocalClock(appointment.localTime)} (${appointment.timeZone}). ¿Confirmas que deseas cancelarla? Responde CONFIRMO para continuar.`;
+}
+
+function renderAuthoritativeActiveAppointments(appointments: AppointmentListItem[]): string | undefined {
+  if (appointments.length === 0) return "No encontré una cita futura activa.";
+  const summaries = appointments.map(renderAuthoritativeAppointmentSummary);
+  if (summaries.some((summary) => summary === undefined)) return undefined;
+  if (summaries.length === 1) return `Tu cita activa es: ${summaries[0]}.`;
+  return `Tus citas activas son:\n${summaries.map((summary, index) => `${index + 1}. ${summary}`).join("\n")}`;
+}
+
+function renderAuthoritativeAppointmentSummary(appointment: AppointmentListItem): string | undefined {
+  if (!appointment.localDate || !appointment.localTime || !appointment.timeZone) return undefined;
+  const appointmentType = appointment.appointmentTypeName ?? "cita";
+  const site = appointment.siteName ? ` en ${appointment.siteName}` : "";
+  const professional = appointment.professionalName ? `, con ${appointment.professionalName}` : "";
+  const payer = appointment.payerName ? `, convenio ${appointment.payerName}` : "";
+  return `${appointmentType}${site}${professional}${payer}, el ${appointment.localDate} a las ${formatLocalClock(appointment.localTime)} (${appointment.timeZone})`;
 }
 
 function extractClockTimes(value: string): string[] {

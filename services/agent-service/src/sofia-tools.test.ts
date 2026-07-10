@@ -76,6 +76,132 @@ describe("SOFIA tool confirmation barrier", () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses an identical cancellation without renewing its action or TTL", async () => {
+    let state: Record<string, unknown> = {};
+    const query = statefulConfirmationQuery(
+      () => state,
+      (next) => {
+        state = next;
+      }
+    );
+    const fetchImpl = vi.fn();
+    const client = createClient(query, fetchImpl);
+    const appointmentId = "00000000-0000-4000-8000-000000000006";
+
+    await client.execute("cancel_appointment", JSON.stringify({ appointmentId, reason: "Solicitud inicial" }), context);
+    const original = structuredClone(state.pendingAction);
+    const repeated = await client.execute(
+      "cancel_appointment",
+      JSON.stringify({ appointmentId, reason: "La misma solicitud expresada de otra forma" }),
+      {
+        ...context,
+        currentMessageId: "00000000-0000-4000-8000-000000000010",
+        jobId: "00000000-0000-4000-8000-000000000011"
+      }
+    );
+
+    expect(repeated).toMatchObject({
+      ok: false,
+      code: "explicit_confirmation_required",
+      pendingActionReused: true
+    });
+    expect(state.pendingAction).toEqual(original);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("normalizes the UTC slot when reusing a reschedule and replaces only a different target", async () => {
+    let state: Record<string, unknown> = {};
+    const query = statefulConfirmationQuery(
+      () => state,
+      (next) => {
+        state = next;
+      }
+    );
+    const fetchImpl = vi.fn();
+    const client = createClient(query, fetchImpl);
+    const base = {
+      appointmentId: "00000000-0000-4000-8000-000000000006",
+      siteId: "00000000-0000-4000-8000-000000000020",
+      professionalId: "00000000-0000-4000-8000-000000000021",
+      payerId: "00000000-0000-4000-8000-000000000025",
+      appointmentTypeId: "00000000-0000-4000-8000-000000000022",
+      scheduledAt: "2026-07-13T14:20:00.000Z",
+      reason: "Solicitud inicial"
+    };
+
+    await client.execute("reschedule_appointment", JSON.stringify(base), context);
+    const original = structuredClone(state.pendingAction);
+    const repeated = await client.execute(
+      "reschedule_appointment",
+      JSON.stringify({
+        ...base,
+        scheduledAt: "2026-07-13T14:20:00Z",
+        reason: "Motivo reformulado"
+      }),
+      {
+        ...context,
+        currentMessageId: "00000000-0000-4000-8000-000000000010",
+        jobId: "00000000-0000-4000-8000-000000000011"
+      }
+    );
+    expect(repeated).toMatchObject({ code: "explicit_confirmation_required", pendingActionReused: true });
+    expect(state.pendingAction).toEqual(original);
+
+    const changed = await client.execute(
+      "reschedule_appointment",
+      JSON.stringify({ ...base, scheduledAt: "2026-07-13T14:40:00.000Z" }),
+      {
+        ...context,
+        currentMessageId: "00000000-0000-4000-8000-000000000012",
+        jobId: "00000000-0000-4000-8000-000000000013"
+      }
+    );
+    expect(changed).toMatchObject({ code: "explicit_confirmation_required" });
+    expect(changed).not.toHaveProperty("pendingActionReused");
+    expect(state.pendingAction).toMatchObject({
+      jobId: "00000000-0000-4000-8000-000000000013",
+      arguments: { scheduledAt: "2026-07-13T14:40:00.000Z" }
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("converges on an identical action after losing the staging CAS race", async () => {
+    const winnerJobId = "00000000-0000-4000-8000-000000000011";
+    const argumentsValue = {
+      appointmentId: "00000000-0000-4000-8000-000000000006",
+      reason: "Solicitud controlada"
+    };
+    let state: Record<string, unknown> = {};
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("select coalesce(metadata->'sofiaState'")) {
+        return queryResult([{ state, pendingExpired: false, grantExpired: false, executionExpired: false }]);
+      }
+      if (sql.includes("update pulso_iris.conversations")) {
+        state = {
+          pendingAction: {
+            tool: "cancel_appointment",
+            arguments: argumentsValue,
+            stagedAt: new Date().toISOString(),
+            jobId: winnerJobId
+          }
+        };
+        return queryResult([]);
+      }
+      return queryResult([]);
+    });
+    const fetchImpl = vi.fn();
+    const client = createClient(query, fetchImpl);
+
+    const result = await client.execute("cancel_appointment", JSON.stringify(argumentsValue), context);
+
+    expect(result).toMatchObject({
+      code: "explicit_confirmation_required",
+      pendingActionReused: true
+    });
+    expect(state).toMatchObject({ pendingAction: { jobId: winnerJobId } });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("overrides identity and idempotency fields on a confirmed mutation", async () => {
     const query = vi.fn(async (sql: string) => ({
       rows: sql.includes("select coalesce(metadata->'sofiaState'")

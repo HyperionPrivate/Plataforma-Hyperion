@@ -6,6 +6,7 @@ import {
   canonicalizeAvailabilitySearchArguments,
   deriveAgendaSelection,
   hasUnverifiedAvailabilityClock,
+  isAppointmentQuery,
   isCancellationRequest,
   isUrgencySignal,
   matchesAuthoritativeAvailabilitySlot,
@@ -133,11 +134,14 @@ describe("SOFIA fresh availability guard", () => {
     expect(requiresFreshAvailability("¿Qué horarios tienen disponibles?")).toBe(true);
     expect(requiresFreshAvailability("¿Hay espacio el 13?")).toBe(true);
     expect(requiresFreshAvailability("¿Pueden atenderme temprano?")).toBe(true);
+    expect(requiresFreshAvailability("¿Qué citas hay el lunes?")).toBe(true);
+    expect(requiresFreshAvailability("¿Qué citas tienen para el lunes?")).toBe(true);
     expect(requiresFreshAvailability("¿Me ayudas con el 13?")).toBe(false);
     expect(requiresFreshAvailability("El primero me sirve", true)).toBe(true);
     expect(requiresFreshAvailability("El de las 9:20 a. m.", true)).toBe(true);
     expect(requiresFreshAvailability("CONFIRMO", true)).toBe(false);
     expect(requiresFreshAvailability("¿Qué citas tengo?", true)).toBe(false);
+    expect(requiresFreshAvailability("¿Cuándo es mi cita el lunes?", true)).toBe(false);
     expect(requiresFreshAvailability("Quiero cancelar mi cita", true)).toBe(false);
   });
 
@@ -485,6 +489,8 @@ describe("SOFIA fresh availability guard", () => {
       appointmentTypeId: "00000000-0000-4000-8000-000000000023"
     };
     let persistedResponse = "";
+    let enqueuedResponse = "";
+    const durableResponse = "Respuesta durable del primer intento.";
     const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
       if (sql.includes("claim_next_job")) {
         return dbResult([
@@ -530,7 +536,7 @@ describe("SOFIA fresh availability guard", () => {
       }
       if (sql.includes("insert into pulso_iris.messages")) {
         persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019" }]);
+        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: durableResponse }]);
       }
       return dbResult([]);
     });
@@ -545,7 +551,7 @@ describe("SOFIA fresh availability guard", () => {
       model: "controlled",
       latencyMs: 1
     }));
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
@@ -561,6 +567,9 @@ describe("SOFIA fresh availability guard", () => {
           payers: [{ id: selection.payerId, name: "Convenio controlado" }],
           appointmentTypes: [{ id: selection.appointmentTypeId, name: "Tipo controlado" }]
         });
+      }
+      if (target.includes("/whatsapp/messages")) {
+        enqueuedResponse = String((JSON.parse(String(init?.body)) as { text?: unknown }).text ?? "");
       }
       return jsonResponse({ accepted: true });
     });
@@ -588,6 +597,7 @@ describe("SOFIA fresh availability guard", () => {
     expect(completionInput.messages.some((message) => message.content?.includes("horarios antiguos"))).toBe(true);
     expect(persistedResponse).toContain("no pude consultar la disponibilidad actual");
     expect(persistedResponse).not.toContain("2:00");
+    expect(enqueuedResponse).toBe(durableResponse);
   });
 
   it("renders the fresh authoritative slot without accepting a later free-form answer", async () => {
@@ -662,7 +672,7 @@ describe("SOFIA fresh availability guard", () => {
       }
       if (sql.includes("insert into pulso_iris.messages")) {
         persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019" }]);
+        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse }]);
       }
       return dbResult([]);
     });
@@ -813,7 +823,7 @@ describe("SOFIA fresh availability guard", () => {
       }
       if (sql.includes("insert into pulso_iris.messages")) {
         persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019" }]);
+        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse }]);
       }
       return dbResult([]);
     });
@@ -999,7 +1009,7 @@ describe("SOFIA fresh availability guard", () => {
       }
       if (sql.includes("insert into pulso_iris.messages")) {
         persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019" }]);
+        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse }]);
       }
       return dbResult([]);
     });
@@ -1152,7 +1162,7 @@ describe("SOFIA fresh availability guard", () => {
       }
       if (sql.includes("insert into pulso_iris.messages")) {
         persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019" }]);
+        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse }]);
       }
       return dbResult([]);
     });
@@ -1236,6 +1246,25 @@ describe("SOFIA deterministic confirmation execution", () => {
     expect(isCancellationRequest("No quiero cancelar mi cita")).toBe(false);
     expect(isCancellationRequest("Nunca anular mi turno")).toBe(false);
     expect(isCancellationRequest("Quiero cancelar mi cita")).toBe(true);
+  });
+
+  it("recognizes explicit appointment queries without intercepting mutations", () => {
+    expect(isAppointmentQuery("¿Cuál es mi cita activa?")).toBe(true);
+    expect(isAppointmentQuery("Quiero consultar mis citas vigentes")).toBe(true);
+    expect(isAppointmentQuery("Quiero cancelar mi cita activa")).toBe(false);
+    expect(isAppointmentQuery("Quiero reagendar mi cita")).toBe(false);
+    expect(isAppointmentQuery("Quiero una cita nueva")).toBe(false);
+    expect(isAppointmentQuery("Quiero consultar disponibilidad para una cita el lunes")).toBe(false);
+    expect(isAppointmentQuery("Quiero ver horarios para una cita")).toBe(false);
+    expect(isAppointmentQuery("¿Qué citas hay disponibles el lunes?")).toBe(false);
+    expect(isAppointmentQuery("Quiero consultar turnos para una cita el lunes")).toBe(false);
+    expect(isAppointmentQuery("¿Qué citas atienden el lunes?")).toBe(false);
+    expect(isAppointmentQuery("¿Qué citas hay el lunes?")).toBe(false);
+    expect(isAppointmentQuery("¿Qué citas tienen para el lunes?")).toBe(false);
+    expect(isAppointmentQuery("¿Qué citas tengo?")).toBe(true);
+    expect(isAppointmentQuery("¿Cuál es mi cita activa el lunes?")).toBe(true);
+    expect(isAppointmentQuery("¿Cuándo es mi cita el lunes 13 de julio?")).toBe(true);
+    expect(isAppointmentQuery("Quiero consultar mi cita del lunes")).toBe(true);
   });
 
   it("does not call the model or mutate the agenda when CONFIRMO has no pending action", async () => {
@@ -1574,6 +1603,86 @@ describe("SOFIA deterministic confirmation execution", () => {
     expect(result.recoveryClaimSql).toContain("and not exists");
   });
 
+  it("answers an active appointment query from authoritative data and excludes historical appointments", async () => {
+    const result = await runConfirmationScenario({
+      body: "¿Cuál es mi cita activa?",
+      state: {},
+      toolResults: {
+        list_patient_appointments: {
+          appointments: [
+            {
+              id: CONFIRMATION_IDS.appointment,
+              status: "rescheduled",
+              scheduledAt: "2027-07-13T14:00:00.000Z",
+              localDate: "2027-07-13",
+              localTime: "09:00",
+              timeZone: "America/Bogota",
+              appointmentTypeName: "Consulta histórica"
+            },
+            {
+              id: "00000000-0000-4000-8000-000000000129",
+              status: "verified",
+              scheduledAt: "2027-07-13T14:20:00.000Z",
+              localDate: "2027-07-13",
+              localTime: "09:20",
+              timeZone: "America/Bogota",
+              siteName: "Sede validada",
+              professionalName: "Profesional validado",
+              payerName: "Convenio validado",
+              appointmentTypeName: "Consulta activa"
+            },
+            {
+              id: "00000000-0000-4000-8000-000000000130",
+              status: "cancelled",
+              scheduledAt: "2027-07-14T15:00:00.000Z",
+              localDate: "2027-07-14",
+              localTime: "10:00",
+              timeZone: "America/Bogota",
+              appointmentTypeName: "Consulta cancelada"
+            }
+          ]
+        }
+      }
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.toolCalls).toEqual(["list_patient_appointments"]);
+    expect(result.mutationCalls).toEqual([]);
+    expect(result.responseText).toContain("Tu cita activa es");
+    expect(result.responseText).toContain("9:20");
+    expect(result.responseText).not.toContain("9:00");
+    expect(result.responseText).not.toContain("10:00");
+  });
+
+  it("does not revive an elapsed appointment when processing a delayed inbound", async () => {
+    const now = Date.now();
+    const result = await runConfirmationScenario({
+      body: "¿Cuál es mi cita activa?",
+      occurredAt: new Date(now - 120_000).toISOString(),
+      state: {},
+      toolResults: {
+        list_patient_appointments: {
+          appointments: [
+            {
+              id: CONFIRMATION_IDS.appointment,
+              status: "verified",
+              scheduledAt: new Date(now - 60_000).toISOString(),
+              localDate: "2026-07-10",
+              localTime: "09:00",
+              timeZone: "America/Bogota",
+              appointmentTypeName: "Consulta ya transcurrida"
+            }
+          ]
+        }
+      }
+    });
+
+    expect(result.complete).not.toHaveBeenCalled();
+    expect(result.toolCalls).toEqual(["list_patient_appointments"]);
+    expect(result.responseText).toContain("No encontré una cita futura activa");
+    expect(result.responseText).not.toContain("9:00");
+  });
+
   it("stages cancellation only for the single future active appointment", async () => {
     const result = await runConfirmationScenario({
       body: "Quiero cancelar mi cita",
@@ -1708,6 +1817,7 @@ function appointmentMutationResult(overrides: { localDate: string; localTime: st
 
 async function runConfirmationScenario(input: {
   body?: string;
+  occurredAt?: string;
   attemptCount?: number;
   maxAttempts?: number;
   recovery?: "available" | "outbound_exists";
@@ -1748,7 +1858,7 @@ async function runConfirmationScenario(input: {
             patientId: CONFIRMATION_IDS.patient,
             messageId: CONFIRMATION_IDS.message,
             threadBindingId: CONFIRMATION_IDS.threadBinding,
-            occurredAt: new Date().toISOString()
+            occurredAt: input.occurredAt ?? new Date().toISOString()
           },
           messageId: CONFIRMATION_IDS.message,
           messageBody: input.body ?? "CONFIRMO"
@@ -1773,7 +1883,7 @@ async function runConfirmationScenario(input: {
             patientId: CONFIRMATION_IDS.patient,
             messageId: CONFIRMATION_IDS.message,
             threadBindingId: CONFIRMATION_IDS.threadBinding,
-            occurredAt: new Date().toISOString()
+            occurredAt: input.occurredAt ?? new Date().toISOString()
           }
         }
       ]);
@@ -1793,7 +1903,7 @@ async function runConfirmationScenario(input: {
             patientId: CONFIRMATION_IDS.patient,
             messageId: CONFIRMATION_IDS.message,
             threadBindingId: CONFIRMATION_IDS.threadBinding,
-            occurredAt: new Date().toISOString()
+            occurredAt: input.occurredAt ?? new Date().toISOString()
           }
         }
       ]);
@@ -1878,7 +1988,7 @@ async function runConfirmationScenario(input: {
     }
     if (sql.includes("insert into pulso_iris.messages")) {
       responseText = String(parameters?.[2] ?? "");
-      return dbResult([{ id: CONFIRMATION_IDS.responseMessage }]);
+      return dbResult([{ id: CONFIRMATION_IDS.responseMessage, body: responseText }]);
     }
     if (sql.includes("update agent_runtime.executions") && sql.includes("set status = $3")) {
       executionStatus = String(parameters?.[2] ?? "");
