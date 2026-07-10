@@ -36,6 +36,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Lint
         run: pnpm lint
+      - name: Test production backup procedure
+        run: pnpm backup:test
       - name: Build
         run: pnpm build
       - name: Migrate test database

@@ -8,8 +8,9 @@
     "node": ">=22.0.0"
   },
   "scripts": {
+    "backup:test": "node scripts/ops/run-postgres-backup-tests.mjs",
     "build": "pnpm -r build",
-    "check": "pnpm lint && pnpm build && pnpm -r test",
+    "check": "pnpm lint && pnpm backup:test && pnpm build && pnpm -r test",
     "db:migrate": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/index.js",
     "db:seed:demo": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-demo.js",
     "db:seed:demo:clear": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-demo.js --clear",
