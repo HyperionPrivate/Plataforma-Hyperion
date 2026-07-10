@@ -3,13 +3,17 @@ import { z } from "zod";
 import type { LlmToolDefinition } from "./llm-provider.js";
 
 const uuid = z.string().uuid();
-const LAST_AVAILABILITY_SCHEMA_VERSION = 2;
+const LAST_AVAILABILITY_SCHEMA_VERSION = 3;
+const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const localTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 
 const businessSchemas = {
   get_catalog: z.object({}),
   update_patient_name: z.object({ fullName: z.string().trim().min(2).max(160) }),
   search_availability: z.object({
     from: z.string().datetime().optional(),
+    localDate: dateOnly.optional(),
+    localTime: localTime.optional(),
     days: z.number().int().min(1).max(31).optional(),
     siteId: uuid.optional(),
     professionalId: uuid.optional(),
@@ -37,6 +41,8 @@ const businessSchemas = {
   })
 } as const;
 
+const availabilityQueryStateSchema = businessSchemas.search_availability;
+
 export type SofiaToolName = keyof typeof businessSchemas;
 
 const definitions: Record<
@@ -58,6 +64,8 @@ const definitions: Record<
       "Consulta disponibilidad real configurada. Muestra al paciente exclusivamente localDate y localTime en timeZone; nunca presentes startsAt o scheduledAt como hora local. Al crear o reagendar, copia exactamente el valor UTC de scheduledAt/startsAt devuelto por el slot, sin reinterpretarlo ni convertirlo. Nunca inventes horarios fuera del resultado.",
     properties: {
       from: { type: "string", description: "Fecha y hora ISO 8601 inicial" },
+      localDate: { type: "string", description: "Fecha local exacta YYYY-MM-DD solicitada por el paciente" },
+      localTime: { type: "string", description: "Hora local exacta HH:mm solicitada por el paciente" },
       days: { type: "integer", minimum: 1, maximum: 31 },
       siteId: { type: "string", format: "uuid" },
       professionalId: { type: "string", format: "uuid" },
@@ -295,12 +303,7 @@ export class SofiaToolClient {
       throw error;
     }
     if (toolName === "search_availability") {
-      await this.saveConversationState(context.tenantId, context.conversationId, {
-        lastAvailability: data,
-        lastAvailabilityAt: new Date().toISOString(),
-        lastAvailabilitySchemaVersion: LAST_AVAILABILITY_SCHEMA_VERSION,
-        lastAvailabilityJobId: context.jobId
-      });
+      await this.saveAvailabilityState(context, toolArguments, data);
     } else if (toolName === "create_appointment_hold") {
       const holdId = readHoldId(data);
       await this.replacePendingWithGrant(
@@ -358,6 +361,40 @@ export class SofiaToolClient {
     );
   }
 
+  private async saveAvailabilityState(
+    context: SofiaToolContext,
+    toolArguments: Record<string, unknown>,
+    data: unknown
+  ): Promise<void> {
+    const query = availabilityQueryStateSchema.parse(toolArguments);
+    const selection: Record<string, string> = {};
+    for (const key of ["siteId", "professionalId", "payerId", "appointmentTypeId"] as const) {
+      const value = query[key];
+      if (typeof value === "string") selection[key] = value;
+    }
+    const availabilityPatch = {
+      lastAvailability: data,
+      lastAvailabilityAt: new Date().toISOString(),
+      lastAvailabilitySchemaVersion: LAST_AVAILABILITY_SCHEMA_VERSION,
+      lastAvailabilityJobId: context.jobId,
+      lastAvailabilityQuery: query
+    };
+    await this.options.db.query(
+      `update pulso_iris.conversations
+       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         'sofiaState',
+         coalesce(metadata->'sofiaState', '{}'::jsonb)
+           || $3::jsonb
+           || jsonb_build_object(
+                'agendaSelection',
+                coalesce(metadata #> '{sofiaState,agendaSelection}', '{}'::jsonb) || $4::jsonb
+              )
+       ), updated_at = now()
+       where tenant_id = $1 and id = $2`,
+      [context.tenantId, context.conversationId, JSON.stringify(availabilityPatch), JSON.stringify(selection)]
+    );
+  }
+
   private async clearLastAvailability(tenantId: string, conversationId: string): Promise<void> {
     await this.options.db.query(
       `update pulso_iris.conversations
@@ -368,6 +405,7 @@ export class SofiaToolClient {
            - 'lastAvailabilityAt'
            - 'lastAvailabilitySchemaVersion'
            - 'lastAvailabilityJobId'
+           - 'lastAvailabilityQuery'
        ), updated_at = now()
        where tenant_id = $1 and id = $2`,
       [tenantId, conversationId]

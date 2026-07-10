@@ -13,30 +13,40 @@ describeIntegration("015 SOFIA fresh availability protocol", () => {
 
   beforeAll(async () => {
     await client.connect();
+    await client.query("begin");
   });
 
   afterAll(async () => {
+    await client.query("rollback");
     await client.end();
   });
 
-  it("activates only v4 and requires a same-job availability result", async () => {
+  it("preserves the superseded v4 prompt with its same-job availability rule", async () => {
     const result = await client.query<{
       runtimeKey: string;
       systemPrompt: string;
       availabilityFreshness: string;
       assistantHistoryAuthority: string;
+      status: string;
       activeCount: number;
     }>(
       `select f.definition ->> 'runtimeKey' as "runtimeKey",
               f.definition ->> 'systemPrompt' as "systemPrompt",
               f.definition ->> 'availabilityFreshness' as "availabilityFreshness",
               f.definition ->> 'assistantHistoryAuthority' as "assistantHistoryAuthority",
-              count(*) over ()::int as "activeCount"
+              f.status,
+              (select count(*)::int
+               from platform.prompt_flows active
+               where active.tenant_id = f.tenant_id
+                 and active.agent_id = f.agent_id
+                 and active.status = 'active') as "activeCount"
        from platform.prompt_flows f
        join platform.agents a
          on a.tenant_id = f.tenant_id and a.id = f.agent_id
        join platform.tenants t on t.id = f.tenant_id
-       where t.slug = 'cedco' and a.code = 'SOFIA' and f.status = 'active'`
+       where t.slug = 'cedco'
+         and a.code = 'SOFIA'
+         and f.definition ->> 'runtimeKey' = 'sofia_whatsapp_internal_v4'`
     );
 
     expect(result.rows).toHaveLength(1);
@@ -45,6 +55,7 @@ describeIntegration("015 SOFIA fresh availability protocol", () => {
         runtimeKey: "sofia_whatsapp_internal_v4",
         availabilityFreshness: "same_job_tool_result",
         assistantHistoryAuthority: "untrusted_for_availability",
+        status: "archived",
         activeCount: 1
       })
     );

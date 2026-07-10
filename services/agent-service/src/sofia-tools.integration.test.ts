@@ -186,6 +186,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     const slot = {
       siteId: randomUUID(),
       professionalId: randomUUID(),
+      payerId: randomUUID(),
       appointmentTypeId: randomUUID(),
       startsAt: "2026-07-13T14:00:00.000Z",
       scheduledAt: "2026-07-13T14:00:00.000Z",
@@ -205,7 +206,16 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     const client = createClient(db, fetchImpl);
     const searchJobId = randomUUID();
 
-    const search = await client.execute("search_availability", "{}", {
+    const searchArguments = {
+      siteId: slot.siteId,
+      professionalId: slot.professionalId,
+      payerId: slot.payerId,
+      appointmentTypeId: slot.appointmentTypeId,
+      localDate: slot.localDate,
+      localTime: slot.localTime,
+      days: 1
+    };
+    const search = await client.execute("search_availability", JSON.stringify(searchArguments), {
       ...context(tenantId, patientId, conversationId, searchJobId),
       currentMessageBody: "Consulta disponibilidad"
     });
@@ -213,8 +223,15 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     const freshState = await readState(db, tenantId, conversationId);
     expect(freshState).toMatchObject({
       lastAvailability: { slots: [expect.objectContaining({ localTime: "09:00" })] },
-      lastAvailabilitySchemaVersion: 2,
-      lastAvailabilityJobId: searchJobId
+      lastAvailabilitySchemaVersion: 3,
+      lastAvailabilityJobId: searchJobId,
+      lastAvailabilityQuery: searchArguments,
+      agendaSelection: {
+        siteId: slot.siteId,
+        professionalId: slot.professionalId,
+        payerId: slot.payerId,
+        appointmentTypeId: slot.appointmentTypeId
+      }
     });
     expect(freshState.lastAvailabilityAt).toEqual(expect.any(String));
 
@@ -253,6 +270,8 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     expect(clearedState).not.toHaveProperty("lastAvailabilityAt");
     expect(clearedState).not.toHaveProperty("lastAvailabilitySchemaVersion");
     expect(clearedState).not.toHaveProperty("lastAvailabilityJobId");
+    expect(clearedState).not.toHaveProperty("lastAvailabilityQuery");
+    expect(clearedState.agendaSelection).toMatchObject({ payerId: slot.payerId });
   });
 });
 
@@ -294,5 +313,7 @@ async function readState(db: DatabaseClient, tenantId: string, conversationId: s
     lastAvailabilityAt?: string;
     lastAvailabilitySchemaVersion?: number;
     lastAvailabilityJobId?: string;
+    lastAvailabilityQuery?: Record<string, unknown>;
+    agendaSelection?: Record<string, unknown>;
   };
 }

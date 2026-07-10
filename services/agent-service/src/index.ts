@@ -9,7 +9,8 @@ await startService({
     "012-whatsapp-sofia-runtime.sql",
     "013-sofia-confirmation-protocol.sql",
     "014-sofia-local-time-protocol.sql",
-    "015-sofia-fresh-availability.sql"
+    "015-sofia-fresh-availability.sql",
+    "016-sofia-search-constraints.sql"
   ],
   registerRoutes
 });

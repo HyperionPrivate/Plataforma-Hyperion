@@ -11,6 +11,8 @@ import { listSlotAlternatives } from "./availability-engine.js";
 import { readTenantId } from "./shared.js";
 
 const uuid = z.string().uuid();
+const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const localTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 const idempotencyKey = z.string().trim().min(8).max(200);
 const confirmationMessage = z.object({ confirmationMessageId: uuid });
 
@@ -29,6 +31,8 @@ const toolSchemas = {
   }),
   search_availability: z.object({
     from: z.string().datetime().optional(),
+    localDate: dateOnly.optional(),
+    localTime: localTime.optional(),
     days: z.number().int().min(1).max(31).default(14),
     siteId: uuid.optional(),
     professionalId: uuid.optional(),
@@ -41,7 +45,7 @@ const toolSchemas = {
       conversationId: uuid,
       siteId: uuid,
       professionalId: uuid,
-      payerId: uuid.optional(),
+      payerId: uuid,
       appointmentTypeId: uuid,
       scheduledAt: z.string().datetime(),
       idempotencyKey
@@ -72,7 +76,7 @@ const toolSchemas = {
       appointmentId: uuid,
       siteId: uuid,
       professionalId: uuid,
-      payerId: uuid.optional(),
+      payerId: uuid,
       appointmentTypeId: uuid,
       scheduledAt: z.string().datetime(),
       reason: z.string().trim().min(2).max(300),
@@ -187,7 +191,7 @@ async function executeTool(
 }
 
 async function getCatalog(db: Database, tenantId: string) {
-  const [sites, payers, appointmentTypes, professionals] = await Promise.all([
+  const [sites, payers, appointmentTypes, professionals, agendaSettings] = await Promise.all([
     db.query(
       `select id, name, city, address from pulso_iris.sites where tenant_id = $1 and status = 'active' order by name`,
       [tenantId]
@@ -208,13 +212,15 @@ async function getCatalog(db: Database, tenantId: string) {
               p.is_pilot as "isPilot", p.status
        from pulso_iris.professionals p where p.tenant_id = $1 and p.status = 'active' order by p.name`,
       [tenantId]
-    )
+    ),
+    db.query(`select timezone from pulso_iris.agenda_settings where tenant_id = $1`, [tenantId])
   ]);
   return {
     sites: sites.rows,
     payers: payers.rows,
     appointmentTypes: appointmentTypes.rows,
-    professionals: professionals.rows
+    professionals: professionals.rows,
+    agendaSettings: agendaSettings.rows[0] ?? null
   };
 }
 
@@ -338,9 +344,29 @@ async function searchAvailability(
   input: z.infer<(typeof toolSchemas)["search_availability"]>
 ) {
   const settings = await loadInternalSettings(db, tenantId);
-  const from = input.from ? new Date(input.from) : new Date();
+  let from: Date;
+  let requestedTo: Date;
+  if (input.localDate) {
+    const bounds = await db.query<{ from: Date; to: Date }>(
+      `select (($1::date + coalesce($2::time, time '00:00'))::timestamp at time zone $3) as "from",
+              (($1::date + $4::integer)::timestamp at time zone $3) as "to"`,
+      [input.localDate, input.localTime ?? null, settings.timezone, input.days]
+    );
+    from = new Date(bounds.rows[0]!.from);
+    requestedTo = new Date(bounds.rows[0]!.to);
+    const now = new Date();
+    if (requestedTo.getTime() <= now.getTime()) {
+      throw new ToolError(422, "availability_window_elapsed", "Availability window is in the past");
+    }
+    if (input.localTime && from.getTime() <= now.getTime()) {
+      throw new ToolError(422, "availability_start_in_past", "Availability start time is in the past");
+    }
+    if (from.getTime() < now.getTime()) from = now;
+  } else {
+    from = input.from ? new Date(input.from) : new Date();
+    requestedTo = new Date(from.getTime() + input.days * 86_400_000);
+  }
   const horizonEnd = new Date(Date.now() + settings.bookingHorizonDays * 86_400_000);
-  const requestedTo = new Date(from.getTime() + input.days * 86_400_000);
   const to = requestedTo < horizonEnd ? requestedTo : horizonEnd;
   let payerName: string | null = null;
   if (input.payerId) {
@@ -817,10 +843,11 @@ async function loadInternalSettings(db: Database, tenantId: string) {
     holdDurationMinutes: number;
     maxAlternatives: number;
     maxReschedules: number;
+    timezone: string;
   }>(
     `select mode, status, booking_horizon_days as "bookingHorizonDays",
             hold_duration_minutes as "holdDurationMinutes", max_alternatives as "maxAlternatives",
-            max_reschedules as "maxReschedules"
+             max_reschedules as "maxReschedules", timezone
      from pulso_iris.agenda_settings where tenant_id = $1`,
     [tenantId]
   );
