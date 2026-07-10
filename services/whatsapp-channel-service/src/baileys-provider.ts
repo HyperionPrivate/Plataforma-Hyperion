@@ -270,13 +270,15 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     const { state, saveCreds } = await this.runtime.loadAuthState(sessionDirectory);
     const socket = this.runtime.createSocket(state);
     connection.socket = socket;
-    connection.status.sessionRestorable = state.creds.registered;
+    connection.status.sessionRestorable = hasRestorableSession(state);
     await this.emitStatus(tenantId);
 
     socket.ev.on("creds.update", async () => {
+      if (connection.generation !== generation) return;
       await saveCreds();
       await protectSessionDirectory(sessionDirectory);
-      connection.status.sessionRestorable = state.creds.registered;
+      connection.status.sessionRestorable =
+        connection.status.sessionRestorable || connection.status.state === "ready" || hasRestorableSession(state);
       await this.emitStatus(tenantId);
     });
     socket.ev.on("connection.update", (update) => {
@@ -502,6 +504,10 @@ function disconnectedStatus(sessionRestorable: boolean): WhatsAppConnectionStatu
     state: "disconnected",
     sessionRestorable
   };
+}
+
+function hasRestorableSession(state: AuthenticationState): boolean {
+  return state.creds.registered || Boolean(state.creds.me?.id && state.creds.account);
 }
 
 function assertTenantId(tenantId: string): void {
