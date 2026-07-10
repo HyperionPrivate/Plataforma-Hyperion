@@ -144,5 +144,9 @@ describe("WhatsApp integration facade RBAC", () => {
       canReceiveMessages: false,
       canBookAppointments: false
     });
+    const promptQuery = String(dbQuery.mock.calls[1]?.[0]);
+    expect(promptQuery).toContain("sofia_whatsapp_internal_v2");
+    expect(promptQuery).toContain("013-sofia-confirmation-protocol.sql");
+    expect(promptQuery).toContain("order by f.version desc, f.updated_at desc");
   });
 });

@@ -4,6 +4,6 @@ import { registerRoutes } from "./app.js";
 await startService({
   serviceName: "agent-service",
   databaseRequired: true,
-  requiredMigrations: ["001-platform.sql", "012-whatsapp-sofia-runtime.sql"],
+  requiredMigrations: ["001-platform.sql", "012-whatsapp-sofia-runtime.sql", "013-sofia-confirmation-protocol.sql"],
   registerRoutes
 });

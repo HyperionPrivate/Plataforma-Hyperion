@@ -129,6 +129,26 @@ describeIntegration("SOFIA internal agenda tools", () => {
     });
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json().data.code).toBe("explicit_confirmation_required");
+
+    const wrongActionConfirmation = await client.query<{ id: string }>(
+      `insert into pulso_iris.messages (tenant_id, conversation_id, sender, body, provider, external_message_id)
+       values ($1, $2, 'patient', 'CONFIRMO cancelar', 'whatsapp_web_test',
+               'controlled-wrong-action-confirmation') returning id`,
+      [tenantId, conversationId]
+    );
+    const mismatched = await callTool("create_appointment_hold", {
+      patientId,
+      conversationId,
+      siteId,
+      professionalId,
+      payerId,
+      appointmentTypeId,
+      scheduledAt,
+      confirmationMessageId: wrongActionConfirmation.rows[0]!.id,
+      idempotencyKey: "sofia-hold-mismatched-confirmation"
+    });
+    expect(mismatched.statusCode).toBe(409);
+    expect(mismatched.json().data.code).toBe("confirmation_action_mismatch");
   });
 
   it("books once, reschedules atomically and cancels only with explicit confirmations", async () => {
