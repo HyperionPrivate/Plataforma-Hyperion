@@ -126,10 +126,11 @@ export class InternalAgendaProvider implements AgendaProvider {
         `insert into pulso_iris.appointment_holds (
            tenant_id, patient_id, conversation_id, site_id, professional_id, payer_id,
            appointment_type_id, scheduled_at, duration_min, slot_capacity_token,
-           expires_at, idempotency_key, created_by
+           expires_at, idempotency_key, created_by, metadata
          ) values (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-           now() + ($11::int * interval '1 minute'), $12, $13
+           now() + ($11::int * interval '1 minute'), $12, $13,
+           jsonb_build_object('slotTimeZone', $14::text)
          )
          returning ${HOLD_COLUMNS}`,
         [
@@ -145,7 +146,8 @@ export class InternalAgendaProvider implements AgendaProvider {
           reservation.slotCapacityToken,
           input.holdDurationMinutes,
           input.idempotencyKey,
-          input.actorId ?? "system"
+          input.actorId ?? "system",
+          reservation.slot.timeZone
         ]
       );
 
@@ -204,7 +206,7 @@ export class InternalAgendaProvider implements AgendaProvider {
            h.tenant_id, h.patient_id, h.conversation_id, h.site_id, h.professional_id, h.payer_id,
            h.appointment_type_id, t.name, $3, 'verified', h.scheduled_at, h.duration_min,
            h.slot_capacity_token, $4, h.id, 'internal', now(), $5, $6, coalesce($7, 0),
-           jsonb_build_object('created_by', $5::text)
+           coalesce(h.metadata, '{}'::jsonb) || jsonb_build_object('created_by', $5::text)
          from pulso_iris.appointment_holds h
          join pulso_iris.appointment_types t
            on t.tenant_id = h.tenant_id and t.id = h.appointment_type_id

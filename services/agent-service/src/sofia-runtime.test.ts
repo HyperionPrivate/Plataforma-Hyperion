@@ -109,8 +109,8 @@ describe("SOFIA deterministic urgency guard", () => {
     )) as { data: { ready: boolean; workerEnabled: boolean; workerRunning: boolean } };
 
     expect(response.data).toMatchObject({ ready: true, workerEnabled: true, workerRunning: true });
-    expect(String(query.mock.calls[0]?.[0])).toContain("sofia_whatsapp_internal_v2");
-    expect(String(query.mock.calls[0]?.[0])).toContain("013-sofia-confirmation-protocol.sql");
+    expect(String(query.mock.calls[0]?.[0])).toContain("sofia_whatsapp_internal_v3");
+    expect(String(query.mock.calls[0]?.[0])).toContain("014-sofia-local-time-protocol.sql");
     expect(String(query.mock.calls[0]?.[0])).toContain("order by f.version desc, f.updated_at desc");
   });
 });

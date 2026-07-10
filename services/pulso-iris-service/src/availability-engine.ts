@@ -56,8 +56,8 @@ with params as (
 ),
 local_days as (
   select generate_series(
-    timezone(tenant_timezone, from_ts)::date,
-    timezone(tenant_timezone, to_ts)::date,
+    timezone(tenant_timezone, from_ts)::date - 2,
+    timezone(tenant_timezone, to_ts)::date + 2,
     interval '1 day'
   )::date as local_date
   from params
@@ -71,6 +71,7 @@ rule_windows as (
     r.appointment_type_id,
     r.slot_duration_min,
     r.capacity,
+    r.timezone,
     (d.local_date::timestamp + r.starts_at) at time zone r.timezone as window_start,
     (d.local_date::timestamp + r.ends_at) at time zone r.timezone as window_end
   from params p
@@ -144,7 +145,8 @@ candidate_slots as (
     rw.appointment_type_id,
     gs.starts_at,
     gs.starts_at + (rw.slot_duration_min * interval '1 minute') as ends_at,
-    rw.capacity
+    rw.capacity,
+    rw.timezone
   from rule_windows rw
   cross join lateral generate_series(
     rw.window_start,
@@ -162,6 +164,7 @@ booked_slots as (
     s.starts_at,
     s.ends_at,
     s.capacity,
+    s.timezone,
     (
       count(a.id)::int +
       (
@@ -207,7 +210,8 @@ booked_slots as (
     s.appointment_type_id,
     s.starts_at,
     s.ends_at,
-    s.capacity
+    s.capacity,
+    s.timezone
 )
 select
   b.rule_id as "ruleId",
@@ -216,6 +220,9 @@ select
   b.appointment_type_id as "appointmentTypeId",
   b.starts_at as "startsAt",
   b.ends_at as "endsAt",
+  to_char(timezone(b.timezone, b.starts_at), 'YYYY-MM-DD') as "localDate",
+  to_char(timezone(b.timezone, b.starts_at), 'HH24:MI') as "localTime",
+  b.timezone as "timeZone",
   b.capacity,
   b.booked,
   greatest(b.capacity - b.booked, 0)::int as remaining,
@@ -368,6 +375,9 @@ export async function listSlotAlternatives(
     .map((slot) => ({
       startsAt: slot.startsAt,
       endsAt: slot.endsAt,
+      localDate: slot.localDate,
+      localTime: slot.localTime,
+      timeZone: slot.timeZone,
       siteId: slot.siteId,
       professionalId: slot.professionalId,
       appointmentTypeId: slot.appointmentTypeId,

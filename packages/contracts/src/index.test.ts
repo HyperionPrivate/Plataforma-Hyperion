@@ -17,6 +17,7 @@ import {
   pulsoIrisManualVerificationInputSchema,
   pulsoIrisMessageSchema,
   pulsoIrisProfessionalSchema,
+  pulsoIrisSlotAlternativeSchema,
   serviceCatalog,
   tenantIdSchema,
   whatsappIntegrationStatusSchema,
@@ -154,6 +155,9 @@ describe("platform contracts", () => {
           appointmentTypeId: "5a6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
           startsAt: new Date("2026-07-20T13:00:00Z"),
           endsAt: new Date("2026-07-20T13:20:00Z"),
+          localDate: "2026-07-20",
+          localTime: "08:00",
+          timeZone: "America/Bogota",
           capacity: 2,
           booked: 1,
           remaining: 1,
@@ -168,6 +172,37 @@ describe("platform contracts", () => {
 
     expect(slots.slots[0]?.remaining).toBe(1);
     expect(slots.slots[0]?.startsAt).toBe("2026-07-20T13:00:00.000Z");
+    expect(slots.slots[0]).toMatchObject({
+      localDate: "2026-07-20",
+      localTime: "08:00",
+      timeZone: "America/Bogota"
+    });
+    const { timeZone: _timeZone, ...slotWithoutTimeZone } = slots.slots[0]!;
+    expect(pulsoIrisAvailabilitySlotsSchema.safeParse({ ...slots, slots: [slotWithoutTimeZone] }).success).toBe(false);
+
+    const alternativeInput = {
+      startsAt: new Date("2026-07-20T13:20:00Z"),
+      endsAt: new Date("2026-07-20T13:40:00Z"),
+      localDate: "2026-07-20",
+      localTime: "08:20",
+      timeZone: "America/Bogota",
+      siteId: "3e6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      professionalId: "4f6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      appointmentTypeId: "5a6f4a3b-2c1d-4e6f-8a9b-0c1d2e3f4a5b",
+      remaining: 1,
+      siteName: "Sotomayor",
+      professionalName: "Dra. Rios",
+      appointmentTypeName: "Consulta"
+    };
+    expect(pulsoIrisSlotAlternativeSchema.parse(alternativeInput)).toMatchObject({
+      localTime: "08:20",
+      timeZone: "America/Bogota"
+    });
+    const { localDate: _localDate, ...alternativeWithoutLocalDate } = alternativeInput;
+    expect(pulsoIrisSlotAlternativeSchema.safeParse(alternativeWithoutLocalDate).success).toBe(false);
+    expect(pulsoIrisSlotAlternativeSchema.safeParse({ ...alternativeInput, localTime: "08:20 UTC" }).success).toBe(
+      false
+    );
   });
 
   it("validates configurable agenda settings and safe limits", () => {

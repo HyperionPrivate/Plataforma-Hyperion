@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "@hyperion/database";
 import { describe, expect, it, vi } from "vitest";
-import { isExplicitConfirmation, SofiaToolClient } from "./sofia-tools.js";
+import { isExplicitConfirmation, SOFIA_TOOL_DEFINITIONS, SofiaToolClient } from "./sofia-tools.js";
 
 const context = {
   tenantId: "00000000-0000-4000-8000-000000000001",
@@ -11,6 +11,35 @@ const context = {
   jobId: "00000000-0000-4000-8000-000000000005",
   sequence: 1
 };
+
+describe("SOFIA tool time contract", () => {
+  it("separates local presentation fields from the exact UTC mutation value", () => {
+    const searchAvailability = SOFIA_TOOL_DEFINITIONS.find(
+      (definition) => definition.function.name === "search_availability"
+    );
+    const createHold = SOFIA_TOOL_DEFINITIONS.find(
+      (definition) => definition.function.name === "create_appointment_hold"
+    );
+    const reschedule = SOFIA_TOOL_DEFINITIONS.find(
+      (definition) => definition.function.name === "reschedule_appointment"
+    );
+
+    expect(searchAvailability?.function.description).toContain("localDate");
+    expect(searchAvailability?.function.description).toContain("localTime");
+    expect(searchAvailability?.function.description).toContain("timeZone");
+    expect(searchAvailability?.function.description).toContain("scheduledAt/startsAt");
+
+    for (const mutation of [createHold, reschedule]) {
+      const parameters = mutation?.function.parameters as {
+        properties?: { scheduledAt?: { description?: string } };
+      };
+      const description = parameters.properties?.scheduledAt?.description;
+      expect(description).toContain("scheduledAt/startsAt");
+      expect(description).toContain("localDate/localTime/timeZone");
+      expect(description).toContain("sin reinterpretarlo ni convertirlo");
+    }
+  });
+});
 
 describe("SOFIA tool confirmation barrier", () => {
   it("accepts only an explicit bounded confirmation", () => {

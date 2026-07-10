@@ -53,7 +53,8 @@ const definitions: Record<
     required: ["fullName"]
   },
   search_availability: {
-    description: "Consulta disponibilidad real configurada. Nunca inventes horarios fuera del resultado.",
+    description:
+      "Consulta disponibilidad real configurada. Muestra al paciente exclusivamente localDate y localTime en timeZone; nunca presentes startsAt o scheduledAt como hora local. Al crear o reagendar, copia exactamente el valor UTC de scheduledAt/startsAt devuelto por el slot, sin reinterpretarlo ni convertirlo. Nunca inventes horarios fuera del resultado.",
     properties: {
       from: { type: "string", description: "Fecha y hora ISO 8601 inicial" },
       days: { type: "integer", minimum: 1, maximum: 31 },
@@ -605,7 +606,11 @@ function slotProperties(): Record<string, unknown> {
     professionalId: { type: "string", format: "uuid" },
     payerId: { type: "string", format: "uuid" },
     appointmentTypeId: { type: "string", format: "uuid" },
-    scheduledAt: { type: "string", description: "Inicio ISO 8601 exacto devuelto por disponibilidad" }
+    scheduledAt: {
+      type: "string",
+      description:
+        "Instante UTC técnico: copia exactamente scheduledAt/startsAt del slot devuelto por search_availability, sin reinterpretarlo ni convertirlo. Para mostrar la hora al paciente usa localDate/localTime/timeZone del slot."
+    }
   };
 }
 

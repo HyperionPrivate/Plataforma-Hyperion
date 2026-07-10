@@ -214,6 +214,9 @@ describeIntegration("pulso-iris tenant isolation", () => {
     expect(before.statusCode).toBe(200);
     expect(before.json().data.slots[0]).toMatchObject({
       startsAt: "2026-09-14T19:00:00.000Z",
+      localDate: "2026-09-14",
+      localTime: "14:00",
+      timeZone: "America/Bogota",
       capacity: 1,
       booked: 0,
       remaining: 1,
@@ -263,7 +266,11 @@ describeIntegration("pulso-iris tenant isolation", () => {
       }
     });
     expect(duplicate.statusCode).toBe(409);
-    expect(Array.isArray(duplicate.json().data.alternatives)).toBe(true);
+    expect(duplicate.json().data.alternatives[0]).toMatchObject({
+      localDate: "2026-09-14",
+      localTime: "14:20",
+      timeZone: "America/Bogota"
+    });
   });
 
   it("rejects scheduled appointments outside configured availability", async () => {
@@ -283,6 +290,80 @@ describeIntegration("pulso-iris tenant isolation", () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json().data.error).toContain("not available");
+  });
+
+  it("projects local slot fields from the availability rule timezone", async () => {
+    const rule = await createRule({
+      weekday: 2,
+      startsAt: "11:00",
+      endsAt: "12:00",
+      capacity: 1,
+      timezone: "America/New_York"
+    });
+    expect(rule.statusCode).toBe(201);
+
+    const response = await app.inject({
+      method: "GET",
+      url:
+        `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
+        `?from=2026-09-15T14:30:00.000Z&to=2026-09-15T17:00:00.000Z` +
+        `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}`
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.slots[0]).toMatchObject({
+      startsAt: "2026-09-15T15:00:00.000Z",
+      localDate: "2026-09-15",
+      localTime: "11:00",
+      timeZone: "America/New_York"
+    });
+  });
+
+  it("includes the rule-local day when it differs from the tenant-local day", async () => {
+    await client.query("update pulso_iris.agenda_settings set timezone = 'Etc/GMT+12' where tenant_id = $1", [tenantA]);
+    let ruleId: string | undefined;
+
+    try {
+      const rule = await createRule({
+        weekday: 2,
+        startsAt: "01:00",
+        endsAt: "02:00",
+        capacity: 1,
+        timezone: "Pacific/Kiritimati"
+      });
+      expect(rule.statusCode).toBe(201);
+      ruleId = rule.json().data.id as string;
+
+      const response = await app.inject({
+        method: "GET",
+        url:
+          `/v1/tenants/${tenantA}/pulso-iris/availability/slots` +
+          `?from=2026-09-14T10:30:00.000Z&to=2026-09-14T12:30:00.000Z` +
+          `&siteId=${siteA}&professionalId=${professionalA}&appointmentTypeId=${typeA}`
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.slots).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            startsAt: "2026-09-14T11:00:00.000Z",
+            localDate: "2026-09-15",
+            localTime: "01:00",
+            timeZone: "Pacific/Kiritimati"
+          })
+        ])
+      );
+    } finally {
+      if (ruleId) {
+        await client.query("delete from pulso_iris.availability_rules where tenant_id = $1 and id = $2", [
+          tenantA,
+          ruleId
+        ]);
+      }
+      await client.query("update pulso_iris.agenda_settings set timezone = 'America/Bogota' where tenant_id = $1", [
+        tenantA
+      ]);
+    }
   });
 
   it("excludes active agenda blocks from generated slots", async () => {
@@ -647,6 +728,7 @@ async function createRule(input: {
   endsAt: string;
   capacity: number;
   slotDurationMin?: number;
+  timezone?: string;
 }): Promise<Awaited<ReturnType<typeof app.inject>>> {
   return app.inject({
     method: "POST",
@@ -659,7 +741,8 @@ async function createRule(input: {
       startsAt: input.startsAt,
       endsAt: input.endsAt,
       slotDurationMin: input.slotDurationMin ?? 20,
-      capacity: input.capacity
+      capacity: input.capacity,
+      timezone: input.timezone
     }
   });
 }
