@@ -1,7 +1,7 @@
 import type { DatabaseClient } from "@hyperion/database";
 import { describe, expect, it, vi } from "vitest";
 import type { LlmProvider } from "./llm-provider.js";
-import { isUrgencySignal, SofiaRuntime } from "./sofia-runtime.js";
+import { isUrgencySignal, registerSofiaReadinessRoute, SofiaRuntime } from "./sofia-runtime.js";
 
 describe("SOFIA deterministic urgency guard", () => {
   it("stops scheduling for controlled urgency phrases", () => {
@@ -70,6 +70,48 @@ describe("SOFIA deterministic urgency guard", () => {
     await runtime.ingestOnce();
 
     expect(queries.some((sql) => sql.includes("'sofiaStatus', 'queued'"))).toBe(false);
+  });
+
+  it("reports ready only from the v2 confirmation prompt", async () => {
+    const query = vi.fn(async (_sql: string) => ({
+      rows: [{ count: 1 }],
+      rowCount: 1,
+      command: "SELECT",
+      oid: 0,
+      fields: []
+    }));
+    let routeHandler:
+      | ((
+          request: { headers: { authorization: string }; params: { tenantId: string }; id: string },
+          reply: unknown
+        ) => Promise<unknown>)
+      | undefined;
+    const app = {
+      get: vi.fn((_path: string, handler: typeof routeHandler) => {
+        routeHandler = handler;
+      })
+    };
+    registerSofiaReadinessRoute(app as never, {
+      db: { query, transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
+      llm: { model: "controlled", isConfigured: () => true } as unknown as LlmProvider,
+      internalServiceToken: "internal-controlled-token",
+      workerEnabled: true,
+      runtime: { isRunning: () => true }
+    });
+
+    const response = (await routeHandler!(
+      {
+        headers: { authorization: "Bearer internal-controlled-token" },
+        params: { tenantId: "00000000-0000-4000-8000-000000000001" },
+        id: "controlled-readiness"
+      },
+      {}
+    )) as { data: { ready: boolean; workerEnabled: boolean; workerRunning: boolean } };
+
+    expect(response.data).toMatchObject({ ready: true, workerEnabled: true, workerRunning: true });
+    expect(String(query.mock.calls[0]?.[0])).toContain("sofia_whatsapp_internal_v2");
+    expect(String(query.mock.calls[0]?.[0])).toContain("013-sofia-confirmation-protocol.sql");
+    expect(String(query.mock.calls[0]?.[0])).toContain("order by f.version desc, f.updated_at desc");
   });
 });
 

@@ -519,10 +519,21 @@ export function registerSofiaReadinessRoute(
       .safeParse((request.params as { tenantId?: unknown }).tenantId);
     if (!tenantId.success) return reply.code(400).send({ data: { error: "Invalid tenant" }, requestId: request.id });
     const prompt = await options.db.query<{ count: number }>(
-      `select count(*)::int as count from platform.prompt_flows f
-       join platform.agents a on a.id = f.agent_id
-       where f.tenant_id = $1 and a.tenant_id = $1 and a.code = 'SOFIA'
-         and f.status = 'active' and a.status = 'active'`,
+      `select count(*)::int as count
+       from (
+         select f.definition ->> 'runtimeKey' as runtime_key
+         from platform.prompt_flows f
+         join platform.agents a on a.id = f.agent_id
+         where f.tenant_id = $1 and a.tenant_id = $1 and a.code = 'SOFIA'
+           and f.status = 'active' and a.status = 'active'
+         order by f.version desc, f.updated_at desc
+         limit 1
+       ) selected
+       where selected.runtime_key = 'sofia_whatsapp_internal_v2'
+         and exists (
+           select 1 from platform.schema_migrations
+           where name = '013-sofia-confirmation-protocol.sql'
+         )`,
       [tenantId.data]
     );
     const workerRunning = options.runtime.isRunning();

@@ -362,7 +362,7 @@ async function createHold(
   input: z.infer<(typeof toolSchemas)["create_appointment_hold"]>,
   emitAudit: AuditEmitter
 ) {
-  await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId);
+  await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "book");
   const settings = await loadInternalSettings(db, tenantId);
   const provider = new InternalAgendaProvider(db);
   try {
@@ -415,7 +415,7 @@ async function bookAppointment(
   input: z.infer<(typeof toolSchemas)["book_appointment"]>,
   emitAudit: AuditEmitter
 ) {
-  await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId);
+  await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "book");
   await assertHoldOwner(db, tenantId, input.holdId, input.patientId, input.conversationId);
   const result = await new InternalAgendaProvider(db).verify({
     tenantId,
@@ -465,7 +465,7 @@ async function cancelAppointment(
   input: z.infer<(typeof toolSchemas)["cancel_appointment"]>,
   emitAudit: AuditEmitter
 ) {
-  await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId);
+  await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "cancel");
   const result = await db.transaction(async (tx) => {
     const current = await tx.query<{ id: string; status: string; key?: string }>(
       `select id, status, metadata->>'sofiaCancelIdempotencyKey' as key
@@ -509,7 +509,7 @@ async function rescheduleAppointment(
   input: z.infer<(typeof toolSchemas)["reschedule_appointment"]>,
   emitAudit: AuditEmitter
 ) {
-  await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId);
+  await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "reschedule");
   const settings = await loadInternalSettings(db, tenantId);
   const preflight = await db.query<{ status: string; rescheduleCount: number }>(
     `select status, reschedule_count as "rescheduleCount"
@@ -700,7 +700,8 @@ async function requireExplicitConfirmation(
   db: Database,
   tenantId: string,
   conversationId: string,
-  messageId: string
+  messageId: string,
+  expectedAction: ConfirmationAction
 ): Promise<void> {
   const result = await db.query<{ body: string }>(
     `select body from pulso_iris.messages
@@ -708,12 +709,22 @@ async function requireExplicitConfirmation(
     [tenantId, messageId, conversationId]
   );
   const body = result.rows[0]?.body;
-  if (!body || !isExplicitConfirmation(body)) {
+  const confirmation = body ? parseExplicitConfirmation(body) : undefined;
+  if (!confirmation) {
     throw new ToolError(409, "explicit_confirmation_required", "Explicit patient confirmation is required");
+  }
+  if (confirmation !== "generic" && confirmation !== expectedAction) {
+    throw new ToolError(409, "confirmation_action_mismatch", "Patient confirmation belongs to another action");
   }
 }
 
 export function isExplicitConfirmation(body: string): boolean {
+  return parseExplicitConfirmation(body) !== undefined;
+}
+
+type ConfirmationAction = "generic" | "book" | "cancel" | "reschedule";
+
+function parseExplicitConfirmation(body: string): ConfirmationAction | undefined {
   const normalized = body
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -721,7 +732,15 @@ export function isExplicitConfirmation(body: string): boolean {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return /^(si\s+)?confirmo(\s+(agendar|reservar|cancelar|reagendar|la\s+cita|el\s+cambio))?$/.test(normalized);
+  const match = /^(?:si\s+)?confirmo(?:\s+(agendar|reservar|cancelar|reagendar|la\s+cita|el\s+cambio))?$/.exec(
+    normalized
+  );
+  const suffix = match?.[1];
+  if (!match) return undefined;
+  if (!suffix) return "generic";
+  if (suffix === "cancelar") return "cancel";
+  if (suffix === "reagendar" || suffix === "el cambio") return "reschedule";
+  return "book";
 }
 
 function emitExpiredHoldAudits(expiredHolds: Array<{ id: string; tenantId: string }>, emitAudit: AuditEmitter): void {
