@@ -47,7 +47,7 @@ export interface WhatsAppProvider {
   readonly mode: typeof WHATSAPP_PROVIDER_MODE;
   setInboundHandler(handler: (message: WhatsAppInboundText) => Promise<void>): void;
   setStatusHandler(handler: (tenantId: string, status: WhatsAppConnectionStatus) => Promise<void>): void;
-  setDeliveryHandler(handler: (update: WhatsAppDeliveryUpdate) => Promise<void>): void;
+  setDeliveryHandler(handler: (update: WhatsAppDeliveryUpdate) => Promise<boolean>): void;
   connect(tenantId: string): Promise<WhatsAppConnectionStatus>;
   restore(tenantIds: string[]): Promise<void>;
   status(tenantId: string): WhatsAppConnectionStatus;

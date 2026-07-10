@@ -9,6 +9,11 @@ export interface WhatsAppProviderConfig {
   rateLimitMessages: number;
   rateLimitWindowMs: number;
   qrTtlMs: number;
+  inboundPersistenceMaxAttempts: number;
+  inboundPersistenceRetryBaseDelayMs: number;
+  inboundPersistenceAttemptTimeoutMs: number;
+  inboundSpoolMaxRecords: number;
+  inboundSpoolMaxBytes: number;
   maxReconnectAttempts: number;
   reconnectBaseDelayMs: number;
 }
@@ -23,6 +28,16 @@ export function readWhatsAppProviderConfig(): WhatsAppProviderConfig {
     rateLimitMessages: readInteger("WHATSAPP_RATE_LIMIT_MESSAGES", 12, 1, 120),
     rateLimitWindowMs: readInteger("WHATSAPP_RATE_LIMIT_WINDOW_MS", 60_000, 1_000, 3_600_000),
     qrTtlMs: readInteger("WHATSAPP_QR_TTL_MS", 60_000, 10_000, 300_000),
+    inboundPersistenceMaxAttempts: readInteger("WHATSAPP_INBOUND_PERSIST_MAX_ATTEMPTS", 3, 1, 10),
+    inboundPersistenceRetryBaseDelayMs: readInteger("WHATSAPP_INBOUND_PERSIST_RETRY_BASE_DELAY_MS", 250, 50, 10_000),
+    inboundPersistenceAttemptTimeoutMs: readInteger(
+      "WHATSAPP_INBOUND_PERSIST_ATTEMPT_TIMEOUT_MS",
+      10_000,
+      10_000,
+      60_000
+    ),
+    inboundSpoolMaxRecords: readInteger("WHATSAPP_INBOUND_SPOOL_MAX_RECORDS", 2_000, 1, 50_000),
+    inboundSpoolMaxBytes: readInteger("WHATSAPP_INBOUND_SPOOL_MAX_BYTES", 16_777_216, 65_536, 268_435_456),
     maxReconnectAttempts: readInteger("WHATSAPP_MAX_RECONNECT_ATTEMPTS", 4, 0, 20),
     reconnectBaseDelayMs: readInteger("WHATSAPP_RECONNECT_BASE_DELAY_MS", 1_000, 100, 60_000)
   };

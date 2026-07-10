@@ -123,7 +123,7 @@ class FakeProvider implements WhatsAppProvider {
   readonly mode = WHATSAPP_PROVIDER_MODE;
   private inbound: (message: WhatsAppInboundText) => Promise<void> = async () => undefined;
   private statusHandler: (tenantId: string, status: WhatsAppConnectionStatus) => Promise<void> = async () => undefined;
-  private delivery: (update: WhatsAppDeliveryUpdate) => Promise<void> = async () => undefined;
+  private delivery: (update: WhatsAppDeliveryUpdate) => Promise<boolean> = async () => true;
   restoreCalls = 0;
 
   setInboundHandler(handler: (message: WhatsAppInboundText) => Promise<void>): void {
@@ -132,7 +132,7 @@ class FakeProvider implements WhatsAppProvider {
   setStatusHandler(handler: (tenantId: string, status: WhatsAppConnectionStatus) => Promise<void>): void {
     this.statusHandler = handler;
   }
-  setDeliveryHandler(handler: (update: WhatsAppDeliveryUpdate) => Promise<void>): void {
+  setDeliveryHandler(handler: (update: WhatsAppDeliveryUpdate) => Promise<boolean>): void {
     this.delivery = handler;
   }
   async connect(): Promise<WhatsAppConnectionStatus> {
@@ -237,7 +237,9 @@ class MemoryRepository implements ChannelRepository {
     this.uncertainEvidence.push({ id: message.id, providerMessageId });
     return true;
   }
-  async updateDelivery(): Promise<void> {}
+  async updateDelivery(): Promise<boolean> {
+    return true;
+  }
 }
 
 function inboundMessage(): WhatsAppInboundText {
