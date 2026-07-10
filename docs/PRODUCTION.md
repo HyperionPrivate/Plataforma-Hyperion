@@ -70,16 +70,20 @@ Luego se verifica el log del servicio `migrations`, se despliega y se validan en
 
 ## Demo clinica LUMEN
 
-LUMEN usa datos sinteticos separados de la operacion real. Despues de aplicar
-`018-lumen-clinical-demo.sql`, el unico seed autorizado para este vertical es:
+LUMEN usa datos sinteticos separados de la operacion real. Despues de aplicar en orden las migraciones
+hasta `019-lumen-clinical-invariants.sql`, el unico seed autorizado para este vertical es:
 
 ```bash
-pnpm db:seed:lumen-demo
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  migrations node packages/migrations/dist/seed-lumen-demo.js
 ```
 
-El seed es idempotente y crea un paciente, un profesional y un encuentro marcados como demo. Para
-retirarlos se usa `pnpm db:seed:lumen-demo:clear`. No ejecutar el seed general de PULSO IRIS para
-habilitar LUMEN.
+Este comando usa `DATABASE_URL` solo dentro de la red privada de Compose; no se debe construir ni
+exportar esa variable en el host. El seed usa una transaccion y un advisory lock, es idempotente y crea
+un paciente, un profesional y un encuentro marcados como demo. Para retirarlos se ejecuta el mismo
+comando con `--clear` al final, siempre antes de aprobar una HC. Un encuentro aprobado es inmutable y
+el clear falla cerrado; su retencion o purga requiere un procedimiento clinico separado y controlado.
+No ejecutar el seed general de PULSO IRIS para habilitar LUMEN.
 
 La transcripcion requiere `OPENAI_API_KEY` y usa `OPENAI_STT_MODEL` (por defecto
 `gpt-4o-transcribe`). La estructuracion requiere `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL` y
