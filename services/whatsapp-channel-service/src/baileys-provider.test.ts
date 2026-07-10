@@ -127,6 +127,25 @@ describe("BaileysWhatsAppWebTestProvider", () => {
     await provider.close();
   });
 
+  it("recognizes a durable QR session and never downgrades it after open", async () => {
+    const { runtime, socket } = createFakeRuntime(false, true);
+    const provider = new BaileysWhatsAppWebTestProvider(await config(), runtime);
+    const status = vi.fn(
+      async (_tenantId: string, _status: import("./types.js").WhatsAppConnectionStatus) => undefined
+    );
+    provider.setStatusHandler(status);
+    await provider.connect(TENANT_ID);
+    expect(provider.status(TENANT_ID).sessionRestorable).toBe(true);
+
+    await socket.emit("connection.update", { connection: "open" });
+    expect(provider.status(TENANT_ID).sessionRestorable).toBe(true);
+
+    await socket.emit("creds.update", {});
+    expect(provider.status(TENANT_ID).sessionRestorable).toBe(true);
+    expect(status.mock.calls.at(-1)?.[1]).toMatchObject({ state: "ready", sessionRestorable: true });
+    await provider.close();
+  });
+
   it("invalidates durable session state on operator disconnect", async () => {
     const { runtime, socket } = createFakeRuntime(true);
     const provider = new BaileysWhatsAppWebTestProvider(await config(), runtime);
@@ -136,6 +155,11 @@ describe("BaileysWhatsAppWebTestProvider", () => {
     await provider.disconnect(TENANT_ID);
 
     expect(socket.logout).toHaveBeenCalledTimes(1);
+    expect(provider.status(TENANT_ID)).toMatchObject({
+      state: "disconnected",
+      sessionRestorable: false
+    });
+    await socket.emit("creds.update", {});
     expect(provider.status(TENANT_ID)).toMatchObject({
       state: "disconnected",
       sessionRestorable: false
@@ -179,7 +203,10 @@ function messageEvent(address: string, id: string, text: string) {
   };
 }
 
-function createFakeRuntime(registered: boolean): {
+function createFakeRuntime(
+  registered: boolean,
+  qrLinked = registered
+): {
   runtime: BaileysRuntime;
   socket: ReturnType<typeof createFakeSocket>;
   createSocket: ReturnType<typeof vi.fn>;
@@ -189,7 +216,10 @@ function createFakeRuntime(registered: boolean): {
   const runtime: BaileysRuntime = {
     loadAuthState: vi.fn(async () => ({
       state: {
-        creds: { registered },
+        creds: {
+          registered,
+          ...(qrLinked ? { me: { id: `${ALLOWED}:1@s.whatsapp.net` }, account: {} } : {})
+        },
         keys: { get: async () => ({}), set: async () => undefined }
       } as unknown as AuthenticationState,
       saveCreds: async () => undefined
