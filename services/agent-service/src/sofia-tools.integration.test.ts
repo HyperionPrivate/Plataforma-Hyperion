@@ -175,6 +175,85 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     expect(state.pendingAction).toMatchObject({ tool: "reschedule_appointment", jobId: newActionId });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("versions fresh availability and invalidates it after a successful mutation", async () => {
+    await db.query(
+      `update pulso_iris.conversations
+       set metadata = jsonb_set(metadata, '{sofiaState}', '{}'::jsonb)
+       where tenant_id = $1 and id = $2`,
+      [tenantId, conversationId]
+    );
+    const slot = {
+      siteId: randomUUID(),
+      professionalId: randomUUID(),
+      appointmentTypeId: randomUUID(),
+      startsAt: "2026-07-13T14:00:00.000Z",
+      scheduledAt: "2026-07-13T14:00:00.000Z",
+      localDate: "2026-07-13",
+      localTime: "09:00",
+      timeZone: "America/Bogota"
+    };
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const data = String(url).endsWith("/search_availability")
+        ? { slots: [slot] }
+        : { appointment: { status: "cancelled" } };
+      return new Response(JSON.stringify({ data }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    });
+    const client = createClient(db, fetchImpl);
+    const searchJobId = randomUUID();
+
+    const search = await client.execute("search_availability", "{}", {
+      ...context(tenantId, patientId, conversationId, searchJobId),
+      currentMessageBody: "Consulta disponibilidad"
+    });
+    expect(search).toMatchObject({ ok: true });
+    const freshState = await readState(db, tenantId, conversationId);
+    expect(freshState).toMatchObject({
+      lastAvailability: { slots: [expect.objectContaining({ localTime: "09:00" })] },
+      lastAvailabilitySchemaVersion: 2,
+      lastAvailabilityJobId: searchJobId
+    });
+    expect(freshState.lastAvailabilityAt).toEqual(expect.any(String));
+
+    const actionId = randomUUID();
+    const appointmentId = randomUUID();
+    await db.query(
+      `update pulso_iris.conversations
+       set metadata = jsonb_set(
+         metadata,
+         '{sofiaState,pendingAction}',
+         $3::jsonb
+       )
+       where tenant_id = $1 and id = $2`,
+      [
+        tenantId,
+        conversationId,
+        JSON.stringify({
+          tool: "cancel_appointment",
+          arguments: { appointmentId, reason: "Solicitud controlada" },
+          stagedAt: new Date().toISOString(),
+          jobId: actionId
+        })
+      ]
+    );
+    const cancelled = await client.execute(
+      "cancel_appointment",
+      JSON.stringify({ appointmentId, reason: "Deriva ignorada" }),
+      {
+        ...context(tenantId, patientId, conversationId, randomUUID()),
+        currentMessageBody: "CONFIRMO cancelar"
+      }
+    );
+    expect(cancelled).toMatchObject({ ok: true });
+    const clearedState = await readState(db, tenantId, conversationId);
+    expect(clearedState).not.toHaveProperty("lastAvailability");
+    expect(clearedState).not.toHaveProperty("lastAvailabilityAt");
+    expect(clearedState).not.toHaveProperty("lastAvailabilitySchemaVersion");
+    expect(clearedState).not.toHaveProperty("lastAvailabilityJobId");
+  });
 });
 
 function createClient(db: DatabaseClient, fetchImpl: ReturnType<typeof vi.fn>): SofiaToolClient {
@@ -211,5 +290,9 @@ async function readState(db: DatabaseClient, tenantId: string, conversationId: s
   return result.rows[0]!.state as {
     pendingAction?: Record<string, unknown> | null;
     confirmationGrant?: Record<string, unknown> | null;
+    lastAvailability?: Record<string, unknown>;
+    lastAvailabilityAt?: string;
+    lastAvailabilitySchemaVersion?: number;
+    lastAvailabilityJobId?: string;
   };
 }

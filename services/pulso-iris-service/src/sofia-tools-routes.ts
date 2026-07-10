@@ -342,6 +342,15 @@ async function searchAvailability(
   const horizonEnd = new Date(Date.now() + settings.bookingHorizonDays * 86_400_000);
   const requestedTo = new Date(from.getTime() + input.days * 86_400_000);
   const to = requestedTo < horizonEnd ? requestedTo : horizonEnd;
+  let payerName: string | null = null;
+  if (input.payerId) {
+    const payer = await db.query<{ name: string }>(
+      `select name from pulso_iris.payers where tenant_id = $1 and id = $2`,
+      [tenantId, input.payerId]
+    );
+    if (!payer.rows[0]) throw new ToolError(404, "payer_not_found", "Payer not found");
+    payerName = payer.rows[0].name;
+  }
   const provider = new InternalAgendaProvider(db);
   const result = await provider.consultAvailability({
     tenantId,
@@ -357,6 +366,8 @@ async function searchAvailability(
     ...result,
     slots: result.slots.slice(0, settings.maxAlternatives).map((slot) => ({
       ...slot,
+      payerId: input.payerId ?? null,
+      payerName,
       scheduledAt: slot.startsAt
     }))
   };

@@ -50,4 +50,65 @@ describe("DeepSeekLlmProvider", () => {
     const provider = new DeepSeekLlmProvider({ apiKey: "" });
     await expect(provider.complete({ messages: [], tools: [] })).rejects.toBeInstanceOf(LlmProviderUnavailableError);
   });
+
+  it("maps a named provider-neutral tool choice to the DeepSeek request", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({
+          model: "deepseek-v4-flash",
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [{ id: "call-availability", function: { name: "search_availability", arguments: "{}" } }]
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
+    const provider = new DeepSeekLlmProvider({ apiKey: "controlled-test-key", fetchImpl: fetchImpl as typeof fetch });
+    const tools = [
+      {
+        type: "function" as const,
+        function: {
+          name: "search_availability",
+          description: "availability",
+          parameters: { type: "object", properties: {} }
+        }
+      }
+    ];
+
+    await provider.complete({
+      messages: [{ role: "user", content: "Busca disponibilidad" }],
+      tools,
+      toolChoice: { name: "search_availability" }
+    });
+
+    expect(requestBody).toMatchObject({
+      tool_choice: { type: "function", function: { name: "search_availability" } }
+    });
+  });
+
+  it("rejects a forced tool that was not offered without calling DeepSeek", async () => {
+    const fetchImpl = vi.fn();
+    const provider = new DeepSeekLlmProvider({ apiKey: "controlled-test-key", fetchImpl: fetchImpl as typeof fetch });
+
+    await expect(
+      provider.complete({
+        messages: [{ role: "user", content: "Busca disponibilidad" }],
+        tools: [
+          {
+            type: "function",
+            function: { name: "get_catalog", description: "catalog", parameters: { type: "object", properties: {} } }
+          }
+        ],
+        toolChoice: { name: "search_availability" }
+      })
+    ).rejects.toThrow('Forced tool "search_availability" is not included in the offered tools');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

@@ -174,6 +174,7 @@ describe("SOFIA tool confirmation barrier", () => {
               arguments: {
                 siteId: "00000000-0000-4000-8000-000000000020",
                 professionalId: "00000000-0000-4000-8000-000000000021",
+                payerId: "00000000-0000-4000-8000-000000000025",
                 appointmentTypeId: "00000000-0000-4000-8000-000000000022",
                 scheduledAt: "2026-07-10T14:00:00.000Z"
               },
@@ -192,6 +193,7 @@ describe("SOFIA tool confirmation barrier", () => {
       JSON.stringify({
         siteId: "00000000-0000-4000-8000-000000000020",
         professionalId: "00000000-0000-4000-8000-000000000021",
+        payerId: "00000000-0000-4000-8000-000000000025",
         appointmentTypeId: "00000000-0000-4000-8000-000000000022",
         scheduledAt: "2026-07-10T14:00:00.000Z"
       }),
@@ -365,6 +367,7 @@ describe("SOFIA tool confirmation barrier", () => {
                       scheduledAt: "2026-07-10T14:00:00.000Z",
                       appointmentTypeId: "00000000-0000-4000-8000-000000000022",
                       professionalId: "00000000-0000-4000-8000-000000000021",
+                      payerId: "00000000-0000-4000-8000-000000000025",
                       siteId: "00000000-0000-4000-8000-000000000020"
                     },
                     stagedAt,
@@ -391,6 +394,7 @@ describe("SOFIA tool confirmation barrier", () => {
       JSON.stringify({
         siteId: "00000000-0000-4000-8000-000000000020",
         professionalId: "00000000-0000-4000-8000-000000000099",
+        payerId: "00000000-0000-4000-8000-000000000025",
         appointmentTypeId: "00000000-0000-4000-8000-000000000022",
         scheduledAt: "2026-07-10T15:00:00.000Z"
       }),
@@ -491,6 +495,7 @@ describe("SOFIA tool confirmation barrier", () => {
     const slot = {
       siteId: "00000000-0000-4000-8000-000000000020",
       professionalId: "00000000-0000-4000-8000-000000000021",
+      payerId: "00000000-0000-4000-8000-000000000025",
       appointmentTypeId: "00000000-0000-4000-8000-000000000022",
       scheduledAt: "2026-07-10T14:00:00.000Z"
     };
@@ -582,6 +587,7 @@ describe("SOFIA tool confirmation barrier", () => {
     const slot = {
       siteId: "00000000-0000-4000-8000-000000000020",
       professionalId: "00000000-0000-4000-8000-000000000021",
+      payerId: "00000000-0000-4000-8000-000000000025",
       appointmentTypeId: "00000000-0000-4000-8000-000000000022",
       scheduledAt: "2026-07-10T14:00:00.000Z"
     };
@@ -661,6 +667,15 @@ function statefulConfirmationQuery(
       ]);
     }
     if (sql.includes("update pulso_iris.conversations")) {
+      if (sql.includes("- 'lastAvailability'")) {
+        const state = { ...readState() };
+        delete state.lastAvailability;
+        delete state.lastAvailabilityAt;
+        delete state.lastAvailabilitySchemaVersion;
+        delete state.lastAvailabilityJobId;
+        writeState(state);
+        return queryResult([{ id: context.conversationId }]);
+      }
       const patchIndex = sql.includes("$8::jsonb")
         ? 7
         : sql.includes("$5::jsonb")

@@ -3,7 +3,7 @@ import type { DatabaseClient } from "@hyperion/database";
 import type { RouteRegistrar } from "@hyperion/service-runtime";
 import { z } from "zod";
 import type { LlmMessage, LlmProvider } from "./llm-provider.js";
-import { SOFIA_TOOL_DEFINITIONS, SofiaToolClient } from "./sofia-tools.js";
+import { isExplicitConfirmation, SOFIA_TOOL_DEFINITIONS, SofiaToolClient } from "./sofia-tools.js";
 
 const inboundEventSchema = z.object({
   id: z.string().uuid(),
@@ -22,6 +22,28 @@ const jobInputSchema = z.object({
   messageId: z.string().uuid(),
   threadBindingId: z.string().uuid(),
   occurredAt: z.string().datetime()
+});
+
+const AVAILABILITY_CONTEXT_SCHEMA_VERSION = 2;
+const AVAILABILITY_CONTEXT_TTL_MS = 10 * 60 * 1_000;
+const authoritativeAvailabilitySlotSchema = z.object({
+  siteId: z.string().uuid(),
+  siteName: z.string().min(1),
+  professionalId: z.string().uuid(),
+  professionalName: z.string().min(1),
+  payerId: z.string().uuid().nullable(),
+  payerName: z.string().min(1).nullable(),
+  appointmentTypeId: z.string().uuid(),
+  appointmentTypeName: z.string().min(1),
+  startsAt: z.string().datetime(),
+  scheduledAt: z.string().datetime(),
+  localDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  localTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+  timeZone: z.string().min(1)
+});
+const successfulAvailabilityResultSchema = z.object({
+  ok: z.literal(true),
+  data: z.object({ slots: z.array(authoritativeAvailabilitySlotSchema) })
 });
 
 interface ClaimedJob {
@@ -252,19 +274,77 @@ export class SofiaRuntime {
           }
         }
       } else {
-        const messages = await this.buildMessages(job, input, prompt);
-        for (let round = 0; round < 6; round += 1) {
-          const completion = await this.options.llm.complete({ messages, tools: SOFIA_TOOL_DEFINITIONS });
+        const context = await this.buildMessages(job, input, prompt);
+        const messages = context.messages;
+        const freshAvailabilityRequired = requiresFreshAvailability(currentBody, context.hadAvailabilityContext);
+        let availabilitySearchAttempted = false;
+        let freshAvailabilitySucceeded = false;
+        let freshAvailability: z.infer<typeof successfulAvailabilityResultSchema>["data"] | undefined;
+        let preparedAvailabilitySlot: z.infer<typeof authoritativeAvailabilitySlotSchema> | undefined;
+        let preparedAvailabilityAction: "book" | "reschedule" | undefined;
+        roundLoop: for (let round = 0; round < 6; round += 1) {
+          const completion = await this.options.llm.complete({
+            messages,
+            tools: SOFIA_TOOL_DEFINITIONS,
+            ...(round === 0 && freshAvailabilityRequired
+              ? { toolChoice: { name: "search_availability" } as const }
+              : {})
+          });
           model = completion.model;
           inputTokens += completion.inputTokens ?? 0;
           outputTokens += completion.outputTokens ?? 0;
           totalLatencyMs += completion.latencyMs;
           messages.push({ role: "assistant", content: completion.content, toolCalls: completion.toolCalls });
           if (completion.toolCalls.length === 0) {
-            responseText = completion.content?.trim() || deterministicFallback();
+            if ((freshAvailabilityRequired || availabilitySearchAttempted) && !freshAvailabilitySucceeded) {
+              executionStatus = "fallback";
+              responseText = availabilityFallback();
+            } else if (freshAvailabilityRequired && preparedAvailabilitySlot && preparedAvailabilityAction) {
+              responseText = renderAuthoritativeConfirmation(preparedAvailabilitySlot, preparedAvailabilityAction);
+            } else if (freshAvailability) {
+              responseText = renderAuthoritativeAvailability(freshAvailability.slots);
+            } else {
+              responseText = completion.content?.trim() || deterministicFallback();
+            }
             break;
           }
           for (const toolCall of completion.toolCalls) {
+            if (round === 0 && freshAvailabilityRequired && toolCall.name !== "search_availability") {
+              messages.push({
+                role: "tool",
+                toolCallId: toolCall.id,
+                content: JSON.stringify({
+                  ok: false,
+                  code: "fresh_availability_required",
+                  message: "Debes ejecutar search_availability antes de usar otra herramienta en este turno."
+                })
+              });
+              continue;
+            }
+            if (
+              !isExplicitConfirmation(currentBody) &&
+              isSlotMutation(toolCall.name) &&
+              !matchesAuthoritativeAvailabilitySlot(toolCall.arguments, freshAvailability?.slots ?? [])
+            ) {
+              messages.push({
+                role: "tool",
+                toolCallId: toolCall.id,
+                content: JSON.stringify({
+                  ok: false,
+                  code: "fresh_availability_required",
+                  message: "La acción no coincide con un slot consultado en este mismo turno."
+                })
+              });
+              continue;
+            }
+            const matchedAvailabilitySlot = isSlotMutation(toolCall.name)
+              ? findAuthoritativeAvailabilitySlot(toolCall.arguments, freshAvailability?.slots ?? [])
+              : undefined;
+            if (toolCall.name === "search_availability") {
+              availabilitySearchAttempted = true;
+              freshAvailabilitySucceeded = false;
+              freshAvailability = undefined;
+            }
             toolNames.push(toolCall.name);
             const result = await this.tools.execute(toolCall.name, toolCall.arguments, {
               tenantId: job.tenantId,
@@ -275,15 +355,45 @@ export class SofiaRuntime {
               jobId: job.id,
               sequence: toolNames.length
             });
+            if (toolCall.name === "search_availability") {
+              const parsedAvailability = successfulAvailabilityResultSchema.safeParse(result);
+              if (parsedAvailability.success) {
+                freshAvailabilitySucceeded = true;
+                freshAvailability = parsedAvailability.data.data;
+              }
+            } else if (
+              matchedAvailabilitySlot &&
+              isRecord(result) &&
+              result.code === "explicit_confirmation_required"
+            ) {
+              preparedAvailabilitySlot = matchedAvailabilitySlot;
+              preparedAvailabilityAction = toolCall.name === "reschedule_appointment" ? "reschedule" : "book";
+            }
             messages.push({
               role: "tool",
               toolCallId: toolCall.id,
               content: JSON.stringify(result).slice(0, 20_000)
             });
+            if (preparedAvailabilitySlot && preparedAvailabilityAction) {
+              responseText = renderAuthoritativeConfirmation(preparedAvailabilitySlot, preparedAvailabilityAction);
+              break roundLoop;
+            }
           }
-          if (round === 5) responseText = deterministicFallback();
+          if (round === 5) {
+            responseText =
+              (freshAvailabilityRequired || availabilitySearchAttempted) && !freshAvailabilitySucceeded
+                ? availabilityFallback()
+                : freshAvailability
+                  ? renderAuthoritativeAvailability(freshAvailability.slots)
+                  : deterministicFallback();
+          }
         }
-        responseText ??= deterministicFallback();
+        responseText ??=
+          (freshAvailabilityRequired || availabilitySearchAttempted) && !freshAvailabilitySucceeded
+            ? availabilityFallback()
+            : freshAvailability
+              ? renderAuthoritativeAvailability(freshAvailability.slots)
+              : deterministicFallback();
       }
     } catch (error) {
       executionStatus = "fallback";
@@ -347,7 +457,7 @@ export class SofiaRuntime {
     job: ClaimedJob,
     input: z.infer<typeof jobInputSchema>,
     prompt: PromptFlow
-  ): Promise<LlmMessage[]> {
+  ): Promise<{ messages: LlmMessage[]; hadAvailabilityContext: boolean }> {
     const [history, state, patient, catalog] = await Promise.all([
       this.options.db.query<{ sender: string; body: string }>(
         `select sender, body from (
@@ -369,23 +479,29 @@ export class SofiaRuntime {
       ),
       this.callPulsoTool(job.tenantId, "get_catalog", {})
     ]);
+    const now = Date.now();
+    const sanitized = sanitizeSofiaState(state.rows[0]?.sofiaState, now);
     const runtimeContext = {
-      now: new Date().toISOString(),
+      now: new Date(now).toISOString(),
       timezone: "America/Bogota",
       patientName: patient.rows[0]?.fullName ?? null,
-      state: state.rows[0]?.sofiaState ?? {},
+      availabilityContextValid: sanitized.availabilityStatus === "valid",
+      state: sanitized.state,
       catalog
     };
-    return [
-      {
-        role: "system",
-        content: `${prompt.systemPrompt}\n\nContexto estructurado de Hyperion:\n${JSON.stringify(runtimeContext)}`
-      },
-      ...history.rows.map((message): LlmMessage => ({
-        role: message.sender === "patient" ? "user" : "assistant",
-        content: message.body
-      }))
-    ];
+    return {
+      messages: [
+        {
+          role: "system",
+          content: `${prompt.systemPrompt}\n\nContexto estructurado de Hyperion:\n${JSON.stringify(runtimeContext)}`
+        },
+        ...history.rows.map((message): LlmMessage => ({
+          role: message.sender === "patient" ? "user" : "assistant",
+          content: message.body
+        }))
+      ],
+      hadAvailabilityContext: sanitized.availabilityStatus !== "absent"
+    };
   }
 
   private async loadPrompt(tenantId: string): Promise<PromptFlow> {
@@ -529,10 +645,10 @@ export function registerSofiaReadinessRoute(
          order by f.version desc, f.updated_at desc
          limit 1
        ) selected
-       where selected.runtime_key = 'sofia_whatsapp_internal_v3'
+       where selected.runtime_key = 'sofia_whatsapp_internal_v4'
          and exists (
            select 1 from platform.schema_migrations
-           where name = '014-sofia-local-time-protocol.sql'
+           where name = '015-sofia-fresh-availability.sql'
          )`,
       [tenantId.data]
     );
@@ -558,6 +674,64 @@ export function isUrgencySignal(body: string): boolean {
   );
 }
 
+export function requiresFreshAvailability(body: string, hasAvailabilityContext = false): boolean {
+  if (isExplicitConfirmation(body)) return false;
+  const normalized = normalizeForIntent(body);
+  if (/\b(cancel\w*|anul\w*)\b/.test(normalized)) return false;
+  if (/\b(mis citas|que citas|consult\w* citas)\b/.test(normalized)) return false;
+
+  const availabilityRequest = /\b(disponib\w*|horarios?|cupos?|turnos?|espacios?|atend\w*)\b/.test(normalized);
+  const schedulingRequest = /\b(citas?|agend\w*|reserv\w*|reagend\w*)\b/.test(normalized);
+  const temporalReference =
+    /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|fecha|dia|semana|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/.test(
+      normalized
+    ) ||
+    /\b\d{1,2}(?:\s+\d{2})?\s*(?:a\s*m|p\s*m|am|pm)\b/.test(normalized) ||
+    /\b(temprano|en la manana|en la tarde)\b/.test(normalized);
+  const contextualSelection =
+    hasAvailabilityContext &&
+    (/\b(primer\w*|segund\w*|tercer\w*|ese|esa|aquel|aquella|el de|la de|prefiero|me sirve|esta bien|de acuerdo)\b/.test(
+      normalized
+    ) ||
+      temporalReference);
+
+  return availabilityRequest || (schedulingRequest && temporalReference) || contextualSelection;
+}
+
+export function sanitizeSofiaState(
+  value: unknown,
+  now = Date.now()
+): {
+  state: Record<string, unknown>;
+  availabilityStatus: "absent" | "valid" | "invalid";
+} {
+  if (!isRecord(value)) return { state: {}, availabilityStatus: "absent" };
+  const state = { ...value };
+  const availabilityKeys = [
+    "lastAvailability",
+    "lastAvailabilityAt",
+    "lastAvailabilitySchemaVersion",
+    "lastAvailabilityJobId"
+  ] as const;
+  const hasAvailabilityContext = availabilityKeys.some((key) => Object.prototype.hasOwnProperty.call(state, key));
+  if (!hasAvailabilityContext) return { state, availabilityStatus: "absent" };
+
+  const timestamp = typeof state.lastAvailabilityAt === "string" ? Date.parse(state.lastAvailabilityAt) : Number.NaN;
+  const availability = state.lastAvailability;
+  const valid =
+    state.lastAvailabilitySchemaVersion === AVAILABILITY_CONTEXT_SCHEMA_VERSION &&
+    isRecord(availability) &&
+    Array.isArray(availability.slots) &&
+    availability.slots.every((slot) => authoritativeAvailabilitySlotSchema.safeParse(slot).success) &&
+    Number.isFinite(timestamp) &&
+    timestamp <= now + 60_000 &&
+    now - timestamp <= AVAILABILITY_CONTEXT_TTL_MS;
+  if (valid) return { state, availabilityStatus: "valid" };
+
+  for (const key of availabilityKeys) delete state[key];
+  return { state, availabilityStatus: "invalid" };
+}
+
 function inferIntent(toolNames: string[]): string | undefined {
   if (toolNames.includes("cancel_appointment")) return "cancel_appointment";
   if (toolNames.includes("reschedule_appointment")) return "reschedule_appointment";
@@ -569,6 +743,121 @@ function inferIntent(toolNames: string[]): string | undefined {
 
 function deterministicFallback(): string {
   return "En este momento no pude completar la consulta. No voy a inventar información. Intenta nuevamente en unos minutos.";
+}
+
+function availabilityFallback(): string {
+  return "En este momento no pude consultar la disponibilidad actual. No voy a ofrecer horarios sin verificarlos. Intenta nuevamente en unos minutos.";
+}
+
+export function hasUnverifiedAvailabilityClock(
+  response: string,
+  slots: Array<z.infer<typeof authoritativeAvailabilitySlotSchema>>
+): boolean {
+  const allowed = new Set(slots.map((slot) => slot.localTime));
+  return extractClockTimes(response).some((time) => !allowed.has(time));
+}
+
+export function matchesAuthoritativeAvailabilitySlot(
+  rawArguments: string,
+  slots: Array<z.infer<typeof authoritativeAvailabilitySlotSchema>>
+): boolean {
+  return findAuthoritativeAvailabilitySlot(rawArguments, slots) !== undefined;
+}
+
+function findAuthoritativeAvailabilitySlot(
+  rawArguments: string,
+  slots: Array<z.infer<typeof authoritativeAvailabilitySlotSchema>>
+): z.infer<typeof authoritativeAvailabilitySlotSchema> | undefined {
+  let argumentsValue: unknown;
+  try {
+    argumentsValue = JSON.parse(rawArguments);
+  } catch {
+    return undefined;
+  }
+  const parsed = z
+    .object({
+      siteId: z.string().uuid(),
+      professionalId: z.string().uuid(),
+      payerId: z.string().uuid(),
+      appointmentTypeId: z.string().uuid(),
+      scheduledAt: z.string().datetime()
+    })
+    .safeParse(argumentsValue);
+  if (!parsed.success) return undefined;
+  const scheduledAt = new Date(parsed.data.scheduledAt).getTime();
+  return slots.find(
+    (slot) =>
+      slot.siteId === parsed.data.siteId &&
+      slot.professionalId === parsed.data.professionalId &&
+      slot.payerId === parsed.data.payerId &&
+      slot.appointmentTypeId === parsed.data.appointmentTypeId &&
+      new Date(slot.scheduledAt).getTime() === scheduledAt
+  );
+}
+
+function isSlotMutation(toolName: string): boolean {
+  return toolName === "create_appointment_hold" || toolName === "reschedule_appointment";
+}
+
+function renderAuthoritativeAvailability(slots: Array<z.infer<typeof authoritativeAvailabilitySlotSchema>>): string {
+  if (slots.length === 0) {
+    return "Consulté nuevamente la agenda y no encontré disponibilidad para esa solicitud. Puedo revisar otra fecha.";
+  }
+  const options = slots
+    .slice(0, 5)
+    .map(
+      (slot) =>
+        `- ${slot.localDate} a las ${formatLocalClock(slot.localTime)}: ${slot.appointmentTypeName}, ${slot.siteName}, con ${slot.professionalName}${slot.payerName ? `, convenio ${slot.payerName}` : ""}`
+    )
+    .join("\n");
+  return `Consulté nuevamente la agenda. Estos son los horarios disponibles en hora local:\n${options}\n¿Cuál prefieres?`;
+}
+
+function renderAuthoritativeConfirmation(
+  slot: z.infer<typeof authoritativeAvailabilitySlotSchema>,
+  action: "book" | "reschedule"
+): string {
+  const verb = action === "reschedule" ? "reagendar tu cita" : "agendar tu cita";
+  const payer = slot.payerName ? `, convenio ${slot.payerName}` : "";
+  return `Encontré el horario solicitado: ${slot.appointmentTypeName} en ${slot.siteName}, con ${slot.professionalName}${payer}, el ${slot.localDate} a las ${formatLocalClock(slot.localTime)} (${slot.timeZone}). ¿Confirmas que deseas ${verb} con estos datos? Responde CONFIRMO para continuar.`;
+}
+
+function extractClockTimes(value: string): string[] {
+  const times: string[] = [];
+  const pattern = /\b(\d{1,2})(?::(\d{2}))?\s*(a\s*\.?\s*m\s*\.?|p\s*\.?\s*m\s*\.?)?/gi;
+  for (const match of value.matchAll(pattern)) {
+    if (match[2] === undefined && match[3] === undefined) continue;
+    let hour = Number(match[1]);
+    const minute = Number(match[2] ?? 0);
+    if (hour > 23 || minute > 59) continue;
+    const meridiem = match[3]?.replace(/[^apm]/gi, "").toLowerCase();
+    if (meridiem === "pm" && hour < 12) hour += 12;
+    if (meridiem === "am" && hour === 12) hour = 0;
+    times.push(`${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`);
+  }
+  return times;
+}
+
+function formatLocalClock(value: string): string {
+  const [rawHour, minute] = value.split(":");
+  const hour = Number(rawHour);
+  const meridiem = hour >= 12 ? "p. m." : "a. m.";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${minute} ${meridiem}`;
+}
+
+function normalizeForIntent(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function boundText(value: string): string {

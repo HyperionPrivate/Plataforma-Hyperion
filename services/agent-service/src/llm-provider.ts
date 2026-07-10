@@ -22,9 +22,12 @@ export interface LlmToolDefinition {
   };
 }
 
+export type LlmToolChoice = "auto" | "none" | "required" | { name: string };
+
 export interface LlmCompletionInput {
   messages: LlmMessage[];
   tools: LlmToolDefinition[];
+  toolChoice?: LlmToolChoice;
 }
 
 export interface LlmCompletion {
