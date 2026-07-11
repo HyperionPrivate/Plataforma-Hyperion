@@ -32,7 +32,8 @@ declare module "fastify" {
 }
 
 const UPSTREAM_TIMEOUT_MS = 2_500;
-const LUMEN_AI_TIMEOUT_MS = 65_000;
+const LUMEN_AI_TIMEOUT_MS = 130_000;
+const LUMEN_REQUEST_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const HEALTH_CACHE_TTL_MS = 5_000;
 const SESSION_CACHE_TTL_MS = 30_000;
 const SESSION_CACHE_MAX_ENTRIES = 1_000;
@@ -48,7 +49,8 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
     const urls = readServiceUrls();
     const resolveSession = overrides?.resolveSession ?? createCachedSessionResolver(urls.identity);
 
-    app.addHook("preHandler", async (request, reply) => {
+    // Authenticate before Fastify parses potentially large LUMEN audio payloads.
+    app.addHook("onRequest", async (request, reply) => {
       const path = (request.raw.url ?? request.url).split("?")[0] ?? "";
       if (!path.startsWith("/v1/") || PUBLIC_PATHS.has(path)) {
         return;
@@ -256,6 +258,7 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
     app.route({
       method: ["GET", "POST", "PATCH"],
       url: "/v1/tenants/:tenantId/lumen/*",
+      bodyLimit: LUMEN_REQUEST_BODY_LIMIT_BYTES,
       handler: async (request, reply) => {
         const params = request.params as { tenantId?: unknown; "*"?: string };
         const tenantId = tenantIdSchema.safeParse(params.tenantId);
@@ -444,6 +447,7 @@ async function proxyJson(
   body?: unknown,
   timeoutMs = UPSTREAM_TIMEOUT_MS
 ): Promise<unknown> {
+  const requestAbort = createRequestAbortSignal(request, reply);
   try {
     const headers: Record<string, string> = { "x-request-id": request.id };
     if (request.headers.authorization) {
@@ -461,14 +465,39 @@ async function proxyJson(
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(timeoutMs)
+      signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(timeoutMs)])
     });
     const payload = await response.json();
 
     return reply.code(response.status).send(payload);
   } catch {
+    if (requestAbort.signal.aborted && reply.raw.destroyed) return undefined;
     return reply.code(502).send(envelope({ error: "Upstream service unavailable" }, request.id));
+  } finally {
+    requestAbort.cleanup();
   }
+}
+
+function createRequestAbortSignal(
+  request: FastifyRequest,
+  reply: FastifyReply
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const abortRequest = () => controller.abort(new DOMException("Client request aborted", "AbortError"));
+  const abortResponse = () => {
+    if (!reply.raw.writableEnded) abortRequest();
+  };
+
+  request.raw.once("aborted", abortRequest);
+  reply.raw.once("close", abortResponse);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      request.raw.off("aborted", abortRequest);
+      reply.raw.off("close", abortResponse);
+    }
+  };
 }
 
 async function fetchServiceHealth(service: DownstreamService): Promise<ServiceHealth> {

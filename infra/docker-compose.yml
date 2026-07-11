@@ -250,14 +250,20 @@ services:
       <<: *service-env
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
       AUDIT_SERVICE_URL: http://audit-service:8086
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_STT_MODEL: ${OPENAI_STT_MODEL:-gpt-4o-transcribe}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_STT_MODEL: ${ELEVENLABS_STT_MODEL:-scribe_v2}
+      ELEVENLABS_STT_LANGUAGE: ${ELEVENLABS_STT_LANGUAGE:-spa}
+      ELEVENLABS_STT_TIMEOUT_MS: ${ELEVENLABS_STT_TIMEOUT_MS:-120000}
+      ELEVENLABS_ZERO_RETENTION_MODE: ${ELEVENLABS_ZERO_RETENTION_MODE:-true}
+      LUMEN_AUDIO_TEMP_DIR: ${LUMEN_AUDIO_TEMP_DIR:-/tmp/lumen-audio}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
       PORT: 8090
     expose:
       - "8090"
+    tmpfs:
+      - /tmp/lumen-audio:rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=0700
     healthcheck: *node-readycheck
     depends_on:
       postgres:

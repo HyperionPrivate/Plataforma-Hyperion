@@ -29,6 +29,9 @@ describe("migrations runner", () => {
     expect(files).toContain("015-sofia-fresh-availability.sql");
     expect(files).toContain("016-sofia-search-constraints.sql");
     expect(files).toContain("017-whatsapp-channel-durability.sql");
+    expect(files).toContain("018-lumen-clinical-demo.sql");
+    expect(files).toContain("019-lumen-clinical-invariants.sql");
+    expect(files).toContain("020-lumen-real-audio-pipeline.sql");
     expect([...files].sort()).toEqual(files);
   });
 
@@ -42,5 +45,25 @@ describe("migrations runner", () => {
     expect(migration).toContain("raise exception");
     expect(migration).toContain("on channel_runtime.outbound_messages(tenant_id, provider, message_id)");
     expect(migration).not.toMatch(/\b(delete|update)\s+channel_runtime\.outbound_messages\b/i);
+  });
+
+  it("keeps LUMEN processing attempts tenant-scoped without persistent audio", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/020-lumen-real-audio-pipeline.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("unique (tenant_id, encounter_id, operation, idempotency_key)");
+    expect(migration).toContain("foreign key (tenant_id, encounter_id)");
+    expect(migration).toContain("input_sha256");
+    expect(migration).toContain("temp_audio_deleted_at");
+    expect(migration).toContain("provider_transcript");
+    expect(migration).toContain("reviewed_by");
+    expect(migration).toContain("result_snapshot");
+    expect(migration).toContain("result_sha256");
+    expect(migration).toContain("result_version");
+    expect(migration).toContain("new.result_snapshot->>'tenantId' = record.tenant_id::text");
+    expect(migration).toContain("terminal LUMEN processing attempts are immutable");
+    expect(migration).toContain("LUMEN provider transcript is immutable after dictation creation");
+    expect(migration).toContain("dictation.processing_attempt_id = new.id");
+    expect(migration).not.toMatch(/\b(audio_base64|audio_bytes|audio_data|bytea)\b/i);
   });
 });

@@ -16,6 +16,7 @@
     "@hyperion/database": "workspace:*",
     "@hyperion/service-runtime": "workspace:*",
     "fastify": "^5.2.1",
+    "music-metadata": "^11.13.0",
     "pg": "^8.22.0",
     "zod": "^3.24.2"
   }

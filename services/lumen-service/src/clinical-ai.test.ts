@@ -3,9 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clinicalEvidenceIssues,
   DeepSeekClinicalStructurer,
-  normalizeStructuredClinicalContent,
-  OpenAiClinicalTranscriber,
-  ProviderNotConfiguredError
+  normalizeStructuredClinicalContent
 } from "./clinical-ai.js";
 
 const TRANSCRIPT =
@@ -43,25 +41,6 @@ const CONTENT: LumenClinicalRecordContent = {
 };
 
 describe("LUMEN clinical providers", () => {
-  it("transcribes short audio through the configured provider", async () => {
-    const fetchImpl = vi.fn(
-      async () => new Response(JSON.stringify({ text: "PIO catorce en ojo derecho" }), { status: 200 })
-    );
-    const provider = new OpenAiClinicalTranscriber({ apiKey: "test-key", fetchImpl: fetchImpl as typeof fetch });
-    const result = await provider.transcribe(Buffer.from("audio").toString("base64"), "audio/webm");
-
-    expect(result.transcript).toContain("PIO");
-    expect(result.provider).toBe("openai");
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it("fails explicitly when STT is not configured", async () => {
-    const provider = new OpenAiClinicalTranscriber({ apiKey: "" });
-    await expect(provider.transcribe(Buffer.from("audio").toString("base64"), "audio/webm")).rejects.toBeInstanceOf(
-      ProviderNotConfiguredError
-    );
-  });
-
   it("validates DeepSeek structured output against the clinical contract", async () => {
     const fetchImpl = vi.fn(
       async () =>
@@ -76,7 +55,7 @@ describe("LUMEN clinical providers", () => {
               }
             ]
           }),
-          { status: 200 }
+          { status: 200, headers: { "x-request-id": "deepseek-request-test" } }
         )
     );
     const provider = new DeepSeekClinicalStructurer({ apiKey: "test-key", fetchImpl: fetchImpl as typeof fetch });
@@ -85,6 +64,7 @@ describe("LUMEN clinical providers", () => {
     expect(result.content.intraocularPressure.right).toBe("14 mmHg");
     expect(result.content.uncertainties).toEqual([]);
     expect(result.model).toBe("deepseek-test");
+    expect(result.requestIdHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("keeps low-confidence evidence pending and pins its real manual origin", async () => {

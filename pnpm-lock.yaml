@@ -224,6 +224,9 @@ importers:
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
+      music-metadata:
+        specifier: ^11.13.0
+        version: 11.13.0
       pg:
         specifier: ^8.22.0
         version: 8.22.0
