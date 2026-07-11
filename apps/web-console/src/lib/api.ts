@@ -1,7 +1,10 @@
 import type { ResponseEnvelope } from "@hyperion/contracts";
 import { clearSession, loadSession } from "./session.js";
 
-export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
+const browserHostname = typeof window === "undefined" ? "" : window.location.hostname;
+const localConsoleHost = browserHostname === "localhost" || browserHostname === "127.0.0.1";
+
+export const apiBaseUrl = localConsoleHost ? "/api" : (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080");
 
 export class SessionExpiredError extends Error {}
 export class ApiError extends Error {
@@ -72,7 +75,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 /** Lecturas y escrituras que devuelven el `data` del envelope ya desempaquetado. */
 export const api = {
   get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
-  post: <T>(path: string, body: unknown) => request<T>(path, { method: "POST", body }),
+  post: <T>(path: string, body: unknown, signal?: AbortSignal) => request<T>(path, { method: "POST", body, signal }),
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body }),
   text: async (path: string): Promise<{ content: string; filename?: string }> => {
     const response = await authorizedFetch(path);

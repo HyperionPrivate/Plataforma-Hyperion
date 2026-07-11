@@ -35,20 +35,22 @@ import {
   Pill as PillIcon,
   Play,
   Plus,
+  RotateCcw,
   Save,
   ShieldCheck,
   Sparkles,
   Square,
   Stethoscope,
   Trash2,
-  Upload
+  Upload,
+  X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { LumenWaveform } from "../components/lumen/LumenWaveform.js";
 import { Layout } from "../components/Layout.js";
 import { EmptyState, LoadingState, Pill } from "../components/ui.js";
-import { api } from "../lib/api.js";
+import { ApiError, api } from "../lib/api.js";
 import { lumenPath, useConsole } from "../lib/context.js";
 import {
   LUMEN_CLINICAL_SECTION_KEYS,
@@ -65,7 +67,21 @@ import {
   lumenTrendTargetLabel,
   type LumenSummarySource
 } from "../lib/lumen-preconsultation.js";
-import { clampLumenRecordingDuration, lumenRecordingReachedLimit } from "../lib/lumen-recording.js";
+import {
+  LUMEN_ALLOWED_AUDIO_MIME_TYPES,
+  clampLumenRecordingDuration,
+  lumenAudioPayloadFingerprint,
+  lumenRecordingReachedLimit,
+  lumenStructurePayloadFingerprint,
+  measureLumenAudioDuration,
+  isLumenAudioTransportAllowed,
+  resolveLumenIdempotencySlot,
+  resolveLumenIdempotencySlotAfterFailure,
+  validateLumenAudio,
+  type LumenAudioValidationCode,
+  type LumenIdempotencyFailure,
+  type LumenIdempotencySlot
+} from "../lib/lumen-recording.js";
 import {
   isCurrentLumenEncounter,
   lumenWorklistForSite,
@@ -77,13 +93,32 @@ interface LumenHealth {
   providers: { transcriptionConfigured: boolean; structuringConfigured: boolean };
 }
 
-type Action = "loading" | "starting" | "transcribing" | "structuring" | "saving" | "approving";
+type Action = "loading" | "starting" | "processing_audio" | "transcribing" | "structuring" | "saving" | "approving";
 type AudioSource = "browser_microphone" | "authorized_upload";
+type DictationFlowState =
+  | "ready"
+  | "recording"
+  | "processing_audio"
+  | "transcribing"
+  | "structuring"
+  | "completed"
+  | "recoverable_error"
+  | "not_configured";
+
+const LUMEN_SECURE_AUDIO_MESSAGE =
+  "Audio bloqueado: la grabación y la carga requieren HTTPS o un túnel local en localhost. El transcript manual sigue disponible.";
 
 interface RecordingSession {
   encounterId: string;
   cancelled: boolean;
   activeSeconds: number;
+}
+
+interface RetryableAudio {
+  blob: Blob;
+  durationSeconds: number;
+  source: AudioSource;
+  encounterId: string;
 }
 
 export function LumenPage() {
@@ -96,6 +131,7 @@ export function LumenPage() {
   const [detail, setDetail] = useState<LumenEncounterDetail>();
   const [draft, setDraft] = useState<LumenClinicalRecordContent>();
   const [transcript, setTranscript] = useState("");
+  const [activeDictationId, setActiveDictationId] = useState<string>();
   const [health, setHealth] = useState<LumenHealth>();
   const [action, setAction] = useState<Action>();
   const [error, setError] = useState<string>();
@@ -104,6 +140,7 @@ export function LumenPage() {
   const [recordingPaused, setRecordingPaused] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [audioPreview, setAudioPreview] = useState<Blob>();
+  const [dictationFlow, setDictationFlow] = useState<DictationFlowState>("ready");
   const [worklistLoaded, setWorklistLoaded] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -111,6 +148,11 @@ export function LumenPage() {
   const recordingSessionRef = useRef<RecordingSession | undefined>(undefined);
   const recordingRequestRef = useRef(0);
   const transcriptionRequestRef = useRef(0);
+  const dictationAbortRef = useRef<AbortController | undefined>(undefined);
+  const activeDictationIdRef = useRef<string | undefined>(undefined);
+  const audioIdempotencyRef = useRef<LumenIdempotencySlot | undefined>(undefined);
+  const structureIdempotencyRef = useRef<LumenIdempotencySlot | undefined>(undefined);
+  const retryableAudioRef = useRef<RetryableAudio | undefined>(undefined);
   const detailRequestRef = useRef(0);
   const selectedIdRef = useRef<string | undefined>(undefined);
   const detailEncounterIdRef = useRef<string | undefined>(undefined);
@@ -118,6 +160,7 @@ export function LumenPage() {
   const previousViewRef = useRef(activeView);
 
   const canWrite = can(session.operator.role, "write:lumen");
+  const audioTransportAllowed = currentLumenAudioTransportAllowed();
 
   useEffect(() => {
     const resolved = resolveLumenLocation(location);
@@ -128,14 +171,20 @@ export function LumenPage() {
   const visibleWorklist = useMemo(() => lumenWorklistForSite(worklist, activeSiteId), [activeSiteId, worklist]);
 
   const applyDetail = useCallback((next: LumenEncounterDetail) => {
+    const latestDictation = next.dictations[0];
     detailEncounterIdRef.current = next.encounter.encounterId;
+    activeDictationIdRef.current = latestDictation?.id;
     setDetail(next);
     setDraft(next.clinicalRecord?.content);
-    setTranscript(next.dictations[0]?.transcript ?? "");
+    setTranscript(latestDictation?.transcript ?? "");
+    setActiveDictationId(latestDictation?.id);
   }, []);
 
   const discardRecording = useCallback((updateUi = true) => {
     recordingRequestRef.current += 1;
+    transcriptionRequestRef.current += 1;
+    dictationAbortRef.current?.abort();
+    dictationAbortRef.current = undefined;
     const session = recordingSessionRef.current;
     if (session) session.cancelled = true;
     chunksRef.current = [];
@@ -163,11 +212,14 @@ export function LumenPage() {
     [applyDetail, tenant.id]
   );
 
-  const refreshWorklist = useCallback(async () => {
-    const rows = await api.get<LumenWorklistEntry[]>(lumenPath(tenant.id, "worklist"));
-    setWorklist(rows);
-    return rows;
-  }, [tenant.id]);
+  const refreshWorklist = useCallback(
+    async (signal?: AbortSignal) => {
+      const rows = await api.get<LumenWorklistEntry[]>(lumenPath(tenant.id, "worklist"), signal);
+      setWorklist(rows);
+      return rows;
+    },
+    [tenant.id]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -179,6 +231,8 @@ export function LumenPage() {
     setDetail(undefined);
     setDraft(undefined);
     setTranscript("");
+    activeDictationIdRef.current = undefined;
+    setActiveDictationId(undefined);
     setWorklistLoaded(false);
     setAction("loading");
     setError(undefined);
@@ -191,9 +245,13 @@ export function LumenPage() {
         if (cancelled) return;
         setWorklist(rows);
         setHealth(providerHealth);
+        setDictationFlow(providerHealth.providers.transcriptionConfigured ? "ready" : "not_configured");
         setWorklistLoaded(true);
       } catch (nextError) {
-        if (!cancelled) setError(lumenErrorMessage(nextError));
+        if (!cancelled) {
+          setError(lumenErrorMessage(nextError));
+          setDictationFlow("recoverable_error");
+        }
       } finally {
         if (!cancelled) setAction(undefined);
       }
@@ -218,6 +276,8 @@ export function LumenPage() {
       setDetail(undefined);
       setDraft(undefined);
       setTranscript("");
+      activeDictationIdRef.current = undefined;
+      setActiveDictationId(undefined);
       setAudioPreview(undefined);
       if (requestedId) navigate(encounterHref(location.pathname), { replace: true });
       return;
@@ -236,6 +296,9 @@ export function LumenPage() {
       setDetail(undefined);
       setDraft(undefined);
       setTranscript("");
+      activeDictationIdRef.current = undefined;
+      setActiveDictationId(undefined);
+      setDictationFlow(health?.providers.transcriptionConfigured ? "ready" : "not_configured");
       setError(undefined);
       setSuccess(undefined);
     }
@@ -254,7 +317,16 @@ export function LumenPage() {
         }
       }
     })();
-  }, [discardRecording, loadDetail, location.pathname, location.search, navigate, visibleWorklist, worklistLoaded]);
+  }, [
+    discardRecording,
+    health?.providers.transcriptionConfigured,
+    loadDetail,
+    location.pathname,
+    location.search,
+    navigate,
+    visibleWorklist,
+    worklistLoaded
+  ]);
 
   useEffect(() => {
     if (!recording || recordingPaused) return;
@@ -331,20 +403,21 @@ export function LumenPage() {
     const recordingRequestId = ++recordingRequestRef.current;
     setError(undefined);
     setSuccess(undefined);
-    if (!window.isSecureContext && window.location.hostname !== "localhost") {
-      setError(
-        "Micrófono bloqueado: la captura directa requiere una conexión HTTPS. La carga autorizada y el transcript manual siguen disponibles."
-      );
+    if (!currentLumenAudioTransportAllowed()) {
+      setError(LUMEN_SECURE_AUDIO_MESSAGE);
+      setDictationFlow("recoverable_error");
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError(
         "Este navegador no permite captura de audio. La carga autorizada y el transcript manual siguen disponibles."
       );
+      setDictationFlow("recoverable_error");
       return;
     }
     if (!health?.providers.transcriptionConfigured) {
       setError("Voz sin configurar. Puedes cargar audio para revisión visual o continuar con transcript manual.");
+      setDictationFlow("not_configured");
       return;
     }
     try {
@@ -363,9 +436,13 @@ export function LumenPage() {
       const chunks: Blob[] = [];
       chunksRef.current = chunks;
       setAudioPreview(undefined);
-      const preferred = "audio/webm;codecs=opus";
-      const mimeType = MediaRecorder.isTypeSupported(preferred) ? preferred : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 32_000 });
+      const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", "audio/ogg;codecs=opus"].find(
+        (candidate) => MediaRecorder.isTypeSupported(candidate)
+      );
+      const recorder = new MediaRecorder(stream, {
+        ...(mimeType ? { mimeType } : {}),
+        audioBitsPerSecond: 32_000
+      });
       const session: RecordingSession = { encounterId: targetEncounterId, cancelled: false, activeSeconds: 0 };
       recordingSessionRef.current = session;
       recorderRef.current = recorder;
@@ -384,9 +461,9 @@ export function LumenPage() {
         if (ownsCurrentSession) {
           setRecording(false);
           setRecordingPaused(false);
+          setDictationFlow("processing_audio");
         }
         const blob = new Blob(chunks, { type: recorder.mimeType });
-        setAudioPreview(blob);
         void transcribeAudio(
           blob,
           clampLumenRecordingDuration(session.activeSeconds),
@@ -397,10 +474,12 @@ export function LumenPage() {
       setRecordingSeconds(0);
       setRecordingPaused(false);
       setRecording(true);
+      setDictationFlow("recording");
       recorder.start(500);
     } catch (nextError) {
       discardRecording();
       setError(lumenErrorMessage(nextError));
+      setDictationFlow("recoverable_error");
     }
   }
 
@@ -417,28 +496,16 @@ export function LumenPage() {
   }
 
   function stopRecording() {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      setDictationFlow("processing_audio");
+      recorderRef.current.stop();
+    }
   }
 
   async function uploadAudio(file: File | undefined) {
     if (!file) return;
     const targetEncounterId = selectedIdRef.current;
     if (!targetEncounterId || detailEncounterIdRef.current !== targetEncounterId) return;
-    setError(undefined);
-    setSuccess(undefined);
-    if (!file.type.startsWith("audio/")) {
-      setError("Selecciona un archivo de audio válido.");
-      return;
-    }
-    if (file.size > 675_000) {
-      setError("La grabación supera 675 KB. Usa un dictado de máximo 90 segundos.");
-      return;
-    }
-    setAudioPreview(file);
-    if (!health?.providers.transcriptionConfigured) {
-      setSuccess("Audio autorizado cargado localmente. Voz sin configurar; el archivo no salió del navegador.");
-      return;
-    }
     await transcribeAudio(file, undefined, "authorized_upload", targetEncounterId);
   }
 
@@ -446,32 +513,135 @@ export function LumenPage() {
     blob: Blob,
     durationSeconds: number | undefined,
     source: AudioSource,
-    targetEncounterId: string
+    targetEncounterId: string,
+    isRetry = false
   ) {
-    if (blob.size > 675_000) {
-      if (isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) {
-        setError("La grabación supera 675 KB. Usa un dictado de máximo 90 segundos.");
-      }
+    if (!currentLumenAudioTransportAllowed()) {
+      setError(LUMEN_SECURE_AUDIO_MESSAGE);
+      setSuccess(undefined);
+      setDictationFlow("recoverable_error");
       return;
     }
     const transcriptionRequestId = ++transcriptionRequestRef.current;
-    await runAction("transcribing", targetEncounterId, async () => {
+    let requestIdempotency: LumenIdempotencySlot | undefined;
+    let operationResponseReceived = false;
+    dictationAbortRef.current?.abort();
+    const controller = new AbortController();
+    dictationAbortRef.current = controller;
+    setAction("processing_audio");
+    setDictationFlow("processing_audio");
+    setError(undefined);
+    setSuccess(undefined);
+    if (!isRetry) {
+      retryableAudioRef.current = undefined;
+      setAudioPreview(undefined);
+    }
+
+    try {
+      const descriptor = validateLumenAudio({ mimeType: blob.type, size: blob.size });
+      if (!descriptor.valid || !descriptor.mimeType) {
+        setError(lumenAudioValidationMessage(descriptor.code));
+        setDictationFlow("recoverable_error");
+        return;
+      }
+      const measuredDuration = durationSeconds ?? (await measureLumenAudioDuration(blob, controller.signal));
+      const validated = validateLumenAudio({
+        mimeType: descriptor.mimeType,
+        size: blob.size,
+        durationSeconds: measuredDuration
+      });
+      if (!validated.valid || !validated.mimeType || validated.durationSeconds === undefined) {
+        setError(lumenAudioValidationMessage(validated.code));
+        setDictationFlow("recoverable_error");
+        return;
+      }
+      if (controller.signal.aborted || transcriptionRequestId !== transcriptionRequestRef.current) return;
+      setAudioPreview(blob);
+      if (!health?.providers.transcriptionConfigured) {
+        setSuccess("Audio autorizado validado localmente. Voz sin configurar; el archivo no salió del navegador.");
+        setDictationFlow("not_configured");
+        return;
+      }
+
+      retryableAudioRef.current = {
+        blob,
+        durationSeconds: validated.durationSeconds,
+        source,
+        encounterId: targetEncounterId
+      };
+
+      const audioBase64 = await blobToBase64(blob, controller.signal);
+      if (controller.signal.aborted || transcriptionRequestId !== transcriptionRequestRef.current) return;
+      const fingerprint = await lumenAudioPayloadFingerprint({
+        scope: `${tenant.id}:${targetEncounterId}`,
+        audioBase64,
+        mimeType: validated.mimeType,
+        source,
+        durationSeconds: validated.durationSeconds
+      });
+      if (controller.signal.aborted || transcriptionRequestId !== transcriptionRequestRef.current) return;
+      const idempotency = resolveLumenIdempotencySlot(audioIdempotencyRef.current, fingerprint);
+      audioIdempotencyRef.current = idempotency;
+      requestIdempotency = idempotency;
+      setAction("transcribing");
+      setDictationFlow("transcribing");
       const dictation = await api.post<LumenDictation>(
         lumenPath(tenant.id, `encounters/${targetEncounterId}/transcriptions`),
-        { audioBase64: await blobToBase64(blob), mimeType: blob.type || "audio/webm", durationSeconds, source }
+        {
+          audioBase64,
+          mimeType: validated.mimeType,
+          durationSeconds: validated.durationSeconds,
+          source,
+          idempotencyKey: idempotency.key
+        },
+        controller.signal
       );
+      operationResponseReceived = true;
       if (
+        controller.signal.aborted ||
         transcriptionRequestId !== transcriptionRequestRef.current ||
         !isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)
       ) {
         return;
       }
+      activeDictationIdRef.current = dictation.id;
+      setActiveDictationId(dictation.id);
       setTranscript(dictation.transcript);
-      await reloadEncounter(targetEncounterId);
-      if (!isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
+      await reloadEncounter(targetEncounterId, controller.signal);
+      if (controller.signal.aborted || !isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
+      activeDictationIdRef.current = dictation.id;
+      setActiveDictationId(dictation.id);
       setTranscript(dictation.transcript);
       setSuccess("Transcripción recibida del proveedor configurado.");
-    });
+      if (audioIdempotencyRef.current === idempotency) audioIdempotencyRef.current = undefined;
+      retryableAudioRef.current = undefined;
+      setAudioPreview(undefined);
+      setDictationFlow("completed");
+    } catch (nextError) {
+      if (requestIdempotency && audioIdempotencyRef.current === requestIdempotency && !operationResponseReceived) {
+        audioIdempotencyRef.current = resolveLumenIdempotencySlotAfterFailure(
+          audioIdempotencyRef.current,
+          lumenIdempotencyFailure(nextError)
+        );
+      }
+      if (
+        mountedRef.current &&
+        !isAbortError(nextError) &&
+        isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)
+      ) {
+        setError(
+          nextError instanceof Error && nextError.message.startsWith("audio_metadata_")
+            ? "No fue posible leer la duración del audio. Usa un archivo reproducible de máximo 90 segundos."
+            : lumenErrorMessage(nextError)
+        );
+        setDictationFlow("recoverable_error");
+      }
+    } finally {
+      if (dictationAbortRef.current === controller) dictationAbortRef.current = undefined;
+      if (mountedRef.current && isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) {
+        setAction((current) => (current === "processing_audio" || current === "transcribing" ? undefined : current));
+      }
+    }
   }
 
   async function structureRecord() {
@@ -483,37 +653,125 @@ export function LumenPage() {
       targetTranscript.trim().length < 10
     ) {
       setError("El transcript debe tener al menos 10 caracteres.");
+      setDictationFlow("recoverable_error");
       return;
     }
     if (!health?.providers.structuringConfigured) {
       setError("Estructuración sin configurar. El transcript permanece disponible para revisión manual.");
+      setDictationFlow("not_configured");
       return;
     }
-    await runAction("structuring", targetEncounterId, async () => {
-      const dictationId =
-        detail?.encounter.encounterId === targetEncounterId
-          ? detail.dictations.find((entry) => entry.transcript === targetTranscript)?.id
-          : undefined;
+    dictationAbortRef.current?.abort();
+    const controller = new AbortController();
+    dictationAbortRef.current = controller;
+    const targetDictationId = activeDictationIdRef.current ?? activeDictationId;
+    const fingerprint = lumenStructurePayloadFingerprint({
+      scope: `${tenant.id}:${targetEncounterId}`,
+      dictationId: targetDictationId,
+      transcript: targetTranscript
+    });
+    const idempotency = resolveLumenIdempotencySlot(structureIdempotencyRef.current, fingerprint);
+    structureIdempotencyRef.current = idempotency;
+    let operationResponseReceived = false;
+    setAction("structuring");
+    setDictationFlow("structuring");
+    setError(undefined);
+    setSuccess(undefined);
+    try {
       const record = await api.post<LumenClinicalRecord>(
         lumenPath(tenant.id, `encounters/${targetEncounterId}/structure`),
-        { transcript: targetTranscript, dictationId }
+        { transcript: targetTranscript, dictationId: targetDictationId, idempotencyKey: idempotency.key },
+        controller.signal
       );
-      if (!isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
+      operationResponseReceived = true;
+      if (controller.signal.aborted || !isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
       setDraft(record.content);
-      await reloadEncounter(targetEncounterId);
-      if (!isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
+      await reloadEncounter(targetEncounterId, controller.signal);
+      if (controller.signal.aborted || !isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
       setDraft(record.content);
-      await refreshWorklist();
-      if (!isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
+      await refreshWorklist(controller.signal);
+      if (controller.signal.aborted || !isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
       setSuccess("Historia estructurada por el proveedor y enviada a revisión humana.");
+      if (structureIdempotencyRef.current === idempotency) structureIdempotencyRef.current = undefined;
+      setDictationFlow("completed");
       goToView("historia");
-    });
+    } catch (nextError) {
+      if (structureIdempotencyRef.current === idempotency && !operationResponseReceived) {
+        structureIdempotencyRef.current = resolveLumenIdempotencySlotAfterFailure(
+          structureIdempotencyRef.current,
+          lumenIdempotencyFailure(nextError)
+        );
+      }
+      if (
+        mountedRef.current &&
+        !isAbortError(nextError) &&
+        isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)
+      ) {
+        setError(lumenErrorMessage(nextError));
+        setDictationFlow("recoverable_error");
+      }
+    } finally {
+      if (dictationAbortRef.current === controller) dictationAbortRef.current = undefined;
+      if (mountedRef.current && isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) {
+        setAction((current) => (current === "structuring" ? undefined : current));
+      }
+    }
   }
 
-  async function reloadEncounter(targetEncounterId: string) {
-    const next = await api.get<LumenEncounterDetail>(lumenPath(tenant.id, `encounters/${targetEncounterId}`));
+  async function reloadEncounter(targetEncounterId: string, signal?: AbortSignal) {
+    const next = await api.get<LumenEncounterDetail>(lumenPath(tenant.id, `encounters/${targetEncounterId}`), signal);
     if (!isCurrentLumenEncounter(targetEncounterId, selectedIdRef.current)) return;
     applyDetail(next);
+  }
+
+  function cancelDictationOperation() {
+    const wasRecording = Boolean(recordingSessionRef.current);
+    const hadRetryableAudio = Boolean(retryableAudioRef.current);
+    const cancelledAction = action;
+    transcriptionRequestRef.current += 1;
+    dictationAbortRef.current?.abort();
+    dictationAbortRef.current = undefined;
+    discardRecording();
+    setAction((current) =>
+      current === "processing_audio" || current === "transcribing" || current === "structuring" ? undefined : current
+    );
+    if (
+      wasRecording ||
+      hadRetryableAudio ||
+      cancelledAction === "processing_audio" ||
+      cancelledAction === "transcribing"
+    ) {
+      audioIdempotencyRef.current = resolveLumenIdempotencySlotAfterFailure(audioIdempotencyRef.current, {
+        kind: "abort"
+      });
+      retryableAudioRef.current = undefined;
+    }
+    if (cancelledAction === "structuring") {
+      structureIdempotencyRef.current = resolveLumenIdempotencySlotAfterFailure(structureIdempotencyRef.current, {
+        kind: "abort"
+      });
+    }
+    setError(undefined);
+    setSuccess(
+      wasRecording || hadRetryableAudio
+        ? "Audio descartado; no se conserva en el navegador."
+        : "Operación cancelada de forma segura."
+    );
+    setDictationFlow(health?.providers.transcriptionConfigured ? "ready" : "not_configured");
+  }
+
+  function retryAudioTranscription() {
+    const pending = retryableAudioRef.current;
+    if (!pending || pending.encounterId !== selectedIdRef.current) return;
+    void transcribeAudio(pending.blob, pending.durationSeconds, pending.source, pending.encounterId, true);
+  }
+
+  function editTranscript(value: string) {
+    // The source dictation identity intentionally survives human transcript corrections.
+    setTranscript(value);
+    if (dictationFlow === "recoverable_error") {
+      setDictationFlow(health?.providers.transcriptionConfigured ? "ready" : "not_configured");
+    }
   }
 
   async function saveDraft(
@@ -701,17 +959,22 @@ export function LumenPage() {
             draft={draft}
             transcript={transcript}
             health={health}
+            audioTransportAllowed={audioTransportAllowed}
             action={action}
+            flowState={dictationFlow}
+            canRetryAudio={dictationFlow === "recoverable_error" && Boolean(retryableAudioRef.current)}
             recording={recording}
             paused={recordingPaused}
             seconds={recordingSeconds}
             stream={activeStream}
             audioPreview={audioPreview}
             locked={recordLocked || busy}
-            onTranscriptChange={setTranscript}
+            onTranscriptChange={editTranscript}
             onStart={() => void startRecording()}
             onPause={toggleRecordingPause}
             onStop={stopRecording}
+            onCancel={cancelDictationOperation}
+            onRetryAudio={retryAudioTranscription}
             onUpload={(file) => void uploadAudio(file)}
             onStructure={() => void structureRecord()}
           />
@@ -1025,7 +1288,10 @@ function DictationView({
   draft,
   transcript,
   health,
+  audioTransportAllowed,
   action,
+  flowState,
+  canRetryAudio,
   recording,
   paused,
   seconds,
@@ -1036,6 +1302,8 @@ function DictationView({
   onStart,
   onPause,
   onStop,
+  onCancel,
+  onRetryAudio,
   onUpload,
   onStructure
 }: {
@@ -1043,7 +1311,10 @@ function DictationView({
   draft?: LumenClinicalRecordContent;
   transcript: string;
   health?: LumenHealth;
+  audioTransportAllowed: boolean;
   action?: Action;
+  flowState: DictationFlowState;
+  canRetryAudio: boolean;
   recording: boolean;
   paused: boolean;
   seconds: number;
@@ -1054,6 +1325,8 @@ function DictationView({
   onStart: () => void;
   onPause: () => void;
   onStop: () => void;
+  onCancel: () => void;
+  onRetryAudio: () => void;
   onUpload: (file?: File) => void;
   onStructure: () => void;
 }) {
@@ -1061,13 +1334,17 @@ function DictationView({
   const fields = detectedFields(draft);
   const providerReady = Boolean(health?.providers.transcriptionConfigured);
   const structurerReady = Boolean(health?.providers.structuringConfigured);
+  const cancellable =
+    recording ||
+    canRetryAudio ||
+    action === "processing_audio" ||
+    action === "transcribing" ||
+    action === "structuring";
   const recordingLabel = paused
     ? "Micrófono en pausa"
-    : recording
+    : flowState === "recording"
       ? `Escuchando ${formatDuration(seconds)}`
-      : providerReady
-        ? "Micrófono listo"
-        : "Voz sin configurar";
+      : dictationFlowLabel(flowState);
 
   return (
     <section className="lumen-view" aria-labelledby="dictation-title">
@@ -1077,7 +1354,13 @@ function DictationView({
         title="Dictado clínico"
         description={`${detail.encounter.professionalName} · ${detail.encounter.siteName}`}
         trailing={
-          <span className={`lumen-mic-state${recording ? " recording" : ""}`}>
+          <span
+            className={`lumen-mic-state state-${flowState}${recording ? " recording" : ""}`}
+            data-state={flowState}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             <CircleDot size={15} aria-hidden="true" /> {recordingLabel}
           </span>
         }
@@ -1087,6 +1370,7 @@ function DictationView({
           <section
             className={`lumen-recorder${recording ? " is-recording" : ""}`}
             aria-label="Captura de audio clínico"
+            data-state={flowState}
           >
             <div className="lumen-recorder-heading">
               <span className="lumen-icon-disc">
@@ -1100,17 +1384,7 @@ function DictationView({
             </div>
             <LumenWaveform stream={stream} audioBlob={audioPreview} ariaLabel={recordingLabel} />
             <div className="lumen-recorder-controls">
-              {!recording ? (
-                <button
-                  className="lumen-mic-button"
-                  type="button"
-                  onClick={onStart}
-                  disabled={locked || !providerReady}
-                  aria-label="Iniciar grabación"
-                >
-                  <Mic size={30} aria-hidden="true" />
-                </button>
-              ) : (
+              {recording ? (
                 <>
                   <button
                     className="lumen-round-action"
@@ -1129,21 +1403,53 @@ function DictationView({
                     <Square size={24} aria-hidden="true" />
                   </button>
                 </>
-              )}
-              <label className={`lumen-upload-action${locked ? " disabled" : ""}`}>
+              ) : !canRetryAudio ? (
+                <button
+                  className="lumen-mic-button"
+                  type="button"
+                  onClick={onStart}
+                  disabled={locked || !providerReady || !audioTransportAllowed}
+                  aria-label="Iniciar grabación"
+                >
+                  <Mic size={30} aria-hidden="true" />
+                </button>
+              ) : null}
+              {canRetryAudio ? (
+                <button className="btn btn-primary lumen-retry-action" type="button" onClick={onRetryAudio}>
+                  <RotateCcw size={17} aria-hidden="true" /> Reintentar audio
+                </button>
+              ) : null}
+              {cancellable ? (
+                <button className="btn btn-outline lumen-cancel-action" type="button" onClick={onCancel}>
+                  <X size={17} aria-hidden="true" /> {recording || canRetryAudio ? "Descartar" : "Cancelar"}
+                </button>
+              ) : null}
+              <label className={`lumen-upload-action${locked || !audioTransportAllowed ? " disabled" : ""}`}>
                 <Upload size={19} aria-hidden="true" />
                 <span>Cargar audio autorizado</span>
                 <input
                   className="visually-hidden"
                   type="file"
-                  accept="audio/*"
+                  accept={LUMEN_ALLOWED_AUDIO_MIME_TYPES.join(",")}
                   capture="user"
-                  disabled={locked}
-                  onChange={(event) => onUpload(event.target.files?.[0])}
+                  disabled={locked || !audioTransportAllowed}
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    event.currentTarget.value = "";
+                    onUpload(file);
+                  }}
                 />
               </label>
             </div>
-            {!providerReady ? (
+            {!audioTransportAllowed ? (
+              <div className="lumen-provider-note" role="status">
+                <LockKeyhole size={17} aria-hidden="true" />
+                <span>
+                  <strong>Audio bloqueado en esta conexión.</strong> Usa HTTPS o el túnel local; el transcript manual
+                  permanece disponible.
+                </span>
+              </div>
+            ) : !providerReady ? (
               <div className="lumen-provider-note" role="status">
                 <AlertTriangle size={17} aria-hidden="true" />
                 <span>
@@ -1160,9 +1466,10 @@ function DictationView({
                 <FileText size={19} aria-hidden="true" />
                 <h2>Transcript revisable</h2>
               </div>
-              {action === "transcribing" ? (
+              {action === "processing_audio" || action === "transcribing" ? (
                 <span className="lumen-processing">
-                  <LoaderCircle className="spin" size={15} aria-hidden="true" /> Transcribiendo
+                  <LoaderCircle className="spin" size={15} aria-hidden="true" />
+                  {action === "processing_audio" ? "Procesando audio" : "Transcribiendo"}
                 </span>
               ) : null}
             </div>
@@ -2098,12 +2405,53 @@ function StatusBadge({ status }: { status: LumenWorklistEntry["status"] }) {
   );
 }
 
-async function blobToBase64(blob: Blob): Promise<string> {
+function currentLumenAudioTransportAllowed(): boolean {
+  return isLumenAudioTransportAllowed({
+    hostname: window.location.hostname,
+    protocol: window.location.protocol,
+    isSecureContext: window.isSecureContext
+  });
+}
+
+async function blobToBase64(blob: Blob, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new DOMException("Operation aborted", "AbortError");
   const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (signal?.aborted) throw new DOMException("Operation aborted", "AbortError");
   let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 16_384)
+  for (let offset = 0; offset < bytes.length; offset += 16_384) {
+    if (signal?.aborted) throw new DOMException("Operation aborted", "AbortError");
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 16_384));
+  }
   return btoa(binary);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function lumenIdempotencyFailure(error: unknown): LumenIdempotencyFailure {
+  if (isAbortError(error)) return { kind: "abort" };
+  if (error instanceof ApiError) return { kind: "api", status: error.status, message: error.message };
+  return { kind: "transport" };
+}
+
+function lumenAudioValidationMessage(code?: LumenAudioValidationCode): string {
+  if (code === "invalid_size") return "El audio debe pesar entre 1 byte y 5 MiB.";
+  if (code === "invalid_duration") return "El audio debe durar entre 1 y 90 segundos.";
+  return "Formato de audio no permitido. Usa WebM, OGG, WAV, MP3, MP4/M4A o AAC.";
+}
+
+function dictationFlowLabel(state: DictationFlowState): string {
+  return {
+    ready: "Listo para grabar",
+    recording: "Grabando",
+    processing_audio: "Procesando audio",
+    transcribing: "Transcribiendo audio",
+    structuring: "Estructurando historia",
+    completed: "Proceso completado",
+    recoverable_error: "Error recuperable",
+    not_configured: "Proveedor no configurado"
+  }[state];
 }
 
 function statusLabel(status: LumenWorklistEntry["status"]): string {
@@ -2128,7 +2476,12 @@ function recordOriginLabel(record: LumenClinicalRecord, dictation?: LumenDictati
 }
 
 function evidenceOriginLabel(origin: LumenClinicalRecordContent["fieldEvidence"][number]["origin"]): string {
-  return { voice: "voz", manual: "entrada manual", synthetic_demo: "guion sintético" }[origin];
+  return {
+    voice: "voz",
+    voice_reviewed: "voz revisada",
+    manual: "entrada manual",
+    synthetic_demo: "guion sintético"
+  }[origin];
 }
 
 function fieldLabel(field: string): string {

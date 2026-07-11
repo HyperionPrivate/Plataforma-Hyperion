@@ -2125,6 +2125,32 @@ a {
   color: #a82f27;
 }
 
+.lumen-mic-state.state-processing_audio,
+.lumen-mic-state.state-transcribing,
+.lumen-mic-state.state-structuring {
+  border-color: #a9cdbc;
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+.lumen-mic-state.state-completed {
+  border-color: #9fd0b7;
+  background: #eef9f3;
+  color: #17633f;
+}
+
+.lumen-mic-state.state-recoverable_error {
+  border-color: #efb3ae;
+  background: #fff4f3;
+  color: #a82f27;
+}
+
+.lumen-mic-state.state-not_configured {
+  border-color: #ead099;
+  background: var(--warning-soft);
+  color: #725019;
+}
+
 .lumen-dictation-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.16fr) minmax(350px, 0.84fr);
@@ -2209,6 +2235,17 @@ a {
   flex: 0 0 auto;
   border-radius: 50%;
   cursor: pointer;
+}
+
+.lumen-cancel-action {
+  min-height: 44px;
+  color: var(--danger);
+  white-space: nowrap;
+}
+
+.lumen-retry-action {
+  min-height: 44px;
+  white-space: nowrap;
 }
 
 .lumen-mic-button {
