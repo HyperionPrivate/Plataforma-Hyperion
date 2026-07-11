@@ -2,6 +2,7 @@ import {
   envelope,
   lumenClinicalRecordContentSchema,
   lumenClinicalRecordPatchSchema,
+  lumenClinicalRequiredFieldBlockers,
   lumenClinicalRecordSchema,
   lumenDictationSchema,
   lumenEncounterDetailSchema,
@@ -10,8 +11,11 @@ import {
   lumenTranscriptionInputSchema,
   lumenWorklistEntrySchema,
   tenantIdSchema,
+  type LumenClinicalField,
   type LumenClinicalRecord,
+  type LumenDictationSource,
   type LumenEncounterDetail,
+  type LumenFieldEvidenceOrigin,
   type LumenWorklistEntry
 } from "@hyperion/contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
@@ -20,6 +24,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
 import type { LumenAuditEmitter } from "./audit-client.js";
 import {
+  changedLumenClinicalFields,
+  clinicalEvidenceIssues,
+  LUMEN_CLINICAL_FIELDS,
+  normalizeStructuredClinicalContent,
   ProviderNotConfiguredError,
   ProviderRequestError,
   type ClinicalStructurer,
@@ -36,6 +44,7 @@ interface WorklistRow {
   encounterId: string;
   tenantId: string;
   patientId: string;
+  siteId: string;
   patientDisplayName: string;
   patientAge: number | null;
   professionalName: string;
@@ -43,6 +52,10 @@ interface WorklistRow {
   scheduledAt: Date | string;
   status: string;
   isDemo: boolean;
+  payer: string | null;
+  documentMasked: string | null;
+  visitReason: string | null;
+  subspecialty: string | null;
 }
 
 interface DictationRow {
@@ -52,6 +65,7 @@ interface DictationRow {
   status: string;
   transcript: string;
   mimeType: string;
+  source: string;
   provider: string | null;
   model: string | null;
   durationSeconds: number | null;
@@ -145,19 +159,19 @@ export async function registerLumenRoutes(
     }
 
     try {
+      const transcription = await dependencies.transcriber.transcribe(input.audioBase64, input.mimeType);
       const outcome = await scope.db.transaction(async (client) => {
         const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
         if (mutable !== "mutable") return { state: mutable } as const;
 
-        const transcription = await dependencies.transcriber.transcribe(input.audioBase64, input.mimeType);
         const result = await client.query<DictationRow>(
           `insert into lumen.dictations
              (tenant_id, encounter_id, status, transcript, mime_type, provider, model, duration_seconds,
               metadata)
            values ($1, $2, 'transcribed', $3, $4, $5, $6, $7,
-                   '{"audioStored":false,"source":"browser_microphone"}'::jsonb)
+                   jsonb_build_object('audioStored', false, 'source', $8::text))
            returning id, tenant_id as "tenantId", encounter_id as "encounterId", status,
-                     transcript, mime_type as "mimeType", provider, model,
+                     transcript, mime_type as "mimeType", metadata->>'source' as source, provider, model,
                      duration_seconds as "durationSeconds", created_at as "createdAt"`,
           [
             scope.tenantId,
@@ -166,7 +180,8 @@ export async function registerLumenRoutes(
             input.mimeType,
             transcription.provider,
             transcription.model,
-            input.durationSeconds ?? null
+            input.durationSeconds ?? null,
+            input.source
           ]
         );
         await client.query(
@@ -185,6 +200,7 @@ export async function registerLumenRoutes(
             encounterId,
             provider: transcription.provider,
             model: transcription.model,
+            source: input.source,
             audioStored: false
           }
         });
@@ -208,6 +224,7 @@ export async function registerLumenRoutes(
           provider: dependencies.transcriber.name,
           model: dependencies.transcriber.model,
           durationSeconds: input.durationSeconds ?? null,
+          source: input.source,
           errorCode: error.name.slice(0, 120)
         });
       }
@@ -231,33 +248,81 @@ export async function registerLumenRoutes(
     }
 
     try {
+      const requestedDictationId = input.dictationId;
+      let evidenceOrigin: LumenFieldEvidenceOrigin = "manual";
+      if (requestedDictationId) {
+        const dictation = await scope.db.query<{ transcript: string; source: string }>(
+          `select transcript,
+                  coalesce(metadata->>'source',
+                    case when provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source
+           from lumen.dictations
+           where tenant_id = $1 and encounter_id = $2 and id = $3 and status = 'transcribed'`,
+          [scope.tenantId, encounterId, requestedDictationId]
+        );
+        if (dictation.rowCount === 0) {
+          return reply.code(422).send(envelope({ error: "dictationId does not belong to this encounter" }, request.id));
+        }
+        if (dictation.rows[0]!.transcript !== input.transcript) {
+          return reply.code(422).send(envelope({ error: "Transcript does not match dictationId" }, request.id));
+        }
+        evidenceOrigin = evidenceOriginForSource(dictation.rows[0]!.source);
+      }
+      const recordSnapshot = await scope.db.query<{ updatedAt: string }>(
+        `select updated_at::text as "updatedAt" from lumen.clinical_records
+         where tenant_id = $1 and encounter_id = $2`,
+        [scope.tenantId, encounterId]
+      );
+      const expectedRecordVersion = recordSnapshot.rows[0]?.updatedAt ?? null;
+      const structured = await dependencies.structurer.structure(input.transcript, evidenceOrigin);
+      const structuredContent = normalizeStructuredClinicalContent(
+        structured.content,
+        input.transcript,
+        evidenceOrigin
+      );
+
       const outcome = await scope.db.transaction(async (client) => {
         const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
         if (mutable !== "mutable") return { state: mutable } as const;
 
-        let dictationId = input.dictationId;
-        if (dictationId) {
-          const dictation = await client.query<{ transcript: string }>(
-            `select transcript from lumen.dictations
+        const currentRecord = await client.query<{ updatedAt: string }>(
+          `select updated_at::text as "updatedAt" from lumen.clinical_records
+           where tenant_id = $1 and encounter_id = $2
+           for update`,
+          [scope.tenantId, encounterId]
+        );
+        if ((currentRecord.rows[0]?.updatedAt ?? null) !== expectedRecordVersion) {
+          return { state: "record_changed" } as const;
+        }
+
+        let dictationId = requestedDictationId;
+        if (requestedDictationId) {
+          const dictation = await client.query<{ transcript: string; source: string }>(
+            `select transcript,
+                    coalesce(metadata->>'source',
+                      case when provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source
+             from lumen.dictations
              where tenant_id = $1 and encounter_id = $2 and id = $3 and status = 'transcribed'`,
-            [scope.tenantId, encounterId, dictationId]
+            [scope.tenantId, encounterId, requestedDictationId]
           );
           if (dictation.rowCount === 0) return { state: "dictation_not_found" } as const;
-          if (dictation.rows[0]!.transcript !== input.transcript) {
-            return { state: "transcript_mismatch" } as const;
+          if (
+            dictation.rows[0]!.transcript !== input.transcript ||
+            evidenceOriginForSource(dictation.rows[0]!.source) !== evidenceOrigin
+          ) {
+            return { state: "dictation_changed" } as const;
           }
         } else {
           const dictation = await client.query<{ id: string }>(
             `insert into lumen.dictations
                (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
-             values ($1, $2, 'transcribed', $3, 'text/plain', 'manual', '{"audioStored":false}'::jsonb)
+             values ($1, $2, 'transcribed', $3, 'text/plain', 'manual',
+                     '{"audioStored":false,"source":"manual_entry"}'::jsonb)
              returning id`,
             [scope.tenantId, encounterId, input.transcript]
           );
           dictationId = dictation.rows[0]!.id;
         }
 
-        const structured = await dependencies.structurer.structure(input.transcript);
         const result = await client.query<RecordRow>(
           `insert into lumen.clinical_records
              (tenant_id, encounter_id, dictation_id, status, content, provider, model)
@@ -277,7 +342,7 @@ export async function registerLumenRoutes(
             scope.tenantId,
             encounterId,
             dictationId,
-            JSON.stringify(structured.content),
+            JSON.stringify(structuredContent),
             structured.provider,
             structured.model
           ]
@@ -309,8 +374,12 @@ export async function registerLumenRoutes(
       if (outcome.state === "dictation_not_found") {
         return reply.code(422).send(envelope({ error: "dictationId does not belong to this encounter" }, request.id));
       }
-      if (outcome.state === "transcript_mismatch") {
-        return reply.code(422).send(envelope({ error: "Transcript does not match dictationId" }, request.id));
+      if (outcome.state === "record_changed" || outcome.state === "dictation_changed") {
+        return reply
+          .code(409)
+          .send(
+            envelope({ error: "Clinical input changed while structuring; retry with the latest draft" }, request.id)
+          );
       }
       return reply.code(201).send(envelope(outcome.record, request.id));
     } catch (error) {
@@ -339,6 +408,36 @@ export async function registerLumenRoutes(
       );
       if (current.rowCount === 0) return undefined;
       const previousContent = lumenClinicalRecordContentSchema.parse(current.rows[0]!.content);
+      const requestedRemainingFields = new Set(input.content.uncertainties.map((uncertainty) => uncertainty.field));
+      const resolvedFields = [
+        ...new Set(
+          previousContent.uncertainties
+            .filter((uncertainty) => !requestedRemainingFields.has(uncertainty.field))
+            .map((uncertainty) => uncertainty.field)
+        )
+      ];
+      const manualEvidenceFields = new Set<LumenClinicalField>(
+        changedLumenClinicalFields(previousContent, input.content)
+      );
+      for (const resolvedField of resolvedFields) {
+        for (const clinicalField of LUMEN_CLINICAL_FIELDS) {
+          if (clinicalField === resolvedField || clinicalField.startsWith(`${resolvedField}.`)) {
+            manualEvidenceFields.add(clinicalField);
+          }
+        }
+      }
+      const nextContent = lumenClinicalRecordContentSchema.parse({
+        ...input.content,
+        fieldEvidence: [
+          ...previousContent.fieldEvidence.filter((evidence) => !manualEvidenceFields.has(evidence.field)),
+          ...[...manualEvidenceFields].map((field) => ({
+            field,
+            confidence: 1,
+            origin: "manual" as const,
+            sourceText: null
+          }))
+        ]
+      });
       const result = await client.query<RecordRow>(
         `update lumen.clinical_records
          set content = $3::jsonb, updated_at = now()
@@ -347,18 +446,10 @@ export async function registerLumenRoutes(
                    dictation_id as "dictationId", status, schema_version as "schemaVersion",
                    content, provider, model, approved_by as "approvedBy",
                    approved_at as "approvedAt", created_at as "createdAt", updated_at as "updatedAt"`,
-        [scope.tenantId, encounterId, JSON.stringify(input.content)]
+        [scope.tenantId, encounterId, JSON.stringify(nextContent)]
       );
       if (result.rowCount === 0) return undefined;
       const updated = parseRecord(result.rows[0]!);
-      const remainingFields = new Set(updated.content.uncertainties.map((uncertainty) => uncertainty.field));
-      const resolvedFields = [
-        ...new Set(
-          previousContent.uncertainties
-            .filter((uncertainty) => !remainingFields.has(uncertainty.field))
-            .map((uncertainty) => uncertainty.field)
-        )
-      ];
       const previousDocument = previousContent as unknown as Record<string, unknown>;
       const updatedDocument = updated.content as unknown as Record<string, unknown>;
       const reviewedSections = Object.keys(previousDocument).filter(
@@ -381,6 +472,7 @@ export async function registerLumenRoutes(
               previousContent.uncertainties.length - updated.content.uncertainties.length
             ),
             resolvedFields,
+            manualEvidenceFields: [...manualEvidenceFields],
             reviewedSections
           })
         ]
@@ -408,17 +500,33 @@ export async function registerLumenRoutes(
       const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
       if (mutable === "not_found") return { state: "not_found" } as const;
       if (mutable === "approved") return { state: "approved" } as const;
-      const current = await client.query<{ content: unknown; status: string }>(
-        `select content, status from lumen.clinical_records
-         where tenant_id = $1 and encounter_id = $2
-         for update`,
+      const current = await client.query<{ content: unknown; status: string; transcript: string; source: string }>(
+        `select record.content, record.status, dictation.transcript,
+                coalesce(dictation.metadata->>'source',
+                  case when dictation.provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source
+         from lumen.clinical_records record
+         join lumen.dictations dictation
+           on dictation.tenant_id = record.tenant_id
+          and dictation.encounter_id = record.encounter_id
+          and dictation.id = record.dictation_id
+         where record.tenant_id = $1 and record.encounter_id = $2
+         for update of record`,
         [scope.tenantId, encounterId]
       );
       if (current.rowCount === 0) return { state: "record_not_found" } as const;
       if (current.rows[0]!.status === "approved") return { state: "approved" } as const;
       const content = lumenClinicalRecordContentSchema.parse(current.rows[0]!.content);
       if (content.uncertainties.length > 0) return { state: "unresolved" } as const;
-      if (!content.reasonForVisit.trim() && !content.history.trim()) return { state: "incomplete" } as const;
+      const requiredFieldBlockers = lumenClinicalRequiredFieldBlockers(content);
+      if (requiredFieldBlockers.length > 0) {
+        return { state: "incomplete", blockers: requiredFieldBlockers } as const;
+      }
+      const evidenceIssues = clinicalEvidenceIssues(
+        content,
+        current.rows[0]!.transcript,
+        evidenceOriginForSource(current.rows[0]!.source)
+      );
+      if (evidenceIssues.length > 0) return { state: "invalid_evidence", issues: evidenceIssues } as const;
 
       const result = await client.query<RecordRow>(
         `update lumen.clinical_records
@@ -454,7 +562,25 @@ export async function registerLumenRoutes(
       return reply.code(422).send(envelope({ error: "Resolve every uncertainty before approval" }, request.id));
     }
     if (outcome.state === "incomplete") {
-      return reply.code(422).send(envelope({ error: "Reason for visit or history is required" }, request.id));
+      return reply
+        .code(422)
+        .send(
+          envelope(
+            { error: "Complete every required clinical field before approval", blockers: outcome.blockers },
+            request.id
+          )
+        );
+    }
+    if (outcome.state === "invalid_evidence") {
+      return reply.code(422).send(
+        envelope(
+          {
+            error: "Every populated clinical field requires transcript evidence or explicit human confirmation",
+            issues: outcome.issues
+          },
+          request.id
+        )
+      );
     }
     if (outcome.state === "conflict") {
       return reply.code(409).send(envelope({ error: "Clinical record approval conflict" }, request.id));
@@ -470,10 +596,19 @@ async function fetchWorklist(
 ): Promise<LumenWorklistEntry[]> {
   const result = await db.query<WorklistRow>(
     `select e.id as "encounterId", e.tenant_id as "tenantId", e.patient_id as "patientId",
-            coalesce(p.full_name, 'Paciente sin nombre') as "patientDisplayName",
-            case when (p.metadata->>'demoAge') ~ '^[0-9]+$' then (p.metadata->>'demoAge')::int else null end as "patientAge",
-            professional.name as "professionalName", site.name as "siteName",
-            e.scheduled_at as "scheduledAt", e.status, e.is_demo as "isDemo"
+             e.site_id as "siteId",
+             coalesce(p.full_name, 'Paciente sin nombre') as "patientDisplayName",
+             case when (p.metadata->>'demoAge') ~ '^[0-9]+$' then (p.metadata->>'demoAge')::int else null end as "patientAge",
+             professional.name as "professionalName",
+             coalesce(nullif(e.metadata->>'siteDisplayName', ''),
+                      nullif(site.metadata->>'lumenDisplayName', ''), site.name) as "siteName",
+             e.scheduled_at as "scheduledAt", e.status, e.is_demo as "isDemo",
+             nullif(p.metadata->>'payer', '') as payer,
+             coalesce(nullif(p.document_number_masked, ''), nullif(p.metadata->>'documentMasked', ''))
+               as "documentMasked",
+             nullif(e.metadata->>'visitReason', '') as "visitReason",
+             coalesce(nullif(professional.metadata->>'subspecialty', ''), nullif(professional.subspecialty, ''))
+               as subspecialty
      from lumen.encounters e
      join pulso_iris.administrative_patients p
        on p.tenant_id = e.tenant_id and p.id = e.patient_id
@@ -509,7 +644,10 @@ async function loadEncounterDetail(
     ),
     db.query<DictationRow>(
       `select id, tenant_id as "tenantId", encounter_id as "encounterId", status,
-              transcript, mime_type as "mimeType", provider, model,
+              transcript, mime_type as "mimeType",
+              coalesce(metadata->>'source',
+                case when provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source,
+              provider, model,
               duration_seconds as "durationSeconds", created_at as "createdAt"
        from lumen.dictations
        where tenant_id = $1 and encounter_id = $2 and status = 'transcribed'
@@ -540,6 +678,12 @@ async function loadEncounterDetail(
 
 function parseRecord(row: RecordRow): LumenClinicalRecord {
   return lumenClinicalRecordSchema.parse(row);
+}
+
+function evidenceOriginForSource(source: string): LumenFieldEvidenceOrigin {
+  if (source === "synthetic_demo") return "synthetic_demo";
+  if (source === "manual_entry") return "manual";
+  return "voice";
 }
 
 async function lockMutableEncounter(
@@ -593,6 +737,7 @@ async function recordFailedDictation(
     provider: string;
     model: string;
     durationSeconds: number | null;
+    source: LumenDictationSource;
     errorCode: string;
   }
 ): Promise<void> {
@@ -602,7 +747,7 @@ async function recordFailedDictation(
       `insert into lumen.dictations
          (tenant_id, encounter_id, status, mime_type, provider, model, duration_seconds, error_code, metadata)
        values ($1, $2, 'failed', $3, $4, $5, $6, $7,
-               '{"audioStored":false,"source":"browser_microphone"}'::jsonb)
+               jsonb_build_object('audioStored', false, 'source', $8::text))
        returning id`,
       [
         input.tenantId,
@@ -611,7 +756,8 @@ async function recordFailedDictation(
         input.provider,
         input.model,
         input.durationSeconds,
-        input.errorCode
+        input.errorCode,
+        input.source
       ]
     );
     await insertDurableAudit(client, {
@@ -620,7 +766,13 @@ async function recordFailedDictation(
       eventType: "lumen.dictation.failed",
       entityType: "lumen_dictation",
       entityId: result.rows[0]!.id,
-      metadata: { encounterId: input.encounterId, provider: input.provider, model: input.model, audioStored: false }
+      metadata: {
+        encounterId: input.encounterId,
+        provider: input.provider,
+        model: input.model,
+        source: input.source,
+        audioStored: false
+      }
     });
   });
 }

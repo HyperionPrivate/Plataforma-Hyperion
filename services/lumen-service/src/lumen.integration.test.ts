@@ -1,4 +1,4 @@
-import type { LumenClinicalRecordContent } from "@hyperion/contracts";
+import type { LumenClinicalRecordContent, LumenFieldEvidenceOrigin } from "@hyperion/contracts";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,16 +10,44 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
 const { Client } = pg;
 
+const TEST_TRANSCRIPT =
+  "Control oftalmológico. Visión estable durante el último mes. Agudeza visual OD 20/20 y OI 20/40. " +
+  "PIO OD 14 mmHg y OI 16 mmHg. Biomicroscopía OD sin hallazgos y OI sin hallazgos. " +
+  "Gonioscopía OD ángulo abierto y OI ángulo abierto. Fondo OD sin hallazgos; fondo OI hallazgo dudoso. " +
+  "Impresión: glaucoma en estudio. Plan: control en cuatro semanas.";
+
 const CONTENT: LumenClinicalRecordContent = {
   reasonForVisit: "Control oftalmológico",
   history: "Visión estable durante el último mes.",
   visualAcuity: { right: "20/20", left: "20/40" },
   intraocularPressure: { right: "14 mmHg", left: "16 mmHg" },
-  biomicroscopy: { right: null, left: null },
-  fundus: { right: null, left: "Hallazgo por confirmar" },
-  assessment: [],
+  biomicroscopy: { right: "Sin hallazgos", left: "Sin hallazgos" },
+  fundus: { right: "Sin hallazgos", left: "Hallazgo por confirmar" },
+  gonioscopy: { right: "Ángulo abierto", left: "Ángulo abierto" },
+  assessment: [{ description: "Glaucoma en estudio", code: null, confidence: 0.9 }],
   plan: ["Control en cuatro semanas"],
-  uncertainties: [{ field: "fundus.left", message: "Confirmar hallazgo", sourceText: "hallazgo dudoso" }]
+  uncertainties: [{ field: "fundus.left", message: "Confirmar hallazgo", sourceText: "hallazgo dudoso" }],
+  fieldEvidence: [
+    { field: "reasonForVisit", confidence: 0.98, origin: "voice", sourceText: "Control oftalmológico" },
+    { field: "history", confidence: 0.96, origin: "voice", sourceText: "Visión estable durante el último mes" },
+    { field: "visualAcuity.right", confidence: 0.98, origin: "voice", sourceText: "OD 20/20" },
+    { field: "visualAcuity.left", confidence: 0.98, origin: "voice", sourceText: "OI 20/40" },
+    { field: "intraocularPressure.right", confidence: 0.98, origin: "voice", sourceText: "PIO OD 14 mmHg" },
+    { field: "intraocularPressure.left", confidence: 0.98, origin: "voice", sourceText: "OI 16 mmHg" },
+    {
+      field: "biomicroscopy.right",
+      confidence: 0.96,
+      origin: "voice",
+      sourceText: "Biomicroscopía OD sin hallazgos"
+    },
+    { field: "biomicroscopy.left", confidence: 0.96, origin: "voice", sourceText: "OI sin hallazgos" },
+    { field: "gonioscopy.right", confidence: 0.95, origin: "voice", sourceText: "Gonioscopía OD ángulo abierto" },
+    { field: "gonioscopy.left", confidence: 0.95, origin: "voice", sourceText: "OI ángulo abierto" },
+    { field: "fundus.right", confidence: 0.95, origin: "voice", sourceText: "Fondo OD sin hallazgos" },
+    { field: "fundus.left", confidence: 0.72, origin: "voice", sourceText: "fondo OI hallazgo dudoso" },
+    { field: "assessment", confidence: 0.9, origin: "voice", sourceText: "Impresión: glaucoma en estudio" },
+    { field: "plan", confidence: 0.94, origin: "voice", sourceText: "Plan: control en cuatro semanas" }
+  ]
 };
 
 const transcriber: ClinicalTranscriber = {
@@ -27,7 +55,7 @@ const transcriber: ClinicalTranscriber = {
   model: "test-stt-v1",
   isConfigured: () => true,
   transcribe: async () => ({
-    transcript: "Control. PIO catorce OD y dieciseis OI.",
+    transcript: TEST_TRANSCRIPT,
     provider: "test-stt",
     model: "test-stt-v1"
   })
@@ -35,12 +63,14 @@ const transcriber: ClinicalTranscriber = {
 
 let structureBarrier: { started: () => void; release: Promise<void> } | undefined;
 let structureCallCount = 0;
+let lastStructureOrigin: LumenFieldEvidenceOrigin | undefined;
 const structurer: ClinicalStructurer = {
   name: "test-llm",
   model: "test-llm-v1",
   isConfigured: () => true,
-  structure: async () => {
+  structure: async (_transcript, origin) => {
     structureCallCount += 1;
+    lastStructureOrigin = origin;
     structureBarrier?.started();
     if (structureBarrier) await structureBarrier.release;
     return { content: CONTENT, provider: "test-llm", model: "test-llm-v1" };
@@ -54,6 +84,7 @@ let tenantB: string;
 let encounterA: string;
 let patientA: string;
 let patientB: string;
+let siteA: string;
 let operatorId: string;
 const audits: LumenAuditEvent[] = [];
 
@@ -70,6 +101,7 @@ describeIntegration("LUMEN clinical vertical", () => {
     encounterA = fixtureA.encounterId;
     patientA = fixtureA.patientId;
     patientB = fixtureB.patientId;
+    siteA = fixtureA.siteId;
     operatorId = await createOperator(tenantA);
 
     const handle = await createService({
@@ -92,6 +124,7 @@ describeIntegration("LUMEN clinical vertical", () => {
     const own = await app.inject({ method: "GET", url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}` });
     expect(own.statusCode).toBe(200);
     expect(own.json().data.encounter.isDemo).toBe(true);
+    expect(own.json().data.encounter.siteId).toBe(siteA);
 
     const foreign = await app.inject({ method: "GET", url: `/v1/tenants/${tenantB}/lumen/encounters/${encounterA}` });
     expect(foreign.statusCode).toBe(404);
@@ -165,16 +198,23 @@ describeIntegration("LUMEN clinical vertical", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
-  it("serializes structuring against approval on the encounter row", async () => {
+  it("does not hold encounter locks during structuring and lets approval win safely", async () => {
     const fixture = await createFixture(tenantA, "C");
-    const resolvedContent = { ...CONTENT, uncertainties: [] };
+    const resolvedContent = {
+      ...CONTENT,
+      uncertainties: [],
+      fieldEvidence: [
+        ...CONTENT.fieldEvidence.filter((evidence) => evidence.field !== "fundus.left"),
+        { field: "fundus.left", confidence: 1, origin: "manual", sourceText: null }
+      ]
+    };
     const dictation = await client.query(
       `insert into lumen.dictations
          (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
-       values ($1, $2, 'transcribed', 'Dictado inicial sintético.', 'text/plain', 'manual',
-               '{"audioStored":false}'::jsonb)
+       values ($1, $2, 'transcribed', $3, 'text/plain', 'test-stt',
+               '{"audioStored":false,"source":"browser_microphone"}'::jsonb)
        returning id`,
-      [tenantA, fixture.encounterId]
+      [tenantA, fixture.encounterId, TEST_TRANSCRIPT]
     );
     await client.query(
       `insert into lumen.clinical_records
@@ -197,7 +237,6 @@ describeIntegration("LUMEN clinical vertical", () => {
     });
     structureBarrier = { started: notifyStarted, release: providerRelease };
     const headers = { "x-operator-role": "advisor", "x-operator-id": operatorId };
-    let approvalSettled = false;
     try {
       const structureRequest = app.inject({
         method: "POST",
@@ -206,20 +245,26 @@ describeIntegration("LUMEN clinical vertical", () => {
         payload: { transcript: "Dictado concurrente sintético sin PII." }
       });
       await providerStarted;
-      const approvalRequest = app
-        .inject({
-          method: "POST",
-          url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/approve`,
-          headers
-        })
-        .finally(() => {
-          approvalSettled = true;
-        });
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      expect(approvalSettled).toBe(false);
+      const approvalRequest = app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/approve`,
+        headers
+      });
+      const approvalOutcome = await Promise.race([
+        approvalRequest.then((response) => ({ state: "settled" as const, response })),
+        new Promise<{ state: "timeout" }>((resolve) => setTimeout(() => resolve({ state: "timeout" }), 2_000))
+      ]);
+      expect(approvalOutcome.state).toBe("settled");
+      if (approvalOutcome.state !== "settled") throw new Error("approval remained blocked by provider I/O");
+      expect(approvalOutcome.response.statusCode).toBe(200);
       releaseProvider();
-      expect((await structureRequest).statusCode).toBe(201);
-      expect((await approvalRequest).statusCode).toBe(422);
+      expect((await structureRequest).statusCode).toBe(409);
+      expect(lastStructureOrigin).toBe("manual");
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}`
+      });
+      expect(detail.json().data.dictations[0].source).toBe("browser_microphone");
     } finally {
       releaseProvider();
       structureBarrier = undefined;
@@ -231,7 +276,132 @@ describeIntegration("LUMEN clinical vertical", () => {
        where record.tenant_id = $1 and record.encounter_id = $2`,
       [tenantA, fixture.encounterId]
     );
-    expect(state.rows[0]).toMatchObject({ status: "draft", uncertainties: 1 });
+    expect(state.rows[0]).toMatchObject({ status: "approved", uncertainties: 0 });
+  });
+
+  it("turns ungrounded provider fields into approval blockers at the route boundary", async () => {
+    const fixture = await createFixture(tenantA, "D");
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/structure`,
+      headers: { "x-operator-role": "advisor", "x-operator-id": operatorId },
+      payload: { transcript: "Consulta sintética sin hallazgos clínicos adicionales." }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().data.content.fieldEvidence).toEqual([]);
+    expect(response.json().data.content.uncertainties).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: "reasonForVisit" }),
+        expect.objectContaining({ field: "intraocularPressure.left" }),
+        expect.objectContaining({ field: "plan" })
+      ])
+    );
+  });
+
+  it("returns every missing required clinical field before approval", async () => {
+    const fixture = await createFixture(tenantA, "F");
+    const dictation = await client.query(
+      `insert into lumen.dictations
+         (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
+       values ($1, $2, 'transcribed', $3, 'text/plain', 'test-stt',
+               '{"audioStored":false,"source":"browser_microphone"}'::jsonb)
+       returning id`,
+      [tenantA, fixture.encounterId, TEST_TRANSCRIPT]
+    );
+    await client.query(
+      `insert into lumen.clinical_records
+         (tenant_id, encounter_id, dictation_id, status, content, provider, model)
+       values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
+      [
+        tenantA,
+        fixture.encounterId,
+        dictation.rows[0].id,
+        JSON.stringify({ ...CONTENT, history: "", uncertainties: [] })
+      ]
+    );
+    await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
+      tenantA,
+      fixture.encounterId
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/approve`,
+      headers: { "x-operator-role": "advisor", "x-operator-id": operatorId }
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().data.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: "history" })])
+    );
+  });
+
+  it("rejects approval without grounded evidence and ignores client-forged manual evidence", async () => {
+    const fixture = await createFixture(tenantA, "E");
+    const dictation = await client.query(
+      `insert into lumen.dictations
+         (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
+       values ($1, $2, 'transcribed', $3, 'text/plain', 'test-stt',
+               '{"audioStored":false,"source":"browser_microphone"}'::jsonb)
+       returning id`,
+      [tenantA, fixture.encounterId, TEST_TRANSCRIPT]
+    );
+    const contentWithoutPlanEvidence = {
+      ...CONTENT,
+      uncertainties: [],
+      fieldEvidence: CONTENT.fieldEvidence.filter((evidence) => evidence.field !== "plan")
+    };
+    await client.query(
+      `insert into lumen.clinical_records
+         (tenant_id, encounter_id, dictation_id, status, content, provider, model)
+       values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
+      [tenantA, fixture.encounterId, dictation.rows[0].id, JSON.stringify(contentWithoutPlanEvidence)]
+    );
+    await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
+      tenantA,
+      fixture.encounterId
+    ]);
+    const headers = { "x-operator-role": "advisor", "x-operator-id": operatorId };
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/approve`,
+      headers
+    });
+    expect(blocked.statusCode).toBe(422);
+    expect(blocked.json().data.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: "plan", reason: "missing" })])
+    );
+
+    const forgedPatch = await app.inject({
+      method: "PATCH",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/record`,
+      headers,
+      payload: {
+        content: {
+          ...contentWithoutPlanEvidence,
+          fieldEvidence: [
+            ...contentWithoutPlanEvidence.fieldEvidence,
+            { field: "plan", confidence: 1, origin: "manual", sourceText: null }
+          ]
+        }
+      }
+    });
+    expect(forgedPatch.statusCode).toBe(200);
+    expect(
+      forgedPatch.json().data.content.fieldEvidence.some((evidence: { field: string }) => evidence.field === "plan")
+    ).toBe(false);
+
+    const stillBlocked = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/approve`,
+      headers
+    });
+    expect(stillBlocked.statusCode).toBe(422);
+    expect(stillBlocked.json().data.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: "plan", reason: "missing" })])
+    );
   });
 
   it("transcribes without persisting audio, structures, resolves uncertainties and approves", async () => {
@@ -249,18 +419,21 @@ describeIntegration("LUMEN clinical vertical", () => {
       payload: {
         audioBase64: Buffer.from("short-valid-audio").toString("base64"),
         mimeType: "audio/webm",
+        source: "authorized_upload",
         durationSeconds: 8
       }
     });
     expect(transcription.statusCode).toBe(201);
     const dictation = transcription.json().data;
     expect(dictation.transcript).toContain("PIO");
+    expect(dictation.source).toBe("authorized_upload");
 
     const stored = await client.query(`select metadata from lumen.dictations where tenant_id = $1 and id = $2`, [
       tenantA,
       dictation.id
     ]);
     expect(stored.rows[0].metadata).toMatchObject({ audioStored: false });
+    expect(stored.rows[0].metadata).toMatchObject({ source: "authorized_upload" });
 
     const mismatched = await app.inject({
       method: "POST",
@@ -277,6 +450,7 @@ describeIntegration("LUMEN clinical vertical", () => {
       payload: { transcript: dictation.transcript, dictationId: dictation.id }
     });
     expect(structured.statusCode).toBe(201);
+    expect(lastStructureOrigin).toBe("voice");
     expect(structured.json().data.content.uncertainties).toHaveLength(1);
 
     const durableProcessAudit = await client.query(
@@ -293,6 +467,12 @@ describeIntegration("LUMEN clinical vertical", () => {
       "lumen.encounter.started": 1,
       "lumen.record.structured": 1
     });
+    const dictationAudit = await client.query(
+      `select metadata from platform.audit_events
+       where tenant_id = $1 and event_type = 'lumen.dictation.transcribed' and entity_id = $2`,
+      [tenantA, dictation.id]
+    );
+    expect(dictationAudit.rows[0].metadata).toMatchObject({ source: "authorized_upload", audioStored: false });
 
     await expect(
       client.query(
@@ -320,7 +500,14 @@ describeIntegration("LUMEN clinical vertical", () => {
     const resolved = {
       ...structured.json().data.content,
       uncertainties: [],
-      fundus: { right: null, left: "Sin hallazgos adicionales" }
+      fieldEvidence: [
+        {
+          field: "plan",
+          confidence: 1,
+          origin: "manual",
+          sourceText: null
+        }
+      ]
     };
     const patched = await app.inject({
       method: "PATCH",
@@ -329,6 +516,21 @@ describeIntegration("LUMEN clinical vertical", () => {
       payload: { content: resolved }
     });
     expect(patched.statusCode).toBe(200);
+    expect(patched.json().data.content.fieldEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: "plan",
+          origin: "voice",
+          sourceText: "Plan: control en cuatro semanas"
+        }),
+        {
+          field: "fundus.left",
+          confidence: 1,
+          origin: "manual",
+          sourceText: null
+        }
+      ])
+    );
 
     const durableReviewAudit = await client.query(
       `select metadata from platform.audit_events
@@ -341,10 +543,11 @@ describeIntegration("LUMEN clinical vertical", () => {
       previousUncertainties: 1,
       remainingUncertainties: 0,
       resolvedUncertainties: 1,
-      resolvedFields: ["fundus.left"]
+      resolvedFields: ["fundus.left"],
+      manualEvidenceFields: ["fundus.left"]
     });
     expect(durableReviewAudit.rows[0].metadata.reviewedSections).toEqual(
-      expect.arrayContaining(["fundus", "uncertainties"])
+      expect.arrayContaining(["fieldEvidence", "uncertainties"])
     );
 
     const approved = await app.inject({
@@ -377,6 +580,7 @@ describeIntegration("LUMEN clinical vertical", () => {
         payload: {
           audioBase64: Buffer.from("post-approval-audio").toString("base64"),
           mimeType: "audio/webm",
+          source: "browser_microphone",
           durationSeconds: 2
         }
       }),
@@ -444,7 +648,10 @@ async function createTenant(slug: string): Promise<string> {
   return result.rows[0].id;
 }
 
-async function createFixture(tenantId: string, suffix: string): Promise<{ encounterId: string; patientId: string }> {
+async function createFixture(
+  tenantId: string,
+  suffix: string
+): Promise<{ encounterId: string; patientId: string; siteId: string }> {
   const patient = await client.query(
     `insert into pulso_iris.administrative_patients (tenant_id, full_name, metadata)
      values ($1, $2, '{"is_demo":true,"demoAge":54}'::jsonb) returning id`,
@@ -482,7 +689,7 @@ async function createFixture(tenantId: string, suffix: string): Promise<{ encoun
       })
     ]
   );
-  return { encounterId: encounter.rows[0].id, patientId: patient.rows[0].id };
+  return { encounterId: encounter.rows[0].id, patientId: patient.rows[0].id, siteId: site.rows[0].id };
 }
 
 async function createOperator(tenantId: string): Promise<string> {

@@ -4,17 +4,19 @@ La plataforma se construye como monorepo TypeScript con microservicios HTTP. El 
 
 ## Servicios
 
-| Puerto | Servicio            | Responsabilidad                                               |
-| ------ | ------------------- | ------------------------------------------------------------- |
-| 8080   | api-gateway         | Entrada publica, catalogo y health agregado.                  |
-| 8081   | identity-service    | Operadores, autenticacion, sesiones y permisos.               |
-| 8082   | tenant-service      | Clientes, organizaciones y configuracion por tenant.          |
-| 8083   | agent-service       | Agentes IA, productos, canales y ciclo operacional.           |
-| 8084   | prompt-flow-service | Prompts, versiones y flujos conversacionales.                 |
-| 8085   | knowledge-service   | Fuentes de conocimiento e ingesta.                            |
-| 8086   | audit-service       | Eventos, bitacora y evidencia operacional.                    |
-| 8087   | integration-service | Voz, WhatsApp, GLPI, ERP, activos y conectores.               |
-| 8088   | pulso-iris-service  | Producto PULSO IRIS: Sofia, agenda, handoff y RPA para CEDCO. |
+| Puerto | Servicio                 | Responsabilidad                                               |
+| ------ | ------------------------ | ------------------------------------------------------------- |
+| 8080   | api-gateway              | Entrada publica, catalogo y health agregado.                  |
+| 8081   | identity-service         | Operadores, autenticacion, sesiones y permisos.               |
+| 8082   | tenant-service           | Clientes, organizaciones y configuracion por tenant.          |
+| 8083   | agent-service            | Agentes IA, productos, canales y ciclo operacional.           |
+| 8084   | prompt-flow-service      | Prompts, versiones y flujos conversacionales.                 |
+| 8085   | knowledge-service        | Fuentes de conocimiento e ingesta.                            |
+| 8086   | audit-service            | Eventos, bitacora y evidencia operacional.                    |
+| 8087   | integration-service      | Voz, WhatsApp, GLPI, ERP, activos y conectores.               |
+| 8088   | pulso-iris-service       | Producto PULSO IRIS: Sofia, agenda, handoff y RPA para CEDCO. |
+| 8089   | whatsapp-channel-service | Canal privado y durable de WhatsApp para SOFIA.               |
+| 8090   | lumen-service            | Demo clinica LUMEN: preconsulta, dictado, HC y aprobacion.    |
 
 ## Datos
 
@@ -29,6 +31,11 @@ Una sola imagen multi-stage para los servicios Node (produccion sin devDependenc
 ## Producto inicial
 
 El producto inicial operativo es PULSO IRIS para CEDCO. La plataforma conserva el nucleo de identidad, tenants, agentes, integraciones y auditoria, y PULSO IRIS vive en `pulso-iris-service` con esquema propio `pulso_iris`.
+
+LUMEN conserva su limite de microservicio y esquema `lumen`. El corte de demo clinica usa exclusivamente
+registros sinteticos identificados y no modifica la logica funcional de `pulso-iris-service`. La consola
+web y el shell son compartidos, por lo que cada despliegue de LUMEN debe incluir una comprobacion de no
+regresion de las rutas PULSO IRIS.
 
 ## Regla para agregar productos
 

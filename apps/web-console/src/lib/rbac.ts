@@ -9,6 +9,7 @@ export type Capability =
   | "view:bi"
   | "view:config"
   | "view:lumen"
+  | "write:lumen"
   | "write:operation"
   | "write:config"
   | "write:rpa"
@@ -24,6 +25,7 @@ const ROLE_CAPABILITIES: Record<OperatorRole, Capability[]> = {
     "view:bi",
     "view:config",
     "view:lumen",
+    "write:lumen",
     "write:operation",
     "write:config",
     "write:rpa",
@@ -38,11 +40,20 @@ const ROLE_CAPABILITIES: Record<OperatorRole, Capability[]> = {
     "view:bi",
     "view:config",
     "view:lumen",
+    "write:lumen",
     "write:operation",
     "write:config",
     "write:rpa"
   ],
-  advisor: ["view:operation", "view:conversations", "view:agenda", "view:bi", "view:lumen", "write:operation"],
+  advisor: [
+    "view:operation",
+    "view:conversations",
+    "view:agenda",
+    "view:bi",
+    "view:lumen",
+    "write:lumen",
+    "write:operation"
+  ],
   auditor: [
     "view:operation",
     "view:conversations",

@@ -1,6 +1,8 @@
 # Produccion
 
-Este repo esta preparado para datos reales, no para demos con datos inventados.
+Este repo esta preparado para datos operativos reales. La unica excepcion autorizada es la demo clinica
+LUMEN descrita abajo, aislada y marcada con datos sinteticos; esos registros no se presentan como datos
+reales ni deben entrar en los flujos operativos de PULSO IRIS.
 
 ## Secretos
 
@@ -93,9 +95,30 @@ memoria y no se guarda en PostgreSQL ni en volumenes Docker. Solo se conservan l
 borrador estructurado y la trazabilidad de revision y aprobacion.
 
 La captura directa de microfono en navegador requiere HTTPS o `localhost`. Mientras la consola
-productiva se publique por HTTP, se debe usar la carga de un audio corto o habilitar TLS antes de usar
-el microfono. Ningun registro clinico pasa a `approved` sin una accion humana explicita y sin resolver
-las incertidumbres reportadas por el modelo.
+productiva se publique por HTTP, la interfaz debe mostrar que la captura directa no esta disponible y
+mantener la carga autorizada o el transcript manual. Habilitar TLS en consola y gateway es requisito
+previo para validar el microfono real en produccion. Ningun registro clinico pasa a `approved` sin una
+accion humana explicita y sin resolver las incertidumbres reportadas por el modelo.
+
+### Despliegue acotado de LUMEN
+
+Despues del backup validado y con `main` fusionado y verde, LUMEN se despliega sin recrear PULSO IRIS,
+el gateway ni PostgreSQL:
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml build migrations lumen-service web-console
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  migrations node packages/migrations/dist/index.js
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  migrations node packages/migrations/dist/seed-lumen-demo.js
+docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
+  --wait --wait-timeout 120 lumen-service
+docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
+  --wait --wait-timeout 120 web-console
+```
+
+Antes y despues se comparan los identificadores de contenedor e imagen de `pulso-iris-service` y
+`api-gateway`; deben permanecer iguales. Nunca ejecutar el seed general para habilitar esta demo.
 
 ## Durabilidad del canal WhatsApp privado
 
