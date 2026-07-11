@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  lumenClinicalRecordContentSchema,
+  lumenClinicalRequiredFieldBlockers,
+  lumenDictationSchema,
+  lumenPreconsultationSummarySchema,
+  lumenTranscriptionInputSchema,
+  lumenWorklistEntrySchema,
   platformCatalogSchema,
   productModules,
   pulsoIrisAgendaBlockListSchema,
@@ -20,6 +26,7 @@ import {
   pulsoIrisSlotAlternativeSchema,
   serviceCatalog,
   tenantIdSchema,
+  retainLumenEvidenceUncertainties,
   whatsappIntegrationStatusSchema,
   whatsappQrSchema
 } from "./index.js";
@@ -44,6 +51,154 @@ describe("platform contracts", () => {
     expect(tenantIdSchema.safeParse(TENANT_ID).success).toBe(true);
     expect(tenantIdSchema.safeParse("abc/../../etc").success).toBe(false);
     expect(tenantIdSchema.safeParse(undefined).success).toBe(false);
+  });
+
+  it("accepts only authorized audio origins for LUMEN transcription input", () => {
+    const input = { audioBase64: "a".repeat(20), mimeType: "audio/webm" };
+
+    expect(lumenTranscriptionInputSchema.safeParse({ ...input, source: "browser_microphone" }).success).toBe(true);
+    expect(lumenTranscriptionInputSchema.safeParse({ ...input, source: "authorized_upload" }).success).toBe(true);
+    expect(lumenTranscriptionInputSchema.safeParse({ ...input, source: "synthetic_demo" }).success).toBe(false);
+    expect(lumenTranscriptionInputSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("keeps LUMEN summary, worklist and clinical content backward compatible", () => {
+    const summary = lumenPreconsultationSummarySchema.parse({
+      summaryText: "Resumen clínico sintético.",
+      activeDiagnoses: [],
+      medications: [],
+      alerts: [],
+      trends: [],
+      sourceCount: 0
+    });
+    const worklist = lumenWorklistEntrySchema.parse({
+      encounterId: "6f5e4d3c-2b1a-4987-8765-4d3c2b1a0987",
+      tenantId: TENANT_ID,
+      patientId: "5e4d3c2b-1a09-4876-9654-3c2b1a098765",
+      siteId: "4e3d2c1b-0a98-4765-8543-2b1a09876543",
+      patientDisplayName: "Paciente demo",
+      patientAge: 64,
+      professionalName: "Profesional demo",
+      siteName: "Sede demo",
+      scheduledAt: "2026-09-15T15:00:00.000Z",
+      status: "review",
+      isDemo: true
+    });
+    const content = lumenClinicalRecordContentSchema.parse({
+      reasonForVisit: "Control",
+      history: "Historia sintética",
+      visualAcuity: { right: "20/30", left: "20/40" },
+      intraocularPressure: { right: "16 mmHg", left: "24 mmHg" },
+      biomicroscopy: { right: null, left: null },
+      fundus: { right: null, left: null },
+      assessment: [],
+      plan: [],
+      uncertainties: []
+    });
+
+    expect(summary).toMatchObject({ alertSourceIds: [], sources: [], recentExams: [], timeline: [] });
+    expect(worklist).toMatchObject({ payer: null, documentMasked: null, visitReason: null, subspecialty: null });
+    const { siteId: _siteId, ...worklistWithoutSiteId } = worklist;
+    expect(lumenWorklistEntrySchema.safeParse(worklistWithoutSiteId).success).toBe(false);
+    expect(content).toMatchObject({ gonioscopy: { right: null, left: null }, fieldEvidence: [] });
+  });
+
+  it("keeps LUMEN alert sources and optional trend targets explicit", () => {
+    const summary = lumenPreconsultationSummarySchema.parse({
+      summaryText: "Resumen clínico sintético con trazabilidad.",
+      activeDiagnoses: [],
+      medications: [],
+      alerts: ["Alerta sintética."],
+      alertSourceIds: ["source-alert-1"],
+      trends: [
+        {
+          label: "PIO OI",
+          unit: "mmHg",
+          targetMin: null,
+          targetMax: 18,
+          points: [{ recordedAt: "2026-03-12", value: 17 }]
+        }
+      ],
+      sourceCount: 1
+    });
+
+    expect(summary.alertSourceIds).toEqual(["source-alert-1"]);
+    expect(summary.trends[0]).toMatchObject({ targetMin: null, targetMax: 18 });
+  });
+
+  it("normalizes low-confidence LUMEN evidence as an approval-blocking uncertainty", () => {
+    const content = lumenClinicalRecordContentSchema.parse({
+      reasonForVisit: "Control",
+      history: "Historia sintética",
+      visualAcuity: { right: "20/30", left: "20/40" },
+      intraocularPressure: { right: "16 mmHg", left: "24 mmHg" },
+      biomicroscopy: { right: null, left: null },
+      fundus: { right: null, left: null },
+      gonioscopy: { right: null, left: "Ángulo abierto; grado por confirmar" },
+      assessment: [],
+      plan: [],
+      uncertainties: [],
+      fieldEvidence: [
+        {
+          field: "gonioscopy.left",
+          confidence: 0.72,
+          origin: "synthetic_demo",
+          sourceText: "ángulo abierto grado..."
+        }
+      ]
+    });
+
+    expect(content.uncertainties).toEqual([]);
+    expect(retainLumenEvidenceUncertainties(content).uncertainties).toEqual([
+      expect.objectContaining({ field: "gonioscopy.left", sourceText: "ángulo abierto grado..." })
+    ]);
+  });
+
+  it("reports every required field missing from the demo clinical record", () => {
+    const content = lumenClinicalRecordContentSchema.parse({
+      reasonForVisit: "Control",
+      history: "",
+      visualAcuity: { right: "20/30", left: null },
+      intraocularPressure: { right: "16 mmHg", left: null },
+      biomicroscopy: { right: null, left: null },
+      gonioscopy: { right: null, left: null },
+      fundus: { right: null, left: null },
+      assessment: [],
+      plan: [],
+      uncertainties: []
+    });
+
+    expect(lumenClinicalRequiredFieldBlockers(content).map((blocker) => blocker.field)).toEqual([
+      "history",
+      "visualAcuity.left",
+      "intraocularPressure.left",
+      "biomicroscopy.right",
+      "biomicroscopy.left",
+      "gonioscopy.right",
+      "gonioscopy.left",
+      "fundus.right",
+      "fundus.left",
+      "assessment",
+      "plan"
+    ]);
+  });
+
+  it("exposes the explicit source of synthetic LUMEN dictations", () => {
+    const dictation = lumenDictationSchema.parse({
+      id: "4d3c2b1a-0987-4654-8432-2b1a09876543",
+      tenantId: TENANT_ID,
+      encounterId: "6f5e4d3c-2b1a-4987-8765-4d3c2b1a0987",
+      status: "transcribed",
+      transcript: "Transcript sintético.",
+      mimeType: "text/plain",
+      source: "synthetic_demo",
+      provider: null,
+      model: null,
+      durationSeconds: 72,
+      createdAt: "2026-09-15T15:18:00.000Z"
+    });
+
+    expect(dictation.source).toBe("synthetic_demo");
   });
 
   it("parses conversation rows as returned by PostgreSQL (Date and null values)", () => {

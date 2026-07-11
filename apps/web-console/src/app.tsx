@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { PulsoIrisSite } from "@hyperion/contracts";
 import { Login } from "./components/Login.js";
@@ -13,7 +13,8 @@ import { ConfigPage } from "./pages/ConfigPage.js";
 import { ConversationsPage } from "./pages/ConversationsPage.js";
 import { OperationPage } from "./pages/OperationPage.js";
 import { RpaPage } from "./pages/RpaPage.js";
-import { LumenPage } from "./pages/LumenPage.js";
+
+const LumenPage = lazy(() => import("./pages/LumenPage.js").then((module) => ({ default: module.LumenPage })));
 
 interface TenantRow {
   id: string;
@@ -123,7 +124,20 @@ function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout:
         <Route path="/operacion" element={<OperationPage />} />
         <Route path="/conversaciones" element={<ConversationsPage />} />
         <Route path="/agenda" element={<AgendaPage />} />
-        <Route path="/lumen" element={<LumenPage />} />
+        <Route
+          path="/lumen/*"
+          element={
+            <Suspense
+              fallback={
+                <main className="login-shell">
+                  <LoadingState label="Cargando LUMEN..." />
+                </main>
+              }
+            >
+              <LumenPage />
+            </Suspense>
+          }
+        />
         <Route path="/rpa" element={<RpaPage />} />
         <Route path="/campanas" element={<CampaignsPage />} />
         <Route path="/bi" element={<BiPage />} />

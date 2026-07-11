@@ -1072,19 +1072,51 @@ export const pulsoIrisCatalog: PulsoIrisCatalog = pulsoIrisCatalogSchema.parse({
 export const lumenEncounterStatusSchema = z.enum(["preconsultation", "in_progress", "review", "approved"]);
 export const lumenDictationStatusSchema = z.enum(["transcribed", "failed"]);
 export const lumenClinicalRecordStatusSchema = z.enum(["draft", "approved"]);
+export const lumenTranscriptionSourceSchema = z.enum(["browser_microphone", "authorized_upload"]);
+export const lumenDictationSourceSchema = z.enum([
+  "browser_microphone",
+  "authorized_upload",
+  "manual_entry",
+  "synthetic_demo"
+]);
+export const lumenFieldEvidenceOriginSchema = z.enum(["voice", "manual", "synthetic_demo"]);
+export const lumenClinicalFieldSchema = z.enum([
+  "reasonForVisit",
+  "history",
+  "visualAcuity.right",
+  "visualAcuity.left",
+  "intraocularPressure.right",
+  "intraocularPressure.left",
+  "biomicroscopy.right",
+  "biomicroscopy.left",
+  "gonioscopy.right",
+  "gonioscopy.left",
+  "fundus.right",
+  "fundus.left",
+  "assessment",
+  "plan"
+]);
 
 const lumenEyeTextSchema = z.object({
   right: z.string().max(2000).nullable(),
   left: z.string().max(2000).nullable()
 });
 
-export const lumenClinicalRecordContentSchema = z.object({
+const lumenFieldEvidenceSchema = z.object({
+  field: lumenClinicalFieldSchema,
+  confidence: z.number().min(0).max(1),
+  origin: lumenFieldEvidenceOriginSchema,
+  sourceText: z.string().max(2000).nullable()
+});
+
+const lumenClinicalRecordContentBaseSchema = z.object({
   reasonForVisit: z.string().max(4000),
   history: z.string().max(8000),
   visualAcuity: lumenEyeTextSchema,
   intraocularPressure: lumenEyeTextSchema,
   biomicroscopy: lumenEyeTextSchema,
   fundus: lumenEyeTextSchema,
+  gonioscopy: lumenEyeTextSchema.default({ right: null, left: null }),
   assessment: z.array(
     z.object({
       description: z.string().min(1).max(2000),
@@ -1099,7 +1131,85 @@ export const lumenClinicalRecordContentSchema = z.object({
       message: z.string().min(1).max(1000),
       sourceText: z.string().max(2000).nullable()
     })
-  )
+  ),
+  fieldEvidence: z.array(lumenFieldEvidenceSchema).default([])
+});
+
+export function retainLumenEvidenceUncertainties(
+  content: z.infer<typeof lumenClinicalRecordContentBaseSchema>
+): z.infer<typeof lumenClinicalRecordContentBaseSchema> {
+  const uncertainFields = new Set(content.uncertainties.map((uncertainty) => uncertainty.field));
+  const evidenceUncertainties = content.fieldEvidence
+    .filter((evidence) => evidence.confidence < 0.85 && !uncertainFields.has(evidence.field))
+    .map((evidence) => ({
+      field: evidence.field,
+      message: `Confianza ${Math.round(evidence.confidence * 100)} %: requiere confirmación profesional.`,
+      sourceText: evidence.sourceText
+    }));
+
+  return evidenceUncertainties.length === 0
+    ? content
+    : { ...content, uncertainties: [...content.uncertainties, ...evidenceUncertainties] };
+}
+
+export interface LumenClinicalRequiredFieldBlocker {
+  field: z.infer<typeof lumenClinicalFieldSchema>;
+  message: string;
+}
+
+export function lumenClinicalRequiredFieldBlockers(
+  content: z.infer<typeof lumenClinicalRecordContentBaseSchema>
+): LumenClinicalRequiredFieldBlocker[] {
+  const blockers: LumenClinicalRequiredFieldBlocker[] = [];
+  const requireText = (field: LumenClinicalRequiredFieldBlocker["field"], value: string | null, message: string) => {
+    if (!value?.trim()) blockers.push({ field, message });
+  };
+
+  requireText("reasonForVisit", content.reasonForVisit, "Motivo de consulta obligatorio");
+  requireText("history", content.history, "Evolución e historia obligatorias");
+  requireText("visualAcuity.right", content.visualAcuity.right, "Agudeza visual OD obligatoria");
+  requireText("visualAcuity.left", content.visualAcuity.left, "Agudeza visual OI obligatoria");
+  requireText("intraocularPressure.right", content.intraocularPressure.right, "Presión intraocular OD obligatoria");
+  requireText("intraocularPressure.left", content.intraocularPressure.left, "Presión intraocular OI obligatoria");
+  requireText("biomicroscopy.right", content.biomicroscopy.right, "Biomicroscopía OD obligatoria");
+  requireText("biomicroscopy.left", content.biomicroscopy.left, "Biomicroscopía OI obligatoria");
+  requireText("gonioscopy.right", content.gonioscopy.right, "Gonioscopía OD obligatoria");
+  requireText("gonioscopy.left", content.gonioscopy.left, "Gonioscopía OI obligatoria");
+  requireText("fundus.right", content.fundus.right, "Fondo de ojo OD obligatorio");
+  requireText("fundus.left", content.fundus.left, "Fondo de ojo OI obligatorio");
+  if (content.assessment.length === 0) {
+    blockers.push({ field: "assessment", message: "Impresión clínica obligatoria" });
+  }
+  if (content.plan.length === 0) blockers.push({ field: "plan", message: "Plan clínico obligatorio" });
+  return blockers;
+}
+
+export const lumenClinicalRecordContentSchema = lumenClinicalRecordContentBaseSchema;
+
+export const lumenPreconsultationSourceSchema = z.object({
+  id: z.string().min(1).max(120),
+  type: z.enum(["encounter", "diagnostic_exam", "procedure", "medication", "appointment", "other"]),
+  label: z.string().min(1).max(500),
+  recordedAt: isoDateTime,
+  detail: optionalFromNull(z.string().min(1).max(1000))
+});
+
+export const lumenRecentExamSchema = z.object({
+  id: z.string().min(1).max(120),
+  name: z.string().min(1).max(240),
+  recordedAt: isoDateTime,
+  detail: z.string().min(1).max(2000),
+  status: z.enum(["available", "pending_review", "reviewed"]),
+  sourceId: optionalFromNull(z.string().min(1).max(120))
+});
+
+export const lumenTimelineEventSchema = z.object({
+  id: z.string().min(1).max(120),
+  recordedAt: isoDateTime,
+  kind: z.enum(["encounter", "procedure", "diagnostic_exam", "medication", "alert"]),
+  title: z.string().min(1).max(500),
+  detail: optionalFromNull(z.string().min(1).max(1000)),
+  sourceId: optionalFromNull(z.string().min(1).max(120))
 });
 
 export const lumenPreconsultationSummarySchema = z.object({
@@ -1107,27 +1217,38 @@ export const lumenPreconsultationSummarySchema = z.object({
   activeDiagnoses: z.array(z.string().min(1).max(500)),
   medications: z.array(z.string().min(1).max(500)),
   alerts: z.array(z.string().min(1).max(1000)),
+  alertSourceIds: z.array(z.string().min(1).max(120)).default([]),
   trends: z.array(
     z.object({
       label: z.string().min(1).max(160),
       unit: z.string().max(40),
-      points: z.array(z.object({ recordedAt: z.string(), value: z.number() }))
+      points: z.array(z.object({ recordedAt: z.string(), value: z.number() })),
+      targetMin: z.number().nullable().optional(),
+      targetMax: z.number().nullable().optional()
     })
   ),
-  sourceCount: z.number().int().nonnegative()
+  sourceCount: z.number().int().nonnegative(),
+  sources: z.array(lumenPreconsultationSourceSchema).default([]),
+  recentExams: z.array(lumenRecentExamSchema).default([]),
+  timeline: z.array(lumenTimelineEventSchema).default([])
 });
 
 export const lumenWorklistEntrySchema = z.object({
   encounterId: z.string().uuid(),
   tenantId: tenantIdSchema,
   patientId: z.string().uuid(),
+  siteId: z.string().uuid(),
   patientDisplayName: z.string().min(1),
   patientAge: z.number().int().nonnegative().nullable(),
   professionalName: z.string().min(1),
   siteName: z.string().min(1),
   scheduledAt: isoDateTime,
   status: lumenEncounterStatusSchema,
-  isDemo: z.boolean()
+  isDemo: z.boolean(),
+  payer: z.string().min(1).max(240).nullable().default(null),
+  documentMasked: z.string().min(1).max(80).nullable().default(null),
+  visitReason: z.string().min(1).max(1000).nullable().default(null),
+  subspecialty: z.string().min(1).max(240).nullable().default(null)
 });
 
 export const lumenDictationSchema = z.object({
@@ -1137,6 +1258,7 @@ export const lumenDictationSchema = z.object({
   status: lumenDictationStatusSchema,
   transcript: z.string(),
   mimeType: z.string(),
+  source: lumenDictationSourceSchema,
   provider: z.string().nullable(),
   model: z.string().nullable(),
   durationSeconds: z.number().int().nonnegative().nullable(),
@@ -1169,6 +1291,7 @@ export const lumenEncounterDetailSchema = z.object({
 export const lumenTranscriptionInputSchema = z.object({
   audioBase64: z.string().min(20).max(900_000),
   mimeType: z.string().regex(/^audio\//),
+  source: lumenTranscriptionSourceSchema,
   durationSeconds: z.number().int().min(1).max(90).optional()
 });
 
@@ -1182,7 +1305,14 @@ export const lumenClinicalRecordPatchSchema = z.object({
 });
 
 export type LumenEncounterStatus = z.infer<typeof lumenEncounterStatusSchema>;
+export type LumenTranscriptionSource = z.infer<typeof lumenTranscriptionSourceSchema>;
+export type LumenDictationSource = z.infer<typeof lumenDictationSourceSchema>;
+export type LumenFieldEvidenceOrigin = z.infer<typeof lumenFieldEvidenceOriginSchema>;
+export type LumenClinicalField = z.infer<typeof lumenClinicalFieldSchema>;
 export type LumenClinicalRecordContent = z.infer<typeof lumenClinicalRecordContentSchema>;
+export type LumenPreconsultationSource = z.infer<typeof lumenPreconsultationSourceSchema>;
+export type LumenRecentExam = z.infer<typeof lumenRecentExamSchema>;
+export type LumenTimelineEvent = z.infer<typeof lumenTimelineEventSchema>;
 export type LumenPreconsultationSummary = z.infer<typeof lumenPreconsultationSummarySchema>;
 export type LumenWorklistEntry = z.infer<typeof lumenWorklistEntrySchema>;
 export type LumenDictation = z.infer<typeof lumenDictationSchema>;

@@ -30,17 +30,19 @@ export function Layout({
   title,
   subtitle,
   actions,
+  className,
   children
 }: {
   title: string;
   subtitle?: string;
   actions?: ReactNode;
+  className?: string;
   children: ReactNode;
 }) {
   const { session, tenant, sites, activeSiteId, setActiveSiteId, logout } = useConsole();
 
   return (
-    <div className="app">
+    <div className={`app${className ? ` ${className}` : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-brand">
           <Eye size={22} aria-hidden="true" />
