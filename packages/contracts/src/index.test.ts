@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   lumenClinicalRecordContentSchema,
   lumenClinicalRequiredFieldBlockers,
+  lumenAudioMaxBase64Length,
   lumenDictationSchema,
   lumenPreconsultationSummarySchema,
+  lumenStructureInputSchema,
   lumenTranscriptionInputSchema,
   lumenWorklistEntrySchema,
   platformCatalogSchema,
@@ -32,6 +34,7 @@ import {
 } from "./index.js";
 
 const TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";
+const IDEMPOTENCY_KEY = "29ab67d0-54c5-4dab-83f7-197b5d16da02";
 
 describe("platform contracts", () => {
   it("keeps the service and product catalog valid", () => {
@@ -54,12 +57,78 @@ describe("platform contracts", () => {
   });
 
   it("accepts only authorized audio origins for LUMEN transcription input", () => {
-    const input = { audioBase64: "a".repeat(20), mimeType: "audio/webm" };
+    const input = {
+      audioBase64: "a".repeat(20),
+      mimeType: "audio/webm;codecs=opus",
+      durationSeconds: 12,
+      idempotencyKey: IDEMPOTENCY_KEY
+    };
 
     expect(lumenTranscriptionInputSchema.safeParse({ ...input, source: "browser_microphone" }).success).toBe(true);
     expect(lumenTranscriptionInputSchema.safeParse({ ...input, source: "authorized_upload" }).success).toBe(true);
     expect(lumenTranscriptionInputSchema.safeParse({ ...input, source: "synthetic_demo" }).success).toBe(false);
     expect(lumenTranscriptionInputSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("bounds LUMEN audio by allowlisted MIME, duration and 5 MiB decoded", () => {
+    const base = {
+      source: "authorized_upload",
+      durationSeconds: 90,
+      idempotencyKey: IDEMPOTENCY_KEY
+    };
+    const exactlyFiveMiB = `${"A".repeat(lumenAudioMaxBase64Length - 1)}=`;
+    const overFiveMiB = "A".repeat(lumenAudioMaxBase64Length);
+
+    expect(
+      lumenTranscriptionInputSchema.safeParse({ ...base, audioBase64: exactlyFiveMiB, mimeType: "audio/wav" }).success
+    ).toBe(true);
+    expect(
+      lumenTranscriptionInputSchema.safeParse({ ...base, audioBase64: overFiveMiB, mimeType: "audio/wav" }).success
+    ).toBe(false);
+    expect(
+      lumenTranscriptionInputSchema.safeParse({ ...base, audioBase64: "a".repeat(20), mimeType: "audio/unknown" })
+        .success
+    ).toBe(false);
+    expect(
+      lumenTranscriptionInputSchema.safeParse({
+        ...base,
+        audioBase64: "a".repeat(20),
+        mimeType: "audio/webm",
+        durationSeconds: 91
+      }).success
+    ).toBe(false);
+    expect(
+      lumenTranscriptionInputSchema.safeParse({
+        source: "browser_microphone",
+        audioBase64: "a".repeat(20),
+        mimeType: "audio/webm",
+        idempotencyKey: IDEMPOTENCY_KEY
+      }).success
+    ).toBe(false);
+  });
+
+  it("requires UUID idempotency for transcription and structuring", () => {
+    expect(
+      lumenStructureInputSchema.safeParse({
+        transcript: "Transcript revisado por una persona.",
+        idempotencyKey: IDEMPOTENCY_KEY
+      }).success
+    ).toBe(true);
+    expect(lumenStructureInputSchema.safeParse({ transcript: "Transcript revisado por una persona." }).success).toBe(
+      false
+    );
+    expect(
+      lumenStructureInputSchema.safeParse({
+        transcript: "Transcript revisado por una persona.",
+        idempotencyKey: "retry-1"
+      }).success
+    ).toBe(false);
+    expect(
+      lumenStructureInputSchema.safeParse({
+        transcript: "Transcript con control\u0000 no permitido.",
+        idempotencyKey: IDEMPOTENCY_KEY
+      }).success
+    ).toBe(false);
   });
 
   it("keeps LUMEN summary, worklist and clinical content backward compatible", () => {
@@ -154,6 +223,30 @@ describe("platform contracts", () => {
     ]);
   });
 
+  it("marks human-reviewed voice evidence explicitly", () => {
+    const content = lumenClinicalRecordContentSchema.parse({
+      reasonForVisit: "Control",
+      history: "Historia sintética revisada.",
+      visualAcuity: { right: "20/30", left: "20/40" },
+      intraocularPressure: { right: "16 mmHg", left: "18 mmHg" },
+      biomicroscopy: { right: null, left: null },
+      fundus: { right: null, left: null },
+      assessment: [],
+      plan: [],
+      uncertainties: [],
+      fieldEvidence: [
+        {
+          field: "history",
+          confidence: 0.95,
+          origin: "voice_reviewed",
+          sourceText: "Historia sintética revisada."
+        }
+      ]
+    });
+
+    expect(content.fieldEvidence[0]?.origin).toBe("voice_reviewed");
+  });
+
   it("reports every required field missing from the demo clinical record", () => {
     const content = lumenClinicalRecordContentSchema.parse({
       reasonForVisit: "Control",
@@ -199,6 +292,12 @@ describe("platform contracts", () => {
     });
 
     expect(dictation.source).toBe("synthetic_demo");
+    expect(dictation).toMatchObject({
+      providerTranscript: null,
+      reviewedAt: null,
+      reviewedBy: null,
+      processingAttemptId: null
+    });
   });
 
   it("parses conversation rows as returned by PostgreSQL (Date and null values)", () => {

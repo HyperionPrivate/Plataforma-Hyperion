@@ -101,6 +101,17 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(401);
   });
 
+  it("rejects unauthenticated LUMEN payloads before parsing their body", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/encounters/00000000-0000-4000-8000-000000000001/transcriptions/audio`,
+      headers: { "content-type": "application/json" },
+      payload: "{".repeat(1024)
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
   it("rejects business routes with an unknown token", async () => {
     const response = await app.inject({
       method: "GET",
@@ -384,6 +395,26 @@ describe("api-gateway authentication", () => {
     expect(auditorRead.statusCode).toBe(502);
     expect(auditorWrite.statusCode).toBe(403);
     expect(foreignTenant.statusCode).toBe(403);
+  });
+
+  it("accepts a validated LUMEN audio payload above the global API body limit", async () => {
+    const encounterId = "00000000-0000-4000-8000-000000000020";
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/encounters/${encounterId}/transcriptions`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: {
+        audioBase64: "A".repeat(1_200_000),
+        mimeType: "audio/webm",
+        source: "authorized_upload",
+        durationSeconds: 30,
+        idempotencyKey: "ad67c1d8-09c7-4f75-82bb-f55ec14d33ba"
+      }
+    });
+
+    // The isolated upstream is intentionally unavailable; reaching the proxy
+    // proves the LUMEN route overrode Fastify's 1 MiB global body limit.
+    expect(response.statusCode).toBe(502);
   });
 });
 

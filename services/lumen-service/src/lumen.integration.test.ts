@@ -1,10 +1,14 @@
 import type { LumenClinicalRecordContent, LumenFieldEvidenceOrigin } from "@hyperion/contracts";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
+import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { LumenAuditEvent } from "./audit-client.js";
-import type { ClinicalStructurer, ClinicalTranscriber } from "./clinical-ai.js";
+import type { ClinicalStructurer } from "./clinical-ai.js";
+import { SpeechToTextError } from "./provider-errors.js";
+import { processingResultSnapshotSha256 } from "./processing-attempts.js";
 import { registerLumenRoutes } from "./routes.js";
+import type { SpeechToTextProvider } from "./speech-to-text.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
@@ -50,15 +54,46 @@ const CONTENT: LumenClinicalRecordContent = {
   ]
 };
 
-const transcriber: ClinicalTranscriber = {
+function validWebmAudioBase64(fill = 0): string {
+  return Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(28, fill)]).toString("base64");
+}
+
+function sha256ForTest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+let transcriptionCallCount = 0;
+let nextTranscriptionError: SpeechToTextError | undefined;
+let nextVerifiedTranscriptionDurationSeconds: number | undefined;
+let transcriptionBarrier: { started: () => void; release: Promise<void> } | undefined;
+const transcriber: SpeechToTextProvider = {
   name: "test-stt",
   model: "test-stt-v1",
+  language: "spa",
   isConfigured: () => true,
-  transcribe: async () => ({
-    transcript: TEST_TRANSCRIPT,
-    provider: "test-stt",
-    model: "test-stt-v1"
-  })
+  transcribe: async (input) => {
+    transcriptionCallCount += 1;
+    if (nextTranscriptionError) {
+      const error = nextTranscriptionError;
+      nextTranscriptionError = undefined;
+      throw error;
+    }
+    transcriptionBarrier?.started();
+    if (transcriptionBarrier) await transcriptionBarrier.release;
+    const verifiedDurationSeconds = nextVerifiedTranscriptionDurationSeconds ?? input.durationSeconds;
+    nextVerifiedTranscriptionDurationSeconds = undefined;
+    return {
+      transcript: TEST_TRANSCRIPT,
+      provider: "test-stt",
+      model: "test-stt-v1",
+      language: "spa",
+      durationSeconds: verifiedDurationSeconds,
+      audioSha256: input.audioSha256 ?? "0".repeat(64),
+      requestIdHash: "1".repeat(64),
+      traceIdHash: "2".repeat(64),
+      temporaryAudioDeleted: true
+    };
+  }
 };
 
 let structureBarrier: { started: () => void; release: Promise<void> } | undefined;
@@ -128,6 +163,205 @@ describeIntegration("LUMEN clinical vertical", () => {
 
     const foreign = await app.inject({ method: "GET", url: `/v1/tenants/${tenantB}/lumen/encounters/${encounterA}` });
     expect(foreign.statusCode).toBe(404);
+  });
+
+  it("makes real-audio transcription idempotent and tenant-scoped without persisting audio", async () => {
+    const fixture = await createFixture(tenantA, "IDEMP-A");
+    const tenantBFixture = await createFixture(tenantB, "IDEMP-B");
+    const operatorB = await createOperator(tenantB);
+    const idempotencyKey = randomUUID();
+    const payload = {
+      audioBase64: validWebmAudioBase64(0x11),
+      mimeType: "audio/webm" as const,
+      source: "authorized_upload" as const,
+      durationSeconds: 8,
+      idempotencyKey
+    };
+    const callsBefore = transcriptionCallCount;
+    const headersA = { "x-operator-role": "advisor", "x-operator-id": operatorId };
+    nextVerifiedTranscriptionDurationSeconds = 12.6;
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+      headers: headersA,
+      payload
+    });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().data.durationSeconds).toBe(13);
+    expect(transcriptionCallCount).toBe(callsBefore + 1);
+
+    const replay = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+      headers: headersA,
+      payload
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.headers["x-idempotent-replay"]).toBe("true");
+    expect(replay.json().data.id).toBe(first.json().data.id);
+    expect(transcriptionCallCount).toBe(callsBefore + 1);
+
+    const mismatch = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+      headers: headersA,
+      payload: { ...payload, audioBase64: validWebmAudioBase64(0x22) }
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(transcriptionCallCount).toBe(callsBefore + 1);
+
+    const otherTenant = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantB}/lumen/encounters/${tenantBFixture.encounterId}/transcriptions`,
+      headers: { "x-operator-role": "advisor", "x-operator-id": operatorB },
+      payload
+    });
+    expect(otherTenant.statusCode).toBe(201);
+    expect(otherTenant.json().data.id).not.toBe(first.json().data.id);
+    expect(transcriptionCallCount).toBe(callsBefore + 2);
+
+    const trace = await client.query(
+      `select status, request_id_hash, trace_id_hash, temp_audio_deleted_at, duration_seconds,
+              to_jsonb(attempt)::text as serialized
+       from lumen.processing_attempts attempt
+       where tenant_id = $1 and encounter_id = $2 and operation = 'transcription'`,
+      [tenantA, fixture.encounterId]
+    );
+    expect(trace.rowCount).toBe(1);
+    expect(trace.rows[0]).toMatchObject({
+      status: "completed",
+      request_id_hash: "1".repeat(64),
+      trace_id_hash: "2".repeat(64)
+    });
+    expect(trace.rows[0].duration_seconds).toBe(payload.durationSeconds);
+    expect(trace.rows[0].temp_audio_deleted_at).toBeTruthy();
+    expect(trace.rows[0].serialized).not.toContain(payload.audioBase64);
+    expect(trace.rows[0].serialized).not.toContain(TEST_TRANSCRIPT);
+
+    const audit = await client.query(
+      `select metadata::text as metadata
+       from platform.audit_events
+       where tenant_id = $1 and event_type = 'lumen.dictation.transcribed'
+         and metadata->>'encounterId' = $2`,
+      [tenantA, fixture.encounterId]
+    );
+    expect(audit.rowCount).toBe(1);
+    expect(audit.rows[0].metadata).not.toContain(TEST_TRANSCRIPT);
+    expect(audit.rows[0].metadata).not.toContain(payload.audioBase64);
+  });
+
+  it("deduplicates concurrent STT requests before calling the provider", async () => {
+    const fixture = await createFixture(tenantA, "STT-CONCURRENT");
+    const headers = { "x-operator-role": "advisor", "x-operator-id": operatorId };
+    const payload = {
+      audioBase64: validWebmAudioBase64(0x44),
+      mimeType: "audio/webm",
+      source: "browser_microphone",
+      durationSeconds: 5,
+      idempotencyKey: randomUUID()
+    };
+    let notifyStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    let releaseProvider!: () => void;
+    const providerRelease = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    transcriptionBarrier = { started: notifyStarted, release: providerRelease };
+    const callsBefore = transcriptionCallCount;
+
+    try {
+      const first = app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+        headers,
+        payload
+      });
+      await providerStarted;
+      const duplicate = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+        headers,
+        payload
+      });
+      expect(duplicate.statusCode).toBe(409);
+      expect(duplicate.headers["retry-after"]).toBe("2");
+      expect(transcriptionCallCount).toBe(callsBefore + 1);
+      releaseProvider();
+      expect((await first).statusCode).toBe(201);
+      expect(transcriptionCallCount).toBe(callsBefore + 1);
+    } finally {
+      releaseProvider();
+      transcriptionBarrier = undefined;
+    }
+  });
+
+  it("records sanitized recoverable STT failures with confirmed temporary cleanup", async () => {
+    const fixture = await createFixture(tenantA, "STT-FAIL");
+    const idempotencyKey = randomUUID();
+    const payload = {
+      audioBase64: validWebmAudioBase64(0x33),
+      mimeType: "audio/webm",
+      source: "browser_microphone",
+      durationSeconds: 4,
+      idempotencyKey
+    };
+    const headers = { "x-operator-role": "advisor", "x-operator-id": operatorId };
+    const callsBefore = transcriptionCallCount;
+    nextTranscriptionError = new SpeechToTextError("network", "ElevenLabs STT transport failed", {
+      provider: "test-stt",
+      retryable: true,
+      temporaryAudioDeleted: true
+    });
+
+    try {
+      const failed = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+        headers,
+        payload
+      });
+      expect(failed.statusCode).toBe(502);
+      expect(failed.json().data).toMatchObject({ code: "network", retryable: true });
+      expect(transcriptionCallCount).toBe(callsBefore + 1);
+
+      const attempt = await client.query(
+        `select status, error_code, temp_audio_deleted_at
+         from lumen.processing_attempts
+         where tenant_id = $1 and encounter_id = $2 and idempotency_key = $3`,
+        [tenantA, fixture.encounterId, idempotencyKey]
+      );
+      expect(attempt.rows[0]).toMatchObject({ status: "failed", error_code: "network" });
+      expect(attempt.rows[0].temp_audio_deleted_at).toBeTruthy();
+
+      const dictations = await client.query(
+        `select count(*)::int as count from lumen.dictations where tenant_id = $1 and encounter_id = $2`,
+        [tenantA, fixture.encounterId]
+      );
+      expect(dictations.rows[0].count).toBe(0);
+
+      const repeatedFailure = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+        headers,
+        payload
+      });
+      expect(repeatedFailure.statusCode).toBe(409);
+      expect(transcriptionCallCount).toBe(callsBefore + 1);
+
+      const retry = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+        headers,
+        payload: { ...payload, idempotencyKey: randomUUID() }
+      });
+      expect(retry.statusCode).toBe(201);
+      expect(transcriptionCallCount).toBe(callsBefore + 2);
+    } finally {
+      nextTranscriptionError = undefined;
+    }
   });
 
   it("blocks direct cross-tenant encounter references", async () => {
@@ -208,19 +442,12 @@ describeIntegration("LUMEN clinical vertical", () => {
         { field: "fundus.left", confidence: 1, origin: "manual", sourceText: null }
       ]
     };
-    const dictation = await client.query(
-      `insert into lumen.dictations
-         (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
-       values ($1, $2, 'transcribed', $3, 'text/plain', 'test-stt',
-               '{"audioStored":false,"source":"browser_microphone"}'::jsonb)
-       returning id`,
-      [tenantA, fixture.encounterId, TEST_TRANSCRIPT]
-    );
+    const dictationId = await createCompletedAudioDictation(tenantA, fixture.encounterId, TEST_TRANSCRIPT);
     await client.query(
       `insert into lumen.clinical_records
          (tenant_id, encounter_id, dictation_id, status, content, provider, model)
        values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
-      [tenantA, fixture.encounterId, dictation.rows[0].id, JSON.stringify(resolvedContent)]
+      [tenantA, fixture.encounterId, dictationId, JSON.stringify(resolvedContent)]
     );
     await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
       tenantA,
@@ -242,7 +469,7 @@ describeIntegration("LUMEN clinical vertical", () => {
         method: "POST",
         url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/structure`,
         headers,
-        payload: { transcript: "Dictado concurrente sintético sin PII." }
+        payload: { transcript: "Dictado concurrente sintético sin PII.", idempotencyKey: randomUUID() }
       });
       await providerStarted;
       const approvalRequest = app.inject({
@@ -285,7 +512,10 @@ describeIntegration("LUMEN clinical vertical", () => {
       method: "POST",
       url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/structure`,
       headers: { "x-operator-role": "advisor", "x-operator-id": operatorId },
-      payload: { transcript: "Consulta sintética sin hallazgos clínicos adicionales." }
+      payload: {
+        transcript: "Consulta sintética sin hallazgos clínicos adicionales.",
+        idempotencyKey: randomUUID()
+      }
     });
 
     expect(response.statusCode).toBe(201);
@@ -301,24 +531,12 @@ describeIntegration("LUMEN clinical vertical", () => {
 
   it("returns every missing required clinical field before approval", async () => {
     const fixture = await createFixture(tenantA, "F");
-    const dictation = await client.query(
-      `insert into lumen.dictations
-         (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
-       values ($1, $2, 'transcribed', $3, 'text/plain', 'test-stt',
-               '{"audioStored":false,"source":"browser_microphone"}'::jsonb)
-       returning id`,
-      [tenantA, fixture.encounterId, TEST_TRANSCRIPT]
-    );
+    const dictationId = await createCompletedAudioDictation(tenantA, fixture.encounterId, TEST_TRANSCRIPT);
     await client.query(
       `insert into lumen.clinical_records
          (tenant_id, encounter_id, dictation_id, status, content, provider, model)
        values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
-      [
-        tenantA,
-        fixture.encounterId,
-        dictation.rows[0].id,
-        JSON.stringify({ ...CONTENT, history: "", uncertainties: [] })
-      ]
+      [tenantA, fixture.encounterId, dictationId, JSON.stringify({ ...CONTENT, history: "", uncertainties: [] })]
     );
     await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
       tenantA,
@@ -339,14 +557,7 @@ describeIntegration("LUMEN clinical vertical", () => {
 
   it("rejects approval without grounded evidence and ignores client-forged manual evidence", async () => {
     const fixture = await createFixture(tenantA, "E");
-    const dictation = await client.query(
-      `insert into lumen.dictations
-         (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
-       values ($1, $2, 'transcribed', $3, 'text/plain', 'test-stt',
-               '{"audioStored":false,"source":"browser_microphone"}'::jsonb)
-       returning id`,
-      [tenantA, fixture.encounterId, TEST_TRANSCRIPT]
-    );
+    const dictationId = await createCompletedAudioDictation(tenantA, fixture.encounterId, TEST_TRANSCRIPT);
     const contentWithoutPlanEvidence = {
       ...CONTENT,
       uncertainties: [],
@@ -356,7 +567,7 @@ describeIntegration("LUMEN clinical vertical", () => {
       `insert into lumen.clinical_records
          (tenant_id, encounter_id, dictation_id, status, content, provider, model)
        values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
-      [tenantA, fixture.encounterId, dictation.rows[0].id, JSON.stringify(contentWithoutPlanEvidence)]
+      [tenantA, fixture.encounterId, dictationId, JSON.stringify(contentWithoutPlanEvidence)]
     );
     await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
       tenantA,
@@ -417,10 +628,11 @@ describeIntegration("LUMEN clinical vertical", () => {
       url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/transcriptions`,
       headers,
       payload: {
-        audioBase64: Buffer.from("short-valid-audio").toString("base64"),
+        audioBase64: validWebmAudioBase64(),
         mimeType: "audio/webm",
         source: "authorized_upload",
-        durationSeconds: 8
+        durationSeconds: 8,
+        idempotencyKey: randomUUID()
       }
     });
     expect(transcription.statusCode).toBe(201);
@@ -428,30 +640,89 @@ describeIntegration("LUMEN clinical vertical", () => {
     expect(dictation.transcript).toContain("PIO");
     expect(dictation.source).toBe("authorized_upload");
 
-    const stored = await client.query(`select metadata from lumen.dictations where tenant_id = $1 and id = $2`, [
-      tenantA,
-      dictation.id
-    ]);
+    const stored = await client.query(
+      `select metadata, transcript, provider_transcript, processing_attempt_id,
+              reviewed_at, reviewed_by
+       from lumen.dictations where tenant_id = $1 and id = $2`,
+      [tenantA, dictation.id]
+    );
     expect(stored.rows[0].metadata).toMatchObject({ audioStored: false });
     expect(stored.rows[0].metadata).toMatchObject({ source: "authorized_upload" });
+    expect(stored.rows[0].provider_transcript).toBe(dictation.transcript);
+    expect(stored.rows[0].processing_attempt_id).toBeTruthy();
+    expect(stored.rows[0].reviewed_at).toBeNull();
 
-    const mismatched = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/structure`,
-      headers,
-      payload: { transcript: `${dictation.transcript} Texto editado.`, dictationId: dictation.id }
-    });
-    expect(mismatched.statusCode).toBe(422);
-
+    const reviewedTranscript = `${dictation.transcript} Texto editado por la revisión humana.`;
+    const structureIdempotencyKey = randomUUID();
+    const structureCallsBefore = structureCallCount;
     const structured = await app.inject({
       method: "POST",
       url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/structure`,
       headers,
-      payload: { transcript: dictation.transcript, dictationId: dictation.id }
+      payload: {
+        transcript: reviewedTranscript,
+        dictationId: dictation.id,
+        idempotencyKey: structureIdempotencyKey
+      }
     });
     expect(structured.statusCode).toBe(201);
-    expect(lastStructureOrigin).toBe("voice");
+    const exactStructuredDraft = structured.json().data;
+    expect(exactStructuredDraft.status).toBe("draft");
+    expect(lastStructureOrigin).toBe("voice_reviewed");
     expect(structured.json().data.content.uncertainties).toHaveLength(1);
+    expect(structureCallCount).toBe(structureCallsBefore + 1);
+
+    const structureReplay = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/structure`,
+      headers,
+      payload: {
+        transcript: reviewedTranscript,
+        dictationId: dictation.id,
+        idempotencyKey: structureIdempotencyKey
+      }
+    });
+    expect(structureReplay.statusCode).toBe(200);
+    expect(structureReplay.headers["x-idempotent-replay"]).toBe("true");
+    expect(structureReplay.json().data).toEqual(exactStructuredDraft);
+    expect(structureCallCount).toBe(structureCallsBefore + 1);
+
+    const immutableStructureResult = await client.query(
+      `select result_snapshot, result_sha256, result_version
+       from lumen.processing_attempts
+       where tenant_id = $1 and encounter_id = $2 and operation = 'structuring'
+         and idempotency_key = $3`,
+      [tenantA, encounterA, structureIdempotencyKey]
+    );
+    expect(immutableStructureResult.rows[0].result_snapshot).toEqual(exactStructuredDraft);
+    expect(immutableStructureResult.rows[0].result_sha256).toBe(processingResultSnapshotSha256(exactStructuredDraft));
+    expect(immutableStructureResult.rows[0].result_version.toISOString()).toBe(exactStructuredDraft.updatedAt);
+
+    const reviewedStored = await client.query(
+      `select transcript, provider_transcript, reviewed_at, reviewed_by
+       from lumen.dictations where tenant_id = $1 and id = $2`,
+      [tenantA, dictation.id]
+    );
+    expect(reviewedStored.rows[0]).toMatchObject({
+      transcript: reviewedTranscript,
+      provider_transcript: dictation.transcript,
+      reviewed_by: operatorId
+    });
+    expect(reviewedStored.rows[0].reviewed_at).toBeTruthy();
+    await expect(
+      client.query(
+        `update lumen.dictations set provider_transcript = 'altered'
+         where tenant_id = $1 and id = $2`,
+        [tenantA, dictation.id]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      client.query(
+        `update lumen.processing_attempts set model = 'altered'
+         where id = $1`,
+        [stored.rows[0].processing_attempt_id]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
 
     const durableProcessAudit = await client.query(
       `select event_type, count(*)::int as count
@@ -473,6 +744,16 @@ describeIntegration("LUMEN clinical vertical", () => {
       [tenantA, dictation.id]
     );
     expect(dictationAudit.rows[0].metadata).toMatchObject({ source: "authorized_upload", audioStored: false });
+    const transcriptReviewAudit = await client.query(
+      `select metadata::text as metadata
+       from platform.audit_events
+       where tenant_id = $1 and event_type = 'lumen.dictation.reviewed' and entity_id = $2`,
+      [tenantA, dictation.id]
+    );
+    expect(transcriptReviewAudit.rowCount).toBe(1);
+    expect(transcriptReviewAudit.rows[0].metadata).toContain(sha256ForTest(reviewedTranscript));
+    expect(transcriptReviewAudit.rows[0].metadata).not.toContain(reviewedTranscript);
+    expect(transcriptReviewAudit.rows[0].metadata).not.toContain(dictation.transcript);
 
     await expect(
       client.query(
@@ -520,7 +801,7 @@ describeIntegration("LUMEN clinical vertical", () => {
       expect.arrayContaining([
         expect.objectContaining({
           field: "plan",
-          origin: "voice",
+          origin: "voice_reviewed",
           sourceText: "Plan: control en cuatro semanas"
         }),
         {
@@ -531,6 +812,22 @@ describeIntegration("LUMEN clinical vertical", () => {
         }
       ])
     );
+
+    const replayAfterMutableReview = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/structure`,
+      headers,
+      payload: {
+        transcript: reviewedTranscript,
+        dictationId: dictation.id,
+        idempotencyKey: structureIdempotencyKey
+      }
+    });
+    expect(replayAfterMutableReview.statusCode).toBe(200);
+    expect(replayAfterMutableReview.headers["x-idempotent-replay"]).toBe("true");
+    expect(replayAfterMutableReview.json().data).toEqual(exactStructuredDraft);
+    expect(replayAfterMutableReview.json().data).not.toEqual(patched.json().data);
+    expect(structureCallCount).toBe(structureCallsBefore + 1);
 
     const durableReviewAudit = await client.query(
       `select metadata from platform.audit_events
@@ -578,17 +875,18 @@ describeIntegration("LUMEN clinical vertical", () => {
         url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/transcriptions`,
         headers,
         payload: {
-          audioBase64: Buffer.from("post-approval-audio").toString("base64"),
+          audioBase64: validWebmAudioBase64(),
           mimeType: "audio/webm",
           source: "browser_microphone",
-          durationSeconds: 2
+          durationSeconds: 2,
+          idempotencyKey: randomUUID()
         }
       }),
       app.inject({
         method: "POST",
         url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/structure`,
         headers,
-        payload: { transcript: "Transcript manual posterior a aprobación." }
+        payload: { transcript: "Transcript manual posterior a aprobación.", idempotencyKey: randomUUID() }
       }),
       app.inject({
         method: "PATCH",
@@ -703,6 +1001,40 @@ async function createOperator(tenantId: string): Promise<string> {
     tenantId
   ]);
   return operator.rows[0].id;
+}
+
+async function createCompletedAudioDictation(
+  tenantId: string,
+  encounterId: string,
+  transcript: string
+): Promise<string> {
+  const attempt = await client.query(
+    `insert into lumen.processing_attempts
+       (tenant_id, encounter_id, operation, idempotency_key, input_sha256,
+        provider, model, mime_type, source, duration_seconds)
+     values ($1, $2, 'transcription', $3, $4, 'test-stt', 'test-stt-v1',
+             'audio/webm', 'browser_microphone', 8)
+     returning id`,
+    [tenantId, encounterId, randomUUID(), sha256ForTest(`fixture-audio:${transcript}`)]
+  );
+  const dictation = await client.query(
+    `insert into lumen.dictations
+       (tenant_id, encounter_id, status, transcript, mime_type, provider, model,
+        duration_seconds, metadata, provider_transcript, processing_attempt_id)
+     values ($1, $2, 'transcribed', $3, 'audio/webm', 'test-stt', 'test-stt-v1', 8,
+             '{"audioStored":false,"source":"browser_microphone","temporaryAudioDeleted":true}'::jsonb,
+             $3, $4)
+     returning id`,
+    [tenantId, encounterId, transcript, attempt.rows[0].id]
+  );
+  await client.query(
+    `update lumen.processing_attempts
+     set status = 'completed', result_entity_id = $2, completed_at = now(),
+         temp_audio_deleted_at = now(), updated_at = now()
+     where id = $1`,
+    [attempt.rows[0].id, dictation.rows[0].id]
+  );
+  return dictation.rows[0].id;
 }
 
 async function cleanup(): Promise<void> {

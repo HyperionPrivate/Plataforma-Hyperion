@@ -87,38 +87,100 @@ comando con `--clear` al final, siempre antes de aprobar una HC. Un encuentro ap
 el clear falla cerrado; su retencion o purga requiere un procedimiento clinico separado y controlado.
 No ejecutar el seed general de PULSO IRIS para habilitar LUMEN.
 
-La transcripcion requiere `OPENAI_API_KEY` y usa `OPENAI_STT_MODEL` (por defecto
-`gpt-4o-transcribe`). La estructuracion requiere `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL` y
-`DEEPSEEK_MODEL`. La ausencia de cualquiera de esos proveedores se muestra como no configurado y la
-operacion correspondiente falla cerrada; nunca se genera una salida simulada. El audio se procesa en
-memoria y no se guarda en PostgreSQL ni en volumenes Docker. Solo se conservan la transcripcion, el
-borrador estructurado y la trazabilidad de revision y aprobacion.
+La transcripcion real usa exclusivamente el endpoint batch Speech-to-Text de ElevenLabs con Scribe v2;
+no crea llamadas ni agentes. La referencia oficial vigente es
+[Create transcript](https://elevenlabs.io/docs/api-reference/speech-to-text/convert). La configuracion
+autorizada es:
 
-La captura directa de microfono en navegador requiere HTTPS o `localhost`. Mientras la consola
-productiva se publique por HTTP, la interfaz debe mostrar que la captura directa no esta disponible y
-mantener la carga autorizada o el transcript manual. Habilitar TLS en consola y gateway es requisito
-previo para validar el microfono real en produccion. Ningun registro clinico pasa a `approved` sin una
-accion humana explicita y sin resolver las incertidumbres reportadas por el modelo.
+```dotenv
+ELEVENLABS_API_KEY=
+ELEVENLABS_STT_MODEL=scribe_v2
+ELEVENLABS_STT_LANGUAGE=spa
+ELEVENLABS_STT_TIMEOUT_MS=120000
+ELEVENLABS_ZERO_RETENTION_MODE=true
+LUMEN_AUDIO_TEMP_DIR=/tmp/lumen-audio
+```
+
+La clave debe provisionarse directamente en el `.env` privado del VPS mediante el canal secreto
+autorizado. No copiar claves desde VetIA, logs, terminal compartida, chat ni archivos del repositorio.
+Para comprobar solo nombres y presencia sin imprimir valores:
+
+```bash
+cd /opt/hyperion-platform
+awk -F= '
+  $1 ~ /^(ELEVENLABS_API_KEY|DEEPSEEK_API_KEY)$/ {
+    value = substr($0, index($0, "=") + 1)
+    print $1 "=" (length(value) > 0 ? "present" : "missing")
+  }
+' .env
+```
+
+Cada solicitud ElevenLabs envia `enable_logging=false`. `ELEVENLABS_ZERO_RETENTION_MODE=true` es
+obligatorio y el servicio falla cerrado si se cambia o falta; no existe degradacion silenciosa a
+retencion normal ni a otro proveedor. ElevenLabs documenta que Zero Retention Mode requiere una cuenta
+elegible, normalmente Enterprise: consultar
+[Zero Retention Mode](https://elevenlabs.io/docs/eleven-api/resources/zero-retention-mode). La credencial
+autorizada debe tener esa capacidad activa antes de la primera llamada real; si no la tiene, detener la
+prueba y resolver la habilitacion con ElevenLabs.
+
+La entrada acepta solo MIME de audio permitidos, maximo 5 MiB decodificados y duracion declarada entre
+1 y 90 segundos. Antes de crear el temporal o llamar al proveedor, LUMEN deriva la duracion real del
+contenedor y falla cerrado si no puede determinarla, supera 90 segundos o no coincide con la declarada;
+los timestamps de palabras del proveedor aportan una segunda comprobacion. El archivo vive unicamente
+en el `tmpfs` privado, no ejecutable y limitado del contenedor LUMEN; se elimina en `finally` tanto en
+exito como en error. No se guardan audio, base64, identificadores crudos del proveedor ni transcript
+completo en logs. PostgreSQL conserva el transcript, revision humana, proveedor/modelo, duracion
+verificada, estados, timestamps, hashes tecnicos e idempotencia.
+
+La estructuracion usa exclusivamente `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL` y `DEEPSEEK_MODEL`.
+La ausencia de ElevenLabs o DeepSeek se muestra como proveedor no configurado y la operacion falla
+cerrada; nunca se genera una salida simulada ni se cambia a OpenAI. El transcript de proveedor se
+conserva separado del transcript revisado. Toda HC queda en `draft`, con fuentes, confianza e
+incertidumbres, hasta una accion humana explicita; el pipeline nunca aprueba automaticamente.
+
+La captura y la carga de audio en navegador requieren HTTPS seguro o un origen loopback exacto. Mientras
+la consola productiva se publique por HTTP, la URL IP bloquea toda salida de audio y mantiene unicamente
+el transcript manual; tampoco debe solicitar permisos de microfono. Para una prueba personal autorizada
+sin habilitar TLS global, crear un tunel local (no compartirlo ni usar `-g`):
+
+```bash
+ssh -N -L 127.0.0.1:19000:127.0.0.1:19000 contabo
+```
+
+Con el tunel activo, abrir exactamente `http://localhost:19000/lumen/dictado`. La consola detecta
+`localhost` y envia `/api` por su proxy interno al gateway, por lo que no requiere publicar PostgreSQL
+ni abrir otro puerto. El operador debe iniciar personalmente la grabacion y conceder el permiso del
+navegador; nadie debe pulsar el microfono ni aceptar permisos en su nombre. Usar solo una frase clinica
+sintetica en el encuentro demo, nunca nombres, documentos ni datos de un paciente real.
 
 ### Despliegue acotado de LUMEN
 
-Despues del backup validado y con `main` fusionado y verde, LUMEN se despliega sin recrear PULSO IRIS,
-el gateway ni PostgreSQL:
+Despues del backup validado y con `main` fusionado y verde, capturar primero IDs e imagenes de
+PostgreSQL, PULSO IRIS y WhatsApp. Si el encuentro demo ya existe, no ejecutar ningun seed durante el
+deploy. El seed LUMEN solo corresponde al aprovisionamiento inicial controlado, nunca a una
+actualizacion de una demo existente.
+
+Construir y migrar, y luego desplegar exclusivamente las imagenes modificadas en el orden backend,
+gateway (solo si su codigo cambio) y consola. No ejecutar `up` sobre el proyecto completo:
 
 ```bash
-docker compose --env-file .env -f infra/docker-compose.yml build migrations lumen-service web-console
+docker compose --env-file .env -f infra/docker-compose.yml build \
+  migrations lumen-service api-gateway web-console
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
   migrations node packages/migrations/dist/index.js
-docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
-  migrations node packages/migrations/dist/seed-lumen-demo.js
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 lumen-service
+docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
+  --wait --wait-timeout 120 api-gateway
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 web-console
 ```
 
-Antes y despues se comparan los identificadores de contenedor e imagen de `pulso-iris-service` y
-`api-gateway`; deben permanecer iguales. Nunca ejecutar el seed general para habilitar esta demo.
+Esperar el `healthy` de cada etapa antes de continuar. Confirmar `020-lumen-real-audio-pipeline.sql`,
+readiness, rutas profundas y logs sanitizados. Antes y despues comparar IDs e imagenes de `postgres`,
+`pulso-iris-service` y `whatsapp-channel-service`; deben permanecer exactamente iguales. Si el gateway
+no cambio, omitir su build/up y confirmar tambien que conserva ID e imagen. Nunca ejecutar el seed
+general para habilitar esta demo.
 
 ## Durabilidad del canal WhatsApp privado
 

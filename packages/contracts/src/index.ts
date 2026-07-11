@@ -1073,13 +1073,29 @@ export const lumenEncounterStatusSchema = z.enum(["preconsultation", "in_progres
 export const lumenDictationStatusSchema = z.enum(["transcribed", "failed"]);
 export const lumenClinicalRecordStatusSchema = z.enum(["draft", "approved"]);
 export const lumenTranscriptionSourceSchema = z.enum(["browser_microphone", "authorized_upload"]);
+export const lumenProcessingOperationSchema = z.enum(["transcription", "structuring"]);
+export const lumenProcessingStatusSchema = z.enum(["processing", "completed", "failed", "cancelled"]);
+export const lumenAudioMimeTypeSchema = z.enum([
+  "audio/aac",
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/ogg",
+  "audio/ogg;codecs=opus",
+  "audio/wav",
+  "audio/webm",
+  "audio/webm;codecs=opus",
+  "audio/x-m4a",
+  "audio/x-wav"
+]);
+export const lumenAudioMaxBytes = 5 * 1024 * 1024;
+export const lumenAudioMaxBase64Length = Math.ceil(lumenAudioMaxBytes / 3) * 4;
 export const lumenDictationSourceSchema = z.enum([
   "browser_microphone",
   "authorized_upload",
   "manual_entry",
   "synthetic_demo"
 ]);
-export const lumenFieldEvidenceOriginSchema = z.enum(["voice", "manual", "synthetic_demo"]);
+export const lumenFieldEvidenceOriginSchema = z.enum(["voice", "voice_reviewed", "manual", "synthetic_demo"]);
 export const lumenClinicalFieldSchema = z.enum([
   "reasonForVisit",
   "history",
@@ -1261,7 +1277,13 @@ export const lumenDictationSchema = z.object({
   source: lumenDictationSourceSchema,
   provider: z.string().nullable(),
   model: z.string().nullable(),
-  durationSeconds: z.number().int().nonnegative().nullable(),
+  durationSeconds: z.number().int().min(1).max(90).nullable(),
+  providerTranscript: z.string().max(20_000).nullable().default(null),
+  reviewedAt: z
+    .preprocess((value) => (value instanceof Date ? value.toISOString() : value), z.string().datetime().nullable())
+    .default(null),
+  reviewedBy: z.string().uuid().nullable().default(null),
+  processingAttemptId: z.string().uuid().nullable().default(null),
   createdAt: isoDateTime
 });
 
@@ -1288,16 +1310,47 @@ export const lumenEncounterDetailSchema = z.object({
   clinicalRecord: lumenClinicalRecordSchema.nullable()
 });
 
+const lumenAudioBase64Schema = z
+  .string()
+  .min(20)
+  .max(lumenAudioMaxBase64Length)
+  .regex(/^[A-Za-z0-9+/]+={0,2}$/)
+  .refine((value) => value.length % 4 === 0, "audioBase64 must use canonical base64 padding")
+  .refine((value) => {
+    const paddingBytes = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+    return (value.length / 4) * 3 - paddingBytes <= lumenAudioMaxBytes;
+  }, "audioBase64 exceeds the 5 MiB decoded limit");
+
 export const lumenTranscriptionInputSchema = z.object({
-  audioBase64: z.string().min(20).max(900_000),
-  mimeType: z.string().regex(/^audio\//),
+  audioBase64: lumenAudioBase64Schema,
+  mimeType: lumenAudioMimeTypeSchema,
   source: lumenTranscriptionSourceSchema,
-  durationSeconds: z.number().int().min(1).max(90).optional()
+  durationSeconds: z.number().int().min(1).max(90),
+  idempotencyKey: z.string().uuid()
 });
 
 export const lumenStructureInputSchema = z.object({
-  transcript: z.string().trim().min(10).max(20_000),
-  dictationId: z.string().uuid().optional()
+  transcript: z
+    .string()
+    .trim()
+    .min(10)
+    .max(20_000)
+    .refine(
+      (value) =>
+        !Array.from(value).some((character) => {
+          const codePoint = character.codePointAt(0)!;
+          return (
+            codePoint <= 8 ||
+            codePoint === 11 ||
+            codePoint === 12 ||
+            (codePoint >= 14 && codePoint <= 31) ||
+            codePoint === 127
+          );
+        }),
+      "transcript contains unsupported control characters"
+    ),
+  dictationId: z.string().uuid().optional(),
+  idempotencyKey: z.string().uuid()
 });
 
 export const lumenClinicalRecordPatchSchema = z.object({
@@ -1306,6 +1359,9 @@ export const lumenClinicalRecordPatchSchema = z.object({
 
 export type LumenEncounterStatus = z.infer<typeof lumenEncounterStatusSchema>;
 export type LumenTranscriptionSource = z.infer<typeof lumenTranscriptionSourceSchema>;
+export type LumenAudioMimeType = z.infer<typeof lumenAudioMimeTypeSchema>;
+export type LumenProcessingOperation = z.infer<typeof lumenProcessingOperationSchema>;
+export type LumenProcessingStatus = z.infer<typeof lumenProcessingStatusSchema>;
 export type LumenDictationSource = z.infer<typeof lumenDictationSourceSchema>;
 export type LumenFieldEvidenceOrigin = z.infer<typeof lumenFieldEvidenceOriginSchema>;
 export type LumenClinicalField = z.infer<typeof lumenClinicalFieldSchema>;

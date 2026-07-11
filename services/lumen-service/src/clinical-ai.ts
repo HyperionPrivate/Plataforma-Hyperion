@@ -5,6 +5,7 @@ import {
   type LumenClinicalRecordContent,
   type LumenFieldEvidenceOrigin
 } from "@hyperion/contracts";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export class ProviderNotConfiguredError extends Error {
@@ -21,30 +22,23 @@ export class ProviderRequestError extends Error {
   }
 }
 
-export interface TranscriptionResult {
-  transcript: string;
-  provider: string;
-  model: string;
-}
-
 export interface ClinicalStructureResult {
   content: LumenClinicalRecordContent;
   provider: string;
   model: string;
-}
-
-export interface ClinicalTranscriber {
-  readonly name: string;
-  readonly model: string;
-  isConfigured(): boolean;
-  transcribe(audioBase64: string, mimeType: string): Promise<TranscriptionResult>;
+  requestIdHash?: string | null;
+  traceIdHash?: string | null;
 }
 
 export interface ClinicalStructurer {
   readonly name: string;
   readonly model: string;
   isConfigured(): boolean;
-  structure(transcript: string, evidenceOrigin?: LumenFieldEvidenceOrigin): Promise<ClinicalStructureResult>;
+  structure(
+    transcript: string,
+    evidenceOrigin?: LumenFieldEvidenceOrigin,
+    signal?: AbortSignal
+  ): Promise<ClinicalStructureResult>;
 }
 
 export interface ClinicalEvidenceIssue {
@@ -183,66 +177,6 @@ function normalizeClinicalText(value: string): string {
     .replace(/\s+/g, " ");
 }
 
-export class OpenAiClinicalTranscriber implements ClinicalTranscriber {
-  readonly name = "openai";
-  readonly model: string;
-  private readonly apiKey?: string;
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(options: { apiKey?: string; model?: string; fetchImpl?: typeof fetch } = {}) {
-    this.apiKey = options.apiKey ?? process.env.OPENAI_API_KEY?.trim();
-    this.model = options.model ?? process.env.OPENAI_STT_MODEL ?? "gpt-4o-transcribe";
-    this.fetchImpl = options.fetchImpl ?? fetch;
-  }
-
-  isConfigured(): boolean {
-    return Boolean(this.apiKey);
-  }
-
-  async transcribe(audioBase64: string, mimeType: string): Promise<TranscriptionResult> {
-    if (!this.apiKey) throw new ProviderNotConfiguredError("OpenAI STT");
-
-    let buffer: Buffer;
-    try {
-      buffer = Buffer.from(audioBase64, "base64");
-    } catch {
-      throw new ProviderRequestError("OpenAI STT", "invalid audio payload");
-    }
-    if (buffer.length === 0 || buffer.length > 675_000) {
-      throw new ProviderRequestError("OpenAI STT", "audio must be between 1 byte and 675 KB");
-    }
-
-    const form = new FormData();
-    const bytes = Uint8Array.from(buffer);
-    form.append("file", new Blob([bytes], { type: mimeType }), `dictation.${audioExtension(mimeType)}`);
-    form.append("model", this.model);
-    form.append("language", "es");
-    form.append("response_format", "json");
-    form.append(
-      "prompt",
-      "Consulta de oftalmologia en español. Conservar OD, OI, AO, PIO, agudeza visual, biomicroscopia, fondo de ojo, OCT y campimetria."
-    );
-
-    let response: Response;
-    try {
-      response = await this.fetchImpl("https://api.openai.com/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { authorization: `Bearer ${this.apiKey}` },
-        body: form,
-        signal: AbortSignal.timeout(60_000)
-      });
-    } catch (error) {
-      throw new ProviderRequestError("OpenAI STT", sanitizeProviderError(error));
-    }
-
-    if (!response.ok) throw new ProviderRequestError("OpenAI STT", `status ${response.status}`);
-    const payload = z.object({ text: z.string() }).parse(await response.json());
-    const transcript = payload.text.trim();
-    if (!transcript) throw new ProviderRequestError("OpenAI STT", "empty transcript");
-    return { transcript, provider: this.name, model: this.model };
-  }
-}
-
 const deepSeekResponseSchema = z.object({
   model: z.string().optional(),
   choices: z
@@ -283,7 +217,8 @@ export class DeepSeekClinicalStructurer implements ClinicalStructurer {
 
   async structure(
     transcript: string,
-    evidenceOrigin: LumenFieldEvidenceOrigin = "voice"
+    evidenceOrigin: LumenFieldEvidenceOrigin = "voice",
+    signal?: AbortSignal
   ): Promise<ClinicalStructureResult> {
     if (!this.apiKey) throw new ProviderNotConfiguredError("DeepSeek");
 
@@ -306,7 +241,7 @@ export class DeepSeekClinicalStructurer implements ClinicalStructurer {
           thinking: { type: "disabled" },
           stream: false
         }),
-        signal: AbortSignal.timeout(30_000)
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000)
       });
     } catch (error) {
       throw new ProviderRequestError("DeepSeek", sanitizeProviderError(error));
@@ -329,7 +264,13 @@ export class DeepSeekClinicalStructurer implements ClinicalStructurer {
     const parsed = lumenClinicalRecordContentSchema.safeParse(json);
     if (!parsed.success) throw new ProviderRequestError("DeepSeek", "structured output failed validation");
     const content = normalizeStructuredClinicalContent(parsed.data, transcript, evidenceOrigin);
-    return { content, provider: this.name, model: payload.model ?? this.model };
+    return {
+      content,
+      provider: this.name,
+      model: payload.model ?? this.model,
+      requestIdHash: hashOpaqueIdentifier(response.headers.get("x-request-id") ?? response.headers.get("request-id")),
+      traceIdHash: hashOpaqueIdentifier(response.headers.get("x-trace-id"))
+    };
   }
 }
 
@@ -409,7 +350,7 @@ const clinicalRecordTool = {
                 ]
               },
               confidence: { type: "number", minimum: 0, maximum: 1 },
-              origin: { type: "string", enum: ["voice", "manual", "synthetic_demo"] },
+              origin: { type: "string", enum: ["voice", "voice_reviewed", "manual", "synthetic_demo"] },
               sourceText: { type: ["string", "null"] }
             },
             required: ["field", "confidence", "origin", "sourceText"]
@@ -433,14 +374,6 @@ const clinicalRecordTool = {
   }
 };
 
-function audioExtension(mimeType: string): string {
-  if (mimeType.includes("ogg")) return "ogg";
-  if (mimeType.includes("wav")) return "wav";
-  if (mimeType.includes("mpeg") || mimeType.includes("mp3")) return "mp3";
-  if (mimeType.includes("mp4") || mimeType.includes("m4a")) return "m4a";
-  return "webm";
-}
-
 function extractJson(text: string): string | undefined {
   const match = text.match(/\{[\s\S]*\}/);
   return match?.[0];
@@ -449,4 +382,9 @@ function extractJson(text: string): string | undefined {
 function sanitizeProviderError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 160);
+}
+
+function hashOpaqueIdentifier(value: string | null): string | null {
+  const identifier = value?.trim();
+  return identifier ? createHash("sha256").update(identifier).digest("hex") : null;
 }

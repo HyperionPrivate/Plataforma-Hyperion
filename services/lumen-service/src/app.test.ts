@@ -21,7 +21,15 @@ describe("lumen-service", () => {
 
     const health = await app.inject({ method: "GET", url: "/v1/lumen/health" });
     expect(health.statusCode).toBe(200);
-    expect(health.json().data.providers).toEqual({ transcriptionConfigured: false, structuringConfigured: false });
+    expect(health.json().data.providers).toMatchObject({
+      transcriptionConfigured: false,
+      transcriptionProvider: "elevenlabs",
+      transcriptionModel: "scribe_v2",
+      transcriptionLanguage: "spa",
+      zeroRetentionRequired: true,
+      structuringConfigured: false,
+      structuringProvider: "deepseek"
+    });
   });
 
   it("rejects invalid tenants and reports a missing database", async () => {

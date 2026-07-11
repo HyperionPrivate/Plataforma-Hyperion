@@ -13,7 +13,6 @@ import {
   tenantIdSchema,
   type LumenClinicalField,
   type LumenClinicalRecord,
-  type LumenDictationSource,
   type LumenEncounterDetail,
   type LumenFieldEvidenceOrigin,
   type LumenWorklistEntry
@@ -21,6 +20,7 @@ import {
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { createHash } from "node:crypto";
 import type { z } from "zod";
 import type { LumenAuditEmitter } from "./audit-client.js";
 import {
@@ -30,12 +30,21 @@ import {
   normalizeStructuredClinicalContent,
   ProviderNotConfiguredError,
   ProviderRequestError,
-  type ClinicalStructurer,
-  type ClinicalTranscriber
+  type ClinicalStructurer
 } from "./clinical-ai.js";
+import {
+  completeProcessingAttempt,
+  failProcessingAttempt,
+  processingResultSnapshotSha256,
+  reserveProcessingAttempt,
+  type ProcessingAttemptReservation
+} from "./processing-attempts.js";
+import { isSpeechToTextError } from "./provider-errors.js";
+import { createRequestAbortSignal } from "./request-abort.js";
+import { decodeBase64SpeechToTextInput, type SpeechToTextProvider, type SpeechToTextResult } from "./speech-to-text.js";
 
 export interface LumenRouteDependencies {
-  transcriber: ClinicalTranscriber;
+  transcriber: SpeechToTextProvider;
   structurer: ClinicalStructurer;
   emitAudit: LumenAuditEmitter;
 }
@@ -69,7 +78,18 @@ interface DictationRow {
   provider: string | null;
   model: string | null;
   durationSeconds: number | null;
+  providerTranscript: string | null;
+  reviewedAt: Date | string | null;
+  reviewedBy: string | null;
+  processingAttemptId: string | null;
   createdAt: Date | string;
+}
+
+interface DictationSnapshot {
+  transcript: string;
+  providerTranscript: string | null;
+  source: string;
+  reviewedAt: Date | string | null;
 }
 
 interface RecordRow {
@@ -143,94 +163,193 @@ export async function registerLumenRoutes(
     return envelope(detail, request.id);
   });
 
-  app.post("/v1/tenants/:tenantId/lumen/encounters/:encounterId/transcriptions", async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
-    if (!scope) return;
-    if (!requireClinicalWrite(request, reply)) return;
-    const encounterId = readUuid(request.params, "encounterId");
-    if (!encounterId) return reply.code(400).send(envelope({ error: "encounterId must be a UUID" }, request.id));
-    const input = parseBody(lumenTranscriptionInputSchema, request, reply);
-    if (!input) return;
-    if (!(await requireMutableEncounter(scope.db, scope.tenantId, encounterId, request, reply))) return;
-    const operatorId = readOperatorId(request);
-    if (!operatorId) return reply.code(400).send(envelope({ error: "x-operator-id must be a UUID" }, request.id));
-    if (!dependencies.transcriber.isConfigured()) {
-      return reply.code(503).send(envelope({ error: "Clinical transcription provider is not configured" }, request.id));
-    }
+  app.post(
+    "/v1/tenants/:tenantId/lumen/encounters/:encounterId/transcriptions",
+    { bodyLimit: 8 * 1024 * 1024 },
+    async (request, reply) => {
+      const scope = requireTenantDb(context, request, reply);
+      if (!scope) return;
+      if (!requireClinicalWrite(request, reply)) return;
+      const encounterId = readUuid(request.params, "encounterId");
+      if (!encounterId) return reply.code(400).send(envelope({ error: "encounterId must be a UUID" }, request.id));
+      const input = parseBody(lumenTranscriptionInputSchema, request, reply);
+      if (!input) return;
+      if (!(await requireMutableEncounter(scope.db, scope.tenantId, encounterId, request, reply))) return;
+      const operatorId = readOperatorId(request);
+      if (!operatorId) return reply.code(400).send(envelope({ error: "x-operator-id must be a UUID" }, request.id));
+      if (!dependencies.transcriber.isConfigured()) {
+        return reply
+          .code(503)
+          .send(envelope({ error: "Clinical transcription provider is not configured" }, request.id));
+      }
 
-    try {
-      const transcription = await dependencies.transcriber.transcribe(input.audioBase64, input.mimeType);
-      const outcome = await scope.db.transaction(async (client) => {
-        const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
-        if (mutable !== "mutable") return { state: mutable } as const;
-
-        const result = await client.query<DictationRow>(
-          `insert into lumen.dictations
-             (tenant_id, encounter_id, status, transcript, mime_type, provider, model, duration_seconds,
-              metadata)
-           values ($1, $2, 'transcribed', $3, $4, $5, $6, $7,
-                   jsonb_build_object('audioStored', false, 'source', $8::text))
-           returning id, tenant_id as "tenantId", encounter_id as "encounterId", status,
-                     transcript, mime_type as "mimeType", metadata->>'source' as source, provider, model,
-                     duration_seconds as "durationSeconds", created_at as "createdAt"`,
-          [
-            scope.tenantId,
-            encounterId,
-            transcription.transcript,
-            input.mimeType,
-            transcription.provider,
-            transcription.model,
-            input.durationSeconds ?? null,
-            input.source
-          ]
-        );
-        await client.query(
-          `update lumen.encounters set status = 'in_progress', updated_at = now()
-           where tenant_id = $1 and id = $2 and status <> 'approved'`,
-          [scope.tenantId, encounterId]
-        );
-        const dictation = lumenDictationSchema.parse(result.rows[0]);
-        await insertDurableAudit(client, {
-          tenantId: scope.tenantId,
-          actorId: operatorId,
-          eventType: "lumen.dictation.transcribed",
-          entityType: "lumen_dictation",
-          entityId: dictation.id,
-          metadata: {
-            encounterId,
-            provider: transcription.provider,
-            model: transcription.model,
-            source: input.source,
-            audioStored: false
-          }
+      let prepared;
+      try {
+        prepared = decodeBase64SpeechToTextInput({
+          audioBase64: input.audioBase64,
+          mimeType: input.mimeType,
+          durationSeconds: input.durationSeconds
         });
-        return { state: "created", dictation } as const;
-      });
+      } catch (error) {
+        return sendSpeechToTextError(reply, request, error);
+      }
 
-      if (outcome.state === "not_found") {
-        return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
-      }
-      if (outcome.state === "approved") {
-        return reply.code(409).send(envelope({ error: "Approved encounters are immutable" }, request.id));
-      }
-      return reply.code(201).send(envelope(outcome.dictation, request.id));
-    } catch (error) {
-      if (error instanceof ProviderNotConfiguredError || error instanceof ProviderRequestError) {
-        await recordFailedDictation(scope.db, {
+      const reservation = await scope.db.transaction(async (client) => {
+        const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
+        if (mutable === "not_found") return { state: "not_found" } as const;
+        if (mutable === "approved") return { state: "approved" } as const;
+        return reserveProcessingAttempt(client, {
           tenantId: scope.tenantId,
           encounterId,
-          operatorId,
-          mimeType: input.mimeType,
+          operation: "transcription",
+          idempotencyKey: input.idempotencyKey,
+          inputSha256: prepared.audioSha256,
           provider: dependencies.transcriber.name,
           model: dependencies.transcriber.model,
-          durationSeconds: input.durationSeconds ?? null,
+          mimeType: prepared.mimeType,
           source: input.source,
-          errorCode: error.name.slice(0, 120)
+          durationSeconds: input.durationSeconds
         });
+      });
+      if (reservation.state === "not_found") {
+        return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
       }
-      return sendProviderError(reply, request, error);
+      if (reservation.state === "approved") {
+        return reply.code(409).send(envelope({ error: "Approved encounters are immutable" }, request.id));
+      }
+      if (reservation.state === "replay") {
+        const dictation = await loadDictation(scope.db, scope.tenantId, encounterId, reservation.resultEntityId);
+        if (!dictation)
+          return reply.code(409).send(envelope({ error: "Idempotent result is unavailable" }, request.id));
+        return reply.header("x-idempotent-replay", "true").code(200).send(envelope(dictation, request.id));
+      }
+      if (reservation.state !== "reserved") return sendReservationConflict(reply, request, reservation);
+
+      const requestAbort = createRequestAbortSignal(request, reply);
+      let transcription: SpeechToTextResult | undefined;
+      try {
+        transcription = await dependencies.transcriber.transcribe({ ...prepared, signal: requestAbort.signal });
+        throwIfRequestAborted(requestAbort.signal);
+        const completedTranscription = transcription;
+        const outcome = await scope.db.transaction(async (client) => {
+          const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
+          if (mutable !== "mutable") return { state: mutable } as const;
+          throwIfRequestAborted(requestAbort.signal);
+
+          const result = await client.query<DictationRow>(
+            `insert into lumen.dictations
+             (tenant_id, encounter_id, status, transcript, mime_type, provider, model, duration_seconds,
+              metadata, provider_transcript, processing_attempt_id)
+           values ($1, $2, 'transcribed', $3, $4, $5, $6, $7,
+                   jsonb_build_object('audioStored', false, 'source', $8::text,
+                                      'temporaryAudioDeleted', true), $3, $9)
+           returning id, tenant_id as "tenantId", encounter_id as "encounterId", status,
+                     transcript, mime_type as "mimeType", metadata->>'source' as source, provider, model,
+                     duration_seconds as "durationSeconds", provider_transcript as "providerTranscript",
+                     reviewed_at as "reviewedAt", reviewed_by as "reviewedBy",
+                     processing_attempt_id as "processingAttemptId", created_at as "createdAt"`,
+            [
+              scope.tenantId,
+              encounterId,
+              completedTranscription.transcript,
+              prepared.mimeType,
+              completedTranscription.provider,
+              completedTranscription.model,
+              Math.max(1, Math.min(90, Math.round(completedTranscription.durationSeconds))),
+              input.source,
+              reservation.attemptId
+            ]
+          );
+          await client.query(
+            `update lumen.encounters set status = 'in_progress', updated_at = now()
+           where tenant_id = $1 and id = $2 and status <> 'approved'`,
+            [scope.tenantId, encounterId]
+          );
+          const dictation = lumenDictationSchema.parse(result.rows[0]);
+          await completeProcessingAttempt(client, {
+            attemptId: reservation.attemptId,
+            tenantId: scope.tenantId,
+            encounterId,
+            operation: "transcription",
+            resultEntityId: dictation.id,
+            provider: completedTranscription.provider,
+            model: completedTranscription.model,
+            requestIdHash: completedTranscription.requestIdHash,
+            traceIdHash: completedTranscription.traceIdHash,
+            temporaryAudioDeleted: completedTranscription.temporaryAudioDeleted
+          });
+          await insertDurableAudit(client, {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: "lumen.dictation.transcribed",
+            entityType: "lumen_dictation",
+            entityId: dictation.id,
+            metadata: {
+              encounterId,
+              provider: completedTranscription.provider,
+              model: completedTranscription.model,
+              source: input.source,
+              audioStored: false,
+              temporaryAudioDeleted: true,
+              processingAttemptId: reservation.attemptId
+            }
+          });
+          throwIfRequestAborted(requestAbort.signal);
+          return { state: "created", dictation } as const;
+        });
+
+        if (outcome.state === "not_found") {
+          await failProcessingAttempt(scope.db, {
+            attemptId: reservation.attemptId,
+            errorCode: "encounter_not_found",
+            cancelled: false,
+            temporaryAudioDeleted: transcription.temporaryAudioDeleted
+          });
+          return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
+        }
+        if (outcome.state === "approved") {
+          await failProcessingAttempt(scope.db, {
+            attemptId: reservation.attemptId,
+            errorCode: "encounter_approved",
+            cancelled: false,
+            temporaryAudioDeleted: transcription.temporaryAudioDeleted
+          });
+          return reply.code(409).send(envelope({ error: "Approved encounters are immutable" }, request.id));
+        }
+        return reply.code(201).send(envelope(outcome.dictation, request.id));
+      } catch (error) {
+        const cancelled = requestAbort.signal.aborted || (isSpeechToTextError(error) && error.code === "cancelled");
+        await scope.db.transaction(async (client) => {
+          await failProcessingAttempt(client, {
+            attemptId: reservation.attemptId,
+            errorCode: isSpeechToTextError(error) ? error.code : "transcription_failed",
+            cancelled,
+            temporaryAudioDeleted:
+              transcription?.temporaryAudioDeleted === true ||
+              (isSpeechToTextError(error) && error.temporaryAudioDeleted === true)
+          });
+          await insertDurableAudit(client, {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: cancelled ? "lumen.transcription.cancelled" : "lumen.transcription.failed",
+            entityType: "lumen_processing_attempt",
+            entityId: reservation.attemptId,
+            metadata: {
+              encounterId,
+              provider: dependencies.transcriber.name,
+              model: dependencies.transcriber.model,
+              source: input.source,
+              audioStored: false
+            }
+          });
+        });
+        if (cancelled && reply.raw.destroyed) return;
+        return sendSpeechToTextError(reply, request, error);
+      } finally {
+        requestAbort.cleanup();
+      }
     }
-  });
+  );
 
   app.post("/v1/tenants/:tenantId/lumen/encounters/:encounterId/structure", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
@@ -247,42 +366,68 @@ export async function registerLumenRoutes(
       return reply.code(503).send(envelope({ error: "Clinical structuring provider is not configured" }, request.id));
     }
 
-    try {
-      const requestedDictationId = input.dictationId;
-      let evidenceOrigin: LumenFieldEvidenceOrigin = "manual";
-      if (requestedDictationId) {
-        const dictation = await scope.db.query<{ transcript: string; source: string }>(
-          `select transcript,
-                  coalesce(metadata->>'source',
-                    case when provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source
-           from lumen.dictations
-           where tenant_id = $1 and encounter_id = $2 and id = $3 and status = 'transcribed'`,
-          [scope.tenantId, encounterId, requestedDictationId]
-        );
-        if (dictation.rowCount === 0) {
-          return reply.code(422).send(envelope({ error: "dictationId does not belong to this encounter" }, request.id));
-        }
-        if (dictation.rows[0]!.transcript !== input.transcript) {
-          return reply.code(422).send(envelope({ error: "Transcript does not match dictationId" }, request.id));
-        }
-        evidenceOrigin = evidenceOriginForSource(dictation.rows[0]!.source);
+    const requestedDictationId = input.dictationId;
+    let dictationSnapshot: DictationSnapshot | undefined;
+    let evidenceOrigin: LumenFieldEvidenceOrigin = "manual";
+    if (requestedDictationId) {
+      const dictation = await loadDictationSnapshot(scope.db, scope.tenantId, encounterId, requestedDictationId);
+      if (!dictation) {
+        return reply.code(422).send(envelope({ error: "dictationId does not belong to this encounter" }, request.id));
       }
-      const recordSnapshot = await scope.db.query<{ updatedAt: string }>(
-        `select updated_at::text as "updatedAt" from lumen.clinical_records
-         where tenant_id = $1 and encounter_id = $2`,
-        [scope.tenantId, encounterId]
-      );
-      const expectedRecordVersion = recordSnapshot.rows[0]?.updatedAt ?? null;
-      const structured = await dependencies.structurer.structure(input.transcript, evidenceOrigin);
+      dictationSnapshot = dictation;
+      evidenceOrigin = evidenceOriginForDictation(dictation);
+    }
+
+    const inputSha256 = structureInputSha256(requestedDictationId, input.transcript);
+    const reservation = await scope.db.transaction(async (client) => {
+      const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
+      if (mutable === "not_found") return { state: "not_found" } as const;
+      if (mutable === "approved") return { state: "approved" } as const;
+      return reserveProcessingAttempt(client, {
+        tenantId: scope.tenantId,
+        encounterId,
+        operation: "structuring",
+        idempotencyKey: input.idempotencyKey,
+        inputSha256,
+        provider: dependencies.structurer.name,
+        model: dependencies.structurer.model
+      });
+    });
+    if (reservation.state === "not_found") {
+      return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
+    }
+    if (reservation.state === "approved") {
+      return reply.code(409).send(envelope({ error: "Approved encounters are immutable" }, request.id));
+    }
+    if (reservation.state === "replay") {
+      const record = parseStructuringReplaySnapshot(reservation, scope.tenantId, encounterId);
+      if (!record) {
+        return reply.code(409).send(envelope({ error: "Idempotent result is unavailable or invalid" }, request.id));
+      }
+      return reply.header("x-idempotent-replay", "true").code(200).send(envelope(record, request.id));
+    }
+    if (reservation.state !== "reserved") return sendReservationConflict(reply, request, reservation);
+
+    const recordSnapshot = await scope.db.query<{ updatedAt: string }>(
+      `select updated_at::text as "updatedAt" from lumen.clinical_records
+       where tenant_id = $1 and encounter_id = $2`,
+      [scope.tenantId, encounterId]
+    );
+    const expectedRecordVersion = recordSnapshot.rows[0]?.updatedAt ?? null;
+    const requestAbort = createRequestAbortSignal(request, reply);
+    try {
+      const structured = await dependencies.structurer.structure(input.transcript, evidenceOrigin, requestAbort.signal);
       const structuredContent = normalizeStructuredClinicalContent(
         structured.content,
         input.transcript,
         evidenceOrigin
       );
+      throwIfRequestAborted(requestAbort.signal);
 
       const outcome = await scope.db.transaction(async (client) => {
         const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
         if (mutable !== "mutable") return { state: mutable } as const;
+        throwIfRequestAborted(requestAbort.signal);
 
         const currentRecord = await client.query<{ updatedAt: string }>(
           `select updated_at::text as "updatedAt" from lumen.clinical_records
@@ -293,34 +438,70 @@ export async function registerLumenRoutes(
         if ((currentRecord.rows[0]?.updatedAt ?? null) !== expectedRecordVersion) {
           return { state: "record_changed" } as const;
         }
+        throwIfRequestAborted(requestAbort.signal);
 
         let dictationId = requestedDictationId;
         if (requestedDictationId) {
-          const dictation = await client.query<{ transcript: string; source: string }>(
-            `select transcript,
+          const dictation = await client.query<DictationSnapshot>(
+            `select transcript, provider_transcript as "providerTranscript",
+                    reviewed_at as "reviewedAt",
                     coalesce(metadata->>'source',
                       case when provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source
              from lumen.dictations
-             where tenant_id = $1 and encounter_id = $2 and id = $3 and status = 'transcribed'`,
+             where tenant_id = $1 and encounter_id = $2 and id = $3 and status = 'transcribed'
+             for update`,
             [scope.tenantId, encounterId, requestedDictationId]
           );
           if (dictation.rowCount === 0) return { state: "dictation_not_found" } as const;
-          if (
-            dictation.rows[0]!.transcript !== input.transcript ||
-            evidenceOriginForSource(dictation.rows[0]!.source) !== evidenceOrigin
-          ) {
+          if (!dictationSnapshot || !sameDictationSnapshot(dictation.rows[0]!, dictationSnapshot)) {
             return { state: "dictation_changed" } as const;
           }
+          const previousTranscriptHash = sha256Text(dictation.rows[0]!.transcript);
+          await client.query(
+            `update lumen.dictations
+             set transcript = $4, reviewed_at = now(), reviewed_by = $5
+             where tenant_id = $1 and encounter_id = $2 and id = $3`,
+            [scope.tenantId, encounterId, requestedDictationId, input.transcript, operatorId]
+          );
+          await insertDurableAudit(client, {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: "lumen.dictation.reviewed",
+            entityType: "lumen_dictation",
+            entityId: requestedDictationId,
+            metadata: {
+              encounterId,
+              transcriptChanged: dictation.rows[0]!.transcript !== input.transcript,
+              previousTranscriptHash,
+              reviewedTranscriptHash: sha256Text(input.transcript),
+              contentStoredInAudit: false
+            }
+          });
         } else {
           const dictation = await client.query<{ id: string }>(
             `insert into lumen.dictations
-               (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
+               (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata,
+                reviewed_at, reviewed_by)
              values ($1, $2, 'transcribed', $3, 'text/plain', 'manual',
-                     '{"audioStored":false,"source":"manual_entry"}'::jsonb)
+                     '{"audioStored":false,"source":"manual_entry"}'::jsonb, now(), $4)
              returning id`,
-            [scope.tenantId, encounterId, input.transcript]
+            [scope.tenantId, encounterId, input.transcript, operatorId]
           );
           dictationId = dictation.rows[0]!.id;
+          await insertDurableAudit(client, {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: "lumen.dictation.reviewed",
+            entityType: "lumen_dictation",
+            entityId: dictationId,
+            metadata: {
+              encounterId,
+              transcriptChanged: false,
+              reviewedTranscriptHash: sha256Text(input.transcript),
+              contentStoredInAudit: false,
+              source: "manual_entry"
+            }
+          });
         }
 
         const result = await client.query<RecordRow>(
@@ -354,27 +535,71 @@ export async function registerLumenRoutes(
           [scope.tenantId, encounterId]
         );
         const record = parseRecord(result.rows[0]!);
+        throwIfRequestAborted(requestAbort.signal);
+        await completeProcessingAttempt(client, {
+          attemptId: reservation.attemptId,
+          tenantId: scope.tenantId,
+          encounterId,
+          operation: "structuring",
+          resultEntityId: record.id,
+          provider: structured.provider,
+          model: structured.model,
+          requestIdHash: structured.requestIdHash,
+          traceIdHash: structured.traceIdHash,
+          resultSnapshot: record,
+          resultSha256: processingResultSnapshotSha256(record),
+          resultVersion: record.updatedAt
+        });
         await insertDurableAudit(client, {
           tenantId: scope.tenantId,
           actorId: operatorId,
           eventType: "lumen.record.structured",
           entityType: "lumen_clinical_record",
           entityId: record.id,
-          metadata: { encounterId, dictationId, provider: structured.provider, model: structured.model }
+          metadata: {
+            encounterId,
+            dictationId,
+            provider: structured.provider,
+            model: structured.model,
+            evidenceOrigin,
+            humanApprovalRequired: true,
+            processingAttemptId: reservation.attemptId
+          }
         });
+        throwIfRequestAborted(requestAbort.signal);
         return { state: "created", record } as const;
       });
 
       if (outcome.state === "not_found") {
+        await failProcessingAttempt(scope.db, {
+          attemptId: reservation.attemptId,
+          errorCode: "encounter_not_found",
+          cancelled: false
+        });
         return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
       }
       if (outcome.state === "approved") {
+        await failProcessingAttempt(scope.db, {
+          attemptId: reservation.attemptId,
+          errorCode: "record_approved",
+          cancelled: false
+        });
         return reply.code(409).send(envelope({ error: "Approved clinical records cannot be replaced" }, request.id));
       }
       if (outcome.state === "dictation_not_found") {
+        await failProcessingAttempt(scope.db, {
+          attemptId: reservation.attemptId,
+          errorCode: "dictation_not_found",
+          cancelled: false
+        });
         return reply.code(422).send(envelope({ error: "dictationId does not belong to this encounter" }, request.id));
       }
       if (outcome.state === "record_changed" || outcome.state === "dictation_changed") {
+        await failProcessingAttempt(scope.db, {
+          attemptId: reservation.attemptId,
+          errorCode: "clinical_input_changed",
+          cancelled: false
+        });
         return reply
           .code(409)
           .send(
@@ -383,7 +608,31 @@ export async function registerLumenRoutes(
       }
       return reply.code(201).send(envelope(outcome.record, request.id));
     } catch (error) {
+      const cancelled = requestAbort.signal.aborted;
+      await scope.db.transaction(async (client) => {
+        await failProcessingAttempt(client, {
+          attemptId: reservation.attemptId,
+          errorCode: cancelled ? "cancelled" : providerErrorCode(error),
+          cancelled
+        });
+        await insertDurableAudit(client, {
+          tenantId: scope.tenantId,
+          actorId: operatorId,
+          eventType: cancelled ? "lumen.structuring.cancelled" : "lumen.structuring.failed",
+          entityType: "lumen_processing_attempt",
+          entityId: reservation.attemptId,
+          metadata: {
+            encounterId,
+            provider: dependencies.structurer.name,
+            model: dependencies.structurer.model,
+            humanApprovalRequired: true
+          }
+        });
+      });
+      if (cancelled && reply.raw.destroyed) return;
       return sendProviderError(reply, request, error);
+    } finally {
+      requestAbort.cleanup();
     }
   });
 
@@ -500,8 +749,17 @@ export async function registerLumenRoutes(
       const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
       if (mutable === "not_found") return { state: "not_found" } as const;
       if (mutable === "approved") return { state: "approved" } as const;
-      const current = await client.query<{ content: unknown; status: string; transcript: string; source: string }>(
+      const current = await client.query<{
+        content: unknown;
+        status: string;
+        transcript: string;
+        providerTranscript: string | null;
+        reviewedAt: Date | string | null;
+        source: string;
+      }>(
         `select record.content, record.status, dictation.transcript,
+                dictation.provider_transcript as "providerTranscript",
+                dictation.reviewed_at as "reviewedAt",
                 coalesce(dictation.metadata->>'source',
                   case when dictation.provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source
          from lumen.clinical_records record
@@ -524,7 +782,7 @@ export async function registerLumenRoutes(
       const evidenceIssues = clinicalEvidenceIssues(
         content,
         current.rows[0]!.transcript,
-        evidenceOriginForSource(current.rows[0]!.source)
+        evidenceOriginForStoredDictation(current.rows[0]!)
       );
       if (evidenceIssues.length > 0) return { state: "invalid_evidence", issues: evidenceIssues } as const;
 
@@ -648,7 +906,9 @@ async function loadEncounterDetail(
               coalesce(metadata->>'source',
                 case when provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source,
               provider, model,
-              duration_seconds as "durationSeconds", created_at as "createdAt"
+              duration_seconds as "durationSeconds", provider_transcript as "providerTranscript",
+              reviewed_at as "reviewedAt", reviewed_by as "reviewedBy",
+              processing_attempt_id as "processingAttemptId", created_at as "createdAt"
        from lumen.dictations
        where tenant_id = $1 and encounter_id = $2 and status = 'transcribed'
        order by created_at desc limit 10`,
@@ -680,10 +940,121 @@ function parseRecord(row: RecordRow): LumenClinicalRecord {
   return lumenClinicalRecordSchema.parse(row);
 }
 
+function parseStructuringReplaySnapshot(
+  reservation: Extract<ProcessingAttemptReservation, { state: "replay" }>,
+  tenantId: string,
+  encounterId: string
+): LumenClinicalRecord | undefined {
+  if (!reservation.resultSnapshot || !reservation.resultSha256 || !reservation.resultVersion) return undefined;
+  try {
+    if (processingResultSnapshotSha256(reservation.resultSnapshot) !== reservation.resultSha256) return undefined;
+    const parsed = lumenClinicalRecordSchema.safeParse(reservation.resultSnapshot);
+    if (!parsed.success) return undefined;
+    if (
+      parsed.data.id !== reservation.resultEntityId ||
+      parsed.data.tenantId !== tenantId ||
+      parsed.data.encounterId !== encounterId ||
+      parsed.data.status !== "draft" ||
+      timestampValue(parsed.data.updatedAt) !== timestampValue(reservation.resultVersion)
+    ) {
+      return undefined;
+    }
+    return parsed.data;
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadDictation(
+  db: DatabaseExecutor,
+  tenantId: string,
+  encounterId: string,
+  dictationId: string
+): Promise<ReturnType<typeof lumenDictationSchema.parse> | undefined> {
+  const result = await db.query<DictationRow>(
+    `select id, tenant_id as "tenantId", encounter_id as "encounterId", status,
+            transcript, mime_type as "mimeType",
+            coalesce(metadata->>'source',
+              case when provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source,
+            provider, model, duration_seconds as "durationSeconds",
+            provider_transcript as "providerTranscript", reviewed_at as "reviewedAt",
+            reviewed_by as "reviewedBy", processing_attempt_id as "processingAttemptId",
+            created_at as "createdAt"
+     from lumen.dictations
+     where tenant_id = $1 and encounter_id = $2 and id = $3 and status = 'transcribed'`,
+    [tenantId, encounterId, dictationId]
+  );
+  return result.rows[0] ? lumenDictationSchema.parse(result.rows[0]) : undefined;
+}
+
+async function loadDictationSnapshot(
+  db: DatabaseExecutor,
+  tenantId: string,
+  encounterId: string,
+  dictationId: string
+): Promise<DictationSnapshot | undefined> {
+  const result = await db.query<DictationSnapshot>(
+    `select transcript, provider_transcript as "providerTranscript", reviewed_at as "reviewedAt",
+            coalesce(metadata->>'source',
+              case when provider = 'manual' then 'manual_entry' else 'browser_microphone' end) as source
+     from lumen.dictations
+     where tenant_id = $1 and encounter_id = $2 and id = $3 and status = 'transcribed'`,
+    [tenantId, encounterId, dictationId]
+  );
+  return result.rows[0];
+}
+
+function sameDictationSnapshot(current: DictationSnapshot, expected: DictationSnapshot): boolean {
+  return (
+    current.transcript === expected.transcript &&
+    current.providerTranscript === expected.providerTranscript &&
+    current.source === expected.source &&
+    timestampValue(current.reviewedAt) === timestampValue(expected.reviewedAt)
+  );
+}
+
+function evidenceOriginForDictation(dictation: DictationSnapshot): LumenFieldEvidenceOrigin {
+  const original = evidenceOriginForSource(dictation.source);
+  if (original === "voice" && dictation.providerTranscript !== null) {
+    return "voice_reviewed";
+  }
+  return original;
+}
+
+function evidenceOriginForStoredDictation(dictation: DictationSnapshot): LumenFieldEvidenceOrigin {
+  const original = evidenceOriginForSource(dictation.source);
+  return original === "voice" && dictation.providerTranscript !== null && dictation.reviewedAt !== null
+    ? "voice_reviewed"
+    : original;
+}
+
 function evidenceOriginForSource(source: string): LumenFieldEvidenceOrigin {
   if (source === "synthetic_demo") return "synthetic_demo";
   if (source === "manual_entry") return "manual";
   return "voice";
+}
+
+function structureInputSha256(dictationId: string | undefined, transcript: string): string {
+  return createHash("sha256")
+    .update(dictationId ?? "manual")
+    .update("\0")
+    .update(transcript, "utf8")
+    .digest("hex");
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function timestampValue(value: Date | string | null): string | null {
+  if (value === null) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function throwIfRequestAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new DOMException("Client request aborted", "AbortError");
 }
 
 async function lockMutableEncounter(
@@ -725,56 +1096,6 @@ async function insertDurableAudit(
       JSON.stringify({ source: "lumen-service", ...(event.metadata ?? {}) })
     ]
   );
-}
-
-async function recordFailedDictation(
-  db: DatabaseClient,
-  input: {
-    tenantId: string;
-    encounterId: string;
-    operatorId: string;
-    mimeType: string;
-    provider: string;
-    model: string;
-    durationSeconds: number | null;
-    source: LumenDictationSource;
-    errorCode: string;
-  }
-): Promise<void> {
-  await db.transaction(async (client) => {
-    if ((await lockMutableEncounter(client, input.tenantId, input.encounterId)) !== "mutable") return;
-    const result = await client.query<{ id: string }>(
-      `insert into lumen.dictations
-         (tenant_id, encounter_id, status, mime_type, provider, model, duration_seconds, error_code, metadata)
-       values ($1, $2, 'failed', $3, $4, $5, $6, $7,
-               jsonb_build_object('audioStored', false, 'source', $8::text))
-       returning id`,
-      [
-        input.tenantId,
-        input.encounterId,
-        input.mimeType,
-        input.provider,
-        input.model,
-        input.durationSeconds,
-        input.errorCode,
-        input.source
-      ]
-    );
-    await insertDurableAudit(client, {
-      tenantId: input.tenantId,
-      actorId: input.operatorId,
-      eventType: "lumen.dictation.failed",
-      entityType: "lumen_dictation",
-      entityId: result.rows[0]!.id,
-      metadata: {
-        encounterId: input.encounterId,
-        provider: input.provider,
-        model: input.model,
-        source: input.source,
-        audioStored: false
-      }
-    });
-  });
 }
 
 async function requireMutableEncounter(
@@ -866,6 +1187,67 @@ function readOperatorId(request: FastifyRequest): string | undefined {
 function readHeader(request: FastifyRequest, name: string): string | undefined {
   const value = request.headers[name];
   return Array.isArray(value) ? value[0] : value;
+}
+
+function sendReservationConflict(
+  reply: FastifyReply,
+  request: FastifyRequest,
+  reservation: Exclude<ProcessingAttemptReservation, { state: "reserved" | "replay" }>
+): unknown {
+  if (reservation.state === "input_mismatch") {
+    return reply
+      .code(409)
+      .send(envelope({ error: "Idempotency key was already used with different clinical input" }, request.id));
+  }
+  if (reservation.state === "processing") {
+    return reply
+      .header("retry-after", "2")
+      .code(409)
+      .send(envelope({ error: "Clinical processing is already in progress" }, request.id));
+  }
+  return reply
+    .code(409)
+    .send(
+      envelope({ error: "Previous clinical processing did not complete; retry with a new idempotency key" }, request.id)
+    );
+}
+
+function sendSpeechToTextError(reply: FastifyReply, request: FastifyRequest, error: unknown): unknown {
+  if (!isSpeechToTextError(error)) {
+    return reply.code(500).send(envelope({ error: "Clinical transcription failed" }, request.id));
+  }
+  const status =
+    error.code === "not_configured"
+      ? 503
+      : error.code === "unsupported_media_type"
+        ? 415
+        : error.code === "audio_too_large"
+          ? 413
+          : error.code === "rate_limited"
+            ? 429
+            : error.code === "timeout"
+              ? 504
+              : error.code === "invalid_audio" || error.code === "audio_too_long"
+                ? 400
+                : error.code === "cancelled"
+                  ? 408
+                  : 502;
+  return reply.code(status).send(
+    envelope(
+      {
+        error: error.message,
+        code: error.code,
+        retryable: error.retryable
+      },
+      request.id
+    )
+  );
+}
+
+function providerErrorCode(error: unknown): string {
+  if (error instanceof ProviderNotConfiguredError) return "provider_not_configured";
+  if (error instanceof ProviderRequestError) return "provider_request_failed";
+  return error instanceof Error ? error.name : "structuring_failed";
 }
 
 function sendProviderError(reply: FastifyReply, request: FastifyRequest, error: unknown): unknown {
