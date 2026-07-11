@@ -521,7 +521,7 @@ describeIntegration("LUMEN clinical vertical", () => {
         expect.objectContaining({
           field: "plan",
           origin: "voice",
-          sourceText: "Control en cuatro semanas"
+          sourceText: "Plan: control en cuatro semanas"
         }),
         {
           field: "fundus.left",
