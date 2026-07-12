@@ -8,10 +8,30 @@ import {
 } from "./lumen-navigation.js";
 
 describe("LUMEN navigation", () => {
-  it("expone solo las tres vistas del corte", () => {
-    expect(LUMEN_VIEWS.map((view) => view.id)).toEqual(["preconsulta", "dictado", "historia"]);
-    expect(LUMEN_VIEWS.map((view) => view.path)).toEqual(["/lumen/preconsulta", "/lumen/dictado", "/lumen/historia"]);
-    expect(LUMEN_VIEWS.map((view) => view.icon)).toEqual(["clipboard-pulse", "mic", "file-check-2"]);
+  it("expone las nueve experiencias definidas para la demo integral", () => {
+    expect(LUMEN_VIEWS.map((view) => view.id)).toEqual([
+      "preconsulta",
+      "dictado",
+      "historia",
+      "laboratorios",
+      "asistente",
+      "modelos",
+      "consentimientos",
+      "facturacion",
+      "dashboard"
+    ]);
+    expect(LUMEN_VIEWS.filter((view) => view.mobilePrimary).map((view) => view.id)).toEqual([
+      "preconsulta",
+      "dictado",
+      "historia"
+    ]);
+    expect(LUMEN_VIEWS.filter((view) => view.requiresEncounter).map((view) => view.id)).toEqual([
+      "preconsulta",
+      "dictado",
+      "historia",
+      "asistente",
+      "consentimientos"
+    ]);
   });
 
   it("normaliza la raiz de LUMEN a preconsulta", () => {
@@ -20,10 +40,11 @@ describe("LUMEN navigation", () => {
     expect(normalizeLumenHref("/lumen?encounter=enc-42")).toBe("/lumen/preconsulta?encounter=enc-42");
   });
 
-  it("rechaza rutas ajenas y modulos fuera del corte", () => {
+  it("acepta los modulos documentados y rechaza rutas ajenas", () => {
     expect(normalizeLumenPath("/agenda")).toBeNull();
-    expect(normalizeLumenPath("/lumen/laboratorios")).toBeNull();
-    expect(normalizeLumenPath("/lumen/asistente")).toBeNull();
+    expect(normalizeLumenPath("/lumen/laboratorios")).toBe("/lumen/laboratorios");
+    expect(normalizeLumenPath("/lumen/asistente")).toBe("/lumen/asistente");
+    expect(normalizeLumenPath("/lumen/dashboard")).toBe("/lumen/dashboard");
     expect(resolveLumenLocation("/lumen/facturacion-rips?encounter=enc-42")).toBeNull();
   });
 
