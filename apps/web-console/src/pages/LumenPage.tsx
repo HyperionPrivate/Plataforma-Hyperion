@@ -923,13 +923,17 @@ export function LumenPage() {
       subtitle="Asistente clínico por voz"
       actions={
         <div className="lumen-provider-status" aria-label="Estado de proveedores clínicos">
-          <Pill tone={health?.providers.transcriptionConfigured ? "green" : "amber"}>
+          <Pill tone={health === undefined ? "blue" : health.providers.transcriptionConfigured ? "green" : "amber"}>
             <Mic size={13} aria-hidden="true" /> Voz{" "}
-            {health?.providers.transcriptionConfigured ? "lista" : "sin configurar"}
+            {health === undefined
+              ? "verificando"
+              : health.providers.transcriptionConfigured
+                ? "lista"
+                : "sin configurar"}
           </Pill>
-          <Pill tone={health?.providers.structuringConfigured ? "green" : "amber"}>
+          <Pill tone={health === undefined ? "blue" : health.providers.structuringConfigured ? "green" : "amber"}>
             <Sparkles size={13} aria-hidden="true" /> Estructuración{" "}
-            {health?.providers.structuringConfigured ? "lista" : "sin configurar"}
+            {health === undefined ? "verificando" : health.providers.structuringConfigured ? "lista" : "sin configurar"}
           </Pill>
           {!canWrite ? <Pill tone="blue">Solo lectura</Pill> : null}
         </div>
@@ -1590,7 +1594,7 @@ function DictationView({
                   permanece disponible.
                 </span>
               </div>
-            ) : !providerReady ? (
+            ) : health && !providerReady ? (
               <div className="lumen-provider-note" role="status">
                 <AlertTriangle size={17} aria-hidden="true" />
                 <span>
@@ -1659,7 +1663,7 @@ function DictationView({
             </div>
           ) : null}
           <div className="lumen-structure-footer">
-            {!structurerReady ? (
+            {health && !structurerReady ? (
               <span className="lumen-provider-inline">
                 <AlertTriangle size={15} aria-hidden="true" /> Estructuración sin configurar
               </span>
