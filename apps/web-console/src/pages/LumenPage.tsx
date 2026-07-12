@@ -14,6 +14,7 @@ import {
   BellRing,
   BookOpenCheck,
   CalendarDays,
+  ChartNoAxesCombined,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -24,6 +25,7 @@ import {
   FileAudio,
   FileCheck2,
   FileText,
+  FlaskConical,
   HeartPulse,
   History,
   Info,
@@ -31,13 +33,17 @@ import {
   LoaderCircle,
   LockKeyhole,
   Mic,
+  MoreHorizontal,
   Pause,
   Pill as PillIcon,
   Play,
   Plus,
   RotateCcw,
+  ReceiptText,
   Save,
+  Settings2,
   ShieldCheck,
+  Signature,
   Sparkles,
   Square,
   Stethoscope,
@@ -47,6 +53,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { LumenAssistantView } from "../components/lumen/demo/LumenAssistantView.js";
+import { LumenBillingView } from "../components/lumen/demo/LumenBillingView.js";
+import { LumenConsentView } from "../components/lumen/demo/LumenConsentView.js";
+import { LumenDashboardView } from "../components/lumen/demo/LumenDashboardView.js";
+import { LumenLaboratoriesView } from "../components/lumen/demo/LumenLaboratoriesView.js";
+import { LumenModelsView } from "../components/lumen/demo/LumenModelsView.js";
 import { LumenWaveform } from "../components/lumen/LumenWaveform.js";
 import { Layout } from "../components/Layout.js";
 import { EmptyState, LoadingState, Pill } from "../components/ui.js";
@@ -88,6 +100,7 @@ import {
   resolveLumenEncounterSelection
 } from "../lib/lumen-selection.js";
 import { can } from "../lib/rbac.js";
+import "../lumen-demo.css";
 
 interface LumenHealth {
   providers: { transcriptionConfigured: boolean; structuringConfigured: boolean };
@@ -126,6 +139,7 @@ export function LumenPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const activeView = resolveLumenLocation(location)?.viewId ?? "preconsulta";
+  const activeViewDefinition = LUMEN_VIEWS.find((view) => view.id === activeView) ?? LUMEN_VIEWS[0];
   const [worklist, setWorklist] = useState<LumenWorklistEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
   const [detail, setDetail] = useState<LumenEncounterDetail>();
@@ -142,6 +156,7 @@ export function LumenPage() {
   const [audioPreview, setAudioPreview] = useState<Blob>();
   const [dictationFlow, setDictationFlow] = useState<DictationFlowState>("ready");
   const [worklistLoaded, setWorklistLoaded] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -158,6 +173,8 @@ export function LumenPage() {
   const detailEncounterIdRef = useRef<string | undefined>(undefined);
   const mountedRef = useRef(true);
   const previousViewRef = useRef(activeView);
+  const mobileMoreTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileMoreDialogRef = useRef<HTMLElement>(null);
 
   const canWrite = can(session.operator.role, "write:lumen");
   const audioTransportAllowed = currentLumenAudioTransportAllowed();
@@ -348,7 +365,44 @@ export function LumenPage() {
       discardRecording();
       previousViewRef.current = activeView;
     }
+    setMobileMoreOpen(false);
   }, [activeView, discardRecording]);
+
+  useEffect(() => {
+    if (!mobileMoreOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusFrame = window.requestAnimationFrame(() => {
+      mobileMoreDialogRef.current?.querySelector<HTMLElement>("button, a")?.focus();
+    });
+    function handleMenuKeyboard(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMobileMoreOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        mobileMoreDialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), a[href]") ?? []
+      );
+      if (!focusable.length) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", handleMenuKeyboard);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", handleMenuKeyboard);
+      document.body.style.overflow = previousOverflow;
+      mobileMoreTriggerRef.current?.focus();
+    };
+  }, [mobileMoreOpen]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -869,13 +923,17 @@ export function LumenPage() {
       subtitle="Asistente clínico por voz"
       actions={
         <div className="lumen-provider-status" aria-label="Estado de proveedores clínicos">
-          <Pill tone={health?.providers.transcriptionConfigured ? "green" : "amber"}>
+          <Pill tone={health === undefined ? "blue" : health.providers.transcriptionConfigured ? "green" : "amber"}>
             <Mic size={13} aria-hidden="true" /> Voz{" "}
-            {health?.providers.transcriptionConfigured ? "lista" : "sin configurar"}
+            {health === undefined
+              ? "verificando"
+              : health.providers.transcriptionConfigured
+                ? "lista"
+                : "sin configurar"}
           </Pill>
-          <Pill tone={health?.providers.structuringConfigured ? "green" : "amber"}>
+          <Pill tone={health === undefined ? "blue" : health.providers.structuringConfigured ? "green" : "amber"}>
             <Sparkles size={13} aria-hidden="true" /> Estructuración{" "}
-            {health?.providers.structuringConfigured ? "lista" : "sin configurar"}
+            {health === undefined ? "verificando" : health.providers.structuringConfigured ? "lista" : "sin configurar"}
           </Pill>
           {!canWrite ? <Pill tone="blue">Solo lectura</Pill> : null}
         </div>
@@ -890,13 +948,15 @@ export function LumenPage() {
           </div>
           <nav className="lumen-product-nav" aria-label="Experiencias LUMEN">
             {LUMEN_VIEWS.map((view) => {
-              const Icon = view.id === "preconsulta" ? HeartPulse : view.id === "dictado" ? Mic : FileCheck2;
+              const Icon = lumenViewIcon(view.id);
               return (
                 <NavLink
                   key={view.id}
                   to={encounterHref(view.path, selectedId)}
                   className={({ isActive }) =>
-                    `lumen-product-link${isActive ? " active" : ""}${interactionLocked ? " disabled" : ""}`
+                    `lumen-product-link${view.mobilePrimary ? " mobile-primary" : " mobile-secondary"}${
+                      isActive ? " active" : ""
+                    }${interactionLocked ? " disabled" : ""}`
                   }
                   aria-label={view.label}
                   aria-disabled={interactionLocked}
@@ -905,14 +965,71 @@ export function LumenPage() {
                   }}
                 >
                   <Icon size={18} aria-hidden="true" />
-                  <span>
-                    {view.id === "preconsulta" ? "Preconsulta" : view.id === "dictado" ? "Dictado" : "Historia"}
-                  </span>
+                  <span>{view.shortLabel}</span>
                 </NavLink>
               );
             })}
+            <button
+              ref={mobileMoreTriggerRef}
+              className={`lumen-more-trigger${activeViewDefinition.mobilePrimary ? "" : " active"}`}
+              type="button"
+              aria-expanded={mobileMoreOpen}
+              aria-controls="lumen-more-menu"
+              aria-haspopup="dialog"
+              onClick={() => setMobileMoreOpen((current) => !current)}
+              disabled={interactionLocked}
+            >
+              <MoreHorizontal size={19} aria-hidden="true" />
+              <span>Más</span>
+            </button>
           </nav>
         </header>
+
+        {mobileMoreOpen ? (
+          <div className="lumen-more-layer">
+            <button
+              className="lumen-more-backdrop"
+              type="button"
+              aria-label="Cerrar menú de módulos"
+              onClick={() => setMobileMoreOpen(false)}
+            />
+            <section
+              ref={mobileMoreDialogRef}
+              className="lumen-more-menu"
+              id="lumen-more-menu"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Más módulos LUMEN"
+            >
+              <header>
+                <div>
+                  <span className="lumen-eyebrow">Espacio clínico</span>
+                  <h2>Más módulos</h2>
+                </div>
+                <button className="icon-btn" type="button" onClick={() => setMobileMoreOpen(false)} aria-label="Cerrar">
+                  <X size={19} aria-hidden="true" />
+                </button>
+              </header>
+              <div>
+                {LUMEN_VIEWS.filter((view) => !view.mobilePrimary).map((view) => {
+                  const Icon = lumenViewIcon(view.id);
+                  return (
+                    <NavLink
+                      key={view.id}
+                      to={encounterHref(view.path, selectedId)}
+                      onClick={() => setMobileMoreOpen(false)}
+                    >
+                      <span>
+                        <Icon size={20} aria-hidden="true" />
+                      </span>
+                      <strong>{view.label}</strong>
+                    </NavLink>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+        ) : null}
 
         {error ? (
           <div className="lumen-feedback lumen-feedback-error" role="alert">
@@ -927,77 +1044,105 @@ export function LumenPage() {
           </div>
         ) : null}
 
-        <AgendaStrip
-          rows={visibleWorklist}
-          selectedId={selectedId}
-          loading={action === "loading" && worklist.length === 0}
-          disabled={interactionLocked}
-          onSelect={(encounterId) => selectEncounter(encounterId)}
-        />
-
-        {displayedDetail ? <PatientContext detail={displayedDetail} /> : null}
-
-        {action === "loading" && !displayedDetail ? <LoadingState label="Cargando encuentro clínico..." /> : null}
-        {!displayedDetail && action !== "loading" ? (
-          <EmptyState label="No hay encuentros sintéticos disponibles para esta sede." />
+        {activeViewDefinition.requiresEncounter ? (
+          <>
+            <AgendaStrip
+              rows={visibleWorklist}
+              selectedId={selectedId}
+              loading={action === "loading" && worklist.length === 0}
+              disabled={interactionLocked}
+              onSelect={(encounterId) => selectEncounter(encounterId)}
+            />
+            {displayedDetail ? <PatientContext detail={displayedDetail} /> : null}
+          </>
         ) : null}
 
-        {displayedDetail && activeView === "preconsulta" ? (
-          <PreconsultationView
-            detail={displayedDetail}
-            canWrite={canWrite}
-            busy={busy}
-            onStart={() => void startEncounter(true)}
-            onOpenDictation={() => goToView("dictado")}
-            onOpenRecord={() => goToView("historia")}
-          />
-        ) : null}
+        <div className="lumen-view-stage" key={activeView}>
+          {activeViewDefinition.requiresEncounter && action === "loading" && !displayedDetail ? (
+            <LoadingState label="Cargando encuentro clínico..." />
+          ) : null}
+          {activeViewDefinition.requiresEncounter && !displayedDetail && action !== "loading" ? (
+            <EmptyState label="No hay encuentros sintéticos disponibles para esta sede." />
+          ) : null}
 
-        {displayedDetail && activeView === "dictado" ? (
-          <DictationView
-            detail={displayedDetail}
-            draft={draft}
-            transcript={transcript}
-            health={health}
-            audioTransportAllowed={audioTransportAllowed}
-            action={action}
-            flowState={dictationFlow}
-            canRetryAudio={dictationFlow === "recoverable_error" && Boolean(retryableAudioRef.current)}
-            recording={recording}
-            paused={recordingPaused}
-            seconds={recordingSeconds}
-            stream={activeStream}
-            audioPreview={audioPreview}
-            locked={recordLocked || busy}
-            onTranscriptChange={editTranscript}
-            onStart={() => void startRecording()}
-            onPause={toggleRecordingPause}
-            onStop={stopRecording}
-            onCancel={cancelDictationOperation}
-            onRetryAudio={retryAudioTranscription}
-            onUpload={(file) => void uploadAudio(file)}
-            onStructure={() => void structureRecord()}
-          />
-        ) : null}
+          {displayedDetail && activeView === "preconsulta" ? (
+            <PreconsultationView
+              detail={displayedDetail}
+              canWrite={canWrite}
+              busy={busy}
+              onStart={() => void startEncounter(true)}
+              onOpenDictation={() => goToView("dictado")}
+              onOpenRecord={() => goToView("historia")}
+            />
+          ) : null}
 
-        {displayedDetail && activeView === "historia" ? (
-          <ClinicalRecordView
-            detail={displayedDetail}
-            draft={draft}
-            action={action}
-            locked={recordLocked}
-            canWrite={canWrite}
-            onDraftChange={setDraft}
-            onEyeChange={updateEye}
-            onResolveUncertainty={resolveUncertainty}
-            onSave={() => void save()}
-            onApprove={() => void approve()}
-            onOpenDictation={() => goToView("dictado")}
-          />
-        ) : null}
+          {displayedDetail && activeView === "dictado" ? (
+            <DictationView
+              detail={displayedDetail}
+              draft={draft}
+              transcript={transcript}
+              health={health}
+              audioTransportAllowed={audioTransportAllowed}
+              action={action}
+              flowState={dictationFlow}
+              canRetryAudio={dictationFlow === "recoverable_error" && Boolean(retryableAudioRef.current)}
+              recording={recording}
+              paused={recordingPaused}
+              seconds={recordingSeconds}
+              stream={activeStream}
+              audioPreview={audioPreview}
+              locked={recordLocked || busy}
+              onTranscriptChange={editTranscript}
+              onStart={() => void startRecording()}
+              onPause={toggleRecordingPause}
+              onStop={stopRecording}
+              onCancel={cancelDictationOperation}
+              onRetryAudio={retryAudioTranscription}
+              onUpload={(file) => void uploadAudio(file)}
+              onStructure={() => void structureRecord()}
+            />
+          ) : null}
+
+          {displayedDetail && activeView === "historia" ? (
+            <ClinicalRecordView
+              detail={displayedDetail}
+              draft={draft}
+              action={action}
+              locked={recordLocked}
+              canWrite={canWrite}
+              onDraftChange={setDraft}
+              onEyeChange={updateEye}
+              onResolveUncertainty={resolveUncertainty}
+              onSave={() => void save()}
+              onApprove={() => void approve()}
+              onOpenDictation={() => goToView("dictado")}
+            />
+          ) : null}
+
+          {activeView === "laboratorios" ? <LumenLaboratoriesView canWrite={canWrite} /> : null}
+          {displayedDetail && activeView === "asistente" ? <LumenAssistantView detail={displayedDetail} /> : null}
+          {activeView === "modelos" ? <LumenModelsView canWrite={canWrite} /> : null}
+          {displayedDetail && activeView === "consentimientos" ? (
+            <LumenConsentView detail={displayedDetail} canWrite={canWrite} />
+          ) : null}
+          {activeView === "facturacion" ? <LumenBillingView canWrite={canWrite} /> : null}
+          {activeView === "dashboard" ? <LumenDashboardView /> : null}
+        </div>
       </div>
     </Layout>
   );
+}
+
+function lumenViewIcon(view: (typeof LUMEN_VIEWS)[number]["id"]) {
+  if (view === "preconsulta") return HeartPulse;
+  if (view === "dictado") return Mic;
+  if (view === "historia") return FileCheck2;
+  if (view === "laboratorios") return FlaskConical;
+  if (view === "asistente") return Sparkles;
+  if (view === "modelos") return Settings2;
+  if (view === "consentimientos") return Signature;
+  if (view === "facturacion") return ReceiptText;
+  return ChartNoAxesCombined;
 }
 
 function AgendaStrip({
@@ -1449,7 +1594,7 @@ function DictationView({
                   permanece disponible.
                 </span>
               </div>
-            ) : !providerReady ? (
+            ) : health && !providerReady ? (
               <div className="lumen-provider-note" role="status">
                 <AlertTriangle size={17} aria-hidden="true" />
                 <span>
@@ -1518,7 +1663,7 @@ function DictationView({
             </div>
           ) : null}
           <div className="lumen-structure-footer">
-            {!structurerReady ? (
+            {health && !structurerReady ? (
               <span className="lumen-provider-inline">
                 <AlertTriangle size={15} aria-hidden="true" /> Estructuración sin configurar
               </span>

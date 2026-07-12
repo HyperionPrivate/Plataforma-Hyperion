@@ -1,12 +1,42 @@
-export type LumenViewId = "preconsulta" | "dictado" | "historia";
-export type LumenPath = "/lumen/preconsulta" | "/lumen/dictado" | "/lumen/historia";
-export type LumenIconId = "clipboard-pulse" | "mic" | "file-check-2";
+export type LumenViewId =
+  | "preconsulta"
+  | "dictado"
+  | "historia"
+  | "laboratorios"
+  | "asistente"
+  | "modelos"
+  | "consentimientos"
+  | "facturacion"
+  | "dashboard";
+export type LumenPath =
+  | "/lumen/preconsulta"
+  | "/lumen/dictado"
+  | "/lumen/historia"
+  | "/lumen/laboratorios"
+  | "/lumen/asistente"
+  | "/lumen/modelos"
+  | "/lumen/consentimientos"
+  | "/lumen/facturacion"
+  | "/lumen/dashboard";
+export type LumenIconId =
+  | "clipboard-pulse"
+  | "mic"
+  | "file-check-2"
+  | "flask-conical"
+  | "sparkles"
+  | "settings-2"
+  | "signature"
+  | "receipt-text"
+  | "chart-no-axes-combined";
 
 export interface LumenViewDefinition {
   id: LumenViewId;
   path: LumenPath;
   label: string;
+  shortLabel: string;
   icon: LumenIconId;
+  requiresEncounter: boolean;
+  mobilePrimary: boolean;
 }
 
 export interface LumenLocationLike {
@@ -28,10 +58,83 @@ export const LUMEN_VIEWS = [
     id: "preconsulta",
     path: "/lumen/preconsulta",
     label: "Resumen preconsulta",
-    icon: "clipboard-pulse"
+    shortLabel: "Preconsulta",
+    icon: "clipboard-pulse",
+    requiresEncounter: true,
+    mobilePrimary: true
   },
-  { id: "dictado", path: "/lumen/dictado", label: "Dictado clínico", icon: "mic" },
-  { id: "historia", path: "/lumen/historia", label: "Historia clínica", icon: "file-check-2" }
+  {
+    id: "dictado",
+    path: "/lumen/dictado",
+    label: "Dictado clínico",
+    shortLabel: "Dictado",
+    icon: "mic",
+    requiresEncounter: true,
+    mobilePrimary: true
+  },
+  {
+    id: "historia",
+    path: "/lumen/historia",
+    label: "Historia clínica",
+    shortLabel: "Historia",
+    icon: "file-check-2",
+    requiresEncounter: true,
+    mobilePrimary: true
+  },
+  {
+    id: "laboratorios",
+    path: "/lumen/laboratorios",
+    label: "Laboratorios",
+    shortLabel: "Labs",
+    icon: "flask-conical",
+    requiresEncounter: false,
+    mobilePrimary: false
+  },
+  {
+    id: "asistente",
+    path: "/lumen/asistente",
+    label: "Asistente clínico",
+    shortLabel: "Asistente",
+    icon: "sparkles",
+    requiresEncounter: true,
+    mobilePrimary: false
+  },
+  {
+    id: "modelos",
+    path: "/lumen/modelos",
+    label: "Modelos de HC",
+    shortLabel: "Modelos",
+    icon: "settings-2",
+    requiresEncounter: false,
+    mobilePrimary: false
+  },
+  {
+    id: "consentimientos",
+    path: "/lumen/consentimientos",
+    label: "Consentimientos",
+    shortLabel: "Consent.",
+    icon: "signature",
+    requiresEncounter: true,
+    mobilePrimary: false
+  },
+  {
+    id: "facturacion",
+    path: "/lumen/facturacion",
+    label: "Facturación y RIPS",
+    shortLabel: "Facturación",
+    icon: "receipt-text",
+    requiresEncounter: false,
+    mobilePrimary: false
+  },
+  {
+    id: "dashboard",
+    path: "/lumen/dashboard",
+    label: "Dashboard gerencial",
+    shortLabel: "Dashboard",
+    icon: "chart-no-axes-combined",
+    requiresEncounter: false,
+    mobilePrimary: false
+  }
 ] as const satisfies readonly LumenViewDefinition[];
 
 const DEFAULT_PATH: LumenPath = "/lumen/preconsulta";
