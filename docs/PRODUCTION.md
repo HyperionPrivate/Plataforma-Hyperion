@@ -1,14 +1,16 @@
 # Produccion
 
-Este repo esta preparado para datos operativos reales. La unica excepcion autorizada es la demo clinica
-LUMEN descrita abajo, aislada y marcada con datos sinteticos; esos registros no se presentan como datos
-reales ni deben entrar en los flujos operativos de PULSO IRIS.
+Este repositorio contiene controles y procedimientos para ambientes con datos operativos. La habilitacion
+productiva exige validar el despliegue, los backups y la recuperacion del ambiente concreto. La unica excepcion
+autorizada al uso de datos operativos es la demo clinica LUMEN descrita abajo, aislada y marcada con datos
+sinteticos; esos registros no se presentan como datos reales ni deben entrar en los flujos operativos de PULSO
+IRIS.
 
 ## Secretos
 
 - No se guardan claves reales en Git.
 - Toda clave compartida por chat, correo o canal no secreto debe rotarse antes de dejarla como acceso permanente.
-- `.env.example` solo muestra nombres de variables.
+- `.env.example` contiene placeholders y valores no secretos para documentar la configuracion esperada.
 - `INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD`, las ocho contraseñas PostgreSQL de servicio y las
   credenciales de proveedores deben vivir fuera del repositorio.
 - Las contraseñas `*_DATABASE_PASSWORD` son distintas entre sí, tienen al menos 24 caracteres URI no
@@ -188,7 +190,8 @@ privado. Un propietario inesperado, un enlace simbolico o un archivo con multipl
 interrumpe la operacion. Fuera de pruebas aisladas exige el repositorio canonico
 `/opt/hyperion-platform` y no acepta rutas alternativas para backups, Compose ni el archivo de entorno.
 La carpeta `backups/` permanece ignorada por Git. El host debe proporcionar GNU `realpath`, `stat`,
-`ln`, `sync`, `sha256sum`, `gzip` y Docker Compose; son dependencias ya presentes en el VPS Linux.
+`ln`, `sync`, `sha256sum`, `gzip` y Docker Compose; su presencia y version deben verificarse en el VPS Linux
+antes de operar.
 
 Antes de publicar, el script exige tamano mayor que cero, ejecuta `gzip -t`, descomprime por `stdin`
 hacia `pg_restore --list`, exige al menos una entrada de catalogo y calcula SHA-256. La salida registra
@@ -256,7 +259,7 @@ LUMEN_AUDIO_TEMP_DIR=/tmp/lumen-audio
 ```
 
 La clave debe provisionarse directamente en el `.env` privado del VPS mediante el canal secreto
-autorizado. No copiar claves desde VetIA, logs, terminal compartida, chat ni archivos del repositorio.
+autorizado. No copiar claves desde otros sistemas, logs, terminal compartida, chat ni archivos del repositorio.
 Para comprobar solo nombres y presencia sin imprimir valores:
 
 ```bash
@@ -294,11 +297,11 @@ incertidumbres, hasta una accion humana explicita; el pipeline nunca aprueba aut
 
 La captura y la carga de audio en navegador requieren HTTPS seguro o un origen loopback exacto. Mientras
 la consola productiva se publique por HTTP, la URL IP bloquea toda salida de audio y mantiene unicamente
-el transcript manual; tampoco debe solicitar permisos de microfono. Para una prueba personal autorizada
+el transcript manual; tampoco debe solicitar permisos de microfono. Para una prueba controlada y autorizada
 sin habilitar TLS global, crear un tunel local (no compartirlo ni usar `-g`):
 
 ```bash
-ssh -N -L 127.0.0.1:19000:127.0.0.1:19000 contabo
+ssh -N -L 127.0.0.1:19000:127.0.0.1:19000 usuario@host-vps
 ```
 
 Con el tunel activo, abrir exactamente `http://localhost:19000/lumen/dictado`. La consola detecta
@@ -332,9 +335,8 @@ docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-
   --wait --wait-timeout 120 web-console
 ```
 
-Esperar el `healthy` de cada etapa antes de continuar. Confirmar `020-lumen-real-audio-pipeline.sql`,
-`022-lumen-autonomy.sql`, `024-service-database-roles.sql`, `025-audit-ledger-autonomy.sql`,
-`026-audit-source-provenance.sql`, readiness, rutas profundas y logs sanitizados.
+Esperar el `healthy` de cada etapa antes de continuar. Confirmar que la secuencia completa de migraciones
+`001`–`026` y sus checksums estan aplicados, ademas de readiness, rutas profundas y logs sanitizados.
 Antes y despues comparar IDs e imagenes de `postgres`,
 `pulso-iris-service` y `whatsapp-channel-service`; deben permanecer exactamente iguales. Si el gateway
 no cambio, omitir su build/up y confirmar tambien que conserva ID e imagen. Nunca ejecutar el seed
