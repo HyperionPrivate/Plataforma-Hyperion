@@ -10,7 +10,9 @@ await startService({
     "013-sofia-confirmation-protocol.sql",
     "014-sofia-local-time-protocol.sql",
     "015-sofia-fresh-availability.sql",
-    "016-sofia-search-constraints.sql"
+    "016-sofia-search-constraints.sql",
+    "021-autonomous-event-flow.sql",
+    "026-audit-source-provenance.sql"
   ],
   registerRoutes
 });

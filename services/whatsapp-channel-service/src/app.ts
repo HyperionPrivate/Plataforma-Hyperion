@@ -1,9 +1,16 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { envelope, tenantIdSchema } from "@hyperion/contracts";
+import {
+  HttpOutboxDispatcher,
+  JetStreamOutboxDispatcher,
+  readNatsAuthentication,
+  type NatsAuthentication
+} from "@hyperion/durable-events";
 import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
 import QRCode from "qrcode";
 import { z } from "zod";
 import { BaileysWhatsAppWebTestProvider } from "./baileys-provider.js";
+import { PostgresChannelOutbox } from "./channel-outbox.js";
 import { PostgresChannelRepository } from "./channel-repository.js";
 import { WhatsAppChannelService } from "./channel-service.js";
 import { readWhatsAppProviderConfig } from "./provider-config.js";
@@ -37,6 +44,7 @@ export interface ChannelRouteDependencies {
 }
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  const durableOutbox = readDurableOutboxConfiguration(process.env);
   const dependencies: ChannelRouteDependencies = {
     internalServiceToken: context.config.internalServiceToken
   };
@@ -70,9 +78,122 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       });
     }
     app.addHook("onClose", async () => channel.stop());
+
+    if (durableOutbox.transport === "jetstream" || context.config.internalServiceToken) {
+      const workerId = `channel-outbox-${randomUUID()}`;
+      const outbox = new PostgresChannelOutbox(
+        context.db,
+        workerId,
+        process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088"
+      );
+      if (durableOutbox.enabled) {
+        const dispatcher =
+          durableOutbox.transport === "jetstream"
+            ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+                workerId,
+                servers: durableOutbox.natsUrl,
+                ...durableOutbox.authentication,
+                connectionName: workerId,
+                subjectPrefix: "hyperion.events",
+                expectedStream: "HYPERION_EVENTS",
+                claim: (limit) => outbox.claim(limit),
+                complete: (eventId) => outbox.complete(eventId),
+                fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                connectTimeoutMs: 5_000,
+                publishTimeoutMs: 5_000
+              })
+            : new HttpOutboxDispatcher<Record<string, unknown>>({
+                workerId,
+                internalToken: context.config.internalServiceToken!,
+                claim: (limit) => outbox.claim(limit),
+                complete: (eventId) => outbox.complete(eventId),
+                fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                timeoutMs: 5_000
+              });
+        app.addHook("onClose", async () => dispatcher.stop());
+        if (dispatcher instanceof JetStreamOutboxDispatcher) {
+          await dispatcher.initialize();
+          context.registerReadinessCheck?.({
+            name: "jetstream_channel_publisher",
+            check: () => dispatcher.checkReadiness()
+          });
+        }
+        dispatcher.start();
+      }
+    }
   }
   registerChannelRoutes(app, dependencies, context);
 };
+
+type DurableOutboxConfiguration =
+  | { readonly transport: "http"; readonly enabled: boolean }
+  | {
+      readonly transport: "jetstream";
+      readonly enabled: boolean;
+      readonly natsUrl: string;
+      readonly authentication: NatsAuthentication;
+    };
+
+export function readDurableOutboxConfiguration(env: NodeJS.ProcessEnv): DurableOutboxConfiguration {
+  const transport = env.DURABLE_EVENT_TRANSPORT?.trim() || "http";
+  if (transport !== "http" && transport !== "jetstream") {
+    throw new Error("DURABLE_EVENT_TRANSPORT must be either http or jetstream");
+  }
+
+  const globallyEnabled = env.DURABLE_OUTBOX_ENABLED !== "false";
+  if (transport === "http") {
+    return {
+      transport,
+      enabled: globallyEnabled && env.DURABLE_HTTP_OUTBOX_ENABLED !== "false"
+    };
+  }
+
+  return {
+    transport,
+    enabled: globallyEnabled,
+    natsUrl: requireCredentialFreeNatsUrl(env.NATS_URL),
+    authentication: readNatsAuthentication(
+      { authToken: env.NATS_AUTH_TOKEN, username: env.NATS_USERNAME, password: env.NATS_PASSWORD },
+      {
+        required: true,
+        minimumSecretLength: 24,
+        serverConfigurationSafe: true,
+        allowToken: env.NODE_ENV !== "production"
+      }
+    )!
+  };
+}
+
+function requireCredentialFreeNatsUrl(value: string | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) {
+    throw new Error("NATS_URL is required when DURABLE_EVENT_TRANSPORT=jetstream");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error("NATS_URL must be a valid credential-free URL");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("NATS_URL must not contain credentials");
+  }
+  if (
+    (parsed.protocol !== "nats:" && parsed.protocol !== "tls:") ||
+    !parsed.hostname ||
+    parsed.pathname !== "" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("NATS_URL must be a nats: or tls: endpoint without path, query, or hash");
+  }
+  return normalized;
+}
 
 export function registerChannelRoutes(
   app: Parameters<RouteRegistrar>[0],

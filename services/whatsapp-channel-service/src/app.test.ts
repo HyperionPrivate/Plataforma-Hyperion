@@ -1,6 +1,6 @@
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerChannelRoutes } from "./app.js";
+import { readDurableOutboxConfiguration, registerChannelRoutes } from "./app.js";
 import type { WhatsAppChannelService } from "./channel-service.js";
 
 const TENANT_ID = "00000000-0000-4000-8000-000000000001";
@@ -85,6 +85,82 @@ describe("whatsapp-channel internal API", () => {
       phoneMasked: "********4567",
       sessionRestorable: false
     });
+  });
+});
+
+describe("whatsapp-channel durable outbox configuration", () => {
+  const natsTestSecret = "nats-test-secret-with-24-characters";
+  it("keeps HTTP as the default and honors both disable switches", () => {
+    expect(readDurableOutboxConfiguration({})).toEqual({ transport: "http", enabled: true });
+    expect(readDurableOutboxConfiguration({ DURABLE_HTTP_OUTBOX_ENABLED: "false" })).toEqual({
+      transport: "http",
+      enabled: false
+    });
+    expect(readDurableOutboxConfiguration({ DURABLE_OUTBOX_ENABLED: "false" })).toEqual({
+      transport: "http",
+      enabled: false
+    });
+  });
+
+  it("requires explicit credential-separated JetStream configuration", () => {
+    expect(
+      readDurableOutboxConfiguration({
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://nats:4222",
+        NATS_AUTH_TOKEN: natsTestSecret
+      })
+    ).toEqual({
+      transport: "jetstream",
+      enabled: true,
+      natsUrl: "nats://nats:4222",
+      authentication: { authToken: natsTestSecret }
+    });
+    expect(() =>
+      readDurableOutboxConfiguration({
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://user:password@nats:4222",
+        NATS_AUTH_TOKEN: natsTestSecret
+      })
+    ).toThrow("must not contain credentials");
+    expect(() =>
+      readDurableOutboxConfiguration({
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://nats:4222"
+      })
+    ).toThrow("NATS authentication is required");
+  });
+
+  it("requires a per-service username identity in production", () => {
+    expect(() =>
+      readDurableOutboxConfiguration({
+        NODE_ENV: "production",
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://nats:4222",
+        NATS_AUTH_TOKEN: natsTestSecret
+      })
+    ).toThrow("token authentication is not allowed");
+  });
+
+  it("rejects unknown transports", () => {
+    expect(() => readDurableOutboxConfiguration({ DURABLE_EVENT_TRANSPORT: "unknown" })).toThrow(
+      "DURABLE_EVENT_TRANSPORT must be either http or jetstream"
+    );
+  });
+
+  it.each([
+    "https://nats:4222",
+    "nats://nats:4222/",
+    "nats://nats:4222/path",
+    "nats://nats:4222?token=unsafe",
+    "nats://nats:4222#fragment"
+  ])("rejects a non-NATS or component-bearing broker URL %s", (natsUrl) => {
+    expect(() =>
+      readDurableOutboxConfiguration({
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: natsUrl,
+        NATS_AUTH_TOKEN: natsTestSecret
+      })
+    ).toThrow("NATS_URL");
   });
 });
 

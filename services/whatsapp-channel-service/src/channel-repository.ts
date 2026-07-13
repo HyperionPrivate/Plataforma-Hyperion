@@ -159,7 +159,10 @@ export class PostgresChannelRepository implements ChannelRepository {
     return this.db.transaction(async (client) => {
       await applyChannelProjectionTimeouts(client);
       const replay = await findInboundReplay(client, message);
-      if (replay) return replay;
+      if (replay) {
+        await ensureInboundOutbox(client, message.tenantId, replay.eventId);
+        return replay;
+      }
 
       const connectionId = await requireConnection(client, message.tenantId);
       const bindingId = await upsertThreadBinding(client, connectionId, message);
@@ -182,17 +185,20 @@ export class PostgresChannelRepository implements ChannelRepository {
         ]
       );
       if (inserted.rows[0]) {
+        const eventId = inserted.rows[0].id;
         await client.query(
           `update channel_runtime.thread_bindings
            set last_inbound_at = greatest(coalesce(last_inbound_at, $3), $3), updated_at = now()
            where tenant_id = $1 and id = $2`,
           [message.tenantId, bindingId, message.receivedAt]
         );
-        return { eventId: inserted.rows[0].id, threadBindingId: bindingId, inserted: true };
+        await ensureInboundOutbox(client, message.tenantId, eventId);
+        return { eventId, threadBindingId: bindingId, inserted: true };
       }
 
       const concurrentReplay = await findInboundReplay(client, message);
       if (!concurrentReplay) throw new Error("Inbound event identity conflict");
+      await ensureInboundOutbox(client, message.tenantId, concurrentReplay.eventId);
       return concurrentReplay;
     });
   }
@@ -690,6 +696,57 @@ async function findInboundReplay(
     throw new Error("Inbound event identity conflict");
   }
   return { eventId: row.eventId, threadBindingId: row.threadBindingId, inserted: false };
+}
+
+async function ensureInboundOutbox(client: DatabaseExecutor, tenantId: string, eventId: string): Promise<void> {
+  const ensured = await client.query<{ sourceExists: boolean; outboxId: string | null }>(
+    `with source as materialized (
+       select event.id, event.tenant_id, event.provider, event.external_message_id,
+              event.body, event.occurred_at, binding.id as thread_binding_id,
+              binding.external_thread_id, binding.phone_e164_hash, binding.phone_masked
+       from channel_runtime.inbound_events event
+       join channel_runtime.thread_bindings binding
+         on binding.tenant_id = event.tenant_id and binding.id = event.thread_binding_id
+       where event.tenant_id = $1 and event.id = $2
+         and event.provider = 'whatsapp_web_test'
+         and char_length(event.external_message_id) between 1 and 512
+         and char_length(binding.external_thread_id) between 1 and 512
+         and binding.phone_e164_hash ~ '^[a-f0-9]{64}$'
+         and char_length(binding.phone_masked) between 3 and 32
+     ), inserted as (
+       insert into channel_runtime.outbox_events (
+         tenant_id, event_type, event_version, aggregate_type, aggregate_id, payload, occurred_at
+       )
+       select source.tenant_id, 'channel.inbound.received.v1', 1, 'channel_inbound_event', source.id,
+              jsonb_build_object(
+                'inboundEventId', source.id,
+                'threadBindingId', source.thread_binding_id,
+                'provider', source.provider,
+                'externalThreadId', source.external_thread_id,
+                'externalMessageId', source.external_message_id,
+                'phoneHash', source.phone_e164_hash,
+                'phoneMasked', source.phone_masked,
+                'body', source.body,
+                'receivedAt', source.occurred_at
+              ),
+              source.occurred_at
+       from source
+       on conflict (tenant_id, event_type, aggregate_id) do nothing
+       returning id
+     )
+     select exists(select 1 from source) as "sourceExists",
+            coalesce(
+              (select id from inserted),
+              (select id
+               from channel_runtime.outbox_events
+               where tenant_id = $1 and event_type = 'channel.inbound.received.v1' and aggregate_id = $2)
+            ) as "outboxId"`,
+    [tenantId, eventId]
+  );
+  const row = ensured.rows[0];
+  if (!row?.sourceExists || !row.outboxId) {
+    throw new Error("Unable to ensure durable outbox for inbound event");
+  }
 }
 
 async function cancelClaimedOutbound(

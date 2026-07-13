@@ -129,6 +129,8 @@ describe("SOFIA deterministic urgency guard", () => {
 });
 
 describe("SOFIA fresh availability guard", () => {
+  const occurredAt = "2026-07-10T03:27:00.000Z";
+
   it("classifies dated requests and contextual slot selections without intercepting confirmations", () => {
     expect(requiresFreshAvailability("Quiero la cita del lunes 13 de julio a las 9:00 a. m.")).toBe(true);
     expect(requiresFreshAvailability("¿Qué horarios tienen disponibles?")).toBe(true);
@@ -505,7 +507,7 @@ describe("SOFIA fresh availability guard", () => {
               patientId: "00000000-0000-4000-8000-000000000016",
               messageId,
               threadBindingId: "00000000-0000-4000-8000-000000000017",
-              occurredAt: new Date().toISOString()
+              occurredAt
             }
           }
         ]);
@@ -636,7 +638,7 @@ describe("SOFIA fresh availability guard", () => {
               patientId,
               messageId,
               threadBindingId: "00000000-0000-4000-8000-000000000017",
-              occurredAt: new Date().toISOString()
+              occurredAt
             }
           }
         ]);
@@ -785,7 +787,7 @@ describe("SOFIA fresh availability guard", () => {
               patientId,
               messageId,
               threadBindingId: "00000000-0000-4000-8000-000000000017",
-              occurredAt: new Date().toISOString()
+              occurredAt
             }
           }
         ]);
@@ -968,7 +970,7 @@ describe("SOFIA fresh availability guard", () => {
               patientId,
               messageId,
               threadBindingId: "00000000-0000-4000-8000-000000000017",
-              occurredAt: "2026-07-10T03:27:00.000Z"
+              occurredAt
             }
           }
         ]);
@@ -1127,7 +1129,7 @@ describe("SOFIA fresh availability guard", () => {
               patientId,
               messageId,
               threadBindingId: "00000000-0000-4000-8000-000000000017",
-              occurredAt: new Date().toISOString()
+              occurredAt
             }
           }
         ]);

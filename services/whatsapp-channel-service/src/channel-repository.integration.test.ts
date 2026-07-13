@@ -31,7 +31,10 @@ describeIntegration("PostgresChannelRepository", () => {
   });
 
   afterAll(async () => {
-    if (tenantId) await db.query("delete from platform.tenants where id = $1", [tenantId]);
+    if (tenantId) {
+      await db.query("delete from channel_runtime.outbox_events where tenant_id = $1", [tenantId]);
+      await db.query("delete from platform.tenants where id = $1", [tenantId]);
+    }
     await db.close();
   });
 
@@ -55,23 +58,60 @@ describeIntegration("PostgresChannelRepository", () => {
     await expect(repository.persistInbound({ ...message, phoneHash: "b".repeat(64) })).rejects.toThrow(
       "Inbound event identity conflict"
     );
-    const counts = await db.query<{ events: number; bindings: number; body: string; phoneHash: string }>(
+    await db.query(
+      `delete from channel_runtime.outbox_events
+       where tenant_id = $1 and aggregate_id = $2`,
+      [tenantId, first.eventId]
+    );
+    const repairedReplay = await repository.persistInbound({
+      ...message,
+      providerAddress: "replayed-address@s.whatsapp.net",
+      phoneMasked: "********9999",
+      receivedAt: new Date("2026-07-13T23:59:59.000Z")
+    });
+    const counts = await db.query<{
+      events: number;
+      bindings: number;
+      outbox: number;
+      outboxType: string;
+      body: string;
+      phoneHash: string;
+      outboxPayload: Record<string, unknown>;
+    }>(
       `select
          (select count(*)::int from channel_runtime.inbound_events where tenant_id = $1) as events,
          (select count(*)::int from channel_runtime.thread_bindings where tenant_id = $1) as bindings,
+         (select count(*)::int from channel_runtime.outbox_events where tenant_id = $1) as outbox,
+         (select event_type from channel_runtime.outbox_events where tenant_id = $1 limit 1) as "outboxType",
          (select body from channel_runtime.inbound_events where tenant_id = $1 limit 1) as body,
-         (select phone_e164_hash from channel_runtime.thread_bindings where tenant_id = $1 limit 1) as "phoneHash"`,
+         (select phone_e164_hash from channel_runtime.thread_bindings where tenant_id = $1 limit 1) as "phoneHash",
+         (select payload from channel_runtime.outbox_events where tenant_id = $1 limit 1) as "outboxPayload"`,
       [tenantId]
     );
 
     expect(first.inserted).toBe(true);
     expect(duplicate).toMatchObject({ inserted: false, eventId: first.eventId });
-    expect(counts.rows[0]).toEqual({
+    expect(repairedReplay).toMatchObject({ inserted: false, eventId: first.eventId });
+    expect(counts.rows[0]).toMatchObject({
       events: 1,
       bindings: 1,
+      outbox: 1,
+      outboxType: "channel.inbound.received.v1",
       body: message.body,
       phoneHash: message.phoneHash
     });
+    expect(counts.rows[0]?.outboxPayload).toMatchObject({
+      inboundEventId: first.eventId,
+      threadBindingId: first.threadBindingId,
+      externalThreadId: message.providerAddress,
+      externalMessageId: message.externalMessageId,
+      phoneHash: message.phoneHash,
+      phoneMasked: message.phoneMasked,
+      body: message.body
+    });
+    const persistedReceivedAt = String(counts.rows[0]?.outboxPayload.receivedAt);
+    expect(Number.isNaN(Date.parse(persistedReceivedAt))).toBe(false);
+    expect(new Date(persistedReceivedAt).toISOString()).toBe(message.receivedAt.toISOString());
   });
 
   it("replays an inbound without waiting on the binding lock used by patient identification", async () => {
@@ -114,6 +154,53 @@ describeIntegration("PostgresChannelRepository", () => {
       releaseLock();
       await locker;
     }
+  });
+
+  it("does not resurrect a contract-invalid terminal legacy event through replay", async () => {
+    const connection = await db.query<{ id: string }>(
+      `select id from channel_runtime.connections where tenant_id = $1`,
+      [tenantId]
+    );
+    const binding = await db.query<{ id: string }>(
+      `insert into channel_runtime.thread_bindings (
+         tenant_id, connection_id, provider, external_thread_id,
+         phone_e164_hash, phone_masked
+       ) values ($1, $2, $3, $4, $5, '********8888') returning id`,
+      [tenantId, connection.rows[0]?.id, WHATSAPP_PROVIDER_MODE, "573008888888@s.whatsapp.net", "Z".repeat(64)]
+    );
+    const legacy = await db.query<{ id: string }>(
+      `insert into channel_runtime.inbound_events (
+         tenant_id, connection_id, thread_binding_id, provider,
+         external_message_id, body, status, occurred_at,
+         last_error_code, metadata
+       ) values (
+         $1, $2, $3, $4, 'legacy-invalid-replay', 'legacy invalido',
+         'dead_letter', now(), 'legacy_inbound_contract_invalid',
+         '{"outboxBackfillStatus":"dead_letter"}'::jsonb
+       ) returning id`,
+      [tenantId, connection.rows[0]?.id, binding.rows[0]?.id, WHATSAPP_PROVIDER_MODE]
+    );
+
+    await expect(
+      repository.persistInbound({
+        tenantId,
+        provider: WHATSAPP_PROVIDER_MODE,
+        externalMessageId: "legacy-invalid-replay",
+        providerAddress: "573008888888@s.whatsapp.net",
+        phoneHash: "Z".repeat(64),
+        phoneMasked: "********8888",
+        body: "legacy invalido",
+        receivedAt: new Date()
+      })
+    ).rejects.toThrow("Unable to ensure durable outbox for inbound event");
+
+    const outbox = await db.query<{ count: number }>(
+      `select count(*)::int as count
+       from channel_runtime.outbox_events
+       where tenant_id = $1 and aggregate_id = $2`,
+      [tenantId, legacy.rows[0]?.id]
+    );
+    expect(outbox.rows[0]?.count).toBe(0);
   });
 
   it("enqueues idempotently, claims once and records delivery", async () => {
@@ -426,6 +513,10 @@ describeIntegration("PostgresChannelRepository", () => {
     expect(new Set(results.map((result) => result.id)).size).toBe(1);
     expect(results.filter((result) => result.inserted)).toHaveLength(1);
     expect(count.rows[0]?.count).toBe(1);
+    await db.query(`delete from channel_runtime.outbound_messages where tenant_id = $1 and message_id = $2`, [
+      tenantId,
+      messageId
+    ]);
     await db.query(`delete from pulso_iris.messages where tenant_id = $1 and id = $2`, [tenantId, messageId]);
   });
 

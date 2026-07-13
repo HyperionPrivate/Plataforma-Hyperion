@@ -3,7 +3,6 @@ import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { LumenAuditEvent } from "./audit-client.js";
 import type { ClinicalStructurer } from "./clinical-ai.js";
 import { SpeechToTextError } from "./provider-errors.js";
 import { processingResultSnapshotSha256 } from "./processing-attempts.js";
@@ -121,7 +120,6 @@ let patientA: string;
 let patientB: string;
 let siteA: string;
 let operatorId: string;
-const audits: LumenAuditEvent[] = [];
 
 describeIntegration("LUMEN clinical vertical", () => {
   beforeAll(async () => {
@@ -143,7 +141,7 @@ describeIntegration("LUMEN clinical vertical", () => {
       serviceName: "lumen-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) =>
-        registerLumenRoutes(serviceApp, context, { transcriber, structurer, emitAudit: (event) => audits.push(event) })
+        registerLumenRoutes(serviceApp, context, { transcriber, structurer })
     });
     app = handle.app;
   });
@@ -240,10 +238,10 @@ describeIntegration("LUMEN clinical vertical", () => {
     expect(trace.rows[0].serialized).not.toContain(TEST_TRANSCRIPT);
 
     const audit = await client.query(
-      `select metadata::text as metadata
-       from platform.audit_events
-       where tenant_id = $1 and event_type = 'lumen.dictation.transcribed'
-         and metadata->>'encounterId' = $2`,
+      `select (payload->'metadata')::text as metadata
+       from lumen.outbox_events
+       where tenant_id = $1 and payload->>'eventType' = 'lumen.dictation.transcribed'
+         and payload->'metadata'->>'encounterId' = $2`,
       [tenantA, fixture.encounterId]
     );
     expect(audit.rowCount).toBe(1);
@@ -379,12 +377,8 @@ describeIntegration("LUMEN clinical vertical", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
-  it("rejects clinical encounters for non-synthetic patients", async () => {
-    const patient = await client.query(
-      `insert into pulso_iris.administrative_patients (tenant_id, full_name, metadata)
-       values ($1, 'Paciente no demo de prueba', '{}'::jsonb) returning id`,
-      [tenantA]
-    );
+  it("rejects encounters without a matching local synthetic reference snapshot", async () => {
+    const patientId = randomUUID();
     const catalog = await client.query(
       `select professional_id, site_id from lumen.encounters where tenant_id = $1 and id = $2`,
       [tenantA, encounterA]
@@ -394,7 +388,7 @@ describeIntegration("LUMEN clinical vertical", () => {
         `insert into lumen.encounters
            (tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
          values ($1, $2, $3, $4, now(), true, 'non-demo-reference', '{"synthetic":true}'::jsonb)`,
-        [tenantA, patient.rows[0].id, catalog.rows[0].professional_id, catalog.rows[0].site_id]
+        [tenantA, patientId, catalog.rows[0].professional_id, catalog.rows[0].site_id]
       )
     ).rejects.toMatchObject({ code: "23514" });
   });
@@ -402,9 +396,9 @@ describeIntegration("LUMEN clinical vertical", () => {
   it("keeps synthetic identity markers and approval transitions database-enforced", async () => {
     await expect(
       client.query(
-        `update pulso_iris.administrative_patients
-         set metadata = metadata - 'is_demo'
-         where tenant_id = $1 and id = $2`,
+        `update lumen.encounter_reference_snapshots
+         set patient_is_demo = false
+         where tenant_id = $1 and patient_id = $2`,
         [tenantA, patientA]
       )
     ).rejects.toMatchObject({ code: "23514" });
@@ -725,12 +719,12 @@ describeIntegration("LUMEN clinical vertical", () => {
     ).rejects.toMatchObject({ code: "23514" });
 
     const durableProcessAudit = await client.query(
-      `select event_type, count(*)::int as count
-       from platform.audit_events
+      `select payload->>'eventType' as event_type, count(*)::int as count
+       from lumen.outbox_events
        where tenant_id = $1
-         and event_type in ('lumen.encounter.started', 'lumen.dictation.transcribed', 'lumen.record.structured')
-         and (entity_id = $2 or metadata->>'encounterId' = $2)
-       group by event_type`,
+         and payload->>'eventType' in ('lumen.encounter.started', 'lumen.dictation.transcribed', 'lumen.record.structured')
+         and (payload->>'entityId' = $2 or payload->'metadata'->>'encounterId' = $2)
+       group by payload->>'eventType'`,
       [tenantA, encounterA]
     );
     expect(Object.fromEntries(durableProcessAudit.rows.map((row) => [row.event_type, row.count]))).toEqual({
@@ -739,15 +733,17 @@ describeIntegration("LUMEN clinical vertical", () => {
       "lumen.record.structured": 1
     });
     const dictationAudit = await client.query(
-      `select metadata from platform.audit_events
-       where tenant_id = $1 and event_type = 'lumen.dictation.transcribed' and entity_id = $2`,
+      `select payload->'metadata' as metadata from lumen.outbox_events
+       where tenant_id = $1 and payload->>'eventType' = 'lumen.dictation.transcribed'
+         and payload->>'entityId' = $2`,
       [tenantA, dictation.id]
     );
     expect(dictationAudit.rows[0].metadata).toMatchObject({ source: "authorized_upload", audioStored: false });
     const transcriptReviewAudit = await client.query(
-      `select metadata::text as metadata
-       from platform.audit_events
-       where tenant_id = $1 and event_type = 'lumen.dictation.reviewed' and entity_id = $2`,
+      `select (payload->'metadata')::text as metadata
+       from lumen.outbox_events
+       where tenant_id = $1 and payload->>'eventType' = 'lumen.dictation.reviewed'
+         and payload->>'entityId' = $2`,
       [tenantA, dictation.id]
     );
     expect(transcriptReviewAudit.rowCount).toBe(1);
@@ -830,9 +826,9 @@ describeIntegration("LUMEN clinical vertical", () => {
     expect(structureCallCount).toBe(structureCallsBefore + 1);
 
     const durableReviewAudit = await client.query(
-      `select metadata from platform.audit_events
-       where tenant_id = $1 and event_type = 'lumen.record.reviewed'
-         and entity_id = $2 and actor_id = $3`,
+      `select payload->'metadata' as metadata from lumen.outbox_events
+       where tenant_id = $1 and payload->>'eventType' = 'lumen.record.reviewed'
+         and payload->>'entityId' = $2 and payload->>'actorId' = $3`,
       [tenantA, patched.json().data.id, operatorId]
     );
     expect(durableReviewAudit.rowCount).toBe(1);
@@ -856,12 +852,15 @@ describeIntegration("LUMEN clinical vertical", () => {
     expect(approved.json().data.status).toBe("approved");
 
     const durableAudit = await client.query(
-      `select count(*)::int as count from platform.audit_events
-       where tenant_id = $1 and event_type = 'lumen.record.approved'
-         and entity_id = $2`,
+      `select count(*)::int as count,
+              bool_and(event_type = 'lumen.audit.event.record.v1') as source_scoped
+       from lumen.outbox_events
+       where tenant_id = $1 and payload->>'eventType' = 'lumen.record.approved'
+         and payload->>'entityId' = $2`,
       [tenantA, approved.json().data.id]
     );
     expect(durableAudit.rows[0].count).toBe(1);
+    expect(durableAudit.rows[0].source_scoped).toBe(true);
 
     const beforeDictations = await client.query(
       `select count(*)::int as count from lumen.dictations where tenant_id = $1 and encounter_id = $2`,
@@ -943,34 +942,48 @@ async function createTenant(slug: string): Promise<string> {
     `insert into platform.tenants (slug, display_name, status) values ($1, $2, 'active') returning id`,
     [slug, slug]
   );
-  return result.rows[0].id;
+  const tenantId = result.rows[0].id as string;
+  await client.query(
+    `insert into lumen.tenant_snapshots (
+       tenant_id, status, is_demo, is_active, source_version, source_updated_at, payload_hash
+     ) values ($1, 'active', true, true, 1, now(), $2)`,
+    [tenantId, sha256ForTest(`tenant:${tenantId}:1`)]
+  );
+  return tenantId;
 }
 
 async function createFixture(
   tenantId: string,
   suffix: string
 ): Promise<{ encounterId: string; patientId: string; siteId: string }> {
-  const patient = await client.query(
-    `insert into pulso_iris.administrative_patients (tenant_id, full_name, metadata)
-     values ($1, $2, '{"is_demo":true,"demoAge":54}'::jsonb) returning id`,
-    [tenantId, `Paciente ${suffix}`]
-  );
-  const professional = await client.query(
-    `insert into pulso_iris.professionals (tenant_id, name, professional_type, metadata)
-     values ($1, $2, 'ophthalmologist', '{"is_demo":true}'::jsonb) returning id`,
-    [tenantId, `Profesional ${suffix}`]
-  );
-  const site = await client.query(
-    `insert into pulso_iris.sites (tenant_id, name, metadata)
-     values ($1, $2, '{"is_demo":true}'::jsonb) returning id`,
-    [tenantId, `Sede ${suffix}`]
+  const encounterId = randomUUID();
+  const patientId = randomUUID();
+  const professionalId = randomUUID();
+  const siteId = randomUUID();
+  await client.query(
+    `insert into lumen.encounter_reference_snapshots (
+       tenant_id, encounter_id, patient_id, site_id, professional_id,
+       patient_display_name, patient_age, professional_name, site_name,
+       patient_is_demo, professional_is_demo, source_version, source_updated_at, payload_hash
+     ) values ($1, $2, $3, $4, $5, $6, 54, $7, $8, true, true, 1, now(), $9)`,
+    [
+      tenantId,
+      encounterId,
+      patientId,
+      siteId,
+      professionalId,
+      `Paciente ${suffix}`,
+      `Profesional ${suffix}`,
+      `Sede ${suffix}`,
+      sha256ForTest(`reference:${tenantId}:${encounterId}:1`)
+    ]
   );
   const encounter = await client.query(
     `insert into lumen.encounters
-       (tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
-     values ($1, $2, $3, $4, '2026-07-10T15:00:00Z', true, $5, '{"synthetic":true}'::jsonb)
+       (id, tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
+     values ($2, $1, $3, $4, $5, '2026-07-10T15:00:00Z', true, $6, '{"synthetic":true}'::jsonb)
      returning id`,
-    [tenantId, patient.rows[0].id, professional.rows[0].id, site.rows[0].id, `integration-${suffix}`]
+    [tenantId, encounterId, patientId, professionalId, siteId, `integration-${suffix}`]
   );
   await client.query(
     `insert into lumen.preconsultation_summaries (tenant_id, encounter_id, content, source_count)
@@ -987,7 +1000,7 @@ async function createFixture(
       })
     ]
   );
-  return { encounterId: encounter.rows[0].id, patientId: patient.rows[0].id, siteId: site.rows[0].id };
+  return { encounterId: encounter.rows[0].id, patientId, siteId };
 }
 
 async function createOperator(tenantId: string): Promise<string> {
@@ -1000,7 +1013,15 @@ async function createOperator(tenantId: string): Promise<string> {
     operator.rows[0].id,
     tenantId
   ]);
-  return operator.rows[0].id;
+  const operatorId = operator.rows[0].id as string;
+  await client.query(
+    `insert into lumen.operator_grants (
+       operator_id, tenant_id, role, is_active, can_review,
+       source_version, source_updated_at, payload_hash
+     ) values ($1, $2, 'advisor', true, true, 1, now(), $3)`,
+    [operatorId, tenantId, sha256ForTest(`operator:${tenantId}:${operatorId}:1`)]
+  );
+  return operatorId;
 }
 
 async function createCompletedAudioDictation(

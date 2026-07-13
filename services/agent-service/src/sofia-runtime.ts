@@ -174,6 +174,7 @@ export interface SofiaRuntimeOptions {
   fetchImpl?: typeof fetch;
   workerId?: string;
   pollIntervalMs?: number;
+  inboundPollingEnabled?: boolean;
 }
 
 export class SofiaRuntime {
@@ -200,11 +201,13 @@ export class SofiaRuntime {
 
   start(): void {
     if (this.ingestTimer || this.jobTimer) return;
-    this.ingestTimer = setInterval(() => void this.ingestTick(), this.pollIntervalMs);
+    if (this.options.inboundPollingEnabled ?? true) {
+      this.ingestTimer = setInterval(() => void this.ingestTick(), this.pollIntervalMs);
+      this.ingestTimer.unref();
+      void this.ingestTick();
+    }
     this.jobTimer = setInterval(() => void this.jobTick(), this.pollIntervalMs);
-    this.ingestTimer.unref();
     this.jobTimer.unref();
-    void this.ingestTick();
     void this.jobTick();
   }
 
@@ -216,7 +219,7 @@ export class SofiaRuntime {
   }
 
   isRunning(): boolean {
-    return Boolean(this.ingestTimer && this.jobTimer);
+    return Boolean(this.jobTimer && (!(this.options.inboundPollingEnabled ?? true) || this.ingestTimer));
   }
 
   async ingestOnce(): Promise<number> {

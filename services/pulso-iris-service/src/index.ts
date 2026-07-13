@@ -10,7 +10,8 @@ await startService({
     "009-agenda-slot-engine.sql",
     "010-agenda-rules.sql",
     "011-configurable-agenda.sql",
-    "012-whatsapp-sofia-runtime.sql"
+    "012-whatsapp-sofia-runtime.sql",
+    "021-autonomous-event-flow.sql"
   ],
   registerRoutes
 });
