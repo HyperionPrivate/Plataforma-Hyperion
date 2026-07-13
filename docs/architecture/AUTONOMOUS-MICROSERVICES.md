@@ -21,7 +21,7 @@ Cada dependencia retirada debe eliminar su entrada del baseline en el mismo camb
 | `sofia-automation`    | Agent + Prompt Flow          | Agentes, prompts, jobs, ejecuciones y estado privado de SOFIA.                                       |
 | `channel`             | WhatsApp Channel             | Conexiones, eventos inbound, mensajes outbound, bindings y comprobantes de entrega.                  |
 | `lumen`               | LUMEN                        | Encuentros, dictados, historias clinicas, resumenes y procesamiento de audio.                        |
-| `knowledge`           | Knowledge                    | Fuentes, corpus, ingestas, versiones y retrieval; Graphify solo como motor interno evaluado.         |
+| `knowledge`           | Knowledge                    | Fuentes, corpus, ingestas, versiones y retrieval.                                                    |
 | `audit`               | Audit                        | Ledger append-only y evidencia durable recibida por contratos.                                       |
 | `integration-adapter` | Integration                  | Adaptadores externos durante la transicion; RPA se separa cuando exista un worker real.              |
 | `migration-control`   | Migrations                   | Historial tecnico de migraciones; no es una API de dominio.                                          |
@@ -142,26 +142,6 @@ Acepta `access.lumen.tenant-snapshot.v1`, `access.lumen.operator-grant.v1` y
 actualizar sus tablas. La migracion inicial hace un backfill controlado, pero el runtime no consulta tablas de
 `access`, PULSO o Audit. Los productores propietarios de esas proyecciones forman parte de la siguiente fase de
 extraccion; hasta entonces los datos de demostracion se cargan exclusivamente con tooling de migracion.
-
-## Decision sobre Graphify
-
-Graphify no forma parte del request path ni es autoridad arquitectonica. El piloto usa exclusivamente el
-repositorio oficial fijado a `v0.9.14` y commit `94d3099540550d58dd121ec3e67cf93e80364079`, instalado de forma
-aislada. No se usa una copia modificada, una rama flotante ni `latest`.
-
-Controles del piloto:
-
-- Salida fuera del repositorio mediante `--out <directorio-externo>`; no se compromete `graphify-out/`.
-- Indexacion `--code-only --no-cluster`, seguida de clustering sobre una copia marcada como grafo dirigido y
-  `--no-viz --no-label`; sin documentos, PDF, imagenes, PHI ni proveedores LLM.
-- `GRAPHIFY_QUERY_LOG_DISABLE=1`; sin HTTP compartido, OAuth pendiente, hooks Git o instaladores que editen instrucciones.
-- Todo hallazgo importante se confirma en la fuente. Se compara contra `rg` y lectura selectiva con preguntas oro.
-- Adopcion habitual solo con al menos 25% menos tokens medianos, calidad no inferior en mas de un punto,
-  cero omisiones P0/P1 y costo de indexacion amortizado en no mas de 30 consultas.
-
-Si el piloto administrativo supera esos gates, `knowledge-service` envolvera indexacion asincrona y snapshots
-inmutables por tenant/corpus/version. No expondra MCP, rutas locales ni URLs arbitrarias, y Graphify no se usara
-para disponibilidad, confirmacion de citas, transcripts o historias clinicas.
 
 ## Barrera de CI y retiro de deuda
 

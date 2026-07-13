@@ -15,4 +15,3 @@ Dockerfile.local
 logs-*.txt
 backups/
 tmp/
-graphify-out/

@@ -106,4 +106,4 @@ El repositorio contiene software desplegable y procedimientos versionados, pero 
 commit determinado esté activo en un ambiente. El estado de cada despliegue debe identificarse mediante su
 commit, imágenes y registro operativo correspondiente.
 
-No se versionan secretos, sesiones de proveedores, audio, datos clínicos reales, backups ni salidas de Graphify.
+No se versionan secretos, sesiones de proveedores, audio, datos clínicos reales ni backups.
