@@ -11,12 +11,15 @@ decisiones arquitectónicas de la plataforma.
 ## Propósito y productos
 
 El núcleo de Hyperion proporciona acceso, tenants, gateway, auditoría, integraciones, conocimiento, flujos de
-prompts y una consola operativa compartida. Sobre ese núcleo viven productos y capacidades con límites propios:
+prompts y una consola operativa compartida. Sobre ese núcleo viven dos productos de software con límites propios:
 
-- **PULSO IRIS**: agenda, conversaciones, operación y automatización para atención al cliente.
-- **SOFÍA**: automatización conversacional y ejecución controlada de procesos sobre PULSO IRIS.
+- **PULSO IRIS**: agenda, conversaciones, operación y automatización para atención al cliente. **SOFÍA** es su
+  agente conversacional y de ejecución controlada; opera en un contexto técnico separado, pero no es un producto
+  comercial independiente.
 - **LUMEN**: flujos clínicos asistidos, con revisión humana y datos sintéticos en su demostración actual.
-- **Canales e integraciones**: adaptadores privados para WhatsApp, voz y sistemas externos.
+
+Canales e integraciones son capacidades compartidas de la plataforma. La consultoría y otros servicios
+profesionales pertenecen al portafolio comercial, pero no se modelan como microservicios.
 
 La plataforma está diseñada para incorporar nuevos productos mediante contratos HTTP o eventos versionados,
 propiedad explícita de datos y despliegues por servicio.
@@ -93,8 +96,13 @@ JetStream están documentados por separado.
 
 ## Documentación
 
+- [Productos y estados de cobertura](docs/products/README.md)
+- [Especificación de PULSO IRIS y SOFÍA](docs/products/PULSO-IRIS.md)
+- [Especificación de LUMEN](docs/products/LUMEN.md)
+- [Matriz de trazabilidad de requisitos](docs/products/REQUIREMENTS-TRACEABILITY.md)
 - [Arquitectura general](docs/ARCHITECTURE.md)
 - [Evolución hacia microservicios autónomos](docs/architecture/AUTONOMOUS-MICROSERVICES.md)
+- [Decisiones arquitectónicas](docs/architecture/decisions/README.md)
 - [Roles PostgreSQL por contexto](docs/architecture/POSTGRESQL-SERVICE-ROLES.md)
 - [Operación y producción](docs/PRODUCTION.md)
 - [Aislamiento NATS y JetStream](infra/nats/README.md)

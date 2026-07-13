@@ -7,6 +7,12 @@ capaces de desplegarse, autorizar, migrar, respaldar y restaurarse de forma inde
 puerto no constituye por si solo un microservicio: el propietario de un dato es el unico que puede consultarlo
 o modificarlo directamente. Los demas contextos usan contratos HTTP o eventos versionados.
 
+Un producto comercial tampoco equivale necesariamente a un unico runtime. PULSO IRIS incluye la capacidad
+SOFIA, aunque `sofia-automation` mantiene un limite tecnico independiente; LUMEN si coincide con un contexto de
+producto propio. La regla completa esta en
+[`ADR-0001`](decisions/ADR-0001-product-service-boundaries.md) y el alcance verificable en
+[`docs/products`](../products/README.md).
+
 La migracion es incremental. La deuda actual queda registrada en
 [`boundary-baseline.json`](boundary-baseline.json); no es una autorizacion para crear dependencias nuevas.
 Cada dependencia retirada debe eliminar su entrada del baseline en el mismo cambio.
@@ -18,7 +24,7 @@ Cada dependencia retirada debe eliminar su entrada del baseline en el mismo camb
 | `edge-gateway`        | `apps/api-gateway`           | Entrada publica, autenticacion de borde, cuotas y enrutamiento; sin datos de dominio.                |
 | `access`              | Identity + Tenant            | Tenants, operadores, sesiones, membresias, roles y productos habilitados.                            |
 | `pulso-core`          | PULSO IRIS                   | Pacientes administrativos, agenda, citas, conversaciones, mensajes, handoffs y operacion RPA actual. |
-| `sofia-automation`    | Agent + Prompt Flow          | Agentes, prompts, jobs, ejecuciones y estado privado de SOFIA.                                       |
+| `sofia-automation`    | Agent + Prompt Flow          | Capacidad de PULSO IRIS: agentes, prompts, jobs, ejecuciones y estado privado de SOFIA.              |
 | `channel`             | WhatsApp Channel             | Conexiones, eventos inbound, mensajes outbound, bindings y comprobantes de entrega.                  |
 | `lumen`               | LUMEN                        | Encuentros, dictados, historias clinicas, resumenes y procesamiento de audio.                        |
 | `knowledge`           | Knowledge                    | Fuentes, corpus, ingestas, versiones y retrieval.                                                    |
@@ -142,6 +148,11 @@ Acepta `access.lumen.tenant-snapshot.v1`, `access.lumen.operator-grant.v1` y
 actualizar sus tablas. La migracion inicial hace un backfill controlado, pero el runtime no consulta tablas de
 `access`, PULSO o Audit. Los productores propietarios de esas proyecciones forman parte de la siguiente fase de
 extraccion; hasta entonces los datos de demostracion se cargan exclusivamente con tooling de migracion.
+
+El corte actual de LUMEN procesa audio en almacenamiento temporal y lo elimina al terminar. Esta politica es
+segura para la demostracion, pero no resuelve por si sola los requisitos de retencion de una operacion clinica
+real. La barrera y la decision pendiente estan registradas en
+[`ADR-0002`](decisions/ADR-0002-lumen-audio-retention.md).
 
 ## Barrera de CI y retiro de deuda
 

@@ -2,7 +2,7 @@
   "name": "plataforma-hyperion",
   "version": "0.1.0",
   "private": true,
-  "description": "Hyperion platform core with microservice boundaries for products such as CEDCO.",
+  "description": "Hyperion platform core with autonomous boundaries for products such as PULSO IRIS and LUMEN.",
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": ">=22.0.0"
