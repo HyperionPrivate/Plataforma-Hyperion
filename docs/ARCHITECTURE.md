@@ -1,5 +1,10 @@
 # Arquitectura
 
+La arquitectura objetivo, los limites de contexto, la propiedad normativa de cada tabla y las decisiones
+de migracion estan en [Microservicios autonomos](architecture/AUTONOMOUS-MICROSERVICES.md). El archivo
+[`data-ownership.json`](architecture/data-ownership.json) es la fuente ejecutable usada por CI para impedir
+que aumenten los accesos SQL y las claves foraneas entre propietarios.
+
 La plataforma se construye como monorepo TypeScript con microservicios HTTP. El gateway es la unica entrada publica prevista; los servicios de dominio quedan en red interna.
 
 ## Servicios
@@ -20,22 +25,35 @@ La plataforma se construye como monorepo TypeScript con microservicios HTTP. El 
 
 ## Datos
 
-PostgreSQL arranca con el esquema core `platform` y el esquema de producto `pulso_iris` (sites, professionals, payers, appointment_types, availability_rules, administrative_patients, conversations, messages, appointments, rpa_actions, handoffs, operational_kpi_snapshots). No hay datos de muestra. Los productos reales se cargan cuando exista la informacion operativa real de cada cliente.
+PostgreSQL arranca con el esquema core `platform`, el esquema de producto `pulso_iris` y los esquemas privados de runtime. No hay datos de muestra en produccion. Los productos reales se cargan cuando exista la informacion operativa real de cada cliente.
 
-El esquema es propiedad de `packages/migrations`: archivos SQL versionados en `packages/migrations/sql` aplicados en orden por un runner transaccional con tabla de control `platform.schema_migrations` y verificacion de checksum. En Docker corre como servicio one-shot antes de los servicios (`service_completed_successfully`); en local se ejecuta con `pnpm db:migrate`. Los servicios no ejecutan DDL en el arranque.
+Durante la transicion, `db-role-bootstrap` crea o rota ocho identidades PostgreSQL restringidas y
+`packages/migrations` aplica despues los archivos SQL versionados y verifica su checksum. Ambos corren como
+servicios one-shot antes de los runtimes (`service_completed_successfully`); solo ellos reciben la conexion
+administrativa. En local las migraciones se ejecutan con `pnpm db:migrate`. Los servicios no ejecutan DDL en el
+arranque y verifican su identidad de base de datos antes de registrar rutas. Cada contexto migra hacia un
+historial local: LUMEN ya publica su version en `lumen.schema_version` y su readiness no consulta
+`platform.schema_migrations`.
 
 ## Despliegue
 
-Una sola imagen multi-stage para los servicios Node (produccion sin devDependencies, proceso como usuario `node`) y una imagen nginx sin privilegios para la consola web estatica. Cada servicio expone `/health` y `/ready`; los servicios con base de datos usan `/ready` como healthcheck y validan migraciones requeridas en `platform.schema_migrations` antes de quedar sanos. El gateway conserva `/health` como healthcheck publico agregado.
+Un Dockerfile multi-stage produce una imagen runtime distinta por servicio Node: cada destino contiene solo el
+artefacto del servicio y su cierre de dependencias de produccion, y ejecuta como usuario `node`. Migraciones y el
+bootstrap de topologia JetStream tienen imagenes one-shot separadas sin artefactos de aplicaciones; la consola
+usa nginx sin privilegios. Cada servicio expone `/health` y `/ready`; los servicios con base de datos validan la
+version de esquema que les corresponde antes de quedar sanos. El gateway no declara dependencias de arranque
+sobre los productos: conserva `/health` como liveness propio y reporta disponibilidad agregada por separado en
+`/v1/platform/health`, por lo que un producto degradado no bloquea el resto de la plataforma.
 
 ## Producto inicial
 
 El producto inicial operativo es PULSO IRIS para CEDCO. La plataforma conserva el nucleo de identidad, tenants, agentes, integraciones y auditoria, y PULSO IRIS vive en `pulso-iris-service` con esquema propio `pulso_iris`.
 
-LUMEN conserva su limite de microservicio y esquema `lumen`. El corte de demo clinica usa exclusivamente
-registros sinteticos identificados y no modifica la logica funcional de `pulso-iris-service`. La consola
-web y el shell son compartidos, por lo que cada despliegue de LUMEN debe incluir una comprobacion de no
-regresion de las rutas PULSO IRIS.
+LUMEN conserva su limite de microservicio y esquema `lumen`. Su runtime consulta proyecciones locales de tenant,
+permisos y referencias de encuentros; recibe sus cambios por contratos versionados y registra auditoria mediante
+outbox, sin SQL directo sobre `platform` o `pulso_iris`. El corte de demo clinica usa exclusivamente registros
+sinteticos identificados y no modifica la logica funcional de `pulso-iris-service`. La consola web y el shell son
+compartidos, por lo que cada despliegue de LUMEN incluye una comprobacion de no regresion de las rutas PULSO IRIS.
 
 ## Regla para agregar productos
 

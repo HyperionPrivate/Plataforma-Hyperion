@@ -8,9 +8,14 @@
     "node": ">=22.0.0"
   },
   "scripts": {
+    "architecture:check": "node scripts/architecture/check-boundaries.mjs",
+    "architecture:test": "node --test scripts/architecture/check-boundaries.test.mjs scripts/architecture/check-compose-identities.test.mjs",
+    "autonomy:e2e": "node scripts/autonomy/real-flow.e2e.mjs",
+    "autonomy:e2e:local": "pnpm build && pnpm autonomy:e2e",
+    "compose:check": "node scripts/architecture/check-compose-identities.mjs",
     "backup:test": "node scripts/ops/run-postgres-backup-tests.mjs",
     "build": "pnpm -r build",
-    "check": "pnpm lint && pnpm backup:test && pnpm build && pnpm -r test",
+    "check": "pnpm architecture:test && pnpm architecture:check && pnpm compose:check && pnpm lint && pnpm backup:test && pnpm build && pnpm -r test",
     "db:migrate": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/index.js",
     "db:seed:demo": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-demo.js",
     "db:seed:demo:clear": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-demo.js --clear",
@@ -21,7 +26,9 @@
     "dev:web": "pnpm --filter @hyperion/contracts build && pnpm --filter @hyperion/web-console dev",
     "format": "prettier --write .",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:down:jetstream": "docker compose -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml down",
     "infra:up": "docker compose -f infra/docker-compose.yml up --build",
+    "infra:up:jetstream": "docker compose -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml up --build",
     "lint": "eslint . && prettier --check .",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"

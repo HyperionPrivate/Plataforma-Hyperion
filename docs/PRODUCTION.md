@@ -9,7 +9,10 @@ reales ni deben entrar en los flujos operativos de PULSO IRIS.
 - No se guardan claves reales en Git.
 - Toda clave compartida por chat, correo o canal no secreto debe rotarse antes de dejarla como acceso permanente.
 - `.env.example` solo muestra nombres de variables.
-- `INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD` y credenciales de proveedores deben vivir fuera del repositorio.
+- `INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD`, las ocho contraseñas PostgreSQL de servicio y las
+  credenciales de proveedores deben vivir fuera del repositorio.
+- Las contraseñas `*_DATABASE_PASSWORD` son distintas entre sí, tienen al menos 24 caracteres URI no
+  reservados y nunca se reutilizan como contraseña administrativa.
 
 ## VPS
 
@@ -20,6 +23,145 @@ El VPS debe quedar con acceso por llave SSH, firewall activo y login root por pa
 - Gateway: `${API_GATEWAY_HOST_PORT:-8080}`.
 - Consola web: `${WEB_CONSOLE_HOST_PORT:-3000}`.
 - PostgreSQL no se publica al host; solo queda disponible dentro de la red Docker.
+
+## JetStream
+
+El transporte productivo predeterminado sigue siendo HTTP. El overlay
+`infra/docker-compose.jetstream.yml` usa identidades y ACL por servicio, pero permanece como piloto de un solo
+nodo: una replica, DLQ con la misma retencion y sin alerta/redrive operativos. No habilitarlo en produccion hasta
+desplegar cluster con replicas, TLS interno, limites de capacidad, monitorizacion y una prueba documentada de
+recuperacion. Cuando se evalua en un ambiente aislado, los seis `NATS_*_PASSWORD` deben ser distintos y nunca
+reutilizar `INTERNAL_SERVICE_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea siete durables activos y el
+durable temporal `audit_event_record_v1`: Audit consume por separado `sofia.audit.event.record.v1` y
+`lumen.audit.event.record.v1`, mientras el tercero sólo drena mensajes publicados antes de la migración y los
+marca `legacy-unknown`. Ninguna identidad runtime puede publicar nuevos eventos en el subject genérico. Cuando
+el durable legado permanezca vacío durante una ventana superior a la retención, se elimina en una migración de
+topología posterior. Con JetStream activo, los endpoints HTTP de entrega durable no se registran; HTTP no queda
+como bypass paralelo de las ACL.
+
+### Ensayo local aislado de JetStream
+
+Este ensayo valida la secuencia de activacion sin tocar el proyecto Compose habitual ni datos operativos. Crear
+`.env.rehearsal.local` a partir de `.env.example`, completar las ocho contraseñas PostgreSQL, las seis de NATS,
+`POSTGRES_PASSWORD` e `INTERNAL_SERVICE_TOKEN`, y mantener el archivo fuera de Git. Todas las contraseñas
+PostgreSQL, incluida la administrativa, deben usar al menos 24 caracteres URI no reservados. Para impedir llamadas
+a proveedores durante el ensayo se fijan además:
+
+```dotenv
+WHATSAPP_WEB_TEST_ENABLED=false
+SOFIA_WORKER_ENABLED=false
+SOFIA_LEGACY_POLLING_ENABLED=false
+DURABLE_OUTBOX_ENABLED=true
+INITIAL_ADMIN_EMAIL=
+INITIAL_ADMIN_PASSWORD=
+VITE_API_BASE_URL=/api
+CORS_ALLOWED_ORIGINS=http://localhost:13000
+API_GATEWAY_HOST_PORT=127.0.0.1:18080
+WEB_CONSOLE_HOST_PORT=127.0.0.1:13000
+```
+
+No usar este procedimiento contra volúmenes existentes. En PowerShell, levantar primero infraestructura y los
+workloads one-shot con un nombre de proyecto exclusivo:
+
+```powershell
+$Project = "hyperion-autonomy-rehearsal"
+$EnvFile = (Resolve-Path ".env.rehearsal.local").Path
+$Compose = @(
+  "--project-name", $Project,
+  "--env-file", $EnvFile,
+  "-f", "infra/docker-compose.yml",
+  "-f", "infra/docker-compose.jetstream.yml"
+)
+
+pnpm compose:check
+docker compose @Compose config --quiet
+docker compose @Compose build
+docker compose @Compose up -d --wait --wait-timeout 120 postgres nats
+docker compose @Compose run --rm --no-deps db-role-bootstrap
+docker compose @Compose run --rm --no-deps migrations
+docker compose @Compose run --rm --no-deps jetstream-topology-bootstrap
+```
+
+El E2E comparte los durables reales del piloto. Channel, PULSO, SOFIA, Audit y LUMEN deben permanecer detenidos
+mientras se ejecuta, para que ningún worker compita por sus mensajes. La imagen `autonomy-e2e-runner` sólo existe
+para este ensayo y no es referenciada por ningún servicio productivo:
+
+```powershell
+docker compose @Compose stop `
+  whatsapp-channel-service pulso-iris-service agent-service audit-service lumen-service
+
+docker build `
+  --file infra/docker/node-service.Dockerfile `
+  --target autonomy-e2e-runner `
+  --tag hyperion-autonomy-e2e:local .
+
+docker run --rm `
+  --network "${Project}_default" `
+  --env-file $EnvFile `
+  --env NATS_URL=nats://nats:4222 `
+  hyperion-autonomy-e2e:local `
+  node --input-type=module -e '
+    const user = encodeURIComponent(process.env.POSTGRES_USER || "hyperion");
+    const password = encodeURIComponent(process.env.POSTGRES_PASSWORD);
+    const database = encodeURIComponent(process.env.POSTGRES_DB || "hyperion");
+    process.env.TEST_DATABASE_URL =
+      "postgres://" + user + ":" + password + "@postgres:5432/" + database;
+    await import("file:///app/scripts/autonomy/real-flow.e2e.mjs");
+  '
+```
+
+El resultado aprobado contiene `status=passed`, las diez cuentas de efectos en `1` y limpia su tenant sintetico.
+Después se levantan consumidores de aguas abajo hacia aguas arriba, y finalmente el gateway y la consola:
+
+```powershell
+docker compose @Compose up -d --no-deps --no-build --wait audit-service
+docker compose @Compose up -d --no-deps --no-build --wait agent-service lumen-service
+docker compose @Compose up -d --no-deps --no-build --wait pulso-iris-service
+docker compose @Compose up -d --no-deps --no-build --wait whatsapp-channel-service
+docker compose @Compose up -d --no-deps --no-build --wait `
+  identity-service tenant-service prompt-flow-service knowledge-service integration-service
+docker compose @Compose up -d --no-deps --no-build --wait api-gateway
+docker compose @Compose up -d --no-deps --no-build --wait web-console
+
+$ReadyPorts = @{
+  "identity-service" = 8081
+  "tenant-service" = 8082
+  "agent-service" = 8083
+  "prompt-flow-service" = 8084
+  "knowledge-service" = 8085
+  "audit-service" = 8086
+  "integration-service" = 8087
+  "pulso-iris-service" = 8088
+  "whatsapp-channel-service" = 8089
+  "lumen-service" = 8090
+}
+foreach ($Entry in $ReadyPorts.GetEnumerator()) {
+  docker compose @Compose exec -T $Entry.Key node -e `
+    "fetch('http://127.0.0.1:$($Entry.Value)/ready').then(async r => { console.log(r.status, await r.text()); process.exit(r.ok ? 0 : 1); })"
+  if ($LASTEXITCODE -ne 0) { throw "Readiness failed for $($Entry.Key)" }
+}
+
+$DisabledHttpIngress = @{
+  "agent-service" = @(8083, "/internal/v1/events/pulso-message-received")
+  "audit-service" = @(8086, "/internal/v1/events")
+  "pulso-iris-service" = @(8088, "/internal/v1/events/channel-inbound")
+  "lumen-service" = @(8090, "/internal/v1/events/lumen-projections")
+}
+foreach ($Entry in $DisabledHttpIngress.GetEnumerator()) {
+  docker compose @Compose exec -T $Entry.Key node -e `
+    "fetch('http://127.0.0.1:$($Entry.Value[0])$($Entry.Value[1])', { method: 'POST' }).then(r => { console.log(r.status); process.exit(r.status === 404 ? 0 : 1); })"
+  if ($LASTEXITCODE -ne 0) { throw "HTTP durable ingress remains enabled for $($Entry.Key)" }
+}
+```
+
+No ejecutar las pruebas de ACL ni de upgrade de topologia contra este broker persistente: usan mensajes o durables
+deliberadamente anómalos y pertenecen a un NATS descartable independiente. El rollback del piloto consiste en
+retirar el overlay JetStream y recrear los servicios con `DURABLE_EVENT_TRANSPORT=http`; no se deben borrar el
+stream ni los outbox hasta verificar que no quedan mensajes pendientes. Al terminar el ensayo aislado:
+
+```powershell
+docker compose @Compose down --volumes --remove-orphans
+```
 
 ## Backup antes de migraciones y deploys
 
@@ -68,12 +210,24 @@ reemplazar backups anteriores para recuperarse de un fallo. La restauracion no f
 script: requiere un procedimiento separado, controlado, con destino explicitamente aprobado y una
 ventana operativa propia.
 
-Luego se verifica el log del servicio `migrations`, se despliega y se validan endpoints publicos.
+Antes de ejecutar migraciones, `db-role-bootstrap` crea o rota las identidades PostgreSQL de servicio. Solo
+ese proceso y `migrations` reciben la conexion administrativa; los diez runtimes usan su URL restringida y
+verifican `EXPECTED_DATABASE_ROLE` antes de registrar rutas o workers. El orden obligatorio es:
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps db-role-bootstrap
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps migrations
+```
+
+La segunda ejecucion aplica, entre otras, `024-service-database-roles.sql`, que materializa la matriz de
+privilegios. Despues se verifican ambos logs, se despliegan los servicios y se validan sus endpoints de
+readiness. La matriz y sus denegaciones esperadas estan descritas en
+[`architecture/POSTGRESQL-SERVICE-ROLES.md`](architecture/POSTGRESQL-SERVICE-ROLES.md).
 
 ## Demo clinica LUMEN
 
 LUMEN usa datos sinteticos separados de la operacion real. Despues de aplicar en orden las migraciones
-hasta `019-lumen-clinical-invariants.sql`, el unico seed autorizado para este vertical es:
+hasta `022-lumen-autonomy.sql` (y la matriz de roles vigente), el unico seed autorizado para este vertical es:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
@@ -165,7 +319,9 @@ gateway (solo si su codigo cambio) y consola. No ejecutar `up` sobre el proyecto
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml build \
-  migrations lumen-service api-gateway web-console
+  db-role-bootstrap migrations lumen-service api-gateway web-console
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  db-role-bootstrap
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
   migrations node packages/migrations/dist/index.js
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
@@ -177,7 +333,9 @@ docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-
 ```
 
 Esperar el `healthy` de cada etapa antes de continuar. Confirmar `020-lumen-real-audio-pipeline.sql`,
-readiness, rutas profundas y logs sanitizados. Antes y despues comparar IDs e imagenes de `postgres`,
+`022-lumen-autonomy.sql`, `024-service-database-roles.sql`, `025-audit-ledger-autonomy.sql`,
+`026-audit-source-provenance.sql`, readiness, rutas profundas y logs sanitizados.
+Antes y despues comparar IDs e imagenes de `postgres`,
 `pulso-iris-service` y `whatsapp-channel-service`; deben permanecer exactamente iguales. Si el gateway
 no cambio, omitir su build/up y confirmar tambien que conserva ID e imagen. Nunca ejecutar el seed
 general para habilitar esta demo.

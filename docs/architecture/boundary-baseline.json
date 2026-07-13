@@ -1,0 +1,243 @@
+{
+  "version": 1,
+  "capturedAtCommit": "f89a42d8a4e3da8936c1848af25fe119cc4e1438",
+  "policy": "Deuda preexistente solamente. No aumentar conteos; eliminar la entrada en el mismo cambio que elimina la violacion.",
+  "violations": [
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/001-platform.sql|platform.agents|sofia-automation->access|platform.products",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/001-platform.sql|platform.agents|sofia-automation->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/001-platform.sql|platform.integrations|integration-adapter->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/001-platform.sql|platform.knowledge_sources|knowledge->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/001-platform.sql|platform.prompt_flows|sofia-automation->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.administrative_patients|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.appointments|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.conversations|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.handoffs|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.operational_kpi_snapshots|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.payers|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.professionals|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.rpa_actions|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/002-pulso-iris.sql|pulso_iris.sites|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/004-cedco-catalog.sql|pulso_iris.appointment_types|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/005-pulso-iris-operations.sql|pulso_iris.campaign_contacts|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/005-pulso-iris-operations.sql|pulso_iris.campaigns|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/005-pulso-iris-operations.sql|pulso_iris.rpa_events|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/005-pulso-iris-operations.sql|pulso_iris.rpa_workers|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/005-pulso-iris-operations.sql|pulso_iris.waitlist|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/008-agenda-configuration.sql|pulso_iris.availability_rules|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/009-agenda-slot-engine.sql|pulso_iris.agenda_blocks|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/010-agenda-rules.sql|pulso_iris.holidays|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/010-agenda-rules.sql|pulso_iris.professional_payer_exclusions|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/011-configurable-agenda.sql|pulso_iris.agenda_settings|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/011-configurable-agenda.sql|pulso_iris.appointment_holds|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/011-configurable-agenda.sql|pulso_iris.appointment_status_history|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/011-configurable-agenda.sql|pulso_iris.configuration_imports|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/011-configurable-agenda.sql|pulso_iris.professional_appointment_types|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/011-configurable-agenda.sql|pulso_iris.professional_sites|pulso-core->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/012-whatsapp-sofia-runtime.sql|agent_runtime.executions|sofia-automation->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/012-whatsapp-sofia-runtime.sql|agent_runtime.jobs|sofia-automation->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/012-whatsapp-sofia-runtime.sql|channel_runtime.connections|channel->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/012-whatsapp-sofia-runtime.sql|channel_runtime.inbound_events|channel->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/012-whatsapp-sofia-runtime.sql|channel_runtime.outbound_messages|channel->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/012-whatsapp-sofia-runtime.sql|channel_runtime.thread_bindings|channel->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "cross-owner-fk|packages/migrations/sql/017-whatsapp-channel-durability.sql|channel_runtime.delivery_receipts|channel->access|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/agent-service/src/app.ts|sofia-automation->access|read|table|platform.products",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->channel|read|table|channel_runtime.outbound_messages",
+      "count": 2
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->migration-control|read|table|platform.schema_migrations",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->pulso-core|read|table|pulso_iris.administrative_patients",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->pulso-core|read|table|pulso_iris.conversations",
+      "count": 2
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->pulso-core|read|table|pulso_iris.messages",
+      "count": 4
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->pulso-core|write|table|pulso_iris.conversations",
+      "count": 2
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->pulso-core|write|table|pulso_iris.messages",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-tools.ts|sofia-automation->pulso-core|read|table|pulso_iris.conversations",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/agent-service/src/sofia-tools.ts|sofia-automation->pulso-core|write|table|pulso_iris.conversations",
+      "count": 14
+    },
+    {
+      "id": "sql-access|services/integration-service/src/app.ts|integration-adapter->migration-control|read|table|platform.schema_migrations",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/integration-service/src/app.ts|integration-adapter->pulso-core|read|table|pulso_iris.agenda_settings",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/integration-service/src/app.ts|integration-adapter->pulso-core|read|table|pulso_iris.availability_rules",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/integration-service/src/app.ts|integration-adapter->pulso-core|read|table|pulso_iris.professionals",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/integration-service/src/app.ts|integration-adapter->sofia-automation|read|table|platform.agents",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/integration-service/src/app.ts|integration-adapter->sofia-automation|read|table|platform.prompt_flows",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/pulso-iris-service/src/appointment-routes.ts|pulso-core->audit|read|table|platform.audit_events",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/pulso-iris-service/src/sofia-tools-routes.ts|pulso-core->channel|read|table|channel_runtime.thread_bindings",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/pulso-iris-service/src/sofia-tools-routes.ts|pulso-core->channel|write|table|channel_runtime.inbound_events",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/pulso-iris-service/src/sofia-tools-routes.ts|pulso-core->channel|write|table|channel_runtime.thread_bindings",
+      "count": 1
+    },
+    {
+      "id": "sql-access|services/whatsapp-channel-service/src/channel-repository.ts|channel->pulso-core|read|table|pulso_iris.messages",
+      "count": 3
+    },
+    {
+      "id": "sql-access|services/whatsapp-channel-service/src/channel-repository.ts|channel->pulso-core|write|table|pulso_iris.messages",
+      "count": 5
+    }
+  ]
+}

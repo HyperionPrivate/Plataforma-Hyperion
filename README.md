@@ -7,10 +7,12 @@ Base de producto para Hyperion con arquitectura de microservicios. Esta carpeta 
 - Gateway HTTP para exponer la plataforma.
 - Servicios separados para identidad, tenants, agentes, flujos, conocimiento, integraciones y auditoria.
 - Contratos compartidos TypeScript/Zod.
-- PostgreSQL como almacenamiento inicial.
+- PostgreSQL compartido como etapa de transicion, con identidad y privilegios distintos por contexto.
 - Consola web operativa para ver estado real de servicios.
 - Docker Compose listo para variables reales de produccion.
 - Canal temporal WhatsApp Web por QR y orquestacion durable de SOFIA sobre la agenda interna.
+- Primer flujo autonomo Channel -> PULSO -> SOFIA -> Audit con outbox/inbox HTTP y JetStream opt-in.
+- LUMEN con esquema, readiness, proyecciones, inbox y outbox propios, sin SQL de runtime sobre Access o PULSO.
 
 ## Comandos
 
@@ -28,7 +30,23 @@ copy .env.example .env
 docker compose --env-file .env -f infra/docker-compose.yml up --build
 ```
 
-No se deben guardar credenciales reales en Git.
+Antes de levantar Compose se reemplazan el secreto administrador, las ocho contraseñas PostgreSQL de servicio y
+los demas placeholders. `db-role-bootstrap` crea o rota los roles antes de que `migrations` aplique sus grants;
+los runtimes nunca reciben la URL administrativa. No se deben guardar credenciales reales en Git.
+
+JetStream permanece opcional y no sustituye el transporte HTTP predeterminado:
+
+```bash
+docker compose --env-file .env \
+  -f infra/docker-compose.yml \
+  -f infra/docker-compose.jetstream.yml up --build
+```
+
+El overlay exige seis passwords NATS distintos y aprovisiona siete durables activos más uno temporal de drenaje
+para auditoría legada. SOFIA y LUMEN publican auditoria en subjects separados por origen; ninguna identidad de
+runtime puede publicar en el subject genérico anterior. Es un
+piloto de un solo nodo, no una configuracion de alta disponibilidad. La decision completa esta en
+[`docs/architecture/AUTONOMOUS-MICROSERVICES.md`](docs/architecture/AUTONOMOUS-MICROSERVICES.md).
 
 ## Piloto WhatsApp + SOFIA
 

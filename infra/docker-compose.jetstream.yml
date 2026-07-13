@@ -1,0 +1,123 @@
+services:
+  nats:
+    image: nats:2.14.3-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        set -- "$${NATS_TOPOLOGY_PASSWORD}" "$${NATS_CHANNEL_PASSWORD}" "$${NATS_PULSO_PASSWORD}" "$${NATS_SOFIA_PASSWORD}" "$${NATS_AUDIT_PASSWORD}" "$${NATS_LUMEN_PASSWORD}"
+        while [ "$${#}" -gt 0 ]; do
+          current="$${1}"
+          shift
+          if [ "$${#current}" -lt 24 ]; then
+            echo "NATS service passwords must contain at least 24 characters" >&2
+            exit 1
+          fi
+          case "$${current}" in
+            [A-Za-z]*) ;;
+            *)
+              echo "NATS service passwords must start with an ASCII letter" >&2
+              exit 1
+              ;;
+          esac
+          case "$${current}" in
+            *[!A-Za-z0-9._~-]*)
+              echo "NATS service passwords contain unsupported characters" >&2
+              exit 1
+              ;;
+          esac
+          for other in "$${@}"; do
+            if [ "$${current}" = "$${other}" ]; then
+              echo "NATS service passwords must be distinct" >&2
+              exit 1
+            fi
+          done
+        done
+        exec nats-server -c /etc/nats/nats-server.conf
+    environment:
+      NATS_TOPOLOGY_PASSWORD: ${NATS_TOPOLOGY_PASSWORD:?NATS_TOPOLOGY_PASSWORD is required for JetStream}
+      NATS_CHANNEL_PASSWORD: ${NATS_CHANNEL_PASSWORD:?NATS_CHANNEL_PASSWORD is required for JetStream}
+      NATS_PULSO_PASSWORD: ${NATS_PULSO_PASSWORD:?NATS_PULSO_PASSWORD is required for JetStream}
+      NATS_SOFIA_PASSWORD: ${NATS_SOFIA_PASSWORD:?NATS_SOFIA_PASSWORD is required for JetStream}
+      NATS_AUDIT_PASSWORD: ${NATS_AUDIT_PASSWORD:?NATS_AUDIT_PASSWORD is required for JetStream}
+      NATS_LUMEN_PASSWORD: ${NATS_LUMEN_PASSWORD:?NATS_LUMEN_PASSWORD is required for JetStream}
+    volumes:
+      - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - nats_data:/data/jetstream
+    expose:
+      - "4222"
+      - "8222"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  jetstream-topology-bootstrap:
+    build:
+      context: ..
+      dockerfile: infra/docker/node-service.Dockerfile
+      target: jetstream-topology-bootstrap
+    restart: "no"
+    command: ["node", "packages/durable-events/dist/jetstream-bootstrap.js"]
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_USERNAME: topology
+      NATS_PASSWORD: ${NATS_TOPOLOGY_PASSWORD:?NATS_TOPOLOGY_PASSWORD is required for JetStream}
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  agent-service:
+    environment:
+      DURABLE_EVENT_TRANSPORT: jetstream
+      NATS_URL: nats://nats:4222
+      NATS_USERNAME: sofia
+      NATS_PASSWORD: ${NATS_SOFIA_PASSWORD:?NATS_SOFIA_PASSWORD is required for JetStream}
+    depends_on:
+      jetstream-topology-bootstrap:
+        condition: service_completed_successfully
+
+  audit-service:
+    environment:
+      DURABLE_EVENT_TRANSPORT: jetstream
+      NATS_URL: nats://nats:4222
+      NATS_USERNAME: audit
+      NATS_PASSWORD: ${NATS_AUDIT_PASSWORD:?NATS_AUDIT_PASSWORD is required for JetStream}
+    depends_on:
+      jetstream-topology-bootstrap:
+        condition: service_completed_successfully
+
+  pulso-iris-service:
+    environment:
+      DURABLE_EVENT_TRANSPORT: jetstream
+      NATS_URL: nats://nats:4222
+      NATS_USERNAME: pulso
+      NATS_PASSWORD: ${NATS_PULSO_PASSWORD:?NATS_PULSO_PASSWORD is required for JetStream}
+    depends_on:
+      jetstream-topology-bootstrap:
+        condition: service_completed_successfully
+
+  whatsapp-channel-service:
+    environment:
+      DURABLE_EVENT_TRANSPORT: jetstream
+      NATS_URL: nats://nats:4222
+      NATS_USERNAME: channel
+      NATS_PASSWORD: ${NATS_CHANNEL_PASSWORD:?NATS_CHANNEL_PASSWORD is required for JetStream}
+    depends_on:
+      jetstream-topology-bootstrap:
+        condition: service_completed_successfully
+
+  lumen-service:
+    environment:
+      DURABLE_EVENT_TRANSPORT: jetstream
+      NATS_URL: nats://nats:4222
+      NATS_USERNAME: lumen
+      NATS_PASSWORD: ${NATS_LUMEN_PASSWORD:?NATS_LUMEN_PASSWORD is required for JetStream}
+    depends_on:
+      jetstream-topology-bootstrap:
+        condition: service_completed_successfully
+
+volumes:
+  nats_data:
