@@ -23,10 +23,14 @@ interface DownstreamService {
   url: string;
 }
 
-export type SessionResolver = (token: string) => Promise<AuthMe | undefined>;
+export type SessionResolver = ((token: string) => Promise<AuthMe | undefined>) & {
+  invalidate?: (token: string) => void;
+};
 
 declare module "fastify" {
   interface FastifyRequest {
+    canonicalPath: string;
+    canonicalQuery?: string;
     session?: AuthMe;
   }
 }
@@ -51,7 +55,15 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
 
     // Authenticate before Fastify parses potentially large LUMEN audio payloads.
     app.addHook("onRequest", async (request, reply) => {
-      const path = (request.raw.url ?? request.url).split("?")[0] ?? "";
+      const requestTarget = canonicalizeRequestTarget(request.raw.url ?? request.url);
+      if (!requestTarget) {
+        return reply.code(400).send(envelope({ error: "Invalid request path" }, request.id));
+      }
+
+      request.canonicalPath = requestTarget.path;
+      request.canonicalQuery = requestTarget.query;
+
+      const path = requestTarget.path;
       if (!path.startsWith("/v1/") || PUBLIC_PATHS.has(path)) {
         return;
       }
@@ -87,35 +99,39 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
       "/v1/auth/login",
       { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
       async (request, reply) => {
-        return proxyJson(request, reply, `${urls.identity}/v1/auth/login`, "POST", request.body);
+        return proxyJson(request, reply, buildUpstreamUrl(urls.identity, request), "POST", request.body);
       }
     );
 
     app.get("/v1/auth/me", async (request, reply) => {
-      return proxyJson(request, reply, `${urls.identity}/v1/auth/me`, "GET");
+      return proxyJson(request, reply, buildUpstreamUrl(urls.identity, request), "GET");
     });
 
     app.post("/v1/auth/logout", async (request, reply) => {
-      return proxyJson(request, reply, `${urls.identity}/v1/auth/logout`, "POST");
-    });
-
-    app.get("/v1/identity/operators", async (request, reply) => {
-      return proxyJson(request, reply, `${urls.identity}/v1/identity/operators`, "GET");
-    });
-
-    app.post("/v1/identity/operators", async (request, reply) => {
-      return proxyJson(request, reply, `${urls.identity}/v1/identity/operators`, "POST", request.body);
-    });
-
-    app.patch("/v1/identity/operators/:operatorId", async (request, reply) => {
-      const params = request.params as { operatorId?: string };
+      const token = readBearerToken(request.headers.authorization);
       return proxyJson(
         request,
         reply,
-        `${urls.identity}/v1/identity/operators/${params.operatorId ?? ""}`,
-        "PATCH",
-        request.body
+        buildUpstreamUrl(urls.identity, request),
+        "POST",
+        undefined,
+        UPSTREAM_TIMEOUT_MS,
+        () => {
+          if (token) resolveSession.invalidate?.(token);
+        }
       );
+    });
+
+    app.get("/v1/identity/operators", async (request, reply) => {
+      return proxyJson(request, reply, buildUpstreamUrl(urls.identity, request), "GET");
+    });
+
+    app.post("/v1/identity/operators", async (request, reply) => {
+      return proxyJson(request, reply, buildUpstreamUrl(urls.identity, request), "POST", request.body);
+    });
+
+    app.patch("/v1/identity/operators/:operatorId", async (request, reply) => {
+      return proxyJson(request, reply, buildUpstreamUrl(urls.identity, request), "PATCH", request.body);
     });
 
     app.get("/v1/platform/catalog", async (request) => {
@@ -129,24 +145,24 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
     });
 
     app.get("/v1/pulso-iris/health", async (request, reply) => {
-      return proxyGet(request, reply, `${urls.pulsoIris}/v1/pulso-iris/health`);
+      return proxyGet(request, reply, buildUpstreamUrl(urls.pulsoIris, request));
     });
 
     app.get("/v1/pulso-iris/catalog", async (request, reply) => {
-      return proxyGet(request, reply, `${urls.pulsoIris}/v1/pulso-iris/catalog`);
+      return proxyGet(request, reply, buildUpstreamUrl(urls.pulsoIris, request));
     });
 
     app.get("/v1/lumen/health", async (request, reply) => {
-      return proxyGet(request, reply, `${urls.lumen}/v1/lumen/health`);
+      return proxyGet(request, reply, buildUpstreamUrl(urls.lumen, request));
     });
 
     app.get("/v1/lumen/catalog", async (request, reply) => {
-      return proxyGet(request, reply, `${urls.lumen}/v1/lumen/catalog`);
+      return proxyGet(request, reply, buildUpstreamUrl(urls.lumen, request));
     });
 
     app.get("/v1/tenants", async (request, reply) => {
       try {
-        const response = await fetch(`${urls.tenant}/v1/tenants`, {
+        const response = await fetch(buildUpstreamUrl(urls.tenant, request), {
           headers: { "x-request-id": request.id },
           signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
         });
@@ -174,58 +190,26 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
     });
 
     app.get("/v1/tenants/:tenantId/integrations/whatsapp/status", async (request, reply) => {
-      const params = request.params as { tenantId?: string };
-      return proxyJson(
-        request,
-        reply,
-        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/integrations/whatsapp/status`,
-        "GET"
-      );
+      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "GET");
     });
 
     app.post("/v1/tenants/:tenantId/integrations/whatsapp/connect", async (request, reply) => {
-      const params = request.params as { tenantId?: string };
-      return proxyJson(
-        request,
-        reply,
-        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/integrations/whatsapp/connect`,
-        "POST",
-        request.body ?? {}
-      );
+      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "POST", request.body ?? {});
     });
 
     app.get("/v1/tenants/:tenantId/integrations/whatsapp/qr", async (request, reply) => {
-      const params = request.params as { tenantId?: string };
       reply.header("cache-control", "no-store, private, max-age=0");
       reply.header("pragma", "no-cache");
       reply.header("expires", "0");
-      return proxyJson(
-        request,
-        reply,
-        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/integrations/whatsapp/qr`,
-        "GET"
-      );
+      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "GET");
     });
 
     app.post("/v1/tenants/:tenantId/integrations/whatsapp/disconnect", async (request, reply) => {
-      const params = request.params as { tenantId?: string };
-      return proxyJson(
-        request,
-        reply,
-        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/integrations/whatsapp/disconnect`,
-        "POST",
-        request.body ?? {}
-      );
+      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "POST", request.body ?? {});
     });
 
     app.get("/v1/tenants/:tenantId/pulso-iris/sofia/readiness", async (request, reply) => {
-      const params = request.params as { tenantId?: string };
-      return proxyJson(
-        request,
-        reply,
-        `${urls.integration}/v1/tenants/${encodeURIComponent(params.tenantId ?? "")}/pulso-iris/sofia/readiness`,
-        "GET"
-      );
+      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "GET");
     });
 
     // Proxy generico de PULSO IRIS: la validacion de tenant y la membresia
@@ -234,24 +218,19 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
       method: ["GET", "POST", "PATCH"],
       url: "/v1/tenants/:tenantId/pulso-iris/*",
       handler: async (request, reply) => {
-        const params = request.params as { tenantId?: unknown; "*"?: string };
-        const tenantId = tenantIdSchema.safeParse(params.tenantId);
+        const tenantId = tenantIdSchema.safeParse(readCanonicalTenantId(request.canonicalPath));
         if (!tenantId.success) {
           return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
         }
 
-        const suffix = params["*"] ?? "";
-        if (suffix.includes("..") || suffix.includes("//")) {
-          return reply.code(400).send(envelope({ error: "Invalid path" }, request.id));
-        }
-
-        const query = (request.raw.url ?? "").split("?")[1];
-        const target = `${urls.pulsoIris}/v1/tenants/${encodeURIComponent(tenantId.data)}/pulso-iris/${suffix}${
-          query ? `?${query}` : ""
-        }`;
-
         const method = request.method as "GET" | "POST" | "PATCH";
-        return proxyJson(request, reply, target, method, method === "GET" ? undefined : request.body);
+        return proxyJson(
+          request,
+          reply,
+          buildUpstreamUrl(urls.pulsoIris, request, true),
+          method,
+          method === "GET" ? undefined : request.body
+        );
       }
     });
 
@@ -260,25 +239,16 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
       url: "/v1/tenants/:tenantId/lumen/*",
       bodyLimit: LUMEN_REQUEST_BODY_LIMIT_BYTES,
       handler: async (request, reply) => {
-        const params = request.params as { tenantId?: unknown; "*"?: string };
-        const tenantId = tenantIdSchema.safeParse(params.tenantId);
+        const tenantId = tenantIdSchema.safeParse(readCanonicalTenantId(request.canonicalPath));
         if (!tenantId.success) {
           return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
         }
 
-        const suffix = params["*"] ?? "";
-        if (suffix.includes("..") || suffix.includes("//")) {
-          return reply.code(400).send(envelope({ error: "Invalid path" }, request.id));
-        }
-        const query = (request.raw.url ?? "").split("?")[1];
-        const target = `${urls.lumen}/v1/tenants/${encodeURIComponent(tenantId.data)}/lumen/${suffix}${
-          query ? `?${query}` : ""
-        }`;
         const method = request.method as "GET" | "POST" | "PATCH";
         return proxyJson(
           request,
           reply,
-          target,
+          buildUpstreamUrl(urls.lumen, request, true),
           method,
           method === "GET" ? undefined : request.body,
           LUMEN_AI_TIMEOUT_MS
@@ -309,6 +279,72 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
 }
 
 export const registerRoutes: RouteRegistrar = createGatewayRoutes();
+
+function canonicalizeRequestTarget(rawTarget: string): { path: string; query?: string } | undefined {
+  const queryStart = rawTarget.indexOf("?");
+  const rawPath = queryStart === -1 ? rawTarget : rawTarget.slice(0, queryStart);
+  const query = queryStart === -1 ? undefined : rawTarget.slice(queryStart + 1);
+
+  if (!rawPath.startsWith("/") || rawPath.includes("\\") || containsControlCharacters(rawPath)) {
+    return undefined;
+  }
+
+  if (rawPath === "/") {
+    return { path: rawPath, query };
+  }
+
+  const rawSegments = rawPath.slice(1).split("/");
+  if (rawSegments.at(-1) === "") {
+    rawSegments.pop();
+  }
+  if (rawSegments.length === 0 || rawSegments.some((segment) => segment.length === 0)) {
+    return undefined;
+  }
+
+  const canonicalSegments: string[] = [];
+  for (const rawSegment of rawSegments) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawSegment).normalize("NFC");
+    } catch {
+      return undefined;
+    }
+
+    // Structural delimiters, dot segments, controls and a remaining percent
+    // can be interpreted differently (or decoded again) by another HTTP hop.
+    if (
+      decoded === "." ||
+      decoded === ".." ||
+      decoded.includes("%") ||
+      /[\\/?#;]/.test(decoded) ||
+      containsControlCharacters(decoded)
+    ) {
+      return undefined;
+    }
+
+    canonicalSegments.push(encodeURIComponent(decoded));
+  }
+
+  return { path: `/${canonicalSegments.join("/")}`, query };
+}
+
+function containsControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x1f || codePoint === 0x7f) return true;
+  }
+  return false;
+}
+
+function readCanonicalTenantId(path: string): string | undefined {
+  const match = path.match(/^\/v1\/tenants\/([^/]+)(?:\/|$)/);
+  return match ? decodeURIComponent(match[1] ?? "") : undefined;
+}
+
+function buildUpstreamUrl(baseUrl: string, request: FastifyRequest, includeQuery = false): string {
+  const query = includeQuery && request.canonicalQuery !== undefined ? `?${request.canonicalQuery}` : "";
+  return `${baseUrl}${request.canonicalPath}${query}`;
+}
 
 function readBearerToken(authorization: string | undefined): string | undefined {
   if (!authorization?.startsWith("Bearer ")) {
@@ -374,14 +410,19 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
 
 function createCachedSessionResolver(identityUrl: string): SessionResolver {
   const cache = new Map<string, { expiresAt: number; session: AuthMe }>();
+  const tokenStates = new Map<string, { activeRequests: number; generation: number }>();
 
-  return async (token) => {
+  const resolve: SessionResolver = async (token) => {
     const key = createHash("sha256").update(token).digest("hex");
     const cached = cache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.session;
     }
 
+    const tokenState = tokenStates.get(key) ?? { activeRequests: 0, generation: 0 };
+    tokenStates.set(key, tokenState);
+    tokenState.activeRequests += 1;
+    const requestGeneration = tokenState.generation;
     try {
       const response = await fetch(`${identityUrl}/v1/auth/me`, {
         headers: { authorization: `Bearer ${token}` },
@@ -396,6 +437,12 @@ function createCachedSessionResolver(identityUrl: string): SessionResolver {
       const payload = (await response.json()) as { data?: unknown };
       const session = authMeSchema.parse(payload.data);
 
+      // A logout completed while this lookup was in flight. Do not authorize
+      // the request or repopulate a token that has just been invalidated.
+      if (requestGeneration !== tokenState.generation) {
+        return undefined;
+      }
+
       if (cache.size >= SESSION_CACHE_MAX_ENTRIES) {
         cache.clear();
       }
@@ -404,8 +451,22 @@ function createCachedSessionResolver(identityUrl: string): SessionResolver {
       return session;
     } catch {
       return undefined;
+    } finally {
+      tokenState.activeRequests -= 1;
+      if (tokenState.activeRequests === 0 && tokenStates.get(key) === tokenState) {
+        tokenStates.delete(key);
+      }
     }
   };
+
+  resolve.invalidate = (token) => {
+    const key = createHash("sha256").update(token).digest("hex");
+    const tokenState = tokenStates.get(key);
+    if (tokenState) tokenState.generation += 1;
+    cache.delete(key);
+  };
+
+  return resolve;
 }
 
 function buildRegistry(): DownstreamService[] {
@@ -445,7 +506,8 @@ async function proxyJson(
   url: string,
   method: "GET" | "POST" | "PATCH",
   body?: unknown,
-  timeoutMs = UPSTREAM_TIMEOUT_MS
+  timeoutMs = UPSTREAM_TIMEOUT_MS,
+  onUpstreamSuccess?: () => void
 ): Promise<unknown> {
   const requestAbort = createRequestAbortSignal(request, reply);
   try {
@@ -467,6 +529,9 @@ async function proxyJson(
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(timeoutMs)])
     });
+    if (response.ok) {
+      onUpstreamSuccess?.();
+    }
     const payload = await response.json();
 
     return reply.code(response.status).send(payload);

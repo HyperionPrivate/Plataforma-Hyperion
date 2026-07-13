@@ -1,7 +1,7 @@
 import { createService } from "@hyperion/service-runtime";
 import type { AuthMe } from "@hyperion/contracts";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createGatewayRoutes } from "./app.js";
 
 const AUTHORIZED_TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";
@@ -192,6 +192,276 @@ describe("api-gateway authentication", () => {
     });
 
     expect(response.statusCode).toBe(403);
+  });
+
+  it("authorizes percent-encoded path segments using their canonical representation", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ data: { created: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    try {
+      const forbidden = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/%63onfig/sites`,
+        headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+        payload: { name: "Sede de prueba" }
+      });
+      const allowed = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/%63onfig/sites`,
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
+        payload: { name: "Sede de prueba" }
+      });
+
+      expect(forbidden.statusCode).toBe(403);
+      expect(allowed.statusCode).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+        `${isolatedServiceUrls.PULSO_IRIS_SERVICE_URL}/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/sites`
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("rejects request paths that could be decoded again by a downstream", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/%2563onfig/sites`,
+      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
+      payload: { name: "Sede de prueba" }
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("rejects ambiguous separators before authorization and proxying", async () => {
+    const encodedSeparator = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config%2Fsites`,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+    });
+    const duplicateSeparator = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris//config/sites`,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+    });
+
+    expect(encodedSeparator.statusCode).toBe(400);
+    expect(duplicateSeparator.statusCode).toBe(400);
+  });
+
+  it("evicts the cached session immediately after a successful logout", async () => {
+    let meRequests = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v1/auth/me")) {
+        meRequests += 1;
+        if (meRequests === 1) {
+          return new Response(JSON.stringify({ data: sessions[COORDINATOR_TOKEN] }), {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          });
+        }
+        return new Response(JSON.stringify({ data: { error: "Invalid or expired session" } }), {
+          status: 401,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.endsWith("/v1/auth/logout")) {
+        return new Response(JSON.stringify({ data: { loggedOut: true } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`Unexpected upstream request: ${url}`);
+    });
+
+    let cachedApp: FastifyInstance | undefined;
+    try {
+      const handle = await createService({
+        serviceName: "api-gateway",
+        databaseRequired: false,
+        publicApi: true,
+        registerRoutes: createGatewayRoutes()
+      });
+      cachedApp = handle.app;
+
+      const first = await cachedApp.inject({
+        method: "GET",
+        url: "/v1/platform/catalog",
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      const cached = await cachedApp.inject({
+        method: "GET",
+        url: "/v1/platform/catalog",
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      const logout = await cachedApp.inject({
+        method: "POST",
+        url: "/v1/auth/logout",
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      const afterLogout = await cachedApp.inject({
+        method: "GET",
+        url: "/v1/platform/catalog",
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(cached.statusCode).toBe(200);
+      expect(logout.statusCode).toBe(200);
+      expect(afterLogout.statusCode).toBe(401);
+      expect(meRequests).toBe(2);
+    } finally {
+      await cachedApp?.close();
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("does not invalidate another token whose session lookup is in flight", async () => {
+    let releaseAdvisor: () => void = () => undefined;
+    let markAdvisorStarted: () => void = () => undefined;
+    const advisorRelease = new Promise<void>((resolve) => {
+      releaseAdvisor = resolve;
+    });
+    const advisorStarted = new Promise<void>((resolve) => {
+      markAdvisorStarted = resolve;
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/v1/auth/me")) {
+        const authorization = new Headers(init?.headers).get("authorization");
+        if (authorization === `Bearer ${ADVISOR_TOKEN}`) {
+          markAdvisorStarted();
+          await advisorRelease;
+          return new Response(JSON.stringify({ data: sessions[ADVISOR_TOKEN] }), {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          });
+        }
+        if (authorization === `Bearer ${COORDINATOR_TOKEN}`) {
+          return new Response(JSON.stringify({ data: sessions[COORDINATOR_TOKEN] }), {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          });
+        }
+      }
+      if (url.endsWith("/v1/auth/logout")) {
+        return new Response(JSON.stringify({ data: { loggedOut: true } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`Unexpected upstream request: ${url}`);
+    });
+
+    let cachedApp: FastifyInstance | undefined;
+    try {
+      const handle = await createService({
+        serviceName: "api-gateway",
+        databaseRequired: false,
+        publicApi: true,
+        registerRoutes: createGatewayRoutes()
+      });
+      cachedApp = handle.app;
+
+      const coordinator = await cachedApp.inject({
+        method: "GET",
+        url: "/v1/platform/catalog",
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      const advisorRequest = cachedApp.inject({
+        method: "GET",
+        url: "/v1/platform/catalog",
+        headers: { authorization: `Bearer ${ADVISOR_TOKEN}` }
+      });
+      await advisorStarted;
+      const logout = await cachedApp.inject({
+        method: "POST",
+        url: "/v1/auth/logout",
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      releaseAdvisor();
+      const advisor = await advisorRequest;
+
+      expect(coordinator.statusCode).toBe(200);
+      expect(logout.statusCode).toBe(200);
+      expect(advisor.statusCode).toBe(200);
+    } finally {
+      releaseAdvisor();
+      await cachedApp?.close();
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("rejects a session lookup that finishes after the same token logs out", async () => {
+    let releaseLookup: () => void = () => undefined;
+    let markLookupStarted: () => void = () => undefined;
+    const lookupRelease = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    let meRequests = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/v1/auth/me")) {
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${COORDINATOR_TOKEN}`);
+        meRequests += 1;
+        if (meRequests === 1) {
+          markLookupStarted();
+          await lookupRelease;
+        }
+        return new Response(JSON.stringify({ data: sessions[COORDINATOR_TOKEN] }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.endsWith("/v1/auth/logout")) {
+        return new Response(JSON.stringify({ data: { loggedOut: true } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`Unexpected upstream request: ${url}`);
+    });
+
+    let cachedApp: FastifyInstance | undefined;
+    try {
+      const handle = await createService({
+        serviceName: "api-gateway",
+        databaseRequired: false,
+        publicApi: true,
+        registerRoutes: createGatewayRoutes()
+      });
+      cachedApp = handle.app;
+
+      const inFlight = cachedApp.inject({
+        method: "GET",
+        url: "/v1/platform/catalog",
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      await lookupStarted;
+      const logout = await cachedApp.inject({
+        method: "POST",
+        url: "/v1/auth/logout",
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      releaseLookup();
+      const staleRequest = await inFlight;
+
+      expect(logout.statusCode).toBe(200);
+      expect(staleRequest.statusCode).toBe(401);
+      expect(meRequests).toBe(2);
+    } finally {
+      releaseLookup();
+      await cachedApp?.close();
+      fetchMock.mockRestore();
+    }
   });
 
   it("forbids advisor from writing holidays and payer exclusions", async () => {
