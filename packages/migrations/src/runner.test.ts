@@ -32,7 +32,57 @@ describe("migrations runner", () => {
     expect(files).toContain("018-lumen-clinical-demo.sql");
     expect(files).toContain("019-lumen-clinical-invariants.sql");
     expect(files).toContain("020-lumen-real-audio-pipeline.sql");
+    expect(files).toContain("023-channel-inbound-outbox-backfill.sql");
+    expect(files).toContain("024-service-database-roles.sql");
+    expect(files).toContain("025-audit-ledger-autonomy.sql");
+    expect(files).toContain("026-audit-source-provenance.sql");
     expect([...files].sort()).toEqual(files);
+  });
+
+  it("migrates Audit provenance without trusting the legacy SOFIA default", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/026-audit-source-provenance.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("alter column source_service drop default");
+    expect(migration).toContain("sofia.audit.event.record.v1");
+    expect(migration).toContain("lumen.audit.event.record.v1");
+    expect(migration).toContain("legacy-unknown");
+    expect(migration).toContain("contract_hash");
+    expect(migration).toContain("source_service = 'sofia-automation'");
+    expect(migration).toContain("source_service = 'lumen-service'");
+    expect(migration).not.toMatch(/source_service\s+text\s+not\s+null\s+default/i);
+  });
+
+  it("keeps Audit tenant identifiers external and immutable across Access deletion", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/025-audit-ledger-autonomy.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("drop constraint if exists audit_events_tenant_id_fkey");
+    expect(migration).toContain("constraint_record.confrelid = 'platform.tenants'::regclass");
+    expect(migration).not.toMatch(/on\s+delete\s+set\s+null/i);
+  });
+
+  it("never records service role isolation as a conditional no-op", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/024-service-database-roles.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("create role %I with nologin nosuperuser");
+    expect(migration).toContain("grant connect on database %I to %I");
+    expect(migration).toContain("grant usage on schema lumen to hyperion_lumen");
+    expect(migration).not.toContain("skipping service privilege grants");
+  });
+
+  it("backfills only contract-valid legacy channel events and terminalizes missing identity", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/023-channel-inbound-outbox-backfill.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("from channel_runtime.inbound_events event");
+    expect(migration).toContain("join channel_runtime.thread_bindings binding");
+    expect(migration).toContain("on conflict (tenant_id, event_type, aggregate_id) do nothing");
+    expect(migration).toContain("legacy_inbound_binding_missing");
+    expect(migration).toContain("legacy_inbound_contract_invalid");
+    expect(migration).not.toContain("references platform.");
+    expect(migration).not.toContain("references pulso_iris.");
   });
 
   it("refuses duplicate WhatsApp source messages without deleting evidence", async () => {
