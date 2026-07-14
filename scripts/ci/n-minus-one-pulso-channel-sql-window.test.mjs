@@ -33,6 +33,14 @@ test("delivery drain gate is read-only and blocks every non-published state", ()
   assert.match(stateProbe, /trap cleanup_probe EXIT/);
   assert.match(stateProbe, /-v probe_id="\$probe_id"/);
   assert.match(stateProbe, /delete from channel_runtime\.outbox_events where id = :'probe_id'::uuid/);
+  assert.match(stateProbe, /probe_id=\$\([\s\S]*select gen_random_uuid\(\);/);
+  assert.match(stateProbe, /values \([\s\S]*:'probe_id'::uuid/);
+  assert.match(stateProbe, /-v probe_status="\$status"/);
+  assert.equal(stateProbe.match(/--file=-[^\n]*<<'SQL'/g)?.length, 2);
+  assert.deepEqual(
+    stateProbe.match(/^\s*-c(?:\s|=).*$/gm)?.map((line) => line.trim()),
+    ['-c "select gen_random_uuid();"']
+  );
 });
 
 test("legacy SQL window verifies the exact effective column allow-list", () => {
