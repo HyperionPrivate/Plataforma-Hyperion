@@ -1098,7 +1098,7 @@ export class SofiaToolClient {
     return this.mutateSofiaState(context.tenantId, context.conversationId, {
       op: "stage_pending_action",
       expectedPendingJobId: expected.pendingAction?.jobId ?? null,
-      expectedGrantActionId: expected.confirmationGrant?.actionId ?? expected.confirmationGrant?.jobId ?? null,
+      expectedGrantActionId: expected.confirmationGrant?.actionId ?? null,
       patch
     });
   }

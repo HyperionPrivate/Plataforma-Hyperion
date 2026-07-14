@@ -39,4 +39,24 @@ export function assertJetStreamProductionGate(environment: NodeJS.ProcessEnv = p
       "Production JetStream requires NATS_URL with tls: (internal TLS). Plain nats: single-node pilots remain blocked."
     );
   }
+
+  const maxBytes = Number(environment.JETSTREAM_MAX_BYTES?.trim() ?? "");
+  const maxMsgs = Number(environment.JETSTREAM_MAX_MSGS?.trim() ?? "");
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || !Number.isSafeInteger(maxMsgs) || maxMsgs <= 0) {
+    throw new Error(
+      "Production JetStream requires positive JETSTREAM_MAX_BYTES and JETSTREAM_MAX_MSGS capacity limits."
+    );
+  }
+
+  const monitorUrl = environment.JETSTREAM_MONITOR_URL?.trim() ?? "";
+  if (!monitorUrl.startsWith("https://")) {
+    throw new Error("Production JetStream requires JETSTREAM_MONITOR_URL with https:// for operational monitoring.");
+  }
+
+  const redrive = environment.JETSTREAM_REDRIVE_RUNBOOK_URL?.trim() ?? "";
+  if (!redrive.startsWith("https://") && !redrive.startsWith("./") && !redrive.startsWith("docs/")) {
+    throw new Error(
+      "Production JetStream requires JETSTREAM_REDRIVE_RUNBOOK_URL pointing to an audited redrive procedure."
+    );
+  }
 }

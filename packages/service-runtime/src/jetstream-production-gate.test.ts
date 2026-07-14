@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { assertJetStreamProductionGate } from "./jetstream-production-gate.js";
 
+const haBase = {
+  NODE_ENV: "production",
+  DURABLE_EVENT_TRANSPORT: "jetstream",
+  PRODUCTION_JETSTREAM_ENABLED: "true",
+  JETSTREAM_REPLICAS: "3",
+  NATS_URL: "tls://nats.internal:4222",
+  JETSTREAM_MAX_BYTES: "10737418240",
+  JETSTREAM_MAX_MSGS: "1000000",
+  JETSTREAM_MONITOR_URL: "https://monitor.example/nats",
+  JETSTREAM_REDRIVE_RUNBOOK_URL: "docs/PRODUCTION.md"
+} as const;
+
 describe("JetStream production gate", () => {
   it("allows jetstream outside production", () => {
     expect(() =>
@@ -44,16 +56,32 @@ describe("JetStream production gate", () => {
     ).toThrow(/tls:/);
   });
 
-  it("accepts an explicit HA jetstream configuration", () => {
+  it("refuses HA enablement without capacity limits, monitor and redrive", () => {
     expect(() =>
       assertJetStreamProductionGate({
-        NODE_ENV: "production",
-        DURABLE_EVENT_TRANSPORT: "jetstream",
-        PRODUCTION_JETSTREAM_ENABLED: "true",
-        JETSTREAM_REPLICAS: "3",
-        NATS_URL: "tls://nats.internal:4222"
+        ...haBase,
+        JETSTREAM_MAX_BYTES: undefined,
+        JETSTREAM_MAX_MSGS: undefined
       })
-    ).not.toThrow();
+    ).toThrow(/JETSTREAM_MAX_BYTES/);
+
+    expect(() =>
+      assertJetStreamProductionGate({
+        ...haBase,
+        JETSTREAM_MONITOR_URL: "http://insecure"
+      })
+    ).toThrow(/JETSTREAM_MONITOR_URL/);
+
+    expect(() =>
+      assertJetStreamProductionGate({
+        ...haBase,
+        JETSTREAM_REDRIVE_RUNBOOK_URL: undefined
+      })
+    ).toThrow(/JETSTREAM_REDRIVE_RUNBOOK_URL/);
+  });
+
+  it("accepts an explicit HA jetstream configuration", () => {
+    expect(() => assertJetStreamProductionGate({ ...haBase })).not.toThrow();
   });
 
   it("ignores http transport in production", () => {

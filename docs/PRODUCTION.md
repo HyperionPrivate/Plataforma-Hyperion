@@ -271,6 +271,15 @@ SHA-256 opcional (`HYPERION_RESTORE_SHA256`) antes de recrear solo esa base. No 
 el volumen productivo: el destino debe ser una base de ensayo o un host aprobado. `pnpm backup:test`
 incluye el round-trip mock de restore.
 
+#### Objetivos de recuperación (RPO/RTO)
+
+| Objetivo                      | Valor declarado                                                                                                      | Evidencia actual                                                                                                           |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| RPO (pérdida máxima de datos) | ≤ 24 h para dumps programados diarios; ≤ intervalo del cron real en el host                                          | Dump local `postgres-backup.sh` + copia offsite obligatoria (`OFFSITE-BACKUP.md`). Sin offsite el RPO es el disco del VPS. |
+| RTO (tiempo de recuperación)  | ≤ 2 h para restore a base de ensayo + revalidación de migraciones/roles en un VPS de tamaño similar al de referencia | Procedimiento manual versionado; el ensayo automatizado de CI valida scripts, no un cluster productivo.                    |
+
+Antes de cutover productivo: ejecutar backup → restore a base de ensayo → `pnpm db:migrate` / bootstrap de roles → smoke `/ready`, y registrar el tiempo real como evidencia del RTO del ambiente.
+
 ### Copia offsite
 
 El dump local no basta ante fallo de disco/host. Ver [`ops/OFFSITE-BACKUP.md`](ops/OFFSITE-BACKUP.md) y el
