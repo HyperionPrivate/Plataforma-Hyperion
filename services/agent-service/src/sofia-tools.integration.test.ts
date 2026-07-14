@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createDatabase, type DatabaseClient } from "@hyperion/database";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  applySofiaStateMutation,
-  loadConfirmationState
-} from "../../pulso-iris-service/src/sofia-owner-routes.js";
+import { createIntegrationOwnerState } from "./sofia-integration-owner-state.js";
 import { SofiaToolClient } from "./sofia-tools.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -492,11 +489,7 @@ function createClient(db: DatabaseClient, fetchImpl: ReturnType<typeof vi.fn>): 
     internalServiceToken: "controlled-internal-token",
     db,
     fetchImpl: fetchImpl as typeof fetch,
-    ownerState: {
-      load: (tenantId, conversationId) => loadConfirmationState(db, tenantId, conversationId),
-      mutate: (tenantId, conversationId, mutation) =>
-        applySofiaStateMutation(db, tenantId, conversationId, mutation)
-    }
+    ownerState: createIntegrationOwnerState(db)
   });
 }
 
