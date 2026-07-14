@@ -14,6 +14,7 @@ const GATEWAY_TO_IDENTITY_TOKEN = "gateway-to-identity-test-token-001";
 const GATEWAY_TO_INTEGRATION_TOKEN = "gateway-to-integration-test-token-02";
 const GATEWAY_TO_PULSO_TOKEN = "gateway-to-pulso-test-token-0001";
 const GATEWAY_TO_LUMEN_TOKEN = "gateway-to-lumen-test-token-0002";
+const GATEWAY_TO_TENANT_TOKEN = "gateway-to-tenant-test-token-00016";
 
 const isolatedServiceUrls = {
   IDENTITY_SERVICE_URL: "http://127.0.0.1:65511",
@@ -86,7 +87,8 @@ beforeAll(async () => {
         identity: GATEWAY_TO_IDENTITY_TOKEN,
         integration: GATEWAY_TO_INTEGRATION_TOKEN,
         pulsoIris: GATEWAY_TO_PULSO_TOKEN,
-        lumen: GATEWAY_TO_LUMEN_TOKEN
+        lumen: GATEWAY_TO_LUMEN_TOKEN,
+        tenant: GATEWAY_TO_TENANT_TOKEN
       }
     })
   });
@@ -173,7 +175,7 @@ describe("api-gateway authentication", () => {
         publicApi: true,
         registerRoutes: createGatewayRoutes({
           resolveSession: async (token) => sessions[token],
-          gatewayCredentials: { identity: "", integration: "", pulsoIris: "", lumen: "" }
+          gatewayCredentials: { identity: "", integration: "", pulsoIris: "", lumen: "", tenant: "" }
         })
       });
       isolatedApp = handle.app;
@@ -198,11 +200,17 @@ describe("api-gateway authentication", () => {
         url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/integrations/whatsapp/status`,
         headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
       });
+      const tenants = await isolatedApp.inject({
+        method: "GET",
+        url: "/v1/tenants",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
 
       expect(pulso.statusCode).toBe(503);
       expect(lumen.statusCode).toBe(503);
       expect(identity.statusCode).toBe(503);
       expect(integration.statusCode).toBe(503);
+      expect(tenants.statusCode).toBe(503);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       await isolatedApp?.close();
@@ -730,15 +738,76 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("lists tenants through the gateway", async () => {
+  it("lists tenants through the gateway when the tenant edge is configured", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/v1/tenants",
       headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
     });
 
-    // Tenant service is not running in tests.
+    // Tenant edge credential is present; upstream is intentionally down → 502.
     expect(response.statusCode).toBe(502);
+  });
+
+  it("fails closed on /v1/tenants without contacting upstream when the tenant edge is missing", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    let isolatedApp: FastifyInstance | undefined;
+    try {
+      const handle = await createService({
+        serviceName: "api-gateway",
+        databaseRequired: false,
+        publicApi: true,
+        registerRoutes: createGatewayRoutes({
+          resolveSession: async (token) => sessions[token],
+          gatewayCredentials: {
+            identity: GATEWAY_TO_IDENTITY_TOKEN,
+            integration: GATEWAY_TO_INTEGRATION_TOKEN,
+            pulsoIris: GATEWAY_TO_PULSO_TOKEN,
+            lumen: GATEWAY_TO_LUMEN_TOKEN,
+            tenant: ""
+          }
+        })
+      });
+      isolatedApp = handle.app;
+
+      const response = await isolatedApp.inject({
+        method: "GET",
+        url: "/v1/tenants",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json().data.error).toContain("tenant edge credential");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      await isolatedApp?.close();
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("attests the tenant edge with the dedicated gateway credential", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+    );
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/tenants",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("authorization")).toBe(`Bearer ${GATEWAY_TO_TENANT_TOKEN}`);
+      expect(headers.get("x-hyperion-caller")).toBe("api-gateway");
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("enforces tenant membership and role permissions for LUMEN", async () => {
