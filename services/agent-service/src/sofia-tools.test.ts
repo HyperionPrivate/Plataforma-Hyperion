@@ -1539,7 +1539,8 @@ function createOwnerStateBridge(query: ReturnType<typeof vi.fn>) {
             expiredAction: expiredPending
               ? {
                   actionId: String(expiredPending.jobId),
-                  tool: expiredPending.tool as "create_appointment_hold" | "cancel_appointment" | "reschedule_appointment"
+                  tool: expiredPending.tool as
+                    "create_appointment_hold" | "cancel_appointment" | "reschedule_appointment"
                 }
               : expiredGrant
                 ? {
@@ -1603,9 +1604,7 @@ function createOwnerStateBridge(query: ReturnType<typeof vi.fn>) {
         case "store_grant_receipt": {
           const receipt = mutation.receipt;
           const messageId =
-            mutation.op === "store_execution_receipt"
-              ? mutation.confirmationMessageId
-              : mutation.currentMessageId;
+            mutation.op === "store_execution_receipt" ? mutation.confirmationMessageId : mutation.currentMessageId;
           const result = await query(
             `update pulso_iris.conversations
              set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(

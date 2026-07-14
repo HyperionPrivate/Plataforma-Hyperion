@@ -363,7 +363,13 @@ export class PostgresChannelRepository implements ChannelRepository {
       );
       const source = valid.rows[0];
       if (!source?.conversationId) {
-        await cancelClaimedOutbound(client, this.requirePulsoDelivery(), candidate.tenantId, candidate.id, candidate.workerId);
+        await cancelClaimedOutbound(
+          client,
+          this.requirePulsoDelivery(),
+          candidate.tenantId,
+          candidate.id,
+          candidate.workerId
+        );
         return undefined;
       }
       const messageMatches = await this.requirePulsoDelivery().guardQueuedMessage(
@@ -372,7 +378,13 @@ export class PostgresChannelRepository implements ChannelRepository {
         { conversationId: source.conversationId, body: candidate.body }
       );
       if (!messageMatches) {
-        await cancelClaimedOutbound(client, this.requirePulsoDelivery(), candidate.tenantId, candidate.id, candidate.workerId);
+        await cancelClaimedOutbound(
+          client,
+          this.requirePulsoDelivery(),
+          candidate.tenantId,
+          candidate.id,
+          candidate.workerId
+        );
         return undefined;
       }
 
@@ -407,7 +419,13 @@ export class PostgresChannelRepository implements ChannelRepository {
       );
       const conversationId = binding.rows[0]?.conversationId;
       if (!conversationId) {
-        await cancelClaimedOutbound(client, this.requirePulsoDelivery(), message.tenantId, message.id, message.workerId);
+        await cancelClaimedOutbound(
+          client,
+          this.requirePulsoDelivery(),
+          message.tenantId,
+          message.id,
+          message.workerId
+        );
         return false;
       }
       const messageMatches = await this.requirePulsoDelivery().guardQueuedMessage(message.tenantId, message.messageId, {
@@ -415,7 +433,13 @@ export class PostgresChannelRepository implements ChannelRepository {
         body: message.body
       });
       if (!messageMatches) {
-        await cancelClaimedOutbound(client, this.requirePulsoDelivery(), message.tenantId, message.id, message.workerId);
+        await cancelClaimedOutbound(
+          client,
+          this.requirePulsoDelivery(),
+          message.tenantId,
+          message.id,
+          message.workerId
+        );
         return false;
       }
       const result = await client.query(
@@ -455,7 +479,13 @@ export class PostgresChannelRepository implements ChannelRepository {
            and b.tenant_id = o.tenant_id and b.id = o.thread_binding_id`,
         [message.tenantId, message.id, sentAt]
       );
-      await reconcilePendingDeliveryReceipts(client, this.requirePulsoDelivery(), message.tenantId, "whatsapp_web_test", providerMessageId);
+      await reconcilePendingDeliveryReceipts(
+        client,
+        this.requirePulsoDelivery(),
+        message.tenantId,
+        "whatsapp_web_test",
+        providerMessageId
+      );
       await client.query(
         `insert into channel_runtime.outbox_events (
            tenant_id, event_type, event_version, aggregate_type, aggregate_id,

@@ -83,7 +83,7 @@ describe("WhatsAppChannelService", () => {
       const provider = new FakeProvider();
       repository.claimedOutbound.push(outboundMessage("hung-provider-send"));
       provider.sendText = vi.fn(() => new Promise<{ providerMessageId: string; sentAt: Date }>(() => undefined));
-    const service = new WhatsAppChannelService(provider, repository, 60_000, undefined, 5_000, 25);
+      const service = new WhatsAppChannelService(provider, repository, 60_000, undefined, 5_000, 25);
 
       const drain = service.drainOutbound();
       await vi.waitFor(() => expect(provider.sendText).toHaveBeenCalledTimes(1));

@@ -1,9 +1,5 @@
 import { envelope } from "@hyperion/contracts";
-import {
-  readInternalCredential,
-  validateInternalAuthorization,
-  type RouteRegistrar
-} from "@hyperion/service-runtime";
+import { readInternalCredential, validateInternalAuthorization, type RouteRegistrar } from "@hyperion/service-runtime";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   app.get("/v1/tenants", async (request, reply) => {

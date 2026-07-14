@@ -112,9 +112,7 @@ function attestProviderBoundaryBlocked() {
 }
 
 function hasStagedAudio(directory) {
-  return safeReaddir(directory).some(
-    (entry) => entry.isFile() && entry.name.startsWith("audio.")
-  );
+  return safeReaddir(directory).some((entry) => entry.isFile() && entry.name.startsWith("audio."));
 }
 
 function safeReaddir(path) {

@@ -221,7 +221,9 @@ export function createGatewayRoutes(overrides?: {
     app.get("/v1/tenants", async (request, reply) => {
       try {
         if (!gatewayCredentials.tenant) {
-          return reply.code(503).send(envelope({ error: "Gateway tenant edge credential is not configured" }, request.id));
+          return reply
+            .code(503)
+            .send(envelope({ error: "Gateway tenant edge credential is not configured" }, request.id));
         }
         const response = await fetch(buildUpstreamUrl(urls.tenant, request), {
           headers: {

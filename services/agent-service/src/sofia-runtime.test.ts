@@ -873,7 +873,7 @@ describe("SOFIA fresh availability guard", () => {
       timeZone: "America/Bogota"
     };
     let persistedResponse = "";
-    const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
+    const query = vi.fn(async (sql: string, _parameters?: unknown[]) => {
       if (sql.includes("claim_next_job")) {
         return dbResult([
           {
@@ -980,14 +980,16 @@ describe("SOFIA fresh availability guard", () => {
         return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse });
       }
       if (target.includes("/sofia-state/load")) {
-        return jsonResponse({ state: {
-          agendaSelection: {
-            siteId: slot.siteId,
-            professionalId: slot.professionalId,
-            payerId: slot.payerId,
-            appointmentTypeId: slot.appointmentTypeId
+        return jsonResponse({
+          state: {
+            agendaSelection: {
+              siteId: slot.siteId,
+              professionalId: slot.professionalId,
+              payerId: slot.payerId,
+              appointmentTypeId: slot.appointmentTypeId
+            }
           }
-        } });
+        });
       }
       if (target.includes("/sofia-state/mutate")) {
         return jsonResponse({ applied: true });
@@ -1040,7 +1042,7 @@ describe("SOFIA fresh availability guard", () => {
     };
     let persistedResponse = "";
     let pendingActionUpdates = 0;
-    const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
+    const query = vi.fn(async (sql: string, _parameters?: unknown[]) => {
       if (sql.includes("claim_next_job")) {
         return dbResult([
           {
@@ -1155,14 +1157,16 @@ describe("SOFIA fresh availability guard", () => {
         return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse });
       }
       if (target.includes("/sofia-state/load")) {
-        return jsonResponse({ state: {
-          agendaSelection: {
-            siteId: slot.siteId,
-            professionalId: slot.professionalId,
-            payerId: slot.payerId,
-            appointmentTypeId: slot.appointmentTypeId
+        return jsonResponse({
+          state: {
+            agendaSelection: {
+              siteId: slot.siteId,
+              professionalId: slot.professionalId,
+              payerId: slot.payerId,
+              appointmentTypeId: slot.appointmentTypeId
+            }
           }
-        } });
+        });
       }
       if (target.includes("/sofia-state/mutate")) {
         const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { op?: string };
@@ -1239,7 +1243,7 @@ describe("SOFIA fresh availability guard", () => {
     };
     let persistedResponse = "";
     let pendingActionUpdates = 0;
-    const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
+    const query = vi.fn(async (sql: string, _parameters?: unknown[]) => {
       if (sql.includes("claim_next_job")) {
         return dbResult([
           {
@@ -1340,14 +1344,16 @@ describe("SOFIA fresh availability guard", () => {
         return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse });
       }
       if (target.includes("/sofia-state/load")) {
-        return jsonResponse({ state: {
-          agendaSelection: {
-            siteId: exactSlot.siteId,
-            professionalId: exactSlot.professionalId,
-            payerId: exactSlot.payerId,
-            appointmentTypeId: exactSlot.appointmentTypeId
+        return jsonResponse({
+          state: {
+            agendaSelection: {
+              siteId: exactSlot.siteId,
+              professionalId: exactSlot.professionalId,
+              payerId: exactSlot.payerId,
+              appointmentTypeId: exactSlot.appointmentTypeId
+            }
           }
-        } });
+        });
       }
       if (target.includes("/sofia-state/mutate")) {
         const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { op?: string };
@@ -1414,7 +1420,7 @@ describe("SOFIA fresh availability guard", () => {
       timeZone: "America/Bogota"
     };
     let persistedResponse = "";
-    const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
+    const query = vi.fn(async (sql: string, _parameters?: unknown[]) => {
       if (sql.includes("claim_next_job")) {
         return dbResult([
           {
@@ -1523,14 +1529,16 @@ describe("SOFIA fresh availability guard", () => {
         return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse });
       }
       if (target.includes("/sofia-state/load")) {
-        return jsonResponse({ state: {
-          agendaSelection: {
-            siteId: searchArguments.siteId,
-            professionalId: searchArguments.professionalId,
-            payerId: searchArguments.payerId,
-            appointmentTypeId: searchArguments.appointmentTypeId
+        return jsonResponse({
+          state: {
+            agendaSelection: {
+              siteId: searchArguments.siteId,
+              professionalId: searchArguments.professionalId,
+              payerId: searchArguments.payerId,
+              appointmentTypeId: searchArguments.appointmentTypeId
+            }
           }
-        } });
+        });
       }
       if (target.includes("/sofia-state/mutate")) {
         return jsonResponse({ applied: true });
@@ -2377,13 +2385,14 @@ async function runConfirmationScenario(input: {
         confirmationStateErrorThrown = true;
         throw input.confirmationStateError;
       }
-      const pending = confirmationState.pendingAction as { stagedAt?: string; jobId?: string; tool?: string } | undefined;
+      const pending = confirmationState.pendingAction as
+        { stagedAt?: string; jobId?: string; tool?: string } | undefined;
       const grant = confirmationState.confirmationGrant as
-        | { expiresAt?: string; actionId?: string; jobId?: string }
-        | undefined;
+        { expiresAt?: string; actionId?: string; jobId?: string } | undefined;
       const pendingAt = Date.parse(pending?.stagedAt ?? "");
       const grantAt = Date.parse(grant?.expiresAt ?? "");
-      const pendingExpired = input.pendingExpired ?? (Number.isFinite(pendingAt) && pendingAt + 15 * 60 * 1_000 <= Date.now());
+      const pendingExpired =
+        input.pendingExpired ?? (Number.isFinite(pendingAt) && pendingAt + 15 * 60 * 1_000 <= Date.now());
       const grantExpired = Number.isFinite(grantAt) && grantAt <= Date.now();
       if (pendingExpired || grantExpired) {
         confirmationState = {

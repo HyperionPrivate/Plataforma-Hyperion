@@ -11,10 +11,10 @@
 #   docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml \
 #     up --detach --no-deps --no-build --wait --wait-timeout 120 whatsapp-channel-service
 #
-# CI smoke currently exercises agent-service (HTTP + JetStream). Operators should
-# rehearse Channel, PULSO, Audit and LUMEN with the same script before production
-# cutover; compose:check already enforces SHUTDOWN_TIMEOUT_MS / stop_grace_period
-# for every node runtime including those four.
+# CI smoke exercises every durable-event runtime (HTTP + JetStream overlays).
+# Operators should still rehearse the same script against production-like load
+# before cutover; compose:check already enforces SHUTDOWN_TIMEOUT_MS /
+# stop_grace_period for every node runtime including these five.
 
 set -euo pipefail
 

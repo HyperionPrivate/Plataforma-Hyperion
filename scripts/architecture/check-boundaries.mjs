@@ -432,10 +432,14 @@ export async function detectBoundaryViolations(root, config) {
 
     for (const trigger of structure.triggers) {
       if (managedObjectProblem(config, trigger.table, "table")) {
-        structuralErrors.push(`Trigger sobre tabla sin propietario: ${relativePath} -> ${trigger.name} -> ${trigger.table}`);
+        structuralErrors.push(
+          `Trigger sobre tabla sin propietario: ${relativePath} -> ${trigger.name} -> ${trigger.table}`
+        );
       }
       if (managedObjectProblem(config, trigger.routine, "routine")) {
-        structuralErrors.push(`Trigger hacia rutina sin propietario: ${relativePath} -> ${trigger.name} -> ${trigger.routine}`);
+        structuralErrors.push(
+          `Trigger hacia rutina sin propietario: ${relativePath} -> ${trigger.name} -> ${trigger.routine}`
+        );
       }
     }
 

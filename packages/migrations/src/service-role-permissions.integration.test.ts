@@ -382,7 +382,10 @@ describeIntegration("PostgreSQL service role isolation", () => {
       await expectPermissionDenied(channel, "select count(*) from lumen.encounters");
       await expectPermissionDenied(channel, "select count(*) from platform.audit_events");
       await expectPermissionDenied(channel, "select count(*) from pulso_iris.messages");
-      await expectPermissionDenied(channel, "update pulso_iris.messages set delivery_status = delivery_status where false");
+      await expectPermissionDenied(
+        channel,
+        "update pulso_iris.messages set delivery_status = delivery_status where false"
+      );
     });
 
     await withRole("hyperion_audit", async (audit) => {
@@ -402,7 +405,10 @@ describeIntegration("PostgreSQL service role isolation", () => {
     await withRole("hyperion_pulso", async (pulso) => {
       await expectPermissionDenied(pulso, "select count(*) from channel_runtime.outbox_event_positions");
       await expectPermissionDenied(pulso, "select count(*) from channel_runtime.thread_bindings");
-      await expectPermissionDenied(pulso, "update channel_runtime.inbound_events set updated_at = updated_at where false");
+      await expectPermissionDenied(
+        pulso,
+        "update channel_runtime.inbound_events set updated_at = updated_at where false"
+      );
     });
   });
 

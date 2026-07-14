@@ -239,7 +239,6 @@ export type SofiaConfirmationResult =
     };
 
 const CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
-const CONFIRMATION_EXECUTION_LEASE_MS = 5 * 60 * 1_000;
 
 export class SofiaToolClient {
   constructor(
@@ -664,7 +663,6 @@ export class SofiaToolClient {
     }
     return { ok: true, data };
   }
-
 
   private async mutateSofiaState(
     tenantId: string,

@@ -950,7 +950,10 @@ async function emitHoldCreated(emitAudit: AuditEmitter, hold: AgendaHold, reques
   });
 }
 
-async function emitExpiredHolds(emitAudit: AuditEmitter, holds: Array<{ id: string; tenantId: string }>): Promise<void> {
+async function emitExpiredHolds(
+  emitAudit: AuditEmitter,
+  holds: Array<{ id: string; tenantId: string }>
+): Promise<void> {
   for (const hold of holds) {
     await emitAudit({
       tenantId: hold.tenantId,

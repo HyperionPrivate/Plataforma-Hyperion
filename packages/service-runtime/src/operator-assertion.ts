@@ -14,10 +14,7 @@ export type OperatorAssertionClaims = {
  * both GATEWAY_TO_* and GATEWAY_OPERATOR_ASSERTION_KEY still forges claims until
  * workload identity / mTLS lands.
  */
-export function createOperatorAssertion(
-  claims: OperatorAssertionClaims,
-  secret: string
-): string {
+export function createOperatorAssertion(claims: OperatorAssertionClaims, secret: string): string {
   if (!secret || secret.length < 24) {
     throw new Error("GATEWAY_OPERATOR_ASSERTION_KEY must be at least 24 characters");
   }

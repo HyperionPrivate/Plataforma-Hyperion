@@ -1,4 +1,3 @@
-import type { DatabaseClient } from "@hyperion/database";
 import { describe, expect, it, vi } from "vitest";
 import {
   createAuditClient,

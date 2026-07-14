@@ -32,10 +32,7 @@ describe("placeholder secret rejection", () => {
     };
 
     expect(shouldEnforcePlaceholderRejection(environment)).toBe(true);
-    expect(findPlaceholderSecretProblems(environment)).toEqual([
-      "ACCESS_DATABASE_PASSWORD",
-      "POSTGRES_PASSWORD"
-    ]);
+    expect(findPlaceholderSecretProblems(environment)).toEqual(["ACCESS_DATABASE_PASSWORD", "POSTGRES_PASSWORD"]);
     expect(() => assertNoPlaceholderSecrets(environment)).toThrow(/placeholder secrets/);
   });
 

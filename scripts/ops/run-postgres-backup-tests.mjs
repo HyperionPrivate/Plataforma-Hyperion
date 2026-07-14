@@ -6,10 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
-const testScripts = [
-  "scripts/ops/postgres-backup.test.sh",
-  "scripts/ops/postgres-restore.test.sh"
-];
+const testScripts = ["scripts/ops/postgres-backup.test.sh", "scripts/ops/postgres-restore.test.sh"];
 const configuredBash = process.env.HYPERION_BASH?.trim();
 const candidates = [
   configuredBash,

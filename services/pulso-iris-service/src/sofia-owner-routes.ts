@@ -30,7 +30,12 @@ const sofiaRuntimeSchema = z
   .strict();
 
 const mutationSchema = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("claim_pending_action"), pendingJobId: uuid, pendingTool: z.string().min(1), execution: jsonObject }),
+  z.object({
+    op: z.literal("claim_pending_action"),
+    pendingJobId: uuid,
+    pendingTool: z.string().min(1),
+    execution: jsonObject
+  }),
   z.object({
     op: z.literal("move_execution_to_grant"),
     executionActionId: z.string().min(1),
@@ -591,7 +596,7 @@ async function loadConfirmationState(db: DatabaseClient, tenantId: string, conve
         state: cleared.rows[0].state,
         expiredAction: expiredPending
           ? { actionId: String(expiredPending.jobId ?? ""), tool: String(expiredPending.tool ?? "") }
-            : expiredGrant
+          : expiredGrant
             ? {
                 actionId: String(expiredGrant.actionId ?? expiredGrant.jobId ?? ""),
                 tool: "create_appointment_hold"

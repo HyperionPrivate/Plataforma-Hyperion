@@ -45,10 +45,7 @@ interface AuditLogger {
 const SOURCE = "pulso-iris-service";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export function createAuditClient(options: {
-  db?: DatabaseExecutor;
-  logger: AuditLogger;
-}): AuditEmitter {
+export function createAuditClient(options: { db?: DatabaseExecutor; logger: AuditLogger }): AuditEmitter {
   let warnedMissingConfig = false;
 
   return async (input, executor) => {
@@ -73,16 +70,12 @@ export function createAuditClient(options: {
   };
 }
 
-export async function enqueuePulsoAuditEvent(
-  db: DatabaseExecutor,
-  input: EmitAuditEventInput
-): Promise<void> {
+export async function enqueuePulsoAuditEvent(db: DatabaseExecutor, input: EmitAuditEventInput): Promise<void> {
   if (!input.tenantId || !UUID_PATTERN.test(input.tenantId)) {
     throw new Error("Pulso audit events require a tenantId UUID");
   }
 
-  const aggregateId =
-    input.entityId && UUID_PATTERN.test(input.entityId) ? input.entityId : randomUUID();
+  const aggregateId = input.entityId && UUID_PATTERN.test(input.entityId) ? input.entityId : randomUUID();
   const dedupeSuffix =
     typeof input.metadata?.auditDedupeSuffix === "string" && input.metadata.auditDedupeSuffix.trim()
       ? input.metadata.auditDedupeSuffix.trim()

@@ -337,9 +337,7 @@ test("negative fixtures: PL/pgSQL cross-owner and packages SQL fail the scanner"
     assert.ok(
       result.violations.some(
         (entry) =>
-          entry.kind === "sql-access" &&
-          entry.path === "packages/leaky/query.ts" &&
-          entry.object === "foreign.records"
+          entry.kind === "sql-access" && entry.path === "packages/leaky/query.ts" && entry.object === "foreign.records"
       ),
       "expected packages SQL access violation"
     );

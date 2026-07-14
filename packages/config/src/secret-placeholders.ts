@@ -104,10 +104,7 @@ export function shouldEnforcePlaceholderRejection(environment: NodeJS.ProcessEnv
   const nodeEnv = (environment.NODE_ENV ?? "development").trim().toLowerCase();
   const hyperionEnv = (environment.HYPERION_ENVIRONMENT ?? "").trim().toLowerCase();
   const restricted =
-    nodeEnv === "production" ||
-    nodeEnv === "staging" ||
-    hyperionEnv === "production" ||
-    hyperionEnv === "staging";
+    nodeEnv === "production" || nodeEnv === "staging" || hyperionEnv === "production" || hyperionEnv === "staging";
   if (!restricted) return false;
 
   // Explicit Hyperion environment always enforces, even under CI.

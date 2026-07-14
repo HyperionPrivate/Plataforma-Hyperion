@@ -138,7 +138,7 @@ jobs:
 
   docker-build-and-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -152,14 +152,16 @@ jobs:
           curl --fail --silent http://127.0.0.1:8080/health >/dev/null
           curl --fail --silent http://127.0.0.1:8080/ready >/dev/null
           curl --fail --silent http://127.0.0.1:3000/ >/dev/null
-      - name: Verify graceful SOFIA shutdown on HTTP
+      - name: Verify graceful shutdown for durable-event runtimes on HTTP
         shell: bash
         run: |
-          bash scripts/ci/verify-compose-graceful-stop.sh \
-            .env.example hyperion-ci-base agent-service 75 infra/docker-compose.yml
-          docker compose --env-file .env.example -p hyperion-ci-base \
-            -f infra/docker-compose.yml up --detach --no-deps --no-build \
-            --wait --wait-timeout 120 agent-service
+          for service in whatsapp-channel-service pulso-iris-service audit-service lumen-service agent-service; do
+            bash scripts/ci/verify-compose-graceful-stop.sh \
+              .env.example hyperion-ci-base "$service" 75 infra/docker-compose.yml
+            docker compose --env-file .env.example -p hyperion-ci-base \
+              -f infra/docker-compose.yml up --detach --no-deps --no-build \
+              --wait --wait-timeout 120 "$service"
+          done
       - name: Stop the base stack
         if: always()
         run: docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml down --volumes --remove-orphans
@@ -173,15 +175,17 @@ jobs:
           curl --fail --silent http://127.0.0.1:8080/health >/dev/null
           curl --fail --silent http://127.0.0.1:8080/ready >/dev/null
           docker compose --env-file .env.example -p hyperion-ci-jetstream -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml exec -T nats wget -q -O /dev/null 'http://127.0.0.1:8222/healthz?js-enabled-only=true'
-      - name: Verify graceful SOFIA shutdown on JetStream
+      - name: Verify graceful shutdown for durable-event runtimes on JetStream
         shell: bash
         run: |
-          bash scripts/ci/verify-compose-graceful-stop.sh \
-            .env.example hyperion-ci-jetstream agent-service 75 \
-            infra/docker-compose.yml infra/docker-compose.jetstream.yml
-          docker compose --env-file .env.example -p hyperion-ci-jetstream \
-            -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml \
-            up --detach --no-deps --no-build --wait --wait-timeout 120 agent-service
+          for service in whatsapp-channel-service pulso-iris-service audit-service lumen-service agent-service; do
+            bash scripts/ci/verify-compose-graceful-stop.sh \
+              .env.example hyperion-ci-jetstream "$service" 75 \
+              infra/docker-compose.yml infra/docker-compose.jetstream.yml
+            docker compose --env-file .env.example -p hyperion-ci-jetstream \
+              -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml \
+              up --detach --no-deps --no-build --wait --wait-timeout 120 "$service"
+          done
       - name: Stop the JetStream stack
         if: always()
         run: >-

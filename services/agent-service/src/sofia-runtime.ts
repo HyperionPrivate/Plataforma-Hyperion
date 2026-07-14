@@ -1218,9 +1218,15 @@ export class SofiaRuntime {
         shutdownInterrupted
       ]
     );
-    await this.setConversationRuntime(job.tenantId, job.conversationId, shutdownInterrupted ? "queued" : "failed", undefined, {
-      allowDuringShutdown: true
-    });
+    await this.setConversationRuntime(
+      job.tenantId,
+      job.conversationId,
+      shutdownInterrupted ? "queued" : "failed",
+      undefined,
+      {
+        allowDuringShutdown: true
+      }
+    );
     this.options.logger.warn("SOFIA job failed", {
       jobId: job.id,
       terminal,
