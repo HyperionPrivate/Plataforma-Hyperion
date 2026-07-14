@@ -184,9 +184,20 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
     /pulso_stop_status=0[\s\S]*?stop --timeout 75 pulso-iris-service \|\| pulso_stop_status=\$\?/
   );
   assert.match(cleanupStep, /steps\.n1_delivery_drain\.outputs\.snapshot/);
+  assert.match(cleanupStep, /steps\.n1_delivery_drain\.outcome/);
+  assert.match(cleanupStep, /delivery_baseline_outcome\s*==\s*"success"/);
   assert.match(cleanupStep, /delivery_snapshot_after\s*!=\s*"\$expected_delivery_snapshot"/);
+  assert.match(cleanupStep, /delivery_evidence_status=1/);
+  assert.doesNotMatch(cleanupStep, /-z \$expected_delivery_snapshot \|\| \$delivery_snapshot_after/);
   assert.match(cleanupStep, /n-minus-one-pulso-channel-sql-window\.sh close/);
   assert.match(cleanupStep, /n-minus-one-pulso-channel-sql-window\.sh verify-closed/);
+  assert.match(cleanupStep, /current_compose\[@\].*down --timeout 75 --remove-orphans/s);
+  const currentHandoff = cleanupStep.slice(
+    cleanupStep.indexOf('"${current_compose[@]}" down'),
+    cleanupStep.indexOf('"${n1_compose[@]}" up')
+  );
+  assert.ok(cleanupStep.indexOf('"${current_compose[@]}" down') < cleanupStep.indexOf('"${n1_compose[@]}" up'));
+  assert.doesNotMatch(currentHandoff, /--volumes|\|\| true/);
   assert.ok(cleanupStep.indexOf("stop --timeout 75") < cleanupStep.indexOf("verify-delivery-drained"));
   assert.ok(cleanupStep.indexOf("verify-delivery-drained") < cleanupStep.indexOf(".sh close"));
 });

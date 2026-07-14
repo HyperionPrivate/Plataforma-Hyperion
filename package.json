@@ -9,7 +9,7 @@
   },
   "scripts": {
     "architecture:check": "node scripts/architecture/check-boundaries.mjs",
-    "architecture:test": "node --test scripts/architecture/check-boundaries.test.mjs scripts/architecture/check-compose-identities.test.mjs scripts/autonomy/real-flow.test.mjs scripts/ci/n-minus-one-pulso-channel-sql-window.test.mjs scripts/ci/resolve-n-minus-one-capabilities.test.mjs scripts/ci/verify-n-minus-one-upgrade-traffic.test.mjs",
+    "architecture:test": "node --test scripts/architecture/check-boundaries.test.mjs scripts/architecture/check-compose-identities.test.mjs scripts/autonomy/real-flow.test.mjs scripts/ci/n-minus-one-pulso-channel-sql-window.test.mjs scripts/ci/resolve-n-minus-one-capabilities.test.mjs scripts/ci/verify-n-minus-one-lumen-audio.test.mjs scripts/ci/verify-n-minus-one-upgrade-traffic.test.mjs",
     "autonomy:e2e": "node scripts/autonomy/real-flow.e2e.mjs",
     "autonomy:e2e:local": "pnpm build && pnpm autonomy:e2e",
     "compose:check": "node scripts/architecture/check-compose-identities.mjs",

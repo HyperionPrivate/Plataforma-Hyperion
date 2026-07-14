@@ -54,6 +54,7 @@ fi
 
 runtime_cleanup_owner=""
 runtime_gateway_token=""
+runtime_operator_assertion=""
 if [[ $contract == "current" ]]; then
   runtime_cleanup_owner=$(
     "${compose[@]}" exec -T lumen-service node -e 'process.stdout.write(process.env.LUMEN_INSTANCE_ID ?? "")'
@@ -196,14 +197,90 @@ for identifier in "$tenant_id" "$encounter_id" "$operator_id" "$idempotency_key"
   fi
 done
 
-request_probe='const [contract,tenantId,encounterId,operatorId,idempotencyKey]=process.argv.slice(1);let gatewayToken="";for await(const chunk of process.stdin)gatewayToken+=chunk;gatewayToken=gatewayToken.trim();const sampleRate=8000;const samples=sampleRate;const dataBytes=samples*2;const wav=Buffer.alloc(44+dataBytes);wav.write("RIFF",0);wav.writeUInt32LE(36+dataBytes,4);wav.write("WAVE",8);wav.write("fmt ",12);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(sampleRate,24);wav.writeUInt32LE(sampleRate*2,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write("data",36);wav.writeUInt32LE(dataBytes,40);const headers={"content-type":"application/json","x-operator-role":"admin","x-operator-id":operatorId};if(contract==="current"){if(!gatewayToken)throw new Error("missing current LUMEN gateway credential");headers.authorization=`Bearer ${gatewayToken}`;headers["x-hyperion-caller"]="api-gateway";}const response=await fetch(`http://lumen-service:8090/v1/tenants/${tenantId}/lumen/encounters/${encounterId}/transcriptions`,{method:"POST",headers,body:JSON.stringify({audioBase64:wav.toString("base64"),mimeType:"audio/wav",source:"authorized_upload",durationSeconds:1,idempotencyKey})});throw new Error(`N-1 LUMEN request returned unexpectedly with HTTP ${response.status}`);'
+if [[ $contract == "current" ]]; then
+  # Sign inside the exact running runtime so the HMAC key never leaves its
+  # container. Only the short-lived, tenant-bound assertion crosses stdin to
+  # the isolated request probe.
+  runtime_operator_assertion=$(
+    "${compose[@]}" exec -T lumen-service node --input-type=module -e '
+      const { createOperatorAssertion } = await import("./packages/service-runtime/dist/index.js");
+      const [operatorId, tenantId] = process.argv.slice(1);
+      process.stdout.write(createOperatorAssertion({
+        operatorId,
+        role: "admin",
+        tenantId,
+        expiresAtUnix: Math.floor(Date.now() / 1000) + 60
+      }, process.env.GATEWAY_OPERATOR_ASSERTION_KEY ?? ""));
+    ' "$operator_id" "$tenant_id"
+  )
+  if [[ $runtime_operator_assertion != "$operator_id|admin|$tenant_id|"* ]]; then
+    echo "Current N-1 LUMEN runtime did not produce a tenant-bound operator assertion" >&2
+    exit 1
+  fi
+fi
+
+request_probe=$(
+  cat <<'NODE'
+const [contract, tenantId, encounterId, operatorId, idempotencyKey] = process.argv.slice(1);
+let credentialInput = "";
+for await (const chunk of process.stdin) credentialInput += chunk;
+const [gatewayToken = "", operatorAssertion = ""] = credentialInput.replace(/\r/g, "").split("\n");
+
+const sampleRate = 8000;
+const samples = sampleRate;
+const dataBytes = samples * 2;
+const wav = Buffer.alloc(44 + dataBytes);
+wav.write("RIFF", 0);
+wav.writeUInt32LE(36 + dataBytes, 4);
+wav.write("WAVE", 8);
+wav.write("fmt ", 12);
+wav.writeUInt32LE(16, 16);
+wav.writeUInt16LE(1, 20);
+wav.writeUInt16LE(1, 22);
+wav.writeUInt32LE(sampleRate, 24);
+wav.writeUInt32LE(sampleRate * 2, 28);
+wav.writeUInt16LE(2, 32);
+wav.writeUInt16LE(16, 34);
+wav.write("data", 36);
+wav.writeUInt32LE(dataBytes, 40);
+
+const headers = {
+  "content-type": "application/json",
+  "x-operator-role": "admin",
+  "x-operator-id": operatorId
+};
+if (contract === "current") {
+  if (!gatewayToken) throw new Error("missing current LUMEN gateway credential");
+  if (!operatorAssertion) throw new Error("missing current LUMEN operator assertion");
+  headers.authorization = `Bearer ${gatewayToken}`;
+  headers["x-hyperion-caller"] = "api-gateway";
+  headers["x-hyperion-operator-assertion"] = operatorAssertion;
+}
+
+const response = await fetch(
+  `http://lumen-service:8090/v1/tenants/${tenantId}/lumen/encounters/${encounterId}/transcriptions`,
+  {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      audioBase64: wav.toString("base64"),
+      mimeType: "audio/wav",
+      source: "authorized_upload",
+      durationSeconds: 1,
+      idempotencyKey
+    })
+  }
+);
+throw new Error(`N-1 LUMEN request returned unexpectedly with HTTP ${response.status}`);
+NODE
+)
 probe_container="${project_name}-lumen-audio-probe"
 docker rm --force "$probe_container" >/dev/null 2>&1 || true
-printf '%s' "$runtime_gateway_token" | \
+printf '%s\n%s\n' "$runtime_gateway_token" "$runtime_operator_assertion" | \
   docker run --rm --interactive --name "$probe_container" --network "$n1_network" "$current_migrations_image" \
     node --input-type=module -e "$request_probe" \
     "$contract" "$tenant_id" "$encounter_id" "$operator_id" "$idempotency_key" \
-    >/dev/null 2>&1 &
+    >/dev/null &
 request_pid=$!
 
 cleanup_probe() {

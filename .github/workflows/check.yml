@@ -608,10 +608,18 @@ jobs:
         if: ${{ always() }}
         shell: bash
         run: |
+          current_compose=(docker compose --env-file .env.example -p hyperion-compat-current
+            -f infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml)
           n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
             -f .ci/n-minus-one/infra/docker-compose.yml
             -f infra/docker-compose.compatibility-ci.yml
             -f infra/docker-compose.n-minus-one-roles-ci.yml)
+
+          # Both projects intentionally share one PostgreSQL volume. An early
+          # failure can skip the normal handoff, so prove the current owner is
+          # fully stopped before N-1 is allowed to mount that volume.
+          "${current_compose[@]}" down --timeout 75 --remove-orphans
           "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
 
           # Quiesce both the delivery producer/dispatcher and the only runtime that
@@ -626,11 +634,17 @@ jobs:
             verify-delivery-drained .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml) || delivery_probe_status=$?
+          delivery_baseline_outcome='${{ steps.n1_delivery_drain.outcome }}'
           expected_delivery_snapshot='${{ steps.n1_delivery_drain.outputs.snapshot }}'
-          if [[ $delivery_probe_status -eq 0 && \
-                ( -z $expected_delivery_snapshot || $delivery_snapshot_after != "$expected_delivery_snapshot" ) ]]; then
-            echo "N-1 changed the current Channel delivery-event snapshot" >&2
-            delivery_probe_status=1
+          delivery_evidence_status=0
+          if [[ $delivery_baseline_outcome == "success" ]]; then
+            if [[ $delivery_probe_status -ne 0 || -z $expected_delivery_snapshot || \
+                  $delivery_snapshot_after != "$expected_delivery_snapshot" ]]; then
+              echo "N-1 changed the current Channel delivery-event snapshot" >&2
+              delivery_evidence_status=1
+            fi
+          else
+            echo "N-1 delivery immutability comparison skipped because its baseline outcome was $delivery_baseline_outcome" >&2
           fi
 
           sql_window_close_status=0
@@ -644,17 +658,18 @@ jobs:
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml || sql_window_closed_probe_status=$?
 
-          printf 'N-1 closure statuses: Channel-stop=%s PULSO-stop=%s delivery=%s SQL-close=%s SQL-closed-probe=%s\n' \
+          printf 'N-1 closure statuses: Channel-stop=%s PULSO-stop=%s delivery-probe=%s delivery-evidence=%s baseline=%s SQL-close=%s SQL-closed-probe=%s\n' \
             "$channel_stop_status" "$pulso_stop_status" "$delivery_probe_status" \
-            "$sql_window_close_status" "$sql_window_closed_probe_status"
+            "$delivery_evidence_status" "$delivery_baseline_outcome" "$sql_window_close_status" \
+            "$sql_window_closed_probe_status"
           if [[ $channel_stop_status -ne 0 ]]; then
             exit "$channel_stop_status"
           fi
           if [[ $pulso_stop_status -ne 0 ]]; then
             exit "$pulso_stop_status"
           fi
-          if [[ $delivery_probe_status -ne 0 ]]; then
-            exit "$delivery_probe_status"
+          if [[ $delivery_evidence_status -ne 0 ]]; then
+            exit "$delivery_evidence_status"
           fi
           if [[ $sql_window_close_status -ne 0 ]]; then
             exit "$sql_window_close_status"
