@@ -93,6 +93,7 @@ services:
     command: ["node", "packages/migrations/dist/bootstrap-roles.js"]
     environment:
       NODE_ENV: production
+      HYPERION_ALLOW_EXAMPLE_SECRETS: ${HYPERION_ALLOW_EXAMPLE_SECRETS:-}
       DATABASE_URL: *admin-database-url
       MIGRATION_LOCK_TIMEOUT_MS: ${MIGRATION_LOCK_TIMEOUT_MS:-10000}
       MIGRATION_STATEMENT_TIMEOUT_MS: ${MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
