@@ -165,7 +165,7 @@ describe("PULSO to SOFIA workload identity", () => {
         payload: EVENT
       });
 
-      expect(response.statusCode).toBe(401);
+      expect(response.statusCode).toBe(403);
       expect(db.transactions).toBe(0);
     } finally {
       await handle.app.close();

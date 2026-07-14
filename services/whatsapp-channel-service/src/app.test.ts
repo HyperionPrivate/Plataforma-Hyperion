@@ -133,9 +133,9 @@ describe("whatsapp-channel internal API", () => {
       }
     });
 
-    expect(integrationCannotSend.statusCode).toBe(401);
-    expect(sofiaCannotManage.statusCode).toBe(401);
-    expect(spoofedCaller.statusCode).toBe(401);
+    expect(integrationCannotSend.statusCode).toBe(403);
+    expect(sofiaCannotManage.statusCode).toBe(403);
+    expect(spoofedCaller.statusCode).toBe(403);
   });
 });
 

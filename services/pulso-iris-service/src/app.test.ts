@@ -73,7 +73,7 @@ describe("pulso-iris-service routes", () => {
       }
     });
 
-    expect(response.statusCode).toBe(401);
+    expect(response.statusCode).toBe(403);
   });
 
   it("reports readiness as down without a database", async () => {

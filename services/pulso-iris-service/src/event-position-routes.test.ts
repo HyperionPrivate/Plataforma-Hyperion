@@ -31,7 +31,7 @@ describe("PULSO event position owner route", () => {
       headers: { authorization: `Bearer ${TOKEN}`, "x-hyperion-caller": "agent-service" }
     });
 
-    expect(wrongCaller.statusCode).toBe(401);
+    expect(wrongCaller.statusCode).toBe(403);
     expect(response.statusCode).toBe(200);
     expect(response.json().data).toEqual({
       tenantId: TENANT_ID,

@@ -183,7 +183,7 @@ export function registerSofiaOwnerRoutes(
         return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
       }
 
-      const applied = await applySofiaStateMutation(
+      const applied = await applySofiaStateMutationInternal(
         context.db,
         params.data.tenantId,
         params.data.conversationId,
@@ -196,7 +196,18 @@ export function registerSofiaOwnerRoutes(
 
 type SofiaStateMutation = z.infer<typeof mutationSchema>;
 
-async function applySofiaStateMutation(
+export async function applySofiaStateMutation(
+  db: DatabaseClient,
+  tenantId: string,
+  conversationId: string,
+  mutation: SofiaStateMutation | Record<string, unknown>
+): Promise<boolean> {
+  const parsed = mutationSchema.safeParse(mutation);
+  if (!parsed.success) return false;
+  return applySofiaStateMutationInternal(db, tenantId, conversationId, parsed.data);
+}
+
+async function applySofiaStateMutationInternal(
   db: DatabaseClient,
   tenantId: string,
   conversationId: string,
@@ -469,7 +480,7 @@ async function applySofiaStateMutation(
   }
 }
 
-async function loadConfirmationState(db: DatabaseClient, tenantId: string, conversationId: string) {
+export async function loadConfirmationState(db: DatabaseClient, tenantId: string, conversationId: string) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await db.query<{
       state: unknown;

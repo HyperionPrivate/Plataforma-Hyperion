@@ -360,7 +360,7 @@ describe("SOFIA deterministic urgency guard", () => {
         }
       });
 
-      expect(response.statusCode).toBe(401);
+      expect(response.statusCode).toBe(403);
       expect(query).not.toHaveBeenCalled();
     } finally {
       await handle.app.close();
