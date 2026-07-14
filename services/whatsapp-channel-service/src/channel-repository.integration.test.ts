@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createDatabase, type DatabaseClient } from "@hyperion/database";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostgresChannelRepository } from "./channel-repository.js";
+import { createDatabasePulsoDeliveryClient } from "./pulso-delivery.integration.test.support.js";
 import { WHATSAPP_PROVIDER_MODE } from "./types.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -21,7 +22,7 @@ describeIntegration("PostgresChannelRepository", () => {
       [`wa-repository-${randomUUID()}`]
     );
     tenantId = tenant.rows[0]?.id ?? "";
-    repository = new PostgresChannelRepository(db);
+    repository = new PostgresChannelRepository(db, createDatabasePulsoDeliveryClient(db));
     await repository.projectConnection(tenantId, {
       providerMode: WHATSAPP_PROVIDER_MODE,
       state: "ready",
