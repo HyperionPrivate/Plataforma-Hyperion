@@ -568,7 +568,7 @@ describeIntegration("PostgresChannelRepository", () => {
         body: "otra conversacion",
         idempotencyKey: "repository-outbound-1"
       })
-    ).rejects.toThrow("Thread binding or message not found");
+    ).rejects.toThrow("pulso_message_rejected");
     await expect(
       repository.enqueueOutbound({
         tenantId,
@@ -577,7 +577,7 @@ describeIntegration("PostgresChannelRepository", () => {
         body: "mensaje del paciente",
         idempotencyKey: "repository-invalid-sender"
       })
-    ).rejects.toThrow("Thread binding or message not found");
+    ).rejects.toThrow("pulso_message_rejected");
     await expect(
       repository.enqueueOutbound({
         tenantId,
@@ -586,7 +586,7 @@ describeIntegration("PostgresChannelRepository", () => {
         body: "contenido alterado",
         idempotencyKey: "repository-invalid-body"
       })
-    ).rejects.toThrow("Thread binding or message not found");
+    ).rejects.toThrow("pulso_message_rejected");
     await expect(
       repository.enqueueOutbound({
         tenantId,
@@ -595,7 +595,7 @@ describeIntegration("PostgresChannelRepository", () => {
         body: "contenido persistido",
         idempotencyKey: "repository-outbound-1"
       })
-    ).rejects.toThrow("Thread binding or message not found");
+    ).rejects.toThrow("pulso_message_rejected");
 
     const invalidRows = await db.query<{ count: number }>(
       `select count(*)::int as count
@@ -786,7 +786,7 @@ describeIntegration("PostgresChannelRepository", () => {
           body: `respuesta ${label}`,
           idempotencyKey: `repository-ineligible-${label}`
         })
-      ).rejects.toThrow("Thread binding or message not found");
+      ).rejects.toThrow("pulso_message_rejected");
     }
   });
 });

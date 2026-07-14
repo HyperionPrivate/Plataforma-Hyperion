@@ -8,6 +8,7 @@ import {
   type ChannelEventPosition,
   type LegacyChannelPositionResolver
 } from "./channel-position-client.js";
+import { createChannelThreadClient, type ChannelThreadClient } from "./channel-thread-client.js";
 import { PULSO_MESSAGE_EVENT_V1_TYPE, PULSO_MESSAGE_EVENT_V2_TYPE } from "./pulso-outbox.js";
 
 export const CHANNEL_INBOUND_EVENT_V1_TYPE = "channel.inbound.received.v1" as const;
@@ -127,6 +128,7 @@ export interface ChannelInboundCompatibilityOptions {
   readonly allowLegacyV1?: boolean;
   readonly channelCredential?: string;
   readonly resolveLegacyPosition?: LegacyChannelPositionResolver;
+  readonly channelThreads?: ChannelThreadClient;
 }
 
 export const registerChannelInboundEventRoutes: RouteRegistrar = async (app, context) => {
@@ -139,6 +141,12 @@ export const registerChannelInboundEventRoutes: RouteRegistrar = async (app, con
       ? createLegacyChannelPositionResolver({
           channelServiceUrl: process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089",
           credential: pulsoToChannelToken ?? ""
+        })
+      : undefined,
+    channelThreads: pulsoToChannelToken
+      ? createChannelThreadClient({
+          channelServiceUrl: process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089",
+          credential: pulsoToChannelToken
         })
       : undefined
   });
@@ -195,6 +203,9 @@ export async function registerChannelInboundEventRoutesWithCompatibility(
         ? await requireLegacyPositionResolver(options.resolveLegacyPosition)(parsed.data)
         : undefined;
       const outcome = await receiveChannelInboundEvent(context.db, parsed.data, legacyPosition);
+      if (outcome.status === "accepted" || outcome.status === "replayed") {
+        await bindChannelOwnerThread(options.channelThreads, parsed.data, outcome.result, context.logger);
+      }
 
       if (outcome.status === "gap") {
         return reply.code(409).send(
@@ -622,6 +633,34 @@ function requirePositiveSequence(value: string | number): number {
     throw new Error("Channel event has an invalid durable stream position");
   }
   return sequence;
+}
+
+export async function bindChannelOwnerThread(
+  channelThreads: ChannelThreadClient | undefined,
+  event: ChannelInboundEvent,
+  result: ChannelInboundResult,
+  logger: { error: (message: string, fields?: Record<string, unknown>) => void }
+): Promise<void> {
+  if (!channelThreads) {
+    throw new Error("PULSO_TO_CHANNEL_TOKEN is required to bind Channel-owned thread projections");
+  }
+
+  try {
+    await channelThreads.bindThread(event.tenantId, event.payload.threadBindingId, {
+      patientId: result.patientId,
+      conversationId: result.conversationId,
+      externalMessageId: event.payload.externalMessageId,
+      messageId: result.messageId
+    });
+  } catch (error) {
+    logger.error("failed to bind Channel-owned thread after inbound projection", {
+      tenantId: event.tenantId,
+      threadBindingId: event.payload.threadBindingId,
+      messageId: result.messageId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
 }
 
 function isStreamSequenceUniqueViolation(error: unknown): boolean {

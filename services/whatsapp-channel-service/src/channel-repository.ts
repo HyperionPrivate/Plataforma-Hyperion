@@ -33,6 +33,23 @@ export interface EnqueueOutboundResult {
   inserted: boolean;
 }
 
+export type OutboundEnqueueFailureReason =
+  | "thread_binding_not_found"
+  | "thread_binding_inactive"
+  | "conversation_unbound"
+  | "pulso_message_rejected"
+  | "outbound_conflict";
+
+export class OutboundEnqueueError extends Error {
+  readonly reason: OutboundEnqueueFailureReason;
+
+  constructor(reason: OutboundEnqueueFailureReason) {
+    super(reason);
+    this.name = "OutboundEnqueueError";
+    this.reason = reason;
+  }
+}
+
 export interface ClaimedOutboundMessage {
   id: string;
   tenantId: string;
@@ -277,14 +294,20 @@ export class PostgresChannelRepository implements ChannelRepository {
         [input.tenantId, input.threadBindingId]
       );
       const thread = binding.rows[0];
-      if (!thread || thread.status !== "active" || !thread.conversationId) {
-        throw new Error("Thread binding or message not found");
+      if (!thread) {
+        throw new OutboundEnqueueError("thread_binding_not_found");
+      }
+      if (thread.status !== "active") {
+        throw new OutboundEnqueueError("thread_binding_inactive");
+      }
+      if (!thread.conversationId) {
+        throw new OutboundEnqueueError("conversation_unbound");
       }
       const messageMatches = await this.requirePulsoDelivery().guardQueuedMessage(input.tenantId, input.messageId, {
         conversationId: thread.conversationId,
         body: input.body
       });
-      if (!messageMatches) throw new Error("Thread binding or message not found");
+      if (!messageMatches) throw new OutboundEnqueueError("pulso_message_rejected");
 
       const inserted = await client.query<{ id: string }>(
         `insert into channel_runtime.outbound_messages (
@@ -315,7 +338,7 @@ export class PostgresChannelRepository implements ChannelRepository {
         [input.tenantId, input.threadBindingId, input.messageId, input.idempotencyKey, input.body]
       );
       const row = existing.rows[0];
-      if (!row) throw new Error("Thread binding or message not found");
+      if (!row) throw new OutboundEnqueueError("outbound_conflict");
       return { id: row.id, inserted: false };
     });
   }

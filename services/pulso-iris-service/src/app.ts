@@ -36,6 +36,7 @@ import {
   registerChannelInboundEventRoutesWithCompatibility
 } from "./channel-inbound-events.js";
 import { startChannelInboundJetStreamConsumer } from "./channel-inbound-jetstream.js";
+import { createChannelThreadClient } from "./channel-thread-client.js";
 import { registerConfigRoutes } from "./config-routes.js";
 import { registerPulsoEventPositionRoute } from "./event-position-routes.js";
 import { registerOperationsRoutes } from "./operations-routes.js";
@@ -55,10 +56,17 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   const pulsoToChannelToken = readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN");
   const auditToken = readInternalCredential(process.env, "PULSO_TO_AUDIT_TOKEN");
   const allowLegacyChannelInboundV1 = readChannelInboundV1Compatibility(process.env);
+  const channelServiceUrl = process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089";
   const resolveLegacyChannelPosition = allowLegacyChannelInboundV1
     ? createLegacyChannelPositionResolver({
-        channelServiceUrl: process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089",
+        channelServiceUrl,
         credential: pulsoToChannelToken ?? ""
+      })
+    : undefined;
+  const channelThreads = pulsoToChannelToken
+    ? createChannelThreadClient({
+        channelServiceUrl,
+        credential: pulsoToChannelToken
       })
     : undefined;
   if (allowLegacyChannelInboundV1) {
@@ -96,7 +104,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   if (isHttpDurableEventIngressEnabled(durableOutbox.transport)) {
     await registerChannelInboundEventRoutesWithCompatibility(app, context, {
       allowLegacyV1: allowLegacyChannelInboundV1,
-      resolveLegacyPosition: resolveLegacyChannelPosition
+      resolveLegacyPosition: resolveLegacyChannelPosition,
+      channelThreads
     });
   }
 
@@ -105,6 +114,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       natsUrl: durableOutbox.natsUrl,
       allowLegacyV1: allowLegacyChannelInboundV1,
       resolveLegacyPosition: resolveLegacyChannelPosition,
+      channelThreads,
       ...durableOutbox.authentication
     });
     context.registerReadinessCheck?.({

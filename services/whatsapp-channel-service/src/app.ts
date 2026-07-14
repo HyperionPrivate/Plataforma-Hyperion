@@ -19,7 +19,7 @@ import { z } from "zod";
 import { BaileysWhatsAppWebTestProvider } from "./baileys-provider.js";
 import { PostgresChannelAuditOutbox } from "./channel-audit-outbox.js";
 import { PostgresChannelOutbox } from "./channel-outbox.js";
-import { PostgresChannelRepository } from "./channel-repository.js";
+import { PostgresChannelRepository, OutboundEnqueueError } from "./channel-repository.js";
 import { WhatsAppChannelService } from "./channel-service.js";
 import { registerChannelEventPositionRoute } from "./event-position-routes.js";
 import { registerThreadBindRoutes } from "./thread-bind-routes.js";
@@ -357,7 +357,19 @@ export function registerChannelRoutes(
         idempotencyKey: body.data.idempotencyKey
       });
       return reply.code(result.inserted ? 202 : 200).send(envelope(result, request.id));
-    } catch {
+    } catch (error) {
+      const reason =
+        error instanceof OutboundEnqueueError
+          ? error.reason
+          : error instanceof Error
+            ? error.message
+            : "outbound_enqueue_failed";
+      context?.logger.warn("whatsapp outbound enqueue rejected", {
+        tenantId: params.data.tenantId,
+        threadBindingId: body.data.threadBindingId,
+        messageId: body.data.messageId,
+        reason
+      });
       return reply.code(404).send(envelope({ error: "Thread or message not found" }, request.id));
     }
   });

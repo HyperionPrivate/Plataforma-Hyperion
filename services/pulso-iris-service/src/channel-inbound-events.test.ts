@@ -35,6 +35,10 @@ const inboundEvent = {
 describe("durable Channel -> PULSO event consumer", () => {
   let app: ReturnType<typeof Fastify>;
   let db: TransactionalFakeDatabase;
+  let channelThreads: {
+    getThread: ReturnType<typeof vi.fn>;
+    bindThread: ReturnType<typeof vi.fn>;
+  };
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -46,6 +50,10 @@ describe("durable Channel -> PULSO event consumer", () => {
     db = new TransactionalFakeDatabase();
     app = Fastify();
     vi.clearAllMocks();
+    channelThreads = {
+      getThread: vi.fn(),
+      bindThread: vi.fn(async () => undefined)
+    };
     await registerChannelInboundEventRoutesWithCompatibility(
       app,
       {
@@ -60,7 +68,7 @@ describe("durable Channel -> PULSO event consumer", () => {
         db: db as never,
         logger: logger as never
       },
-      { allowLegacyV1: false, channelCredential: INTERNAL_TOKEN }
+      { allowLegacyV1: false, channelCredential: INTERNAL_TOKEN, channelThreads }
     );
   });
 
@@ -111,6 +119,64 @@ describe("durable Channel -> PULSO event consumer", () => {
       occurredAt: inboundEvent.occurredAt
     });
     expect(db.state.threads[0]?.lastInboundSequence).toBe(1);
+    expect(channelThreads.bindThread).toHaveBeenCalledWith(
+      TENANT_ID,
+      THREAD_BINDING_ID,
+      expect.objectContaining({
+        patientId: response.json().data.patientId,
+        conversationId: response.json().data.conversationId,
+        externalMessageId: "message-001",
+        messageId: response.json().data.messageId
+      })
+    );
+  });
+
+  it("binds the Channel-owned thread after a successful projection and again on replay", async () => {
+    const accepted = await send(inboundEvent);
+    const replayed = await send(inboundEvent);
+
+    expect(accepted.statusCode).toBe(202);
+    expect(replayed.statusCode).toBe(200);
+    expect(channelThreads.bindThread).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when Channel bind is unavailable after projection", async () => {
+    channelThreads.bindThread.mockRejectedValueOnce(new Error("thread_binding_not_found"));
+    const response = await send(inboundEvent);
+
+    expect(response.statusCode).toBe(500);
+    expect(logger.error).toHaveBeenCalledWith(
+      "failed to bind Channel-owned thread after inbound projection",
+      expect.objectContaining({
+        tenantId: TENANT_ID,
+        threadBindingId: THREAD_BINDING_ID
+      })
+    );
+  });
+
+  it("does not contact Channel upstream when the tenant bind credential is missing", async () => {
+    await app.close();
+    app = Fastify();
+    await registerChannelInboundEventRoutesWithCompatibility(
+      app,
+      {
+        config: {
+          serviceName: "pulso-iris-service",
+          environment: "test",
+          host: "127.0.0.1",
+          port: 8088,
+          serviceVersion: "test",
+          corsAllowedOrigins: []
+        },
+        db: db as never,
+        logger: logger as never
+      },
+      { allowLegacyV1: false, channelCredential: INTERNAL_TOKEN }
+    );
+
+    const response = await send(inboundEvent);
+    expect(response.statusCode).toBe(500);
+    expect(channelThreads.bindThread).not.toHaveBeenCalled();
   });
 
   it("accepts PostgreSQL RFC3339 offsets and canonicalizes them to UTC before hashing", async () => {
@@ -255,6 +321,7 @@ describe("durable Channel -> PULSO event consumer", () => {
       {
         allowLegacyV1: true,
         channelCredential: INTERNAL_TOKEN,
+        channelThreads,
         resolveLegacyPosition: (event) => db.resolveChannelPosition(event.payload.inboundEventId)
       }
     );
@@ -317,6 +384,7 @@ describe("durable Channel -> PULSO event consumer", () => {
       {
         allowLegacyV1: true,
         channelCredential: INTERNAL_TOKEN,
+        channelThreads,
         resolveLegacyPosition: (event) => db.resolveChannelPosition(event.payload.inboundEventId)
       }
     );

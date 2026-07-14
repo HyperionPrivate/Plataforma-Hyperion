@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "@hyperion/database";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CHANNEL_INBOUND_DURABLE_NAME,
   CHANNEL_INBOUND_EVENT_TYPE,
@@ -31,21 +31,55 @@ const EVENT = {
 } as const;
 
 describe("channel inbound JetStream adapter", () => {
-  it("maps accepted and replayed database outcomes to ack", async () => {
+  const bindThread = vi.fn(async () => undefined);
+  const channelThreads = { getThread: vi.fn(), bindThread };
+
+  beforeEach(() => {
+    bindThread.mockClear();
+    bindThread.mockResolvedValue(undefined);
+  });
+
+  it("maps accepted and replayed database outcomes to ack after Channel bind", async () => {
     for (const status of ["accepted", "replayed"] as const) {
       const receive = receiverReturning(status);
-      await expect(createChannelInboundJetStreamHandler(database(), receive)(EVENT, context())).resolves.toEqual({
+      await expect(
+        createChannelInboundJetStreamHandler(database(), receive, { channelThreads })(EVENT, context())
+      ).resolves.toEqual({
         action: "ack"
       });
+      expect(bindThread).toHaveBeenCalledWith(
+        EVENT.tenantId,
+        EVENT.payload.threadBindingId,
+        expect.objectContaining({
+          patientId: "7698487b-a4f1-4b60-a477-8a721c4583d5",
+          conversationId: "f165b7ef-d842-41e7-80d6-176dfc4cb7fb",
+          externalMessageId: EVENT.payload.externalMessageId,
+          messageId: "45ab619c-4d5e-42ca-b45b-d7935a3d46bd"
+        })
+      );
     }
+  });
+
+  it("retries when Channel bind fails after a successful projection", async () => {
+    bindThread.mockRejectedValueOnce(new Error("thread_binding_not_found"));
+    await expect(
+      createChannelInboundJetStreamHandler(database(), receiverReturning("accepted"), { channelThreads })(
+        EVENT,
+        context()
+      )
+    ).resolves.toEqual({ action: "retry" });
   });
 
   it("maps conflict or strict-envelope failure to term", async () => {
     await expect(
-      createChannelInboundJetStreamHandler(database(), receiverReturning("conflict"))(EVENT, context())
+      createChannelInboundJetStreamHandler(database(), receiverReturning("conflict"), { channelThreads })(
+        EVENT,
+        context()
+      )
     ).resolves.toEqual({ action: "term" });
+    expect(bindThread).not.toHaveBeenCalled();
     await expect(
-      createChannelInboundJetStreamHandler(database(), receiverReturning("accepted"))(
+      createChannelInboundJetStreamHandler(database(), receiverReturning("accepted"), { channelThreads })(
         { ...EVENT, payload: { ...EVENT.payload, unexpected: true } },
         context()
       )
@@ -63,12 +97,15 @@ describe("channel inbound JetStream adapter", () => {
     };
     const receive = receiverReturning("accepted");
 
-    await expect(createChannelInboundJetStreamHandler(database(), receive)(legacy, context())).resolves.toEqual({
+    await expect(
+      createChannelInboundJetStreamHandler(database(), receive, { channelThreads })(legacy, context())
+    ).resolves.toEqual({
       action: "term"
     });
     await expect(
       createChannelInboundJetStreamHandler(database(), receive, {
         allowLegacyV1: true,
+        channelThreads,
         resolveLegacyPosition: async () => ({
           streamId: EVENT.streamId,
           streamSequence: EVENT.streamSequence
@@ -79,13 +116,16 @@ describe("channel inbound JetStream adapter", () => {
 
   it("retries a valid event when PULSO detects a stream gap", async () => {
     await expect(
-      createChannelInboundJetStreamHandler(database(), receiverReturning("gap"))(EVENT, context())
+      createChannelInboundJetStreamHandler(database(), receiverReturning("gap"), { channelThreads })(EVENT, context())
     ).resolves.toEqual({ action: "retry" });
+    expect(bindThread).not.toHaveBeenCalled();
   });
 
   it("maps a transient persistence error to retry", async () => {
     const receive = vi.fn<ChannelInboundReceiver>(async () => Promise.reject(new Error("temporary database failure")));
-    await expect(createChannelInboundJetStreamHandler(database(), receive)(EVENT, context())).resolves.toEqual({
+    await expect(
+      createChannelInboundJetStreamHandler(database(), receive, { channelThreads })(EVENT, context())
+    ).resolves.toEqual({
       action: "retry"
     });
   });

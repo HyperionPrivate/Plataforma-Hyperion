@@ -9,12 +9,14 @@ import type { DatabaseClient } from "@hyperion/database";
 import {
   CHANNEL_INBOUND_EVENT_V1_TYPE,
   CHANNEL_INBOUND_EVENT_V2_TYPE,
+  bindChannelOwnerThread,
   channelInboundEventSchema,
   compatibleChannelInboundEventSchema,
   isLegacyChannelInboundEvent,
   receiveChannelInboundEvent
 } from "./channel-inbound-events.js";
 import type { LegacyChannelPositionResolver } from "./channel-position-client.js";
+import type { ChannelThreadClient } from "./channel-thread-client.js";
 
 export const CHANNEL_INBOUND_EVENT_TYPE = CHANNEL_INBOUND_EVENT_V2_TYPE;
 export const CHANNEL_INBOUND_DURABLE_NAME = "pulso_channel_inbound_v2";
@@ -25,6 +27,7 @@ export type ChannelInboundJetStreamConfiguration = NatsAuthentication & {
   readonly natsUrl: string;
   readonly allowLegacyV1?: boolean;
   readonly resolveLegacyPosition?: LegacyChannelPositionResolver;
+  readonly channelThreads?: ChannelThreadClient;
 };
 
 export interface ManagedJetStreamConsumer {
@@ -45,8 +48,14 @@ export type ChannelInboundReceiver = typeof receiveChannelInboundEvent;
 export function createChannelInboundJetStreamHandler(
   db: DatabaseClient,
   receive: ChannelInboundReceiver = receiveChannelInboundEvent,
-  options: Readonly<{ allowLegacyV1?: boolean; resolveLegacyPosition?: LegacyChannelPositionResolver }> = {}
+  options: Readonly<{
+    allowLegacyV1?: boolean;
+    resolveLegacyPosition?: LegacyChannelPositionResolver;
+    channelThreads?: ChannelThreadClient;
+    logger?: { error: (message: string, fields?: Record<string, unknown>) => void };
+  }> = {}
 ): JetStreamEventHandler {
+  const logger = options.logger ?? { error: () => undefined };
   return async (event) => {
     const schema = options.allowLegacyV1 ? compatibleChannelInboundEventSchema : channelInboundEventSchema;
     const parsed = schema.safeParse(event);
@@ -60,7 +69,9 @@ export function createChannelInboundJetStreamHandler(
         : undefined;
       const result = await receive(db, parsed.data, legacyPosition);
       if (result.status === "gap") return { action: "retry" };
-      return result.status === "conflict" ? { action: "term" } : { action: "ack" };
+      if (result.status === "conflict") return { action: "term" };
+      await bindChannelOwnerThread(options.channelThreads, parsed.data, result.result, logger);
+      return { action: "ack" };
     } catch {
       return { action: "retry" };
     }
@@ -100,7 +111,8 @@ export async function startChannelInboundJetStreamConsumer(
       provisionTopology: false,
       handler: createChannelInboundJetStreamHandler(db, receiveChannelInboundEvent, {
         allowLegacyV1: definition.legacy,
-        resolveLegacyPosition: configuration.resolveLegacyPosition
+        resolveLegacyPosition: configuration.resolveLegacyPosition,
+        channelThreads: configuration.channelThreads
       })
     })
   );
