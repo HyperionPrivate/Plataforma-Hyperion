@@ -64,6 +64,12 @@ idempotente. El `POST` directo de delivery permanece autenticado sólo para comp
 cruzado al runtime Channel. De forma análoga, PULSO y Channel escriben sus auditorías en outboxes propios; sólo
 `hyperion_audit` agrega el ledger y su inbox.
 
+La matriz durable tampoco concede escrituras PULSO a `hyperion_sofia`. El rehearsal del SHA histórico que aún
+escribía SQL abre antes de iniciar workloads una allow-list temporal por columna en `conversations` y `messages`;
+después detiene Agent y Prompt Flow, reconstruye este baseline de lectura y atestigua que no quede escritura,
+propiedad, membresía, secuencia ni rutina cruzada. Ese procedimiento de rollback está detallado en
+[`../PRODUCTION.md`](../PRODUCTION.md) y no forma parte de los grants permanentes.
+
 El trigger histórico que inicializa `pulso_iris.agenda_settings` al crear un
 tenant sigue siendo un acoplamiento pendiente. Para no conceder PULSO a Access,
 la función fija se ejecuta como su propietario de migraciones con `search_path`

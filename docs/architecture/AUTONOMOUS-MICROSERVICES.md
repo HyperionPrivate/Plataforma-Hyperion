@@ -79,12 +79,13 @@ forma concurrente después de separar expansión, backfill y contrato. El fence 
 writers Channel N-1 durante el backfill histórico 023. La migración 021 también se ejecuta en fases autocommit
 recuperables y crea sus índices de forma concurrente. CI resuelve de forma fail-closed las capacidades del SHA base
 mediante `infra/compatibility-policy.json`: usa el descriptor de la propia base cuando existe y sólo admite una
-excepción bootstrap asociada al SHA histórico exacto. Una base `legacy` deja un inbound pre-outbox pendiente, lo
-drena tras el upgrade con compatibilidad temporal y después prueba el flujo v2 actual; una base `current` preserva
-directamente su escritor y sus contratos v2. Al volver a las imágenes base, una revisión pre-durable valida su
-polling original y no se presenta como productora de inbox/outbox inexistentes; una base `current` sí debe completar
-un flujo durable nuevo Channel -> PULSO -> SOFIA. El ensayo verifica ledger, identidades restringidas, liveness,
-readiness, ejecución SOFÍA y outbound según las capacidades declaradas.
+excepción bootstrap asociada al SHA histórico exacto. Channel/outbox, limpieza LUMEN y propiedad SOFÍA → PULSO son
+capacidades independientes; `owner_api_v2` no se infiere de la presencia del outbox. Una base `legacy` deja un
+inbound pre-outbox pendiente, lo drena tras el upgrade con compatibilidad temporal y después prueba el flujo v2
+actual; una base `current` preserva directamente su escritor y sus contratos v2. Al volver a las imágenes base, una
+revisión pre-durable valida su polling original y no se presenta como productora de inbox/outbox inexistentes; una
+base `current` sí debe completar un flujo durable nuevo Channel -> PULSO -> SOFIA. El ensayo verifica ledger,
+identidades restringidas, liveness, readiness, ejecución SOFÍA y outbound según las capacidades declaradas.
 
 Antes de iniciar cualquier workload N-1, CI detiene los runtimes actuales, arranca únicamente PostgreSQL y exige
 que todo `channel.delivery.updated.v1` existente esté `published`; además conserva un fingerprint de sus filas y
@@ -98,6 +99,16 @@ rechaza cualquier otro permiso efectivo de tabla o columna, se revoca en un paso
 cierre falla si queda algún acceso de esquema o DML efectivo. Por tanto, este camino demuestra un rollback acotado
 y supervisado; no convierte
 el binario pre-durable en un servicio autónomo ni autoriza mantenerlo operando después de cerrar la ventana.
+
+La misma base histórica declara por separado `legacy_direct_sql_v1` para SOFÍA. Antes de arrancar workloads, CI
+restaura su baseline de `USAGE` y `SELECT` PULSO y añade sólo `UPDATE(metadata, primary_intent, updated_at)` en
+`conversations`, `INSERT(tenant_id, conversation_id, sender, body, provider, external_message_id, delivery_status,
+metadata)` y `UPDATE(body)` en `messages`. Un control positivo autoriza formas representativas del camino ejercitado
+por el binario exacto y los probes de deriva rechazan propiedad, membresías, escrituras de tabla, columnas DML o
+tablas de lectura adicionales, secuencias, rutinas y grant options.
+El cleanup detiene Agent y Prompt Flow —ambos consumen la identidad SOFÍA— además de Channel y PULSO, cierra y
+atestigua cada ventana aplicable, y conserva los contenedores para diagnóstico antes del teardown. La matriz durable
+continúa sin escrituras cruzadas: el acceso actual usa las rutas autenticadas del propietario PULSO.
 
 Los contratos nuevos de auditoría PULSO/Channel y de entrega Channel → PULSO siguen la misma disciplina. Las
 migraciones 041 y 044 son fases de expansión con checks `NOT VALID`; 042 y 045 construyen los índices únicos de

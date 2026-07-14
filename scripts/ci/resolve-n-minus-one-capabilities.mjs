@@ -4,8 +4,18 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const CHANNEL_VALUES = new Set(["legacy_pre_outbox_v1", "current_v2"]);
-const LUMEN_VALUES = new Set(["legacy_ephemeral_v1", "deterministic_v2"]);
+const CHANNEL_CONTRACTS = new Map([
+  ["legacy_pre_outbox_v1", "legacy"],
+  ["current_v2", "current"]
+]);
+const LUMEN_CONTRACTS = new Map([
+  ["legacy_ephemeral_v1", "legacy"],
+  ["deterministic_v2", "current"]
+]);
+const SOFIA_PULSO_CONTRACTS = new Map([
+  ["legacy_direct_sql_v1", "legacy_sql"],
+  ["owner_api_v2", "owner_api"]
+]);
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
 
 export function resolveNMinusOneCapabilities({ expectedSha, actualSha, currentPolicy, basePolicy }) {
@@ -20,17 +30,23 @@ export function resolveNMinusOneCapabilities({ expectedSha, actualSha, currentPo
     throw new Error("N-1 base has no compatibility descriptor or exact legacy override");
   }
 
+  const channelContract = resolveCapability(CHANNEL_CONTRACTS, capabilities.channelInbound, "channelInbound");
   return {
-    channel_contract: capabilities.channelInbound === "current_v2" ? "current" : "legacy",
-    lumen_contract: capabilities.lumenAudioCleanup === "deterministic_v2" ? "current" : "legacy",
-    channel_v1_compatibility: capabilities.channelInbound === "current_v2" ? "disabled" : "enabled"
+    channel_contract: channelContract,
+    lumen_contract: resolveCapability(LUMEN_CONTRACTS, capabilities.lumenAudioCleanup, "lumenAudioCleanup"),
+    channel_v1_compatibility: channelContract === "current" ? "disabled" : "enabled",
+    sofia_pulso_contract: resolveCapability(
+      SOFIA_PULSO_CONTRACTS,
+      capabilities.sofiaPulsoOwnership,
+      "sofiaPulsoOwnership"
+    )
   };
 }
 
 export function validatePolicy(value) {
   requireObject(value, "compatibility policy");
   requireExactKeys(value, ["schemaVersion", "self", "legacyBaseOverrides"], "compatibility policy");
-  if (value.schemaVersion !== 1) throw new Error("Unsupported compatibility policy schemaVersion");
+  if (value.schemaVersion !== 2) throw new Error("Unsupported compatibility policy schemaVersion");
   const self = validateCapabilities(value.self, "self");
   requireObject(value.legacyBaseOverrides, "legacyBaseOverrides");
 
@@ -39,18 +55,30 @@ export function validatePolicy(value) {
     if (!SHA_PATTERN.test(sha)) throw new Error("Legacy compatibility override key must be an exact commit SHA");
     legacyBaseOverrides[sha] = validateCapabilities(capabilities, `legacyBaseOverrides.${sha}`);
   }
-  return { schemaVersion: 1, self, legacyBaseOverrides };
+  return { schemaVersion: 2, self, legacyBaseOverrides };
 }
 
 function validateCapabilities(value, label) {
   requireObject(value, label);
-  requireExactKeys(value, ["channelInbound", "lumenAudioCleanup"], label);
-  if (!CHANNEL_VALUES.has(value.channelInbound)) throw new Error(`${label}.channelInbound is unsupported`);
-  if (!LUMEN_VALUES.has(value.lumenAudioCleanup)) throw new Error(`${label}.lumenAudioCleanup is unsupported`);
+  requireExactKeys(value, ["channelInbound", "lumenAudioCleanup", "sofiaPulsoOwnership"], label);
+  if (!CHANNEL_CONTRACTS.has(value.channelInbound)) throw new Error(`${label}.channelInbound is unsupported`);
+  if (!LUMEN_CONTRACTS.has(value.lumenAudioCleanup)) {
+    throw new Error(`${label}.lumenAudioCleanup is unsupported`);
+  }
+  if (!SOFIA_PULSO_CONTRACTS.has(value.sofiaPulsoOwnership)) {
+    throw new Error(`${label}.sofiaPulsoOwnership is unsupported`);
+  }
   return {
     channelInbound: value.channelInbound,
-    lumenAudioCleanup: value.lumenAudioCleanup
+    lumenAudioCleanup: value.lumenAudioCleanup,
+    sofiaPulsoOwnership: value.sofiaPulsoOwnership
   };
+}
+
+function resolveCapability(mapping, value, label) {
+  const resolved = mapping.get(value);
+  if (resolved === undefined) throw new Error(`${label} has no fail-closed contract mapping`);
+  return resolved;
 }
 
 function requireObject(value, label) {

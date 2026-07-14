@@ -310,6 +310,8 @@ jobs:
           printf '%s\n' "$resolved" >> "$GITHUB_OUTPUT"
           channel_v1_compatibility=$(awk -F= '$1 == "channel_v1_compatibility" { print $2 }' <<<"$resolved")
           [[ $channel_v1_compatibility == "enabled" || $channel_v1_compatibility == "disabled" ]]
+          sofia_pulso_contract=$(awk -F= '$1 == "sofia_pulso_contract" { print $2 }' <<<"$resolved")
+          [[ $sofia_pulso_contract == "owner_api" || $sofia_pulso_contract == "legacy_sql" ]]
           echo "CHANNEL_INBOUND_V1_COMPATIBILITY=$channel_v1_compatibility" >> "$GITHUB_ENV"
       - name: Validate N-1 Compose model
         shell: bash
@@ -463,10 +465,16 @@ jobs:
             infra/docker-compose.lumen-crash-ci.yml
       - name: Stop current workloads while preserving upgraded PostgreSQL
         shell: bash
-        run: >-
-          docker compose --env-file .env.example -p hyperion-compat-current
-          -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml
-          down --remove-orphans
+        run: |
+          current_compose=(docker compose --env-file .env.example -p hyperion-compat-current
+            -f infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml)
+          "${current_compose[@]}" stop --timeout 75
+          current_postgres_running=$("${current_compose[@]}" ps --status running --quiet postgres)
+          if [[ -n $current_postgres_running ]]; then
+            echo "current PostgreSQL is still running after the compatibility handoff" >&2
+            exit 1
+          fi
       - name: Exercise Channel delivery drain states against PostgreSQL
         shell: bash
         run: |
@@ -490,6 +498,10 @@ jobs:
           "${n1_compose[@]}" config --quiet
           "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
           bash scripts/ci/verify-n-minus-one-sql-window-drift.sh \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+          bash scripts/ci/verify-n-minus-one-sofia-sql-window-drift.sh \
             .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml
@@ -549,6 +561,42 @@ jobs:
             --env "LUMEN_N1_ROLLBACK_EVIDENCE_SHA256=$rollback_evidence" \
             "$current_migrations_image" \
             node packages/migrations/dist/lumen-n-minus-one-compatibility.js open
+      - name: Open bounded PULSO-to-Channel SQL compatibility before N-1 workloads
+        if: ${{ steps.n_minus_one_schema.outputs.traffic_contract == 'legacy' }}
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.n-minus-one-roles-ci.yml)
+          "${n1_compose[@]}" config --quiet
+          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
+          bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh open \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+          bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh verify-open \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+      - name: Open bounded SOFIA-to-PULSO SQL compatibility before N-1 workloads
+        if: ${{ steps.n1_capabilities.outputs.sofia_pulso_contract == 'legacy_sql' }}
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.n-minus-one-roles-ci.yml)
+          "${n1_compose[@]}" config --quiet
+          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
+          bash scripts/ci/n-minus-one-sofia-pulso-sql-window.sh open \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+          bash scripts/ci/n-minus-one-sofia-pulso-sql-window.sh verify-open \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
       - name: Return to N-1 images against the upgraded schema
         shell: bash
         run: |
@@ -563,14 +611,6 @@ jobs:
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml
           if [[ '${{ steps.n_minus_one_schema.outputs.traffic_contract }}' == "legacy" ]]; then
-            bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh open \
-              .env.example hyperion-compat-n1 \
-              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
-              infra/docker-compose.n-minus-one-roles-ci.yml
-            bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh verify-open \
-              .env.example hyperion-compat-n1 \
-              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
-              infra/docker-compose.n-minus-one-roles-ci.yml
             bash scripts/ci/verify-n-minus-one-sofia-traffic.sh .env.example hyperion-compat-n1 \
               .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
               infra/docker-compose.n-minus-one-roles-ci.yml
@@ -604,7 +644,7 @@ jobs:
             .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml
-      - name: Close N-1 SQL window and verify delivery immutability
+      - name: Close N-1 SQL windows and verify delivery immutability
         if: ${{ always() }}
         shell: bash
         run: |
@@ -616,24 +656,65 @@ jobs:
             -f infra/docker-compose.compatibility-ci.yml
             -f infra/docker-compose.n-minus-one-roles-ci.yml)
 
-          # Both projects intentionally share one PostgreSQL volume. An early
-          # failure can skip the normal handoff, so prove the current owner is
-          # fully stopped before N-1 is allowed to mount that volume.
-          "${current_compose[@]}" down --timeout 75 --remove-orphans
-          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
-
-          # Quiesce both the delivery producer/dispatcher and the only runtime that
-          # uses the temporary SQL window before taking final evidence or revoking it.
+          # Stop every workload that can use either temporary identity before
+          # taking evidence or revoking grants. Keep containers for diagnostics.
+          agent_stop_status=0
+          "${n1_compose[@]}" stop --timeout 75 agent-service || agent_stop_status=$?
+          prompt_flow_stop_status=0
+          "${n1_compose[@]}" stop --timeout 75 prompt-flow-service || prompt_flow_stop_status=$?
           channel_stop_status=0
           "${n1_compose[@]}" stop --timeout 75 whatsapp-channel-service || channel_stop_status=$?
           pulso_stop_status=0
           "${n1_compose[@]}" stop --timeout 75 pulso-iris-service || pulso_stop_status=$?
 
+          n1_workload_probe_status=0
+          n1_running_workloads=''
+          for service in agent-service prompt-flow-service whatsapp-channel-service pulso-iris-service; do
+            running_container=$("${n1_compose[@]}" ps --status running --quiet "$service") || \
+              n1_workload_probe_status=$?
+            if [[ -n $running_container ]]; then
+              n1_running_workloads+=" $service"
+            fi
+          done
+          n1_workload_fence_status=$n1_workload_probe_status
+          if [[ -n $n1_running_workloads ]]; then
+            echo "N-1 privileged workloads are still running:$n1_running_workloads" >&2
+            n1_workload_fence_status=1
+          fi
+
+          # Both projects intentionally share one PostgreSQL volume. An early
+          # failure can skip the normal handoff, so fence the current server
+          # before N-1 is allowed to mount that volume.
+          current_stop_status=0
+          "${current_compose[@]}" stop --timeout 75 || current_stop_status=$?
+          current_postgres_probe_status=0
+          current_postgres_running=$("${current_compose[@]}" ps --status running --quiet postgres) || \
+            current_postgres_probe_status=$?
+          current_postgres_fence_status=$current_postgres_probe_status
+          if [[ -n $current_postgres_running ]]; then
+            echo "current PostgreSQL is still running during N-1 security cleanup" >&2
+            current_postgres_fence_status=1
+          fi
+
+          n1_postgres_start_status=0
+          if [[ $current_postgres_fence_status -eq 0 ]]; then
+            "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres || \
+              n1_postgres_start_status=$?
+          else
+            n1_postgres_start_status=1
+          fi
+
           delivery_probe_status=0
-          delivery_snapshot_after=$(bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh \
-            verify-delivery-drained .env.example hyperion-compat-n1 \
-            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
-            infra/docker-compose.n-minus-one-roles-ci.yml) || delivery_probe_status=$?
+          delivery_snapshot_after=''
+          if [[ $n1_workload_fence_status -eq 0 && $n1_postgres_start_status -eq 0 ]]; then
+            delivery_snapshot_after=$(bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh \
+              verify-delivery-drained .env.example hyperion-compat-n1 \
+              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+              infra/docker-compose.n-minus-one-roles-ci.yml) || delivery_probe_status=$?
+          else
+            echo "delivery evidence skipped because workloads or PostgreSQL were not safely fenced" >&2
+            delivery_probe_status=1
+          fi
           delivery_baseline_outcome='${{ steps.n1_delivery_drain.outcome }}'
           expected_delivery_snapshot='${{ steps.n1_delivery_drain.outputs.snapshot }}'
           delivery_evidence_status=0
@@ -647,36 +728,55 @@ jobs:
             echo "N-1 delivery immutability comparison skipped because its baseline outcome was $delivery_baseline_outcome" >&2
           fi
 
-          sql_window_close_status=0
+          channel_sql_window_close_status=0
           bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh close \
             .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
-            infra/docker-compose.n-minus-one-roles-ci.yml || sql_window_close_status=$?
-          sql_window_closed_probe_status=0
+            infra/docker-compose.n-minus-one-roles-ci.yml || channel_sql_window_close_status=$?
+          sofia_sql_window_close_status=0
+          sofia_pulso_contract='${{ steps.n1_capabilities.outputs.sofia_pulso_contract }}'
+          if [[ $sofia_pulso_contract == "legacy_sql" ]]; then
+            bash scripts/ci/n-minus-one-sofia-pulso-sql-window.sh close \
+              .env.example hyperion-compat-n1 \
+              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+              infra/docker-compose.n-minus-one-roles-ci.yml || sofia_sql_window_close_status=$?
+          else
+            echo "SOFIA-to-PULSO SQL close skipped for contract: ${sofia_pulso_contract:-unresolved}"
+          fi
+          channel_sql_window_closed_probe_status=0
           bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh verify-closed \
             .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
-            infra/docker-compose.n-minus-one-roles-ci.yml || sql_window_closed_probe_status=$?
+            infra/docker-compose.n-minus-one-roles-ci.yml || channel_sql_window_closed_probe_status=$?
+          sofia_sql_window_closed_probe_status=0
+          bash scripts/ci/n-minus-one-sofia-pulso-sql-window.sh verify-closed \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml || sofia_sql_window_closed_probe_status=$?
 
-          printf 'N-1 closure statuses: Channel-stop=%s PULSO-stop=%s delivery-probe=%s delivery-evidence=%s baseline=%s SQL-close=%s SQL-closed-probe=%s\n' \
-            "$channel_stop_status" "$pulso_stop_status" "$delivery_probe_status" \
-            "$delivery_evidence_status" "$delivery_baseline_outcome" "$sql_window_close_status" \
-            "$sql_window_closed_probe_status"
-          if [[ $channel_stop_status -ne 0 ]]; then
-            exit "$channel_stop_status"
-          fi
-          if [[ $pulso_stop_status -ne 0 ]]; then
-            exit "$pulso_stop_status"
-          fi
-          if [[ $delivery_evidence_status -ne 0 ]]; then
-            exit "$delivery_evidence_status"
-          fi
-          if [[ $sql_window_close_status -ne 0 ]]; then
-            exit "$sql_window_close_status"
-          fi
-          if [[ $sql_window_closed_probe_status -ne 0 ]]; then
-            exit "$sql_window_closed_probe_status"
-          fi
+          printf 'N-1 closure statuses: Agent-stop=%s Prompt-stop=%s Channel-stop=%s PULSO-stop=%s N1-workload-probe=%s N1-workload-fence=%s current-stop=%s current-Postgres-probe=%s current-Postgres-fence=%s N1-Postgres-start=%s delivery-probe=%s delivery-evidence=%s baseline=%s Channel-SQL-close=%s SOFIA-SQL-contract=%s SOFIA-SQL-close=%s Channel-SQL-closed-probe=%s SOFIA-SQL-closed-probe=%s\n' \
+            "$agent_stop_status" "$prompt_flow_stop_status" "$channel_stop_status" \
+            "$pulso_stop_status" "$n1_workload_probe_status" "$n1_workload_fence_status" \
+            "$current_stop_status" "$current_postgres_probe_status" "$current_postgres_fence_status" \
+            "$n1_postgres_start_status" "$delivery_probe_status" "$delivery_evidence_status" \
+            "$delivery_baseline_outcome" "$channel_sql_window_close_status" "$sofia_pulso_contract" \
+            "$sofia_sql_window_close_status" \
+            "$channel_sql_window_closed_probe_status" "$sofia_sql_window_closed_probe_status"
+
+          overall_status=0
+          for status in \
+            "$agent_stop_status" "$prompt_flow_stop_status" "$channel_stop_status" \
+            "$pulso_stop_status" "$n1_workload_probe_status" "$n1_workload_fence_status" \
+            "$current_stop_status" "$current_postgres_probe_status" \
+            "$current_postgres_fence_status" "$n1_postgres_start_status" \
+            "$delivery_evidence_status" "$channel_sql_window_close_status" \
+            "$sofia_sql_window_close_status" "$channel_sql_window_closed_probe_status" \
+            "$sofia_sql_window_closed_probe_status"; do
+            if [[ $overall_status -eq 0 && $status -ne 0 ]]; then
+              overall_status=$status
+            fi
+          done
+          exit "$overall_status"
       - name: Exercise the declared LUMEN N-1 cleanup contract
         id: verify_lumen_n1_binary
         if: ${{ success() && (steps.n_minus_one_schema.outputs.lumen_contract == 'current' || steps.open_lumen_n1_compatibility.outcome == 'success') }}

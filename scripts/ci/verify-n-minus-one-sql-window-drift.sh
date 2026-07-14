@@ -88,6 +88,9 @@ cleanup_on_exit() {
   verify_status=$?
 
   if (( original_status != 0 )); then
+    if (( artifact_status != 0 || close_status != 0 || verify_status != 0 )); then
+      echo "N-1 SQL-window drift probe also failed to restore and attest the closed state" >&2
+    fi
     exit "$original_status"
   fi
   if (( artifact_status != 0 || close_status != 0 || verify_status != 0 )); then

@@ -351,11 +351,12 @@ antes de que el ledger avance, pero el cutover sigue requiriendo medir locks y d
 representativa.
 
 En cada PR, CI construye todas las imágenes y resuelve de forma fail-closed el contrato del SHA base desde
-`infra/compatibility-policy.json`. Si la base ya contiene el descriptor usa sus capacidades `current_v2` y
-`deterministic_v2`; la única excepción bootstrap está ligada al SHA histórico exacto y declara los contratos
-legacy. Una base legacy deja un inbound pre-outbox pendiente con el binario N-1 detenido; la migración/backfill lo
-convierte en v1, current lo drena con compatibilidad temporal, cierra esa ventana y prueba un inbound v2. Una base
-current conserva el escritor y los contratos v2 sin abrir una ventana legacy.
+`infra/compatibility-policy.json`. Si la base ya contiene el descriptor usa sus capacidades `current_v2`,
+`deterministic_v2` y `owner_api_v2`; la única excepción bootstrap está ligada al SHA histórico exacto y declara
+por separado Channel pre-outbox, audio efímero y acceso SOFÍA → PULSO por SQL heredado. Una base legacy deja un
+inbound pre-outbox pendiente con el binario N-1 detenido; la migración/backfill lo convierte en v1, current lo
+drena con compatibilidad temporal, cierra esa ventana y prueba un inbound v2. Una base current conserva el escritor
+y los contratos v2 sin abrir una ventana legacy.
 
 Después CI vuelve a las imágenes base exactas sobre el mismo volumen. Una base pre-durable valida su polling
 Channel → SOFÍA original y no se presenta como productora de inbox/outbox inexistentes; una base `current_v2`
@@ -378,12 +379,22 @@ pre-durable abre sólo durante su polling la siguiente allow-list para `hyperion
 - `SELECT` en `inbound_events(tenant_id, external_message_id, provider)`;
 - `UPDATE` en `inbound_events(thread_binding_id, message_id, updated_at)`.
 
-El probe rechaza permisos de tabla completa o cualquier columna adicional. Un paso separado con `if: always()`
-detiene primero Channel y PULSO, revoca la ventana de forma idempotente, verifica que no quede `USAGE`, `SELECT`
-ni ningún otro privilegio DML efectivo en `channel_runtime`, y compara el fingerprint para demostrar que N-1 no
-cambió eventos de delivery actuales. Como el polling histórico necesita esa excepción, el cierre termina también su capacidad
-operativa: el ensayo certifica un rollback temporal y supervisado, no un estado N-1 autónomo que pueda mantenerse
-indefinidamente.
+El probe de Channel rechaza permisos de tabla completa o cualquier columna adicional. También antes de iniciar
+workloads, una base `legacy_direct_sql_v1` reconstruye el baseline de lectura de
+`hyperion_sofia` y abre únicamente `UPDATE(metadata, primary_intent, updated_at)` en `conversations`, más
+`INSERT(tenant_id, conversation_id, sender, body, provider, external_message_id, delivery_status, metadata)` y
+`UPDATE(body)` en `messages`. El verificador rechaza propiedad de objetos PULSO, membresías, grant options,
+escrituras de tabla completa, columnas DML adicionales, lectura de otras tablas, secuencias y rutinas; además
+autoriza formas representativas de las sentencias ejercitadas del binario histórico dentro de una transacción sin
+filas.
+
+El paso separado con `if: always()` detiene primero Agent, Prompt Flow, Channel y PULSO, conserva sus contenedores
+para diagnóstico, compara el fingerprint de delivery, cierra cada ventana aplicable de forma idempotente y verifica
+el estado cerrado aunque una apertura haya quedado incompleta. En `channel_runtime` no puede quedar ningún acceso de
+`hyperion_pulso`; en `pulso_iris`, `hyperion_sofia` vuelve exactamente a `USAGE` y a los tres `SELECT` transitorios
+del baseline vigente de la matriz 024, sin escrituras. Como los binarios históricos necesitan esas excepciones, el
+cierre termina también su capacidad operativa: el ensayo certifica un rollback temporal y supervisado, no un estado
+N-1 autónomo que pueda mantenerse indefinidamente.
 
 El rehearsal es deliberadamente HTTP: no prueba un mensaje JetStream pendiente creado por N-1 y el overlay sigue
 siendo un piloto separado. Tampoco demuestra compatibilidad universal: antes de producción se debe ensayar una
