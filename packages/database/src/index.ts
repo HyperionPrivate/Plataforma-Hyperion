@@ -3,6 +3,14 @@ import type { PoolClient, QueryResult, QueryResultRow } from "pg";
 
 const { Pool } = pg;
 
+// Runtime services must finish or release work inside the 65s coordinated
+// shutdown budget. Schema migrations use their own administrative client and
+// explicit per-migration budgets, so these limits only constrain application
+// queries and lock waits.
+const APPLICATION_LOCK_TIMEOUT_MS = 5_000;
+const APPLICATION_STATEMENT_TIMEOUT_MS = 10_000;
+const APPLICATION_QUERY_TIMEOUT_MS = 12_000;
+
 export interface DatabaseExecutor {
   query<T extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<QueryResult<T>>;
 }
@@ -31,7 +39,10 @@ export function createDatabase(connectionString: string): DatabaseClient {
     connectionString,
     max: 10,
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000
+    connectionTimeoutMillis: 5_000,
+    lock_timeout: APPLICATION_LOCK_TIMEOUT_MS,
+    statement_timeout: APPLICATION_STATEMENT_TIMEOUT_MS,
+    query_timeout: APPLICATION_QUERY_TIMEOUT_MS
   });
 
   return {

@@ -19,6 +19,12 @@ export interface ClaimedOutboxEvent<TPayload = JsonValue> {
   readonly version: number;
   readonly occurredAt: string;
   readonly tenantId: string | null;
+  /**
+   * Optional for event contracts that do not promise aggregate ordering. Ordered
+   * contracts must provide both values and consumers must require them.
+   */
+  readonly streamId?: string;
+  readonly streamSequence?: number;
   readonly payload: TPayload;
   readonly destination: string;
 }
@@ -29,6 +35,8 @@ export interface OutboxEventEnvelope<TPayload = JsonValue> {
   readonly version: number;
   readonly occurredAt: string;
   readonly tenantId: string | null;
+  readonly streamId?: string;
+  readonly streamSequence?: number;
   readonly payload: TPayload;
 }
 
@@ -96,7 +104,10 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
   readonly #fetch: HttpOutboxFetch;
 
   #activeDrain: Promise<HttpOutboxDrainResult> | undefined;
+  #activeRequestController: AbortController | undefined;
   #interval: ReturnType<typeof setInterval> | undefined;
+  #stopPromise: Promise<void> | undefined;
+  #stopping = false;
 
   constructor(options: HttpOutboxDispatcherOptions<TPayload>) {
     if (!options || typeof options !== "object") {
@@ -128,7 +139,7 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
 
   /** Starts one immediate drain and a non-blocking periodic timer. Calling start twice is a no-op. */
   start(): void {
-    if (this.#interval !== undefined) {
+    if (this.#interval !== undefined || this.#stopping) {
       return;
     }
 
@@ -140,13 +151,16 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
   }
 
   /** Stops future drains and waits for a drain that is already in flight. */
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.#stopPromise !== undefined) return this.#stopPromise;
+    this.#stopping = true;
     if (this.#interval !== undefined) {
       clearInterval(this.#interval);
       this.#interval = undefined;
     }
-
-    await this.#activeDrain;
+    this.#activeRequestController?.abort();
+    this.#stopPromise = Promise.resolve(this.#activeDrain).then(() => undefined);
+    return this.#stopPromise;
   }
 
   /**
@@ -154,6 +168,9 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
    * claim or deliver the same batch twice through this dispatcher instance.
    */
   drainOnce(): Promise<HttpOutboxDrainResult> {
+    if (this.#stopping) {
+      return Promise.resolve(mutableDrainResult(this.workerId));
+    }
     if (this.#activeDrain !== undefined) {
       return this.#activeDrain;
     }
@@ -194,7 +211,11 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
     }
 
     const seenIds = new Set<string>();
-    for (const event of boundedEvents) {
+    for (const [index, event] of boundedEvents.entries()) {
+      if (this.#stopping) {
+        result.skipped += boundedEvents.length - index;
+        break;
+      }
       let eventId = "";
       try {
         eventId = typeof event?.id === "string" ? event.id : "";
@@ -251,6 +272,7 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
         version: event.version,
         occurredAt: event.occurredAt,
         tenantId: event.tenantId,
+        ...(event.streamId === undefined ? {} : { streamId: event.streamId, streamSequence: event.streamSequence }),
         payload: event.payload
       };
       body = JSON.stringify(envelope);
@@ -281,6 +303,8 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
 
   async #request(event: ClaimedOutboxEvent<TPayload>, body: string): Promise<RequestOutcome | TimeoutOutcome> {
     const controller = new AbortController();
+    this.#activeRequestController = controller;
+    if (this.#stopping) controller.abort();
     const request: Promise<RequestOutcome> = Promise.resolve()
       .then(() =>
         this.#fetch(event.destination, {
@@ -314,6 +338,9 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
     try {
       return await Promise.race([request, timeout]);
     } finally {
+      if (this.#activeRequestController === controller) {
+        this.#activeRequestController = undefined;
+      }
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle);
       }
@@ -394,7 +421,22 @@ function validateEvent<TPayload>(event: ClaimedOutboxEvent<TPayload>): HttpOutbo
   if (event.tenantId !== null && (typeof event.tenantId !== "string" || event.tenantId.length === 0)) {
     return "invalid_event";
   }
+  if (!isValidStreamPosition(event.streamId, event.streamSequence)) {
+    return "invalid_event";
+  }
   return undefined;
+}
+
+function isValidStreamPosition(streamId: unknown, streamSequence: unknown): boolean {
+  if (streamId === undefined && streamSequence === undefined) {
+    return true;
+  }
+  return (
+    isSafeHeaderValue(streamId) &&
+    typeof streamSequence === "number" &&
+    Number.isSafeInteger(streamSequence) &&
+    streamSequence > 0
+  );
 }
 
 function isSafeHeaderValue(value: unknown): value is string {

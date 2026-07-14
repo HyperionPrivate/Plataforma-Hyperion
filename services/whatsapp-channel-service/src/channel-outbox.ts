@@ -6,6 +6,8 @@ export interface ChannelOutboxDelivery {
   type: string;
   version: number;
   occurredAt: string;
+  streamId?: string;
+  streamSequence?: number;
   payload: Record<string, unknown>;
   destination: string;
 }
@@ -16,6 +18,8 @@ interface ClaimedOutboxRow {
   eventType: string;
   eventVersion: number;
   occurredAt: Date;
+  streamId: string;
+  streamSequence: string | number;
   payload: Record<string, unknown>;
 }
 
@@ -38,14 +42,16 @@ export class PostgresChannelOutbox {
     this.destination = `${pulsoIrisUrl.replace(/\/$/, "")}/internal/v1/events/channel-inbound`;
   }
 
-  async claim(limit: number): Promise<ChannelOutboxDelivery[]> {
+  async claim(limit: number, tenantScope?: string): Promise<ChannelOutboxDelivery[]> {
     const boundedLimit = Math.max(1, Math.min(20, Math.trunc(limit)));
+    const scopedTenantId = tenantScope?.trim() || null;
     const result = await this.db.query<ClaimedOutboxRow>(
       `with terminalized as (
          update channel_runtime.outbox_events event
          set status = 'dead_letter', locked_at = null, locked_by = null,
              last_error_code = coalesce(event.last_error_code, 'lease_attempts_exhausted'), updated_at = now()
          where status = 'processing'
+           and ($3::uuid is null or event.tenant_id = $3::uuid)
            and locked_at < now() - interval '2 minutes'
            and attempt_count >= max_attempts
          returning event.id, event.tenant_id, event.aggregate_id, event.aggregate_type,
@@ -73,15 +79,26 @@ export class PostgresChannelOutbox {
            and source.tenant_id = event.tenant_id
            and source.id = event.aggregate_id
        ), candidates as (
-         select id
-         from channel_runtime.outbox_events
+         select candidate.id
+         from channel_runtime.outbox_events candidate
          where (
-             status in ('queued', 'retry_scheduled')
-             or (status = 'processing' and locked_at < now() - interval '2 minutes')
+             candidate.status in ('queued', 'retry_scheduled')
+             or (candidate.status = 'processing' and candidate.locked_at < now() - interval '2 minutes')
            )
-           and next_attempt_at <= now()
-           and attempt_count < max_attempts
-         order by next_attempt_at, created_at
+           and ($3::uuid is null or candidate.tenant_id = $3::uuid)
+           and candidate.next_attempt_at <= now()
+           and candidate.attempt_count < candidate.max_attempts
+           and candidate.stream_id is not null
+           and candidate.stream_sequence is not null
+           and not exists (
+             select 1
+             from channel_runtime.outbox_events predecessor
+             where predecessor.tenant_id = candidate.tenant_id
+               and predecessor.stream_id = candidate.stream_id
+               and predecessor.stream_sequence < candidate.stream_sequence
+               and predecessor.status <> 'published'
+           )
+         order by candidate.next_attempt_at, candidate.created_at, candidate.stream_sequence
          for update skip locked
          limit $2
        )
@@ -91,19 +108,24 @@ export class PostgresChannelOutbox {
        from candidates
        where event.id = candidates.id
        returning event.id, event.tenant_id as "tenantId", event.event_type as "eventType",
-                 event.event_version as "eventVersion", event.occurred_at as "occurredAt", event.payload`,
-      [this.workerId, boundedLimit]
+                 event.event_version as "eventVersion", event.occurred_at as "occurredAt",
+                 event.stream_id as "streamId", event.stream_sequence as "streamSequence", event.payload`,
+      [this.workerId, boundedLimit, scopedTenantId]
     );
 
-    return result.rows.map((row) => ({
-      id: row.id,
-      tenantId: row.tenantId,
-      type: row.eventType,
-      version: row.eventVersion,
-      occurredAt: row.occurredAt.toISOString(),
-      payload: row.payload,
-      destination: this.destination
-    }));
+    return result.rows.map((row) => {
+      const streamSequence = requirePositiveSequence(row.streamSequence);
+      return {
+        id: row.id,
+        tenantId: row.tenantId,
+        type: row.eventType,
+        version: row.eventVersion,
+        occurredAt: row.occurredAt.toISOString(),
+        ...(row.eventType === "channel.inbound.received.v2" ? { streamId: row.streamId, streamSequence } : {}),
+        payload: row.payload,
+        destination: this.destination
+      };
+    });
   }
 
   async complete(eventId: string): Promise<void> {
@@ -190,4 +212,12 @@ function sanitizeErrorCode(value: string): string {
     .replace(/[^a-z0-9_]/g, "_")
     .slice(0, 64);
   return sanitized || "delivery_failed";
+}
+
+function requirePositiveSequence(value: string | number): number {
+  const sequence = typeof value === "string" ? Number(value) : value;
+  if (!Number.isSafeInteger(sequence) || sequence <= 0) {
+    throw new Error("Claimed Channel outbox event has an invalid stream sequence");
+  }
+  return sequence;
 }

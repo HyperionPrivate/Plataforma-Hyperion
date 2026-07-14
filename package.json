@@ -9,7 +9,7 @@
   },
   "scripts": {
     "architecture:check": "node scripts/architecture/check-boundaries.mjs",
-    "architecture:test": "node --test scripts/architecture/check-boundaries.test.mjs scripts/architecture/check-compose-identities.test.mjs",
+    "architecture:test": "node --test scripts/architecture/check-boundaries.test.mjs scripts/architecture/check-compose-identities.test.mjs scripts/ci/resolve-n-minus-one-capabilities.test.mjs",
     "autonomy:e2e": "node scripts/autonomy/real-flow.e2e.mjs",
     "autonomy:e2e:local": "pnpm build && pnpm autonomy:e2e",
     "compose:check": "node scripts/architecture/check-compose-identities.mjs",
@@ -17,6 +17,7 @@
     "build": "pnpm -r build",
     "check": "pnpm architecture:test && pnpm architecture:check && pnpm compose:check && pnpm lint && pnpm backup:test && pnpm build && pnpm -r test",
     "db:migrate": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/index.js",
+    "db:lumen:n1-compat": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/lumen-n-minus-one-compatibility.js",
     "db:seed:demo": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-demo.js",
     "db:seed:demo:clear": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-demo.js --clear",
     "db:seed:lumen-demo": "pnpm --filter @hyperion/migrations build && node packages/migrations/dist/seed-lumen-demo.js",

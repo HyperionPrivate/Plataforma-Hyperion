@@ -36,7 +36,7 @@ describeIntegration("JetStream rolling topology upgrade", () => {
       });
 
       const result = await provisionHyperionJetStreamTopology(adapter);
-      expect(result.consumers).toHaveLength(8);
+      expect(result.consumers).toHaveLength(10);
       for (const definition of HYPERION_KNOWN_CONSUMERS) {
         await expect(adapter.getConsumer(HYPERION_EVENTS_STREAM, definition.durableName)).resolves.toBeDefined();
       }

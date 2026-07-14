@@ -1,10 +1,12 @@
 import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { TemporaryAudioError, withTemporaryAudioFile, type TemporaryAudioCleanupState } from "./temporary-audio.js";
 
 const cleanupDirectories: string[] = [];
+const CLEANUP_OWNER = "lumen-test-1";
 
 afterEach(async () => {
   await Promise.all(cleanupDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -25,7 +27,7 @@ describe("private temporary audio", () => {
 
     const result = await withTemporaryAudioFile(
       audio,
-      { rootDirectory: root, extension: "webm", cleanupState },
+      { rootDirectory: root, extension: "webm", cleanupOwner: CLEANUP_OWNER, cleanupKey: randomUUID(), cleanupState },
       async (file) => {
         stagedPath = file.path;
         expect(file.fileName).toBe("audio.webm");
@@ -54,7 +56,7 @@ describe("private temporary audio", () => {
     await expect(
       withTemporaryAudioFile(
         Buffer.from("audio"),
-        { rootDirectory: root, extension: "ogg", cleanupState },
+        { rootDirectory: root, extension: "ogg", cleanupOwner: CLEANUP_OWNER, cleanupKey: randomUUID(), cleanupState },
         async () => {
           throw providerFailure;
         }
@@ -69,7 +71,11 @@ describe("private temporary audio", () => {
     const { root } = await newRoot();
 
     await expect(
-      withTemporaryAudioFile(Buffer.from("audio"), { rootDirectory: root, extension: "../wav" }, async () => undefined)
+      withTemporaryAudioFile(
+        Buffer.from("audio"),
+        { rootDirectory: root, extension: "../wav", cleanupOwner: CLEANUP_OWNER, cleanupKey: randomUUID() },
+        async () => undefined
+      )
     ).rejects.toMatchObject({ name: "TemporaryAudioError", operation: "create" });
     await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -82,7 +88,13 @@ describe("private temporary audio", () => {
 
     const error = await withTemporaryAudioFile(
       Buffer.from("sensitive audio bytes"),
-      { rootDirectory: occupiedPath, extension: "wav", cleanupState },
+      {
+        rootDirectory: occupiedPath,
+        extension: "wav",
+        cleanupOwner: CLEANUP_OWNER,
+        cleanupKey: randomUUID(),
+        cleanupState
+      },
       async () => undefined
     ).catch((caught: unknown) => caught);
 
@@ -90,5 +102,33 @@ describe("private temporary audio", () => {
     expect(error).toMatchObject({ name: "TemporaryAudioError", operation: "create" });
     expect(String(error)).not.toContain("sensitive audio bytes");
     expect(cleanupState.deleted).toBe(true);
+  });
+
+  it("keeps the deterministic attempt directory pending when deletion fails", async () => {
+    const { root } = await newRoot();
+    const attemptId = randomUUID();
+    const cleanupState: TemporaryAudioCleanupState = { deleted: null };
+    let stagedDirectory = "";
+
+    const error = await withTemporaryAudioFile(
+      Buffer.from("audio"),
+      {
+        rootDirectory: root,
+        extension: "wav",
+        cleanupOwner: CLEANUP_OWNER,
+        cleanupKey: attemptId,
+        cleanupState,
+        removeDirectory: async (path) => {
+          stagedDirectory = path;
+          throw new Error("simulated deletion failure");
+        }
+      },
+      async () => "provider-result"
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ name: "TemporaryAudioError", operation: "cleanup" });
+    expect(cleanupState.deleted).toBe(false);
+    expect(stagedDirectory).toContain(`attempt-${attemptId}`);
+    expect((await stat(stagedDirectory)).isDirectory()).toBe(true);
   });
 });

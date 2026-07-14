@@ -15,6 +15,8 @@ const EVENT: ClaimedOutboxEvent = {
   version: 1,
   occurredAt: "2026-07-13T15:00:00.000Z",
   tenantId: "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c",
+  streamId: "0790ebc5-9058-4dcb-8be0-5e3e85858738",
+  streamSequence: 7,
   payload: { conversationId: "controlled-conversation", body: "controlled-message" },
   destination: "http://pulso-iris-service:3000/internal/events"
 };
@@ -69,6 +71,8 @@ describe("HttpOutboxDispatcher", () => {
       version: EVENT.version,
       occurredAt: EVENT.occurredAt,
       tenantId: EVENT.tenantId,
+      streamId: EVENT.streamId,
+      streamSequence: EVENT.streamSequence,
       payload: EVENT.payload
     });
     expect(complete).toHaveBeenCalledWith(EVENT.id);
@@ -194,6 +198,22 @@ describe("HttpOutboxDispatcher", () => {
       fetch,
       fail
     });
+
+    await dispatcher.drainOnce();
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(fail).toHaveBeenCalledWith(EVENT.id, "invalid_event");
+  });
+
+  it.each([
+    { streamId: EVENT.streamId, streamSequence: undefined },
+    { streamId: undefined, streamSequence: EVENT.streamSequence },
+    { streamId: EVENT.streamId, streamSequence: 0 },
+    { streamId: "stream\r\ninjected", streamSequence: 1 }
+  ])("rejects an incomplete or invalid ordered stream position %o", async (position) => {
+    const fail = vi.fn(async () => undefined);
+    const fetch = vi.fn(async () => new Response(null, { status: 200 }));
+    const dispatcher = createDispatcher({ claim: async () => [{ ...EVENT, ...position }], fetch, fail });
 
     await dispatcher.drainOnce();
 
@@ -338,6 +358,31 @@ describe("HttpOutboxDispatcher", () => {
     releaseRequest(new Response(null, { status: 200 }));
     await vi.runOnlyPendingTimersAsync();
     await dispatcher.stop();
+  });
+
+  it("aborts the active request and leaves the remainder of a claimed batch for lease recovery on stop", async () => {
+    const secondEvent = { ...EVENT, id: "event-2" };
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+            once: true
+          });
+        })
+    );
+    const fail = vi.fn(async () => undefined);
+    const dispatcher = createDispatcher({ claim: async () => [EVENT, secondEvent], fetch, fail, batchSize: 2 });
+
+    const draining = dispatcher.drainOnce();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    const stopping = dispatcher.stop();
+    const result = await draining;
+    await stopping;
+
+    expect(result).toMatchObject({ claimed: 2, failed: 1, skipped: 1 });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fail).toHaveBeenCalledWith(EVENT.id, "network_error");
+    await expect(dispatcher.drainOnce()).resolves.toMatchObject({ claimed: 0 });
   });
 
   it.each([

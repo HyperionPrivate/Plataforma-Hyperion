@@ -2,7 +2,12 @@ import type { LumenClinicalRecordContent, LumenFieldEvidenceOrigin } from "@hype
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  acquireAudioCleanupOwnerLease,
+  reconcilePendingAudioCleanup,
+  type AudioCleanupLease
+} from "./audio-cleanup-recovery.js";
 import type { ClinicalStructurer } from "./clinical-ai.js";
 import { SpeechToTextError } from "./provider-errors.js";
 import { processingResultSnapshotSha256 } from "./processing-attempts.js";
@@ -141,7 +146,11 @@ describeIntegration("LUMEN clinical vertical", () => {
       serviceName: "lumen-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) =>
-        registerLumenRoutes(serviceApp, context, { transcriber, structurer })
+        registerLumenRoutes(serviceApp, context, {
+          transcriber,
+          structurer,
+          audioCleanupOwner: "lumen-integration-1"
+        })
     });
     app = handle.app;
   });
@@ -357,6 +366,96 @@ describeIntegration("LUMEN clinical vertical", () => {
       });
       expect(retry.statusCode).toBe(201);
       expect(transcriptionCallCount).toBe(callsBefore + 2);
+    } finally {
+      nextTranscriptionError = undefined;
+    }
+  });
+
+  it("holds an rm failure in cleanup_pending and terminalizes it only after a successful retry", async () => {
+    const fixture = await createFixture(tenantA, "STT-CLEANUP-RETRY");
+    const idempotencyKey = randomUUID();
+    const payload = {
+      audioBase64: validWebmAudioBase64(0x35),
+      mimeType: "audio/webm",
+      source: "authorized_upload",
+      durationSeconds: 4,
+      idempotencyKey
+    };
+    nextTranscriptionError = new SpeechToTextError("temporary_storage", "Private temporary audio handling failed", {
+      provider: "test-stt",
+      retryable: true,
+      temporaryAudioDeleted: false
+    });
+
+    try {
+      const failed = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+        headers: { "x-operator-role": "advisor", "x-operator-id": operatorId },
+        payload
+      });
+      expect(failed.statusCode).toBe(502);
+
+      const pending = await client.query(
+        `select id, status, cleanup_owner, cleanup_target_status, error_code, temp_audio_deleted_at
+         from lumen.processing_attempts
+         where tenant_id = $1 and encounter_id = $2 and idempotency_key = $3`,
+        [tenantA, fixture.encounterId, idempotencyKey]
+      );
+      expect(pending.rows[0]).toMatchObject({
+        status: "cleanup_pending",
+        cleanup_owner: "lumen-integration-1",
+        cleanup_target_status: "failed",
+        error_code: "temporary_storage",
+        temp_audio_deleted_at: null
+      });
+
+      const repeated = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+        headers: { "x-operator-role": "advisor", "x-operator-id": operatorId },
+        payload
+      });
+      expect(repeated.statusCode).toBe(409);
+      expect(repeated.headers["retry-after"]).toBe("5");
+
+      const removeDirectory = vi.fn(async () => undefined);
+      const cleanupLease: AudioCleanupLease = {
+        owner: "lumen-integration-1",
+        holderId: randomUUID(),
+        ttlMs: 30 * 60_000
+      };
+      await expect(acquireAudioCleanupOwnerLease(client, cleanupLease)).resolves.toBe(true);
+      await expect(
+        reconcilePendingAudioCleanup(
+          client,
+          {
+            owner: "lumen-integration-1",
+            rootDirectory: "C:/deterministic-test-root",
+            batchSize: 25
+          },
+          cleanupLease,
+          { removeDirectory }
+        )
+      ).resolves.toEqual({ attempted: 1, completed: 1, failed: 0 });
+      expect(removeDirectory).toHaveBeenCalledWith(expect.stringContaining(`attempt-${pending.rows[0].id}`));
+
+      const terminal = await client.query(
+        `select status, cleanup_target_status, error_code, temp_audio_deleted_at
+         from lumen.processing_attempts where id = $1`,
+        [pending.rows[0].id]
+      );
+      expect(terminal.rows[0]).toMatchObject({
+        status: "failed",
+        cleanup_target_status: null,
+        error_code: "temporary_storage"
+      });
+      expect(terminal.rows[0].temp_audio_deleted_at).toBeTruthy();
+      await client.query(
+        `delete from lumen.audio_cleanup_owner_leases
+          where cleanup_owner = $1 and holder_id = $2::uuid`,
+        [cleanupLease.owner, cleanupLease.holderId]
+      );
     } finally {
       nextTranscriptionError = undefined;
     }
@@ -1032,9 +1131,9 @@ async function createCompletedAudioDictation(
   const attempt = await client.query(
     `insert into lumen.processing_attempts
        (tenant_id, encounter_id, operation, idempotency_key, input_sha256,
-        provider, model, mime_type, source, duration_seconds)
+        provider, model, mime_type, source, duration_seconds, cleanup_protocol, cleanup_owner)
      values ($1, $2, 'transcription', $3, $4, 'test-stt', 'test-stt-v1',
-             'audio/webm', 'browser_microphone', 8)
+             'audio/webm', 'browser_microphone', 8, 'deterministic_v2', 'lumen-integration-1')
      returning id`,
     [tenantId, encounterId, randomUUID(), sha256ForTest(`fixture-audio:${transcript}`)]
   );

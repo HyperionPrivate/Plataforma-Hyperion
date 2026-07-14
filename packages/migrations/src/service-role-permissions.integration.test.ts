@@ -9,6 +9,7 @@ import {
   type ServiceDatabaseRole,
   type ServiceRolePasswords
 } from "./bootstrap-roles.js";
+import { readNonTransactionalStatements } from "./runner.js";
 
 const { Client } = pg;
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -34,7 +35,7 @@ describeIntegration("PostgreSQL service role isolation", () => {
          ) as applied`
       );
       if (!applied.rows[0]?.applied) {
-        throw new Error("024-service-database-roles.sql must be applied after role bootstrap");
+        throw new Error("024-service-database-roles.sql must be applied before role bootstrap");
       }
     } finally {
       await admin.end();
@@ -78,11 +79,106 @@ describeIntegration("PostgreSQL service role isolation", () => {
         `select count(*)::int as count
            from pg_auth_members membership
            join pg_roles member_role on member_role.oid = membership.member
-          where member_role.rolname = any($1::text[])`,
+           join pg_roles granted_role on granted_role.oid = membership.roleid
+          where member_role.rolname = any($1::text[])
+             or granted_role.rolname = any($1::text[])`,
         [SERVICE_DATABASE_ROLES.map((definition) => definition.role)]
       );
       expect(memberships.rows[0]?.count).toBe(0);
     });
+  });
+
+  it("reapplies the least-privilege matrix on every credential rotation", async () => {
+    await withAdmin(async (admin) => {
+      await admin.query("grant select on table platform.tenants to hyperion_lumen");
+      const drifted = await admin.query<{ allowed: boolean }>(
+        `select has_table_privilege('hyperion_lumen', 'platform.tenants', 'SELECT') as allowed`
+      );
+      expect(drifted.rows[0]?.allowed).toBe(true);
+    });
+
+    await bootstrapDatabaseRoles(TEST_DATABASE_URL ?? "", passwords as ServiceRolePasswords);
+
+    await withAdmin(async (admin) => {
+      const repaired = await admin.query<{ allowed: boolean }>(
+        `select has_table_privilege('hyperion_lumen', 'platform.tenants', 'SELECT') as allowed`
+      );
+      expect(repaired.rows[0]?.allowed).toBe(false);
+    });
+  });
+
+  it("rejects a role that can impersonate a service identity", async () => {
+    const probeRole = `role_probe_${randomUUID().replaceAll("-", "")}`;
+    await withAdmin(async (admin) => {
+      await admin.query(`create role "${probeRole}" nologin`);
+      await admin.query(`grant hyperion_lumen to "${probeRole}"`);
+    });
+
+    try {
+      await expect(bootstrapDatabaseRoles(TEST_DATABASE_URL ?? "", passwords as ServiceRolePasswords)).rejects.toThrow(
+        "unsafe role privilege matrix"
+      );
+
+      await withAdmin(async (admin) => {
+        const state = await admin.query<{ loginCount: number }>(
+          `select count(*) filter (where rolcanlogin)::int as "loginCount"
+             from pg_roles
+            where rolname = any($1::text[])`,
+          [SERVICE_DATABASE_ROLES.map((definition) => definition.role)]
+        );
+        expect(state.rows[0]?.loginCount).toBe(0);
+      });
+    } finally {
+      await withAdmin(async (admin) => {
+        await admin.query(`revoke hyperion_lumen from "${probeRole}"`);
+        await admin.query(`drop role "${probeRole}"`);
+      });
+      await bootstrapDatabaseRoles(TEST_DATABASE_URL ?? "", passwords as ServiceRolePasswords);
+    }
+  });
+
+  it("fails the NOLOGIN migration fence while a service session is still active", async () => {
+    await withRole("hyperion_lumen", async () => {
+      await withAdmin(async (admin) => {
+        const fence = await readFile(
+          fileURLToPath(new URL("../sql/020-service-role-nologin-fence.sql", import.meta.url)),
+          "utf8"
+        );
+        const statements = readNonTransactionalStatements(fence);
+        expect(statements).toHaveLength(2);
+        await admin.query(statements[0]!);
+        await expect(admin.query(statements[1]!)).rejects.toThrow("drain all Hyperion service database sessions");
+
+        const loginState = await admin.query<{ canLogin: boolean }>(
+          `select rolcanlogin as "canLogin" from pg_roles where rolname = 'hyperion_lumen'`
+        );
+        expect(loginState.rows[0]?.canLogin).toBe(false);
+      });
+    });
+
+    await bootstrapDatabaseRoles(TEST_DATABASE_URL ?? "", passwords as ServiceRolePasswords);
+  });
+
+  it("fences every role and refuses credential rotation until old service sessions drain", async () => {
+    await withRole("hyperion_lumen", async () => {
+      await expect(bootstrapDatabaseRoles(TEST_DATABASE_URL ?? "", passwords as ServiceRolePasswords)).rejects.toThrow(
+        "requires all service sessions to be drained"
+      );
+
+      await withAdmin(async (admin) => {
+        const state = await admin.query<{ loginCount: number }>(
+          `select count(*) filter (where rolcanlogin)::int as "loginCount"
+             from pg_roles
+            where rolname = any($1::text[])`,
+          [SERVICE_DATABASE_ROLES.map((definition) => definition.role)]
+        );
+        expect(state.rows[0]?.loginCount).toBe(0);
+      });
+    });
+
+    // Once the old connection is gone, the same all-or-nothing activation can
+    // safely restore service availability for the remaining permission tests.
+    await bootstrapDatabaseRoles(TEST_DATABASE_URL ?? "", passwords as ServiceRolePasswords);
   });
 
   it("runs a representative real query in every service database context", async () => {
@@ -100,6 +196,8 @@ describeIntegration("PostgreSQL service role isolation", () => {
         queries: [
           "select count(*) from platform.agents",
           "select count(*) from agent_runtime.jobs",
+          "select count(*) from agent_runtime.pulso_stream_positions",
+          "select count(*) from agent_runtime.job_stream_positions",
           "select count(*) from pulso_iris.messages",
           "select count(*) from channel_runtime.outbound_messages",
           "select count(*) from agent_runtime.claim_next_job('role-permission-test')"
@@ -132,6 +230,8 @@ describeIntegration("PostgreSQL service role isolation", () => {
           "select count(*) from pulso_iris.sites",
           "select count(*) from platform.audit_events",
           "select count(*) from channel_runtime.thread_bindings",
+          "select count(*) from pulso_iris.outbox_stream_positions",
+          "select count(*) from pulso_iris.outbox_event_positions",
           "select count(*) from platform.schema_migrations"
         ]
       },
@@ -149,7 +249,8 @@ describeIntegration("PostgreSQL service role isolation", () => {
         queries: [
           "select current_version from lumen.schema_version where service_name = 'lumen'",
           "select count(*) from lumen.encounters",
-          "select count(*) from lumen.inbox_events"
+          "select count(*) from lumen.inbox_events",
+          "select count(*) from lumen.audio_cleanup_owner_leases"
         ]
       }
     ];
@@ -230,6 +331,34 @@ describeIntegration("PostgreSQL service role isolation", () => {
                 ) as "canExecute"`
       );
       expect(publicExecute.rows[0]?.canExecute).toBe(false);
+
+      const compatibilityExecute = await admin.query<{
+        pulsoInboxResolver: boolean;
+        pulsoOutboxResolver: boolean;
+        sofiaInboxResolver: boolean;
+      }>(
+        `select
+           has_function_privilege(
+             'hyperion_pulso',
+             'pulso_iris.resolve_legacy_channel_inbox_position()',
+             'EXECUTE'
+           ) as "pulsoInboxResolver",
+           has_function_privilege(
+             'hyperion_pulso',
+             'pulso_iris.prepare_legacy_message_source_position()',
+             'EXECUTE'
+           ) as "pulsoOutboxResolver",
+           has_function_privilege(
+             'hyperion_sofia',
+             'agent_runtime.resolve_legacy_pulso_inbox_position()',
+             'EXECUTE'
+           ) as "sofiaInboxResolver"`
+      );
+      expect(compatibilityExecute.rows[0]).toEqual({
+        pulsoInboxResolver: false,
+        pulsoOutboxResolver: false,
+        sofiaInboxResolver: false
+      });
     });
   });
 
@@ -237,6 +366,18 @@ describeIntegration("PostgreSQL service role isolation", () => {
     await withRole("hyperion_lumen", async (lumen) => {
       await expectPermissionDenied(lumen, "select count(*) from platform.tenants");
       await expectPermissionDenied(lumen, "select count(*) from pulso_iris.messages");
+      await expectPermissionDenied(lumen, "select count(*) from lumen.n_minus_one_compatibility_windows");
+      await expectPermissionDenied(
+        lumen,
+        `insert into lumen.legacy_audio_scope_attestations (
+           attestation_id, cleanup_scope_id, destroyed_at, evidence_sha256
+         ) values (
+           '00000000-0000-4000-8000-000000000001',
+           'lumen-n1-permission-probe-00000001',
+           now(),
+           '${"a".repeat(64)}'
+         )`
+      );
     });
 
     await withRole("hyperion_channel", async (channel) => {
@@ -247,6 +388,14 @@ describeIntegration("PostgreSQL service role isolation", () => {
     await withRole("hyperion_audit", async (audit) => {
       await expectPermissionDenied(audit, "select count(*) from pulso_iris.messages");
       await expectPermissionDenied(audit, "select count(*) from lumen.encounters");
+    });
+
+    await withRole("hyperion_sofia", async (sofia) => {
+      await expectPermissionDenied(sofia, "select count(*) from pulso_iris.outbox_event_positions");
+    });
+
+    await withRole("hyperion_pulso", async (pulso) => {
+      await expectPermissionDenied(pulso, "select count(*) from channel_runtime.outbox_event_positions");
     });
   });
 

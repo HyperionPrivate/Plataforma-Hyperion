@@ -17,16 +17,27 @@ import {
   readNatsAuthentication,
   type NatsAuthentication
 } from "@hyperion/durable-events";
-import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import {
+  createInternalAuthorizationHeaders,
+  readInternalCredential,
+  validateInternalAuthorization,
+  type RouteRegistrar,
+  type ServiceContext
+} from "@hyperion/service-runtime";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
 import { registerAppointmentRoutes } from "./appointment-routes.js";
 import { startAppointmentHoldExpiration } from "./appointment-hold-expiration.js";
 import { startAppointmentVerificationSimulator } from "./appointment-verification-simulator.js";
 import { createAuditClient } from "./audit-client.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
-import { registerChannelInboundEventRoutes } from "./channel-inbound-events.js";
+import { createLegacyChannelPositionResolver } from "./channel-position-client.js";
+import {
+  readChannelInboundV1Compatibility,
+  registerChannelInboundEventRoutesWithCompatibility
+} from "./channel-inbound-events.js";
 import { startChannelInboundJetStreamConsumer } from "./channel-inbound-jetstream.js";
 import { registerConfigRoutes } from "./config-routes.js";
+import { registerPulsoEventPositionRoute } from "./event-position-routes.js";
 import { registerOperationsRoutes } from "./operations-routes.js";
 import { PostgresPulsoOutbox } from "./pulso-outbox.js";
 import { registerSofiaToolRoutes } from "./sofia-tools-routes.js";
@@ -34,14 +45,40 @@ import { readTenantId } from "./shared.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const durableOutbox = readDurableOutboxConfiguration(process.env);
+  const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_PULSO_TOKEN");
+  const sofiaToken = readInternalCredential(process.env, "PULSO_TO_SOFIA_TOKEN");
+  const sofiaToPulsoToken = readInternalCredential(process.env, "SOFIA_TO_PULSO_TOKEN");
+  const pulsoToChannelToken = readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN");
+  const auditToken = readInternalCredential(process.env, "PULSO_TO_AUDIT_TOKEN");
+  const allowLegacyChannelInboundV1 = readChannelInboundV1Compatibility(process.env);
+  const resolveLegacyChannelPosition = allowLegacyChannelInboundV1
+    ? createLegacyChannelPositionResolver({
+        channelServiceUrl: process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089",
+        credential: pulsoToChannelToken ?? ""
+      })
+    : undefined;
+  if (allowLegacyChannelInboundV1) {
+    context.logger.warn("Channel inbound v1 compatibility window is enabled", {
+      compatibilityMode: "channel_inbound_v1",
+      targetContract: "channel.inbound.received.v2"
+    });
+  }
   if (context.db) {
     await verifyPulsoIrisSchema(context);
   }
 
   const emitAudit = createAuditClient({
     auditServiceUrl: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
-    internalServiceToken: context.config.internalServiceToken,
+    workloadToken: auditToken,
     logger: context.logger
+  });
+
+  app.addHook("preHandler", async (request, reply) => {
+    if (!request.url.split("?", 1)[0]?.startsWith("/v1/tenants/")) return;
+    const authError = validateInternalAuthorization(request.headers, { "api-gateway": gatewayToken });
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
   });
 
   await registerConfigRoutes(app, context, emitAudit);
@@ -50,13 +87,19 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   await registerAvailabilityRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
   await registerSofiaToolRoutes(app, context, emitAudit);
+  registerPulsoEventPositionRoute(app, context, sofiaToPulsoToken);
   if (isHttpDurableEventIngressEnabled(durableOutbox.transport)) {
-    await registerChannelInboundEventRoutes(app, context);
+    await registerChannelInboundEventRoutesWithCompatibility(app, context, {
+      allowLegacyV1: allowLegacyChannelInboundV1,
+      resolveLegacyPosition: resolveLegacyChannelPosition
+    });
   }
 
   if (context.db && durableOutbox.transport === "jetstream") {
     const consumer = await startChannelInboundJetStreamConsumer((hook) => app.addHook("onClose", hook), context.db, {
       natsUrl: durableOutbox.natsUrl,
+      allowLegacyV1: allowLegacyChannelInboundV1,
+      resolveLegacyPosition: resolveLegacyChannelPosition,
       ...durableOutbox.authentication
     });
     context.registerReadinessCheck?.({
@@ -65,7 +108,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     });
   }
 
-  if (context.db && (durableOutbox.transport === "jetstream" || context.config.internalServiceToken)) {
+  if (context.db && (durableOutbox.transport === "jetstream" || sofiaToken)) {
     const workerId = `pulso-outbox-${randomUUID()}`;
     const outbox = new PostgresPulsoOutbox(
       context.db,
@@ -92,7 +135,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
             })
           : new HttpOutboxDispatcher<Record<string, unknown>>({
               workerId,
-              internalToken: context.config.internalServiceToken!,
+              internalToken: sofiaToken!,
+              fetch: createWorkloadFetch("pulso-iris-service", sofiaToken!),
               claim: (limit) => outbox.claim(limit),
               complete: (eventId) => outbox.complete(eventId),
               fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
@@ -416,4 +460,14 @@ async function verifyPulsoIrisSchema(context: ServiceContext): Promise<void> {
       error: error instanceof Error ? error.message : String(error)
     });
   }
+}
+
+function createWorkloadFetch(caller: string, token: string): typeof fetch {
+  return (input, init) => {
+    const headers = new Headers(init?.headers);
+    for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
+      headers.set(name, value);
+    }
+    return fetch(input, { ...init, headers });
+  };
 }

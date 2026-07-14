@@ -7,6 +7,11 @@ import {
   type LlmProvider
 } from "./llm-provider.js";
 
+const DEFAULT_DEEPSEEK_TIMEOUT_MS = 8_000;
+const MIN_DEEPSEEK_TIMEOUT_MS = 100;
+const MAX_DEEPSEEK_TIMEOUT_MS = 10_000;
+const RETRY_DELAY_MS = 250;
+
 const responseSchema = z.object({
   model: z.string().optional(),
   choices: z
@@ -58,7 +63,7 @@ export class DeepSeekLlmProvider implements LlmProvider {
     this.apiKey = options.apiKey ?? process.env.DEEPSEEK_API_KEY?.trim();
     this.baseUrl = (options.baseUrl ?? process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com").replace(/\/$/, "");
     this.model = options.model ?? process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
-    this.timeoutMs = options.timeoutMs ?? readPositiveInteger(process.env.DEEPSEEK_TIMEOUT_MS, 8_000);
+    this.timeoutMs = readBoundedTimeout(options.timeoutMs ?? process.env.DEEPSEEK_TIMEOUT_MS);
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? Date.now;
   }
@@ -68,6 +73,7 @@ export class DeepSeekLlmProvider implements LlmProvider {
   }
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
+    input.signal?.throwIfAborted();
     if (!this.apiKey) throw new LlmProviderUnavailableError("DeepSeek is not configured");
     if (this.circuitOpenUntil > this.now()) throw new LlmProviderUnavailableError("DeepSeek circuit is open");
     const toolChoice = toDeepSeekToolChoice(input);
@@ -76,6 +82,10 @@ export class DeepSeekLlmProvider implements LlmProvider {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
+        input.signal?.throwIfAborted();
+        const requestSignal = input.signal
+          ? AbortSignal.any([input.signal, AbortSignal.timeout(this.timeoutMs)])
+          : AbortSignal.timeout(this.timeoutMs);
         const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
           method: "POST",
           headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
@@ -87,12 +97,12 @@ export class DeepSeekLlmProvider implements LlmProvider {
             thinking: { type: "disabled" },
             stream: false
           }),
-          signal: AbortSignal.timeout(this.timeoutMs)
+          signal: requestSignal
         });
 
         if (!response.ok) {
           if ((response.status === 429 || response.status >= 500) && attempt === 0) {
-            await sleep(250);
+            await abortableSleep(RETRY_DELAY_MS, input.signal);
             continue;
           }
           throw new Error(`DeepSeek request failed with status ${response.status}`);
@@ -115,9 +125,10 @@ export class DeepSeekLlmProvider implements LlmProvider {
           outputTokens: parsed.usage?.completion_tokens
         };
       } catch (error) {
+        if (input.signal?.aborted) throw input.signal.reason;
         lastError = error;
         if (attempt === 0 && isRetryableNetworkError(error)) {
-          await sleep(250);
+          await abortableSleep(RETRY_DELAY_MS, input.signal);
           continue;
         }
         break;
@@ -157,9 +168,10 @@ function toDeepSeekMessage(message: LlmMessage): Record<string, unknown> {
   return { role: message.role, content: message.content ?? "" };
 }
 
-function readPositiveInteger(raw: string | undefined, fallback: number): number {
-  const value = raw ? Number(raw) : fallback;
-  return Number.isInteger(value) && value > 0 ? value : fallback;
+function readBoundedTimeout(raw: number | string | undefined): number {
+  const value = raw === undefined ? DEFAULT_DEEPSEEK_TIMEOUT_MS : Number(raw);
+  if (!Number.isInteger(value) || value <= 0) return DEFAULT_DEEPSEEK_TIMEOUT_MS;
+  return Math.min(MAX_DEEPSEEK_TIMEOUT_MS, Math.max(MIN_DEEPSEEK_TIMEOUT_MS, value));
 }
 
 function isRetryableNetworkError(error: unknown): boolean {
@@ -170,6 +182,18 @@ function sanitizeError(message: string): string {
   return message.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 200);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException("The operation was aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
 }

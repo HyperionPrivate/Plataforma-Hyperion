@@ -1,0 +1,13 @@
+# CI-only overlay for the current deterministic LUMEN crash/restart probe.
+# A synthetic key enters the real provider boundary. The preload attests the
+# POST + xi-api-key + FormData fetch shape, writes attempt-scoped markers, and
+# rejects non-internal outbound fetch() calls (redirects from internal hops
+# are also rejected). It is not a kernel-level network namespace.
+services:
+  lumen-service:
+    environment:
+      ELEVENLABS_API_KEY: ci-synthetic-key-never-transmitted
+      ELEVENLABS_ZERO_RETENTION_MODE: "true"
+      NODE_OPTIONS: --import=/app/ci/lumen-provider-network-block.mjs
+    volumes:
+      - ${HYPERION_REPOSITORY_ROOT:-..}/scripts/ci/lumen-provider-network-block.mjs:/app/ci/lumen-provider-network-block.mjs:ro

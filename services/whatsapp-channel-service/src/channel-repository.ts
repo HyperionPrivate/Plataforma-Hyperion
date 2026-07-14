@@ -699,7 +699,30 @@ async function findInboundReplay(
 }
 
 async function ensureInboundOutbox(client: DatabaseExecutor, tenantId: string, eventId: string): Promise<void> {
-  const ensured = await client.query<{ sourceExists: boolean; outboxId: string | null }>(
+  // Serialize the idempotency check and stream-position allocation. The second
+  // statement gets a fresh READ COMMITTED snapshot after a concurrent writer,
+  // while the event-position ledger makes a repaired replay reuse its position.
+  const locked = await client.query<{ streamId: string }>(
+    `select event.thread_binding_id as "streamId",
+            pg_advisory_xact_lock(
+              hashtextextended(event.tenant_id::text || ':' || event.thread_binding_id::text, 0)
+            )
+     from channel_runtime.inbound_events event
+     join channel_runtime.thread_bindings binding
+       on binding.tenant_id = event.tenant_id and binding.id = event.thread_binding_id
+     where event.tenant_id = $1 and event.id = $2`,
+    [tenantId, eventId]
+  );
+  if (!locked.rows[0]?.streamId) {
+    throw new Error("Unable to lock durable outbox stream for inbound event");
+  }
+
+  const ensured = await client.query<{
+    sourceExists: boolean;
+    outboxId: string | null;
+    streamId: string | null;
+    streamSequence: string | number | null;
+  }>(
     `with source as materialized (
        select event.id, event.tenant_id, event.provider, event.external_message_id,
               event.body, event.occurred_at, binding.id as thread_binding_id,
@@ -713,11 +736,64 @@ async function ensureInboundOutbox(client: DatabaseExecutor, tenantId: string, e
          and char_length(binding.external_thread_id) between 1 and 512
          and binding.phone_e164_hash ~ '^[a-f0-9]{64}$'
          and char_length(binding.phone_masked) between 3 and 32
+     ), promoted as (
+       update channel_runtime.outbox_events outbox
+       set event_type = 'channel.inbound.received.v2',
+           event_version = 2,
+           updated_at = now()
+       from source
+       where outbox.tenant_id = source.tenant_id
+         and outbox.aggregate_id = source.id
+         and outbox.event_type = 'channel.inbound.received.v1'
+         and outbox.status in ('queued', 'retry_scheduled')
+       returning outbox.id, outbox.stream_id, outbox.stream_sequence
+     ), missing as materialized (
+       select source.*
+       from source
+       where not exists (
+         select 1
+         from channel_runtime.outbox_events existing
+         where existing.tenant_id = source.tenant_id
+           and existing.event_type in ('channel.inbound.received.v1', 'channel.inbound.received.v2')
+           and existing.aggregate_id = source.id
+       )
+     ), known_position as materialized (
+       select position.tenant_id, position.event_id, position.stream_id,
+              position.stream_sequence
+       from channel_runtime.outbox_event_positions position
+       join missing
+         on missing.tenant_id = position.tenant_id and missing.id = position.event_id
+     ), allocated_counter as (
+       insert into channel_runtime.outbox_stream_positions (tenant_id, stream_id, last_sequence)
+       select missing.tenant_id, missing.thread_binding_id, 1
+       from missing
+       where not exists (select 1 from known_position)
+       on conflict (tenant_id, stream_id) do update
+       set last_sequence = channel_runtime.outbox_stream_positions.last_sequence + 1,
+           updated_at = now()
+       returning tenant_id, stream_id, last_sequence as stream_sequence
+     ), allocated_position as (
+       insert into channel_runtime.outbox_event_positions (
+         tenant_id, event_id, stream_id, stream_sequence
+       )
+       select missing.tenant_id, missing.id, missing.thread_binding_id,
+              allocated_counter.stream_sequence
+       from missing
+       join allocated_counter
+         on allocated_counter.tenant_id = missing.tenant_id
+        and allocated_counter.stream_id = missing.thread_binding_id
+       returning tenant_id, event_id, stream_id, stream_sequence
+     ), next_position as materialized (
+       select tenant_id, event_id, stream_id, stream_sequence from known_position
+       union all
+       select tenant_id, event_id, stream_id, stream_sequence from allocated_position
      ), inserted as (
        insert into channel_runtime.outbox_events (
-         tenant_id, event_type, event_version, aggregate_type, aggregate_id, payload, occurred_at
+         tenant_id, event_type, event_version, aggregate_type, aggregate_id,
+         stream_id, stream_sequence, payload, occurred_at
        )
-       select source.tenant_id, 'channel.inbound.received.v1', 1, 'channel_inbound_event', source.id,
+       select source.tenant_id, 'channel.inbound.received.v2', 2, 'channel_inbound_event', source.id,
+              source.thread_binding_id, next_position.stream_sequence,
               jsonb_build_object(
                 'inboundEventId', source.id,
                 'threadBindingId', source.thread_binding_id,
@@ -731,22 +807,44 @@ async function ensureInboundOutbox(client: DatabaseExecutor, tenantId: string, e
               ),
               source.occurred_at
        from source
+       join next_position
+         on next_position.tenant_id = source.tenant_id
+        and next_position.event_id = source.id
+        and next_position.stream_id = source.thread_binding_id
        on conflict (tenant_id, event_type, aggregate_id) do nothing
-       returning id
+       returning id, stream_id, stream_sequence
+     ), ensured as (
+       select id, stream_id, stream_sequence from inserted
+       union all
+       select id, stream_id, stream_sequence from promoted
+       union all
+       select id, stream_id, stream_sequence
+       from channel_runtime.outbox_events
+       where tenant_id = $1
+         and event_type in ('channel.inbound.received.v1', 'channel.inbound.received.v2')
+         and aggregate_id = $2
+       limit 1
      )
      select exists(select 1 from source) as "sourceExists",
-            coalesce(
-              (select id from inserted),
-              (select id
-               from channel_runtime.outbox_events
-               where tenant_id = $1 and event_type = 'channel.inbound.received.v1' and aggregate_id = $2)
-            ) as "outboxId"`,
+            (select id from ensured) as "outboxId",
+            (select stream_id from ensured) as "streamId",
+            (select stream_sequence from ensured) as "streamSequence"`,
     [tenantId, eventId]
   );
   const row = ensured.rows[0];
-  if (!row?.sourceExists || !row.outboxId) {
+  if (
+    !row?.sourceExists ||
+    !row.outboxId ||
+    row.streamId !== locked.rows[0].streamId ||
+    !isPositiveDatabaseInteger(row.streamSequence)
+  ) {
     throw new Error("Unable to ensure durable outbox for inbound event");
   }
+}
+
+function isPositiveDatabaseInteger(value: string | number | null): boolean {
+  const numeric = typeof value === "string" ? Number(value) : value;
+  return typeof numeric === "number" && Number.isSafeInteger(numeric) && numeric > 0;
 }
 
 async function cancelClaimedOutbound(

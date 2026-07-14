@@ -12,6 +12,8 @@ import {
 } from "./projection-events.js";
 
 const TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";
+const ACCESS_TOKEN = "access-to-lumen-test-token";
+const PULSO_TOKEN = "pulso-to-lumen-test-token";
 const EVENT = {
   id: "a56e320f-cbce-4e96-b7fc-c79e52970a52",
   type: "access.lumen.tenant-snapshot.v1",
@@ -47,17 +49,19 @@ describe("LUMEN projection event contract", () => {
   });
 
   it("protects the internal endpoint and rejects a strict cross-tenant envelope", async () => {
+    process.env.ACCESS_TO_LUMEN_TOKEN = ACCESS_TOKEN;
+    process.env.PULSO_TO_LUMEN_TOKEN = PULSO_TOKEN;
     const app = Fastify();
     await registerLumenProjectionEventRoutes(app, {
       db: {} as DatabaseClient,
-      config: { internalServiceToken: "controlled-token" },
+      config: {},
       logger: { error: vi.fn() }
     } as unknown as ServiceContext);
     try {
       const unauthorized = await app.inject({
         method: "POST",
         url: "/internal/v1/events/lumen-projections",
-        headers: { authorization: "Bearer wrong-token" },
+        headers: { authorization: "Bearer wrong-token", "x-hyperion-caller": "identity-service" },
         payload: EVENT
       });
       expect(unauthorized.statusCode).toBe(401);
@@ -65,12 +69,46 @@ describe("LUMEN projection event contract", () => {
       const crossTenant = await app.inject({
         method: "POST",
         url: "/internal/v1/events/lumen-projections",
-        headers: { authorization: "Bearer controlled-token" },
+        headers: { authorization: `Bearer ${ACCESS_TOKEN}`, "x-hyperion-caller": "identity-service" },
         payload: { ...EVENT, tenantId: "7fba9ced-2c1a-4bbd-b2ee-72c379a56143" }
       });
       expect(crossTenant.statusCode).toBe(400);
     } finally {
       await app.close();
+      delete process.env.ACCESS_TO_LUMEN_TOKEN;
+      delete process.env.PULSO_TO_LUMEN_TOKEN;
+    }
+  });
+
+  it("binds each projection contract to its authenticated producer", async () => {
+    process.env.ACCESS_TO_LUMEN_TOKEN = ACCESS_TOKEN;
+    process.env.PULSO_TO_LUMEN_TOKEN = PULSO_TOKEN;
+    const app = Fastify();
+    await registerLumenProjectionEventRoutes(app, {
+      db: {} as DatabaseClient,
+      config: {},
+      logger: { error: vi.fn() }
+    } as unknown as ServiceContext);
+    try {
+      const wrongContract = await app.inject({
+        method: "POST",
+        url: "/internal/v1/events/lumen-projections",
+        headers: { authorization: `Bearer ${PULSO_TOKEN}`, "x-hyperion-caller": "pulso-iris-service" },
+        payload: EVENT
+      });
+      const impersonation = await app.inject({
+        method: "POST",
+        url: "/internal/v1/events/lumen-projections",
+        headers: { authorization: `Bearer ${ACCESS_TOKEN}`, "x-hyperion-caller": "pulso-iris-service" },
+        payload: EVENT
+      });
+
+      expect(wrongContract.statusCode).toBe(403);
+      expect(impersonation.statusCode).toBe(401);
+    } finally {
+      await app.close();
+      delete process.env.ACCESS_TO_LUMEN_TOKEN;
+      delete process.env.PULSO_TO_LUMEN_TOKEN;
     }
   });
 });

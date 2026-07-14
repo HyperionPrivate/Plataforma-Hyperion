@@ -12,7 +12,9 @@ import { natsInboxPrefix, readNatsAuthentication, type NatsAuthentication } from
 
 export const HYPERION_KNOWN_CONSUMERS = [
   { eventType: "channel.inbound.received.v1", durableName: "pulso_channel_inbound_v1" },
+  { eventType: "channel.inbound.received.v2", durableName: "pulso_channel_inbound_v2" },
   { eventType: "pulso.message.received.v1", durableName: "sofia_pulso_message_v1" },
+  { eventType: "pulso.message.received.v2", durableName: "sofia_pulso_message_v2" },
   { eventType: "sofia.audit.event.record.v1", durableName: "audit_sofia_event_record_v1" },
   { eventType: "lumen.audit.event.record.v1", durableName: "audit_lumen_event_record_v1" },
   { eventType: "audit.event.record.v1", durableName: "audit_event_record_v1" },

@@ -3,6 +3,57 @@ import { DeepSeekLlmProvider } from "./deepseek-llm-provider.js";
 import { LlmProviderUnavailableError } from "./llm-provider.js";
 
 describe("DeepSeekLlmProvider", () => {
+  it("cancels an in-flight request without consuming a second attempt", async () => {
+    const controller = new AbortController();
+    const reason = new Error("controlled shutdown");
+    const fetchImpl = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        })
+    );
+    const provider = new DeepSeekLlmProvider({
+      apiKey: "controlled-test-key",
+      fetchImpl: fetchImpl as typeof fetch
+    });
+
+    const completion = provider.complete({ messages: [], tools: [], signal: controller.signal });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    controller.abort(reason);
+
+    await expect(completion).rejects.toBe(reason);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the transient-response retry delay before issuing another request", async () => {
+    const controller = new AbortController();
+    const reason = new Error("controlled shutdown during retry delay");
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 429 }));
+    const provider = new DeepSeekLlmProvider({
+      apiKey: "controlled-test-key",
+      fetchImpl: fetchImpl as typeof fetch
+    });
+
+    const completion = provider.complete({ messages: [], tools: [], signal: controller.signal });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    controller.abort(reason);
+
+    await expect(completion).rejects.toBe(reason);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps DEEPSEEK_TIMEOUT_MS at ten seconds", () => {
+    const previousTimeout = process.env.DEEPSEEK_TIMEOUT_MS;
+    process.env.DEEPSEEK_TIMEOUT_MS = "60000";
+    try {
+      const provider = new DeepSeekLlmProvider({ apiKey: "controlled-test-key" });
+      expect((provider as unknown as { timeoutMs: number }).timeoutMs).toBe(10_000);
+    } finally {
+      if (previousTimeout === undefined) delete process.env.DEEPSEEK_TIMEOUT_MS;
+      else process.env.DEEPSEEK_TIMEOUT_MS = previousTimeout;
+    }
+  });
+
   it("uses non-thinking tool calling and retries one transient response", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

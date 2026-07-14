@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -26,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -130,3 +135,415 @@ jobs:
         run: pnpm -r test
         env:
           TEST_DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_test
+
+  docker-build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build every deployable base image
+        run: docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml build
+      - name: Start and verify the base HTTP stack
+        run: |
+          docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml up --detach --no-build --wait --wait-timeout 240
+          curl --fail --silent http://127.0.0.1:8080/health >/dev/null
+          curl --fail --silent http://127.0.0.1:8080/ready >/dev/null
+          curl --fail --silent http://127.0.0.1:3000/ >/dev/null
+      - name: Verify graceful SOFIA shutdown on HTTP
+        shell: bash
+        run: |
+          bash scripts/ci/verify-compose-graceful-stop.sh \
+            .env.example hyperion-ci-base agent-service 75 infra/docker-compose.yml
+          docker compose --env-file .env.example -p hyperion-ci-base \
+            -f infra/docker-compose.yml up --detach --no-deps --no-build \
+            --wait --wait-timeout 120 agent-service
+      - name: Stop the base stack
+        if: always()
+        run: docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml down --volumes --remove-orphans
+      - name: Build every deployable JetStream overlay image
+        run: >-
+          docker compose --env-file .env.example -p hyperion-ci-jetstream
+          -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml build
+      - name: Start and verify the JetStream stack
+        run: |
+          docker compose --env-file .env.example -p hyperion-ci-jetstream -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml up --detach --no-build --wait --wait-timeout 240
+          curl --fail --silent http://127.0.0.1:8080/health >/dev/null
+          curl --fail --silent http://127.0.0.1:8080/ready >/dev/null
+          docker compose --env-file .env.example -p hyperion-ci-jetstream -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml exec -T nats wget -q -O /dev/null 'http://127.0.0.1:8222/healthz?js-enabled-only=true'
+      - name: Verify graceful SOFIA shutdown on JetStream
+        shell: bash
+        run: |
+          bash scripts/ci/verify-compose-graceful-stop.sh \
+            .env.example hyperion-ci-jetstream agent-service 75 \
+            infra/docker-compose.yml infra/docker-compose.jetstream.yml
+          docker compose --env-file .env.example -p hyperion-ci-jetstream \
+            -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml \
+            up --detach --no-deps --no-build --wait --wait-timeout 120 agent-service
+      - name: Stop the JetStream stack
+        if: always()
+        run: >-
+          docker compose --env-file .env.example -p hyperion-ci-jetstream
+          -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml
+          down --volumes --remove-orphans
+
+  n-minus-one-upgrade-rollback:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      API_GATEWAY_HOST_PORT: "18080"
+      WEB_CONSOLE_HOST_PORT: "13000"
+      VITE_API_BASE_URL: http://localhost:18080
+      CORS_ALLOWED_ORIGINS: http://localhost:13000
+      POSTGRES_USER: hyperion
+      POSTGRES_PASSWORD: compatibility-postgres-password-0001
+      POSTGRES_DB: hyperion
+      INTERNAL_SERVICE_TOKEN: compatibility-internal-token-0002
+      WHATSAPP_PHONE_HASH_KEY: compatibility-phone-hash-key-0000003
+      HYPERION_COMPAT_POSTGRES_VOLUME: hyperion-compat-postgres-${{ github.run_id }}-${{ github.run_attempt }}
+      HYPERION_COMPAT_WHATSAPP_VOLUME: hyperion-compat-whatsapp-${{ github.run_id }}-${{ github.run_attempt }}
+      LUMEN_N1_CLEANUP_SCOPE_ID: lumen-n1-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      HYPERION_REPOSITORY_ROOT: ${{ github.workspace }}
+    steps:
+      - name: Checkout current revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate current Compose model
+        shell: bash
+        run: >-
+          docker compose --env-file .env.example -p hyperion-compat-current
+          -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml config --quiet
+      - name: Build every current deployable image
+        shell: bash
+        run: |
+          docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml build
+          docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml \
+            build jetstream-topology-bootstrap
+      - name: Checkout exact N-1 base revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci/n-minus-one
+          persist-credentials: false
+      - name: Record compatibility boundary
+        shell: bash
+        run: |
+          expected='${{ github.event.pull_request.base.sha }}'
+          actual=$(git -C .ci/n-minus-one rev-parse HEAD)
+          test "$actual" = "$expected"
+          echo "current=$(git rev-parse HEAD)"
+          echo "n-minus-one=$actual"
+      - name: Resolve fail-closed N-1 capabilities
+        id: n1_capabilities
+        shell: bash
+        run: |
+          resolved=$(node scripts/ci/resolve-n-minus-one-capabilities.mjs \
+            --base-dir .ci/n-minus-one \
+            --expected-sha '${{ github.event.pull_request.base.sha }}' \
+            --policy infra/compatibility-policy.json)
+          printf '%s\n' "$resolved" >> "$GITHUB_OUTPUT"
+          channel_v1_compatibility=$(awk -F= '$1 == "channel_v1_compatibility" { print $2 }' <<<"$resolved")
+          [[ $channel_v1_compatibility == "enabled" || $channel_v1_compatibility == "disabled" ]]
+          echo "CHANNEL_INBOUND_V1_COMPATIBILITY=$channel_v1_compatibility" >> "$GITHUB_ENV"
+      - name: Validate N-1 Compose model
+        shell: bash
+        run: >-
+          docker compose --env-file .env.example -p hyperion-compat-n1
+          -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml config --quiet
+      - name: Build every N-1 deployable image
+        shell: bash
+        run: >-
+          docker compose --env-file .env.example -p hyperion-compat-n1
+          -f .ci/n-minus-one/infra/docker-compose.yml build
+      - name: Start N-1 with the N-1 schema
+        id: n_minus_one_schema
+        shell: bash
+        run: |
+          docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            up --detach --no-build --wait --wait-timeout 300
+          bash scripts/ci/verify-compose-readiness.sh .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml
+          system_identifier=$(docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            exec -T postgres psql -U "${POSTGRES_USER:-hyperion}" -d "${POSTGRES_DB:-hyperion}" \
+            -Atc 'select system_identifier from pg_control_system()')
+          test -n "$system_identifier"
+          echo "system_identifier=$system_identifier" >> "$GITHUB_OUTPUT"
+          migration_count=$(docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            exec -T postgres psql -U "${POSTGRES_USER:-hyperion}" -d "${POSTGRES_DB:-hyperion}" \
+            -Atc 'select count(*) from platform.schema_migrations')
+          test "$migration_count" -gt 0
+          expected_migration_count=$(find .ci/n-minus-one/packages/migrations/sql -maxdepth 1 -type f -name '*.sql' | wc -l)
+          test "$migration_count" = "$expected_migration_count"
+          echo "migration_count=$migration_count" >> "$GITHUB_OUTPUT"
+          observed_traffic_contract=$(docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            exec -T postgres psql -U "${POSTGRES_USER:-hyperion}" -d "${POSTGRES_DB:-hyperion}" \
+            -Atc "select case when to_regclass('channel_runtime.outbox_events') is null then 'legacy' else 'current' end")
+          observed_lumen_contract=$(docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            exec -T postgres psql -U "${POSTGRES_USER:-hyperion}" -d "${POSTGRES_DB:-hyperion}" \
+            -Atc "select case when to_regclass('lumen.audio_cleanup_owner_leases') is null then 'legacy' else 'current' end")
+          traffic_contract='${{ steps.n1_capabilities.outputs.channel_contract }}'
+          lumen_contract='${{ steps.n1_capabilities.outputs.lumen_contract }}'
+          test "$observed_traffic_contract" = "$traffic_contract"
+          test "$observed_lumen_contract" = "$lumen_contract"
+          echo "traffic_contract=$traffic_contract" >> "$GITHUB_OUTPUT"
+          echo "lumen_contract=$lumen_contract" >> "$GITHUB_OUTPUT"
+      - name: Seed pending N-1 traffic before the upgrade
+        id: n_minus_one_pending_traffic
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml)
+          contract='${{ steps.n_minus_one_schema.outputs.traffic_contract }}'
+          if [[ $contract == "current" ]]; then
+            "${n1_compose[@]}" up --detach --no-deps --force-recreate \
+              --wait --wait-timeout 120 pulso-iris-service
+          fi
+          "${n1_compose[@]}" stop --timeout 75 agent-service
+          seed=$(bash scripts/ci/verify-n-minus-one-upgrade-traffic.sh seed "$contract" \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml)
+          IFS='|' read -r tenant_id inbound_event_id <<<"$seed"
+          uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          [[ $tenant_id =~ $uuid_pattern ]]
+          [[ $inbound_event_id =~ $uuid_pattern ]]
+          echo "tenant_id=$tenant_id" >> "$GITHUB_OUTPUT"
+          echo "inbound_event_id=$inbound_event_id" >> "$GITHUB_OUTPUT"
+      - name: Stop N-1 while preserving PostgreSQL
+        shell: bash
+        run: >-
+          docker compose --env-file .env.example -p hyperion-compat-n1
+          -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml
+          down --remove-orphans
+      - name: Upgrade schema, roles and workloads to current
+        id: current_schema
+        shell: bash
+        run: |
+          docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            up --detach --no-build --wait --wait-timeout 300
+          bash scripts/ci/verify-compose-readiness.sh .env.example hyperion-compat-current \
+            infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml
+          system_identifier=$(docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            exec -T postgres psql -U "${POSTGRES_USER:-hyperion}" -d "${POSTGRES_DB:-hyperion}" \
+            -Atc 'select system_identifier from pg_control_system()')
+          test "$system_identifier" = '${{ steps.n_minus_one_schema.outputs.system_identifier }}'
+          migration_count=$(docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            exec -T postgres psql -U "${POSTGRES_USER:-hyperion}" -d "${POSTGRES_DB:-hyperion}" \
+            -Atc 'select count(*) from platform.schema_migrations')
+          test "$migration_count" -ge '${{ steps.n_minus_one_schema.outputs.migration_count }}'
+          expected_migration_count=$(find packages/migrations/sql -maxdepth 1 -type f -name '*.sql' | wc -l)
+          test "$migration_count" = "$expected_migration_count"
+          echo "migration_count=$migration_count" >> "$GITHUB_OUTPUT"
+          migrations_container=$(docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            ps --all --quiet migrations)
+          test -n "$migrations_container"
+          migrations_image=$(docker inspect "$migrations_container" --format '{{.Image}}')
+          test -n "$migrations_image"
+          echo "migrations_image=$migrations_image" >> "$GITHUB_OUTPUT"
+      - name: Drain the pending N-1 event through current
+        shell: bash
+        run: >-
+          bash scripts/ci/verify-n-minus-one-upgrade-traffic.sh verify
+          '${{ steps.n_minus_one_schema.outputs.traffic_contract }}'
+          '${{ steps.n_minus_one_pending_traffic.outputs.tenant_id }}'
+          '${{ steps.n_minus_one_pending_traffic.outputs.inbound_event_id }}'
+          .env.example hyperion-compat-current
+          infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml
+      - name: Close v1 compatibility and prove the current v2 flow
+        shell: bash
+        run: |
+          current_compose=(docker compose --env-file .env.example -p hyperion-compat-current
+            -f infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml)
+          CHANNEL_INBOUND_V1_COMPATIBILITY=disabled \
+            "${current_compose[@]}" up --detach --no-deps --force-recreate \
+            --wait --wait-timeout 120 pulso-iris-service
+          seed=$(CHANNEL_INBOUND_V1_COMPATIBILITY=disabled \
+            bash scripts/ci/verify-n-minus-one-upgrade-traffic.sh seed current \
+            .env.example hyperion-compat-current \
+            infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml)
+          IFS='|' read -r tenant_id inbound_event_id <<<"$seed"
+          uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          [[ $tenant_id =~ $uuid_pattern ]]
+          [[ $inbound_event_id =~ $uuid_pattern ]]
+          CHANNEL_INBOUND_V1_COMPATIBILITY=disabled \
+            bash scripts/ci/verify-n-minus-one-upgrade-traffic.sh verify current \
+            "$tenant_id" "$inbound_event_id" \
+            .env.example hyperion-compat-current \
+            infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml
+      - name: Exercise current LUMEN deterministic crash recovery
+        shell: bash
+        run: |
+          current_lumen_compose=(docker compose --env-file .env.example -p hyperion-compat-current
+            -f infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.lumen-crash-ci.yml)
+          "${current_lumen_compose[@]}" config --quiet
+          "${current_lumen_compose[@]}" up --detach --no-deps --force-recreate --no-build \
+            --wait --wait-timeout 120 lumen-service
+          bash scripts/ci/verify-n-minus-one-lumen-audio.sh current \
+            .env.example hyperion-compat-current \
+            '${{ steps.current_schema.outputs.migrations_image }}' \
+            infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.lumen-crash-ci.yml
+      - name: Stop current workloads while preserving upgraded PostgreSQL
+        shell: bash
+        run: >-
+          docker compose --env-file .env.example -p hyperion-compat-current
+          -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml
+          down --remove-orphans
+      - name: Open bounded LUMEN compatibility for the final N-1 rollback
+        id: open_lumen_n1_compatibility
+        if: ${{ steps.n_minus_one_schema.outputs.lumen_contract == 'legacy' }}
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.n-minus-one-roles-ci.yml)
+          "${n1_compose[@]}" config --quiet
+          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
+
+          postgres_container=$("${n1_compose[@]}" ps --quiet postgres)
+          test -n "$postgres_container"
+          n1_network=$(docker inspect "$postgres_container" \
+            --format '{{json .NetworkSettings.Networks}}' \
+            | jq -er 'keys | if length == 1 then .[0] else error("expected one N-1 network") end')
+          test -n "$n1_network"
+          current_migrations_image='${{ steps.current_schema.outputs.migrations_image }}'
+          test -n "$current_migrations_image"
+
+          rollback_evidence=$(printf '%s\n' \
+            "repository=$GITHUB_REPOSITORY" \
+            "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
+            "current=$(git rev-parse HEAD)" \
+            "n-minus-one=$(git -C .ci/n-minus-one rev-parse HEAD)" \
+            "migration-count=${{ steps.current_schema.outputs.migration_count }}" \
+            | sha256sum | awk '{print $1}')
+          test "${#rollback_evidence}" -eq 64
+
+          admin_database_url="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+          echo "n1_network=$n1_network" >> "$GITHUB_OUTPUT"
+          echo "current_migrations_image=$current_migrations_image" >> "$GITHUB_OUTPUT"
+          echo "open_attempted=true" >> "$GITHUB_OUTPUT"
+          docker run --rm --network "$n1_network" \
+            --env "DATABASE_URL=$admin_database_url" \
+            --env "LUMEN_N1_CLEANUP_SCOPE_ID=$LUMEN_N1_CLEANUP_SCOPE_ID" \
+            --env "LUMEN_N1_ROLLBACK_EVIDENCE_SHA256=$rollback_evidence" \
+            "$current_migrations_image" \
+            node packages/migrations/dist/lumen-n-minus-one-compatibility.js open
+      - name: Return to N-1 images against the upgraded schema
+        shell: bash
+        run: |
+          docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            -f infra/docker-compose.n-minus-one-roles-ci.yml \
+            up --detach --no-build --wait --wait-timeout 300
+          bash scripts/ci/verify-compose-readiness.sh .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+          bash scripts/ci/verify-service-database-identities.sh .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+          if [[ '${{ steps.n_minus_one_schema.outputs.traffic_contract }}' == "legacy" ]]; then
+            bash scripts/ci/verify-n-minus-one-sofia-traffic.sh .env.example hyperion-compat-n1 \
+              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+              infra/docker-compose.n-minus-one-roles-ci.yml
+          fi
+          system_identifier=$(docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            -f infra/docker-compose.n-minus-one-roles-ci.yml \
+            exec -T postgres psql -U "${POSTGRES_USER:-hyperion}" -d "${POSTGRES_DB:-hyperion}" \
+            -Atc 'select system_identifier from pg_control_system()')
+          test "$system_identifier" = '${{ steps.n_minus_one_schema.outputs.system_identifier }}'
+          migration_count=$(docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            -f infra/docker-compose.n-minus-one-roles-ci.yml \
+            exec -T postgres psql -U "${POSTGRES_USER:-hyperion}" -d "${POSTGRES_DB:-hyperion}" \
+            -Atc 'select count(*) from platform.schema_migrations')
+          test "$migration_count" = '${{ steps.current_schema.outputs.migration_count }}'
+      - name: Exercise durable Channel to PULSO to SOFIA traffic on a current-capable N-1 rollback
+        if: ${{ steps.n_minus_one_schema.outputs.traffic_contract == 'current' }}
+        shell: bash
+        run: |
+          seed=$(bash scripts/ci/verify-n-minus-one-upgrade-traffic.sh seed current \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml)
+          IFS='|' read -r tenant_id inbound_event_id <<<"$seed"
+          uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          [[ $tenant_id =~ $uuid_pattern ]]
+          [[ $inbound_event_id =~ $uuid_pattern ]]
+          bash scripts/ci/verify-n-minus-one-upgrade-traffic.sh verify current \
+            "$tenant_id" "$inbound_event_id" \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+      - name: Exercise the declared LUMEN N-1 cleanup contract
+        id: verify_lumen_n1_binary
+        if: ${{ success() && (steps.n_minus_one_schema.outputs.lumen_contract == 'current' || steps.open_lumen_n1_compatibility.outcome == 'success') }}
+        shell: bash
+        run: >-
+          bash scripts/ci/verify-n-minus-one-lumen-audio.sh
+          '${{ steps.n_minus_one_schema.outputs.lumen_contract }}'
+          .env.example hyperion-compat-n1
+          '${{ steps.current_schema.outputs.migrations_image }}'
+          .ci/n-minus-one/infra/docker-compose.yml
+          infra/docker-compose.compatibility-ci.yml
+          infra/docker-compose.n-minus-one-roles-ci.yml
+      - name: Fence an interrupted LUMEN N-1 compatibility window
+        if: ${{ always() && steps.n_minus_one_schema.outputs.lumen_contract == 'legacy' && steps.open_lumen_n1_compatibility.outputs.open_attempted == 'true' && steps.verify_lumen_n1_binary.outcome != 'success' }}
+        shell: bash
+        run: |
+          docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            -f infra/docker-compose.n-minus-one-roles-ci.yml \
+            stop --timeout 75 lumen-service || true
+          admin_database_url="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+          docker run --rm --network '${{ steps.open_lumen_n1_compatibility.outputs.n1_network }}' \
+            --env "DATABASE_URL=$admin_database_url" \
+            --env "LUMEN_N1_CLEANUP_SCOPE_ID=$LUMEN_N1_CLEANUP_SCOPE_ID" \
+            '${{ steps.open_lumen_n1_compatibility.outputs.current_migrations_image }}' \
+            node packages/migrations/dist/lumen-n-minus-one-compatibility.js close
+      - name: Print compatibility diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml ps --all || true
+          docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml logs --no-color || true
+          docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            -f infra/docker-compose.n-minus-one-roles-ci.yml ps --all || true
+          docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            -f infra/docker-compose.n-minus-one-roles-ci.yml logs --no-color || true
+      - name: Remove compatibility containers and volumes
+        if: always()
+        shell: bash
+        run: |
+          docker compose --env-file .env.example -p hyperion-compat-current \
+            -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            down --volumes --remove-orphans || true
+          docker compose --env-file .env.example -p hyperion-compat-n1 \
+            -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
+            -f infra/docker-compose.n-minus-one-roles-ci.yml \
+            down --volumes --remove-orphans || true
+          docker volume rm "$HYPERION_COMPAT_POSTGRES_VOLUME" "$HYPERION_COMPAT_WHATSAPP_VOLUME" \
+            >/dev/null 2>&1 || true

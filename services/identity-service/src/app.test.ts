@@ -1,14 +1,17 @@
-import { createService, type ServiceHandle } from "@hyperion/service-runtime";
+import { createInternalAuthorizationHeaders, createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerRoutes } from "./app.js";
 import { hashPassword, readBearerToken, verifyPassword } from "./auth.js";
 
 let app: ServiceHandle["app"];
+const GATEWAY_TOKEN = "identity-gateway-test-token-0001";
+const gatewayHeaders = createInternalAuthorizationHeaders("api-gateway", GATEWAY_TOKEN);
 
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
   delete process.env.INITIAL_ADMIN_EMAIL;
   delete process.env.INITIAL_ADMIN_PASSWORD;
+  process.env.GATEWAY_TO_IDENTITY_TOKEN = GATEWAY_TOKEN;
   const handle = await createService({
     serviceName: "identity-service",
     databaseRequired: true,
@@ -19,6 +22,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+  delete process.env.GATEWAY_TO_IDENTITY_TOKEN;
 });
 
 describe("password hashing", () => {
@@ -81,7 +85,7 @@ describe("identity-service routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/identity/operators",
-      headers: { "x-operator-role": "coordinator" },
+      headers: { ...gatewayHeaders, "x-operator-role": "coordinator" },
       payload: {
         email: "asesor@hyperion.local",
         displayName: "Asesor",
@@ -94,11 +98,21 @@ describe("identity-service routes", () => {
     expect(response.statusCode).toBe(403);
   });
 
+  it("requires admin role for operator listing", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/identity/operators",
+      headers: { ...gatewayHeaders, "x-operator-role": "coordinator" }
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
   it("requires a database for admin operator creation", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/identity/operators",
-      headers: { "x-operator-role": "admin" },
+      headers: { ...gatewayHeaders, "x-operator-role": "admin" },
       payload: {
         email: "correo-invalido",
         displayName: "A",
@@ -109,5 +123,22 @@ describe("identity-service routes", () => {
     });
 
     expect(response.statusCode).toBe(503);
+  });
+
+  it("does not trust a forged admin header without the gateway identity", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/identity/operators",
+      headers: { "x-operator-role": "admin" },
+      payload: {
+        email: "asesor@hyperion.local",
+        displayName: "Asesor",
+        password: "clave-segura-123",
+        role: "advisor",
+        tenantIds: []
+      }
+    });
+
+    expect(response.statusCode).toBe(401);
   });
 });

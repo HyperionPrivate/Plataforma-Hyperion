@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { verifyLumenSchema } from "./app.js";
 
 describe("LUMEN local schema verification", () => {
-  it("accepts local schema version 26 without consulting platform migrations", async () => {
+  it("accepts local schema version 39 without consulting platform migrations", async () => {
     const query = vi.fn(async (_text: string) => ({
-      rows: [{ encounters: "lumen.encounters", records: "lumen.clinical_records", currentVersion: 26 }]
+      rows: [{ encounters: "lumen.encounters", records: "lumen.clinical_records", currentVersion: 39 }]
     }));
     await expect(verifyLumenSchema(contextWithQuery(query))).resolves.toBeUndefined();
     expect(query).toHaveBeenCalledTimes(1);
@@ -13,7 +13,7 @@ describe("LUMEN local schema verification", () => {
     expect(query.mock.calls[0]![0]).not.toContain("platform.schema_migrations");
   });
 
-  it.each([25, null])("rejects an incomplete local schema version %s", async (currentVersion) => {
+  it.each([38, null])("rejects an incomplete local schema version %s", async (currentVersion) => {
     const query = vi.fn(async (_text: string) => ({
       rows: [{ encounters: "lumen.encounters", records: "lumen.clinical_records", currentVersion }]
     }));

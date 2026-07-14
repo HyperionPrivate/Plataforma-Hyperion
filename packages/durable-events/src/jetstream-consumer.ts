@@ -40,6 +40,7 @@ export const DEFAULT_JETSTREAM_RECONNECT_DELAY_MS = 1_000;
 export const DEFAULT_JETSTREAM_IDLE_DELAY_MS = 25;
 export const DEFAULT_JETSTREAM_HANDLER_RETRY_DELAY_MS = 1_000;
 export const DEFAULT_JETSTREAM_CONSUMER_TIMEOUT_MS = 5_000;
+export const DEFAULT_JETSTREAM_CONSUMER_STOP_TIMEOUT_MS = 15_000;
 
 const NANOS_PER_MILLISECOND = 1_000_000;
 const SAFE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -51,7 +52,8 @@ const MAX_SERVER_LENGTH = 2_048;
 const MAX_SERVERS = 8;
 const MAX_RETRY_DELAY_MS = 60 * 60 * 1_000;
 const LEGACY_HYPERION_CONSUMER_SERVER_MAX_DELIVER = 12;
-const ENVELOPE_KEYS = new Set(["id", "type", "version", "occurredAt", "tenantId", "payload"]);
+const BASE_ENVELOPE_KEYS = new Set(["id", "type", "version", "occurredAt", "tenantId", "payload"]);
+const ORDERED_ENVELOPE_KEYS = new Set([...BASE_ENVELOPE_KEYS, "streamId", "streamSequence"]);
 
 export interface HyperionStreamConfiguration {
   readonly name: typeof HYPERION_EVENTS_STREAM;
@@ -282,7 +284,10 @@ export interface JetStreamConsumerSession {
   ): Promise<JetStreamConsumerPublishAck>;
   /** Passive connection/durable check; it must not fetch a message. */
   check?(): Promise<void>;
+  /** Graceful drain. The consumer bounds this call before falling back to forceClose. */
   close(): Promise<void>;
+  /** Immediate transport close used only when the graceful drain misses its deadline. */
+  forceClose?(): Promise<void>;
 }
 
 export type JetStreamConsumerSessionFactory = () => Promise<JetStreamConsumerSession>;
@@ -305,6 +310,7 @@ export interface DurableJetStreamConsumerOptions<TPayload extends JsonValue = Js
   readonly retryDelayMs?: number;
   readonly publishTimeoutMs?: number;
   readonly connectTimeoutMs?: number;
+  readonly stopTimeoutMs?: number;
   readonly maxPayloadBytes?: number;
   readonly now?: () => Date;
 }
@@ -336,6 +342,7 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
   readonly retryDelayMs: number;
   readonly publishTimeoutMs: number;
   readonly connectTimeoutMs: number;
+  readonly stopTimeoutMs: number;
   readonly maxPayloadBytes: number;
 
   readonly #handler: JetStreamEventHandler<TPayload>;
@@ -348,6 +355,7 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
   #loop: Promise<void> | undefined;
   #stopPromise: Promise<void> | undefined;
   #stopping = false;
+  #stopped = false;
   #started = false;
   #delayCancel: (() => void) | undefined;
 
@@ -394,6 +402,12 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
     this.connectTimeoutMs = requireBoundedInteger(
       options.connectTimeoutMs ?? DEFAULT_JETSTREAM_CONSUMER_TIMEOUT_MS,
       "connectTimeoutMs",
+      1,
+      60_000
+    );
+    this.stopTimeoutMs = requireBoundedInteger(
+      options.stopTimeoutMs ?? DEFAULT_JETSTREAM_CONSUMER_STOP_TIMEOUT_MS,
+      "stopTimeoutMs",
       1,
       60_000
     );
@@ -460,7 +474,7 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
 
   /** Starts one background loop. Repeated calls while running are no-ops. */
   start(): void {
-    if (this.#started || this.#stopping) {
+    if (this.#started || this.#stopping || this.#stopped) {
       return;
     }
     this.#started = true;
@@ -488,7 +502,7 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
 
   /** Pulls and handles at most one message. Concurrent callers share the same operation. */
   consumeOnce(): Promise<JetStreamConsumeResult> {
-    if (this.#stopping) {
+    if (this.#stopping || this.#stopped) {
       return Promise.resolve({ status: "idle" });
     }
     if (this.#activeConsume !== undefined) {
@@ -504,9 +518,9 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
   }
 
   async #runLoop(): Promise<void> {
-    while (this.#started && !this.#stopping) {
+    while (this.#started && !this.#stopping && !this.#stopped) {
       const result = await this.consumeOnce();
-      if (!this.#started || this.#stopping) {
+      if (!this.#started || this.#stopping || this.#stopped) {
         return;
       }
       if (result.status === "session_error") {
@@ -519,26 +533,36 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
 
   async #runStop(): Promise<void> {
     this.#stopping = true;
+    this.#stopped = true;
     this.#started = false;
     this.#delayCancel?.();
 
     const session = this.#session;
     this.#session = undefined;
-    if (session !== undefined) {
-      await sanitizedSessionClose(session);
-    }
+    const finish = (async () => {
+      if (session !== undefined) {
+        await sanitizedSessionClose(session, this.connectTimeoutMs);
+      }
 
-    try {
       await this.#sessionPromise;
       await this.#activeConsume;
       await this.#loop;
+      const lateSession = this.#session;
+      this.#session = undefined;
+      if (lateSession !== undefined && lateSession !== session) {
+        await sanitizedSessionClose(lateSession, this.connectTimeoutMs);
+      }
+    })();
+
+    try {
+      await settleWithinTimeout(finish, this.stopTimeoutMs);
     } finally {
       const lateSession = this.#session;
       this.#session = undefined;
-      this.#sessionPromise = undefined;
       if (lateSession !== undefined && lateSession !== session) {
-        await sanitizedSessionClose(lateSession);
+        void sanitizedSessionClose(lateSession, this.connectTimeoutMs);
       }
+      this.#sessionPromise = undefined;
       this.#loop = undefined;
       this.#stopping = false;
     }
@@ -593,6 +617,9 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
       decision = { action: "retry" };
     }
 
+    if (this.#stopping || this.#stopped) {
+      return { status: "session_error", deliveryCount: message.deliveryCount };
+    }
     if (!isHandlerDecision(decision)) {
       decision = { action: "retry" };
     }
@@ -657,6 +684,9 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
       return { status: "dlq_failed", deliveryCount: message.deliveryCount };
     }
 
+    if (this.#stopping || this.#stopped) {
+      return { status: "session_error", deliveryCount: message.deliveryCount };
+    }
     try {
       await message.term(reason);
       return { status: "terminated", deliveryCount: message.deliveryCount };
@@ -667,6 +697,9 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
   }
 
   async #getSession(): Promise<JetStreamConsumerSession> {
+    if (this.#stopping || this.#stopped) {
+      throw new Error("consumer_stopping");
+    }
     if (this.#session !== undefined) {
       return this.#session;
     }
@@ -681,8 +714,8 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
       if (!isConsumerSession(session)) {
         throw new TypeError("invalid_consumer_session");
       }
-      if (this.#stopping) {
-        await sanitizedSessionClose(session);
+      if (this.#stopping || this.#stopped) {
+        await sanitizedSessionClose(session, this.connectTimeoutMs);
         throw new Error("consumer_stopping");
       }
       this.#session = session;
@@ -700,7 +733,7 @@ export class DurableJetStreamConsumer<TPayload extends JsonValue = JsonValue> {
     if (this.#session === session) {
       this.#session = undefined;
     }
-    await sanitizedSessionClose(session);
+    await sanitizedSessionClose(session, this.connectTimeoutMs);
   }
 
   #releaseConsume(consume: Promise<JetStreamConsumeResult>): void {
@@ -825,20 +858,19 @@ export function createNatsJetStreamConsumerSessionFactory(
         },
         close: async () => {
           if (!ownedConnection.isClosed()) {
-            try {
-              await ownedConnection.drain();
-            } catch {
-              if (!ownedConnection.isClosed()) {
-                await ownedConnection.close();
-              }
-            }
+            await ownedConnection.drain();
+          }
+        },
+        forceClose: async () => {
+          if (!ownedConnection.isClosed()) {
+            await ownedConnection.close();
           }
         }
       };
     } catch {
       if (connection !== undefined && !connection.isClosed()) {
         try {
-          await connection.close();
+          await withinOperationTimeout(connection.close(), connectTimeoutMs, "jetstream_consumer_close_timeout");
         } catch {
           // Preserve only the stable connection classification.
         }
@@ -1067,10 +1099,13 @@ function parseEventEnvelope<TPayload extends JsonValue>(
   if (!isPlainObject(value)) {
     return { ok: false, reason: "invalid_envelope" };
   }
+  const envelopeKeys = Object.keys(value);
+  const hasOrderedPosition = Object.hasOwn(value, "streamId") || Object.hasOwn(value, "streamSequence");
+  const expectedKeys = hasOrderedPosition ? ORDERED_ENVELOPE_KEYS : BASE_ENVELOPE_KEYS;
   if (
-    Object.keys(value).length !== ENVELOPE_KEYS.size ||
-    !Object.keys(value).every((key) => ENVELOPE_KEYS.has(key)) ||
-    ![...ENVELOPE_KEYS].every((key) => Object.hasOwn(value, key)) ||
+    envelopeKeys.length !== expectedKeys.size ||
+    !envelopeKeys.every((key) => expectedKeys.has(key)) ||
+    ![...expectedKeys].every((key) => Object.hasOwn(value, key)) ||
     !isSafeIdentifier(value.id, MAX_EVENT_ID_LENGTH) ||
     value.type !== expectedType ||
     !Number.isSafeInteger(value.version) ||
@@ -1078,6 +1113,10 @@ function parseEventEnvelope<TPayload extends JsonValue>(
     typeof value.occurredAt !== "string" ||
     !Number.isFinite(Date.parse(value.occurredAt)) ||
     (value.tenantId !== null && !isSafeIdentifier(value.tenantId, MAX_EVENT_ID_LENGTH)) ||
+    (hasOrderedPosition &&
+      (!isSafeIdentifier(value.streamId, MAX_EVENT_ID_LENGTH) ||
+        !Number.isSafeInteger(value.streamSequence) ||
+        (value.streamSequence as number) <= 0)) ||
     !isJsonValue(value.payload)
   ) {
     return { ok: false, reason: "invalid_envelope" };
@@ -1090,6 +1129,9 @@ function parseEventEnvelope<TPayload extends JsonValue>(
       version: value.version as number,
       occurredAt: value.occurredAt,
       tenantId: value.tenantId as string | null,
+      ...(hasOrderedPosition
+        ? { streamId: value.streamId as string, streamSequence: value.streamSequence as number }
+        : {}),
       payload: value.payload as TPayload
     }
   };
@@ -1201,12 +1243,19 @@ function isNotFound(error: unknown, apiCode: number): boolean {
   return error instanceof JetStreamApiError && (error.code === apiCode || error.status === 404);
 }
 
-async function sanitizedSessionClose(session: JetStreamConsumerSession): Promise<void> {
-  try {
-    await session.close();
-  } catch {
-    // Closing is best-effort and must not leak transport details.
+async function sanitizedSessionClose(session: JetStreamConsumerSession, timeoutMs: number): Promise<void> {
+  const gracefulTimeoutMs = Math.max(1, Math.floor(timeoutMs * 0.8));
+  const gracefullyClosed = await settleWithinTimeout(
+    Promise.resolve().then(() => session.close()),
+    gracefulTimeoutMs
+  );
+  if (gracefullyClosed || typeof session.forceClose !== "function") {
+    return;
   }
+  await settleWithinTimeout(
+    Promise.resolve().then(() => session.forceClose!()),
+    Math.max(1, timeoutMs - gracefulTimeoutMs)
+  );
 }
 
 function normalizeServers(value: string | readonly string[] | undefined): string | string[] {
@@ -1302,17 +1351,30 @@ function isBoundedInteger(value: unknown, minimum: number, maximum: number): val
 }
 
 async function withinReadinessTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  return withinOperationTimeout(operation, timeoutMs, "jetstream_readiness_timeout");
+}
+
+async function withinOperationTimeout<T>(operation: Promise<T>, timeoutMs: number, errorCode: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       operation,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("jetstream_readiness_timeout")), timeoutMs);
+        timer = setTimeout(() => reject(new Error(errorCode)), timeoutMs);
         timer.unref?.();
       })
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function settleWithinTimeout(operation: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  try {
+    await withinOperationTimeout(operation, timeoutMs, "jetstream_consumer_stop_timeout");
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -2,6 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DatabaseClient } from "@hyperion/database";
 import { createService } from "./index.js";
+import {
+  DEFAULT_SHUTDOWN_TIMEOUT_MS,
+  MIN_SHUTDOWN_TIMEOUT_MS,
+  resolveShutdownTimeoutMs,
+  resolveTrustedProxies
+} from "./runtime-config.js";
 
 let app: FastifyInstance | undefined;
 
@@ -11,6 +17,8 @@ afterEach(async () => {
   delete process.env.DATABASE_URL;
   delete process.env.EXPECTED_DATABASE_ROLE;
   delete process.env.NODE_ENV;
+  delete process.env.TRUST_PROXY;
+  delete process.env.SHUTDOWN_TIMEOUT_MS;
 });
 
 describe("service runtime", () => {
@@ -32,6 +40,7 @@ describe("service runtime", () => {
 
     const response = await app.inject({ method: "GET", url: "/ready" });
 
+    expect(response.statusCode).toBe(503);
     expect(response.json().status).toBe("down");
   });
 
@@ -41,6 +50,7 @@ describe("service runtime", () => {
 
     const response = await app.inject({ method: "GET", url: "/ready" });
 
+    expect(response.statusCode).toBe(200);
     expect(response.json().status).toBe("ok");
   });
 
@@ -70,6 +80,7 @@ describe("service runtime", () => {
 
     available = false;
     const response = await app.inject({ method: "GET", url: "/ready" });
+    expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual(
       expect.objectContaining({
         status: "down",
@@ -109,6 +120,7 @@ describe("service runtime", () => {
     const response = await app.inject({ method: "GET", url: "/ready" });
     const body = response.json();
 
+    expect(response.statusCode).toBe(200);
     expect(body.status).toBe("ok");
     expect(body.dependencies).toEqual(
       expect.arrayContaining([
@@ -131,6 +143,7 @@ describe("service runtime", () => {
     const response = await app.inject({ method: "GET", url: "/ready" });
     const body = response.json();
 
+    expect(response.statusCode).toBe(503);
     expect(body.status).toBe("down");
     expect(body.dependencies).toEqual(
       expect.arrayContaining([
@@ -155,6 +168,7 @@ describe("service runtime", () => {
 
     const response = await app.inject({ method: "GET", url: "/ready" });
 
+    expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual(
       expect.objectContaining({
         status: "ok",
@@ -261,6 +275,7 @@ describe("service runtime", () => {
     const response = await app.inject({ method: "GET", url: "/ready" });
     const body = response.json();
 
+    expect(response.statusCode).toBe(200);
     expect(body.status).toBe("ok");
     expect(body.dependencies).toEqual(
       expect.arrayContaining([
@@ -285,6 +300,7 @@ describe("service runtime", () => {
 
     const response = await app.inject({ method: "GET", url: "/ready" });
 
+    expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual(
       expect.objectContaining({
         status: "down",
@@ -328,6 +344,67 @@ describe("service runtime", () => {
     const response = await app.inject({ method: "GET", url: "/health" });
 
     expect(String(response.headers["x-request-id"])).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("drains route-owned close hooks before closing the database pool", async () => {
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    const closeOrder: string[] = [];
+    const db = createFakeDatabase([]);
+    vi.mocked(db.close).mockImplementation(async () => {
+      closeOrder.push("database");
+    });
+
+    ({ app } = await createService({
+      serviceName: "tenant-service",
+      createDatabase: () => db,
+      registerRoutes: (instance) => {
+        instance.addHook("onClose", async () => {
+          closeOrder.push("dispatcher");
+        });
+      }
+    }));
+
+    await app.close();
+    app = undefined;
+
+    expect(closeOrder).toEqual(["dispatcher", "database"]);
+    expect(db.close).toHaveBeenCalledOnce();
+  });
+
+  it("uses a safe drain budget and permits only bounded overrides", () => {
+    expect(resolveShutdownTimeoutMs(undefined, undefined)).toBe(DEFAULT_SHUTDOWN_TIMEOUT_MS);
+    expect(DEFAULT_SHUTDOWN_TIMEOUT_MS).toBeGreaterThan(50_000);
+    expect(resolveShutdownTimeoutMs(90_000, undefined)).toBe(90_000);
+    expect(resolveShutdownTimeoutMs(undefined, "120000")).toBe(120_000);
+    expect(() => resolveShutdownTimeoutMs(10_000, undefined)).toThrow(/SHUTDOWN_TIMEOUT_MS/);
+    expect(() => resolveShutdownTimeoutMs(undefined, String(MIN_SHUTDOWN_TIMEOUT_MS - 1))).toThrow(
+      /SHUTDOWN_TIMEOUT_MS/
+    );
+  });
+
+  it("does not trust forwarded addresses unless an explicit proxy is configured", async () => {
+    ({ app } = await createService({
+      serviceName: "api-gateway",
+      registerRoutes: (instance) => {
+        instance.get("/client-ip", async (request) => ({ ip: request.ip }));
+      }
+    }));
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/client-ip",
+      headers: { "x-forwarded-for": "203.0.113.25" }
+    });
+
+    expect(response.json().ip).not.toBe("203.0.113.25");
+  });
+
+  it("accepts only explicit IP or CIDR trust-proxy rules and rejects trust-all", () => {
+    expect(resolveTrustedProxies(undefined)).toBe(false);
+    expect(resolveTrustedProxies("127.0.0.1,10.20.0.0/16")).toEqual(["127.0.0.1", "10.20.0.0/16"]);
+    expect(() => resolveTrustedProxies("true")).toThrow(/trust-all/);
+    expect(() => resolveTrustedProxies("0.0.0.0/0")).toThrow(/explicit proxy/);
+    expect(() => resolveTrustedProxies("proxy.internal")).toThrow(/explicit proxy/);
   });
 });
 

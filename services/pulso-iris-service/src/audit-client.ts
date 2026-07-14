@@ -1,4 +1,5 @@
 import type { AuditEventInput } from "@hyperion/contracts";
+import { createInternalAuthorizationHeaders } from "@hyperion/service-runtime";
 
 export const PULSO_AUDIT_EVENTS = [
   "agenda.settings.updated",
@@ -42,12 +43,12 @@ const SOURCE = "pulso-iris-service";
 
 export function createAuditClient(options: {
   auditServiceUrl?: string;
-  internalServiceToken?: string;
+  workloadToken?: string;
   logger: AuditLogger;
   fetchImpl?: typeof fetch;
 }): AuditEmitter {
   const auditServiceUrl = options.auditServiceUrl?.replace(/\/$/, "");
-  const token = options.internalServiceToken?.trim();
+  const token = options.workloadToken?.trim();
   const fetchImpl = options.fetchImpl ?? fetch;
   let warnedMissingConfig = false;
 
@@ -55,7 +56,7 @@ export function createAuditClient(options: {
     if (!auditServiceUrl || !token) {
       if (!warnedMissingConfig) {
         warnedMissingConfig = true;
-        options.logger.warn("audit emission disabled: AUDIT_SERVICE_URL or INTERNAL_SERVICE_TOKEN missing");
+        options.logger.warn("audit emission disabled: AUDIT_SERVICE_URL or PULSO_TO_AUDIT_TOKEN missing");
       }
       return;
     }
@@ -78,7 +79,7 @@ export function createAuditClient(options: {
     void fetchImpl(`${auditServiceUrl}/v1/audit/events`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${token}`,
+        ...createInternalAuthorizationHeaders(SOURCE, token),
         "content-type": "application/json"
       },
       body: JSON.stringify(payload),

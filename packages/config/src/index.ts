@@ -8,7 +8,6 @@ export interface ServiceConfig {
   serviceVersion: string;
   databaseUrl?: string;
   corsAllowedOrigins: string[];
-  internalServiceToken?: string;
 }
 
 export interface ServiceUrlMap {
@@ -46,8 +45,7 @@ export function readServiceConfig(serviceName: ServiceName): ServiceConfig {
     port: readNumber(process.env.PORT, defaultPorts[serviceName]),
     serviceVersion: process.env.SERVICE_VERSION ?? "0.1.0",
     databaseUrl: readOptional(process.env.DATABASE_URL),
-    corsAllowedOrigins: readCsv(process.env.CORS_ALLOWED_ORIGINS),
-    internalServiceToken: readOptional(process.env.INTERNAL_SERVICE_TOKEN)
+    corsAllowedOrigins: readCsv(process.env.CORS_ALLOWED_ORIGINS)
   };
 }
 

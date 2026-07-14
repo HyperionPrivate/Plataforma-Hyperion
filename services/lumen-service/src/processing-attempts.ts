@@ -2,7 +2,8 @@ import type { DatabaseExecutor } from "@hyperion/database";
 import { createHash } from "node:crypto";
 
 export type LumenProcessingOperation = "transcription" | "structuring";
-export type LumenProcessingStatus = "processing" | "completed" | "failed" | "cancelled";
+export type LumenProcessingStatus = "processing" | "cleanup_pending" | "completed" | "failed" | "cancelled";
+export const DETERMINISTIC_AUDIO_CLEANUP_PROTOCOL = "deterministic_v2" as const;
 
 interface ProcessingAttemptRow {
   id: string;
@@ -27,7 +28,7 @@ export type ProcessingAttemptReservation =
       resultSha256: string | null;
       resultVersion: Date | string | null;
     }
-  | { state: "processing" | "failed" | "cancelled" | "input_mismatch"; attemptId: string };
+  | { state: "processing" | "cleanup_pending" | "failed" | "cancelled" | "input_mismatch"; attemptId: string };
 
 export async function reserveProcessingAttempt(
   db: DatabaseExecutor,
@@ -42,13 +43,16 @@ export async function reserveProcessingAttempt(
     mimeType?: string;
     source?: string;
     durationSeconds?: number;
+    cleanupOwner?: string;
   }
 ): Promise<ProcessingAttemptReservation> {
+  const cleanupOwner = normalizeCleanupOwner(input.operation, input.cleanupOwner);
+  const cleanupProtocol = input.operation === "transcription" ? DETERMINISTIC_AUDIO_CLEANUP_PROTOCOL : null;
   const inserted = await db.query<{ id: string }>(
     `insert into lumen.processing_attempts
        (tenant_id, encounter_id, operation, idempotency_key, input_sha256,
-        provider, model, mime_type, source, duration_seconds)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        provider, model, mime_type, source, duration_seconds, cleanup_protocol, cleanup_owner)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      on conflict (tenant_id, encounter_id, operation, idempotency_key) do nothing
      returning id`,
     [
@@ -61,7 +65,9 @@ export async function reserveProcessingAttempt(
       input.model,
       input.mimeType ?? null,
       input.source ?? null,
-      input.durationSeconds ?? null
+      input.durationSeconds ?? null,
+      cleanupProtocol,
+      cleanupOwner
     ]
   );
   if (inserted.rowCount === 1) return { state: "reserved", attemptId: inserted.rows[0]!.id };
@@ -178,15 +184,47 @@ export async function failProcessingAttempt(
   const errorCode = sanitizeProcessingErrorCode(input.errorCode);
   await db.query(
     `update lumen.processing_attempts
-     set status = case when $2::boolean then 'cancelled' else 'failed' end,
-         error_code = case when $2::boolean then null else $3 end,
-         cancelled_at = case when $2::boolean then now() else null end,
-         failed_at = case when $2::boolean then null else now() end,
+     set status = case
+           when operation = 'transcription' and not $4::boolean then 'cleanup_pending'
+           when $2::boolean then 'cancelled'
+           else 'failed'
+         end,
+         cleanup_target_status = case
+           when operation = 'transcription' and not $4::boolean
+             then case when $2::boolean then 'cancelled' else 'failed' end
+           else null
+         end,
+         error_code = case
+           when operation = 'transcription' and not $4::boolean then $3
+           when $2::boolean then null
+           else $3
+         end,
+         cancelled_at = case
+           when (operation <> 'transcription' or $4::boolean) and $2::boolean then now()
+           else null
+         end,
+         failed_at = case
+           when (operation <> 'transcription' or $4::boolean) and not $2::boolean then now()
+           else null
+         end,
          temp_audio_deleted_at = case when $4::boolean then now() else temp_audio_deleted_at end,
          updated_at = now()
      where id = $1 and status = 'processing'`,
     [input.attemptId, input.cancelled, errorCode, input.temporaryAudioDeleted === true]
   );
+}
+
+function normalizeCleanupOwner(operation: LumenProcessingOperation, value: string | undefined): string | null {
+  if (operation === "structuring") {
+    if (value !== undefined) throw new Error("Structuring attempts must not have an audio cleanup owner");
+    return null;
+  }
+
+  const owner = value?.trim() ?? "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(owner)) {
+    throw new Error("Transcription attempts require a valid audio cleanup owner");
+  }
+  return owner;
 }
 
 function sanitizeProcessingErrorCode(value: string): string {

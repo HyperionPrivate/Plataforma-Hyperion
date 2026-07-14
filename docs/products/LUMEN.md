@@ -160,9 +160,11 @@ La implementación de estas rutas se encuentra en
   desde un origen de navegador inseguro, salvo el origen loopback controlado para
   pruebas locales.
 - **LUM-063 — Retención temporal vigente.** El audio solo puede existir durante
-  una solicitud, en un directorio privado y no ejecutable. DEBE eliminarse tanto
-  en éxito como en error. No se persiste en PostgreSQL ni en almacenamiento de
-  objetos.
+  el procesamiento o una recuperación pendiente, en un directorio privado y no
+  ejecutable. Su eliminación DEBE intentarse en éxito, error, cancelación y
+  aborto. Si no se confirma, el intento DEBE permanecer no terminal en
+  `cleanup_pending` y reintentarse; no se persisten audio ni rutas en PostgreSQL
+  o almacenamiento de objetos.
 - **LUM-064 — Evidencia conservada.** Se conservan el transcript, su revisión
   humana, el hash de entrada, metadatos técnicos mínimos, estados, timestamps,
   resultado e idempotencia. Un hash no permite reconstruir el audio.
@@ -184,8 +186,12 @@ La implementación de estas rutas se encuentra en
   medicación, alertas, tendencias, exámenes, línea de tiempo y fuentes
   identificables.
 - **LUM-084 — Intento de procesamiento.** Conserva operación, clave de
-  idempotencia, hash de entrada, estado terminal, snapshot de resultado y
-  confirmación de eliminación del temporal; nunca contiene audio.
+  idempotencia, hash de entrada, protocolo de limpieza, owner determinista o
+  scope efímero no secretos, estado terminal o `cleanup_pending`, snapshot de
+  resultado y clase de evidencia de eliminación del temporal; nunca contiene
+  audio ni rutas de archivos. `legacy_ephemeral_v1` pertenece sólo a una
+  ventana de rollback N-1 y nunca es procesado por el reconciliador
+  `deterministic_v2`.
 - **LUM-085 — Proyecciones.** LUMEN mantiene snapshots locales de tenant,
   concesiones de operador y referencias de encuentro con versión monótona y hash
   canónico.
@@ -195,13 +201,23 @@ La implementación de estas rutas se encuentra en
 - **LUM-087 — Historial de esquema.** El servicio valida su propia versión de
   esquema y no depende del historial global para quedar listo.
 
-La forma normativa está en
-[los contratos compartidos](../../packages/contracts/src/index.ts); la
-persistencia inicial y la autonomía están en
+La forma normativa de las interfaces HTTP y eventos públicos está en
+[los contratos compartidos](../../packages/contracts/src/index.ts). Ese paquete no representa el lifecycle interno
+de limpieza: `cleanup_pending` es un estado persistente privado de LUMEN, definido por
+[processing-attempts.ts](../../services/lumen-service/src/processing-attempts.ts) y por sus constraints de migración;
+no debe interpretarse como un estado aceptado por una entrada pública. La persistencia inicial y la autonomía están en
 [018-lumen-clinical-demo.sql](../../packages/migrations/sql/018-lumen-clinical-demo.sql),
 [020-lumen-real-audio-pipeline.sql](../../packages/migrations/sql/020-lumen-real-audio-pipeline.sql)
 y
-[022-lumen-autonomy.sql](../../packages/migrations/sql/022-lumen-autonomy.sql).
+[022-lumen-autonomy.sql](../../packages/migrations/sql/022-lumen-autonomy.sql), y
+la recuperación durable está en
+[029-lumen-audio-cleanup-recovery.sql](../../packages/migrations/sql/029-lumen-audio-cleanup-recovery.sql),
+la validación y lease exclusiva en
+[032-lumen-audio-cleanup-contract.sql](../../packages/migrations/sql/032-lumen-audio-cleanup-contract.sql)
+y el índice de reconciliación en
+[033-lumen-audio-cleanup-index.sql](../../packages/migrations/sql/033-lumen-audio-cleanup-index.sql). El chequeo
+global de owners no resueltos usa el índice parcial de
+[039-lumen-unresolved-cleanup-owner-index.sql](../../packages/migrations/sql/039-lumen-unresolved-cleanup-owner-index.sql).
 
 ## 9. Consola funcional
 
@@ -233,7 +249,7 @@ y
 | --------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | LUM-040–LUM-048 | Salud, worklist, encuentro, inicio, transcripción, estructuración, corrección, aprobación y proyecciones | `demo sintética`: backend funcional limitado a datos sintéticos    |
 | LUM-020–LUM-029 | Revisión humana, confianza, bloqueos, linaje, inmutabilidad y auditoría                                  | `demo sintética`: salvaguardas funcionales en el corte sintético   |
-| LUM-060–LUM-065 | Captura controlada, validación, temporal y eliminación de audio                                          | `demo sintética`: backend funcional para prueba sintética          |
+| LUM-060–LUM-065 | Captura controlada, validación, temporal y eliminación recuperable de audio                              | `demo sintética`: backend funcional para prueba sintética          |
 | LUM-080–LUM-087 | Esquema privado, contratos, intentos, inbox, outbox y versión local                                      | `parcial`: faltan productores, backfill y recuperación completa    |
 | LUM-100         | Preconsulta, dictado y revisión en consola web                                                           | `demo sintética`: funcional sobre el backend sintético             |
 | LUM-101         | Navegación y presentación adaptable a escritorio y móvil                                                 | `demo sintética`: web adaptable; no es una aplicación móvil nativa |
@@ -282,8 +298,13 @@ y
   de datos.
 - **LUM-202.** Una entrada de audio fuera de MIME, tamaño o duración permitidos se
   rechaza antes del procesamiento.
-- **LUM-203.** Cada archivo temporal de audio se elimina en éxito, error,
-  cancelación y aborto de la solicitud.
+- **LUM-203.** En éxito, error, cancelación y aborto se intenta eliminar cada
+  temporal. Un fallo de borrado confirmado deja `cleanup_pending`; una caída
+  abrupta puede dejar `processing`. El reconciliador recupera ambos casos y sólo
+  permite un estado terminal después de confirmar la eliminación o la ausencia
+  de la frontera temporal destruida. La recuperación conserva el
+  `LUMEN_INSTANCE_ID`; trabajo pendiente de un owner expirado distinto bloquea
+  readiness hasta restaurar esa identidad y su frontera.
 - **LUM-204.** Repetir una operación con la misma clave y la misma entrada devuelve
   el resultado idempotente; reutilizar la clave con otra entrada produce
   conflicto.
@@ -305,6 +326,8 @@ y
 La evidencia automatizada principal está en
 [lumen.integration.test.ts](../../services/lumen-service/src/lumen.integration.test.ts),
 [temporary-audio.test.ts](../../services/lumen-service/src/temporary-audio.test.ts),
+[audio-cleanup-recovery.test.ts](../../services/lumen-service/src/audio-cleanup-recovery.test.ts),
+[lumen-audio-cleanup-recovery.integration.test.ts](../../packages/migrations/src/lumen-audio-cleanup-recovery.integration.test.ts),
 [projection-events.integration.test.ts](../../services/lumen-service/src/projection-events.integration.test.ts)
 y las
 [pruebas de contratos](../../packages/contracts/src/index.test.ts).

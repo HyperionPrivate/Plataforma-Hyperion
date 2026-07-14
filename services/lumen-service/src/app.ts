@@ -6,8 +6,15 @@ import {
   readNatsAuthentication,
   type NatsAuthentication
 } from "@hyperion/durable-events";
-import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import {
+  createInternalAuthorizationHeaders,
+  readInternalCredential,
+  validateInternalAuthorization,
+  type RouteRegistrar,
+  type ServiceContext
+} from "@hyperion/service-runtime";
 import { randomUUID } from "node:crypto";
+import { readLumenAudioCleanupConfiguration, startLumenAudioCleanupReconciler } from "./audio-cleanup-recovery.js";
 import { DeepSeekClinicalStructurer } from "./clinical-ai.js";
 import { PostgresLumenOutbox } from "./lumen-outbox.js";
 import { registerLumenProjectionEventRoutes } from "./projection-events.js";
@@ -17,21 +24,48 @@ import { ElevenLabsSpeechToTextProvider } from "./speech-to-text.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const durableOutbox = readDurableOutboxConfiguration(process.env);
+  const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_LUMEN_TOKEN");
+  const auditToken = readInternalCredential(process.env, "LUMEN_TO_AUDIT_TOKEN");
   if (context.db) await verifyLumenSchema(context);
 
-  const transcriber = new ElevenLabsSpeechToTextProvider();
+  const audioCleanup = readLumenAudioCleanupConfiguration(process.env);
+  if (context.db) {
+    // Startup reconciliation is deliberately awaited before any clinical route
+    // can accept new audio. The periodic worker is drained before DB shutdown.
+    const reconciler = await startLumenAudioCleanupReconciler(context.db, audioCleanup, {
+      onError: () => app.log.error("LUMEN temporary-audio cleanup retry failed")
+    });
+    app.addHook("onClose", async () => reconciler.stop());
+    context.registerReadinessCheck?.({
+      name: "lumen_audio_cleanup_lease",
+      check: () => reconciler.checkReadiness()
+    });
+  }
+
+  const transcriber = new ElevenLabsSpeechToTextProvider({
+    tempRootDirectory: audioCleanup.rootDirectory,
+    cleanupOwner: audioCleanup.owner
+  });
   const structurer = new DeepSeekClinicalStructurer();
+
+  app.addHook("preHandler", async (request, reply) => {
+    if (!request.url.split("?", 1)[0]?.startsWith("/v1/tenants/")) return;
+    const authError = validateInternalAuthorization(request.headers, { "api-gateway": gatewayToken });
+    if (authError) {
+      return reply.code(authError.statusCode).send({ data: { error: authError.message }, requestId: request.id });
+    }
+  });
 
   if (isHttpDurableEventIngressEnabled(durableOutbox.transport)) {
     await registerLumenProjectionEventRoutes(app, context);
   }
-  await registerLumenRoutes(app, context, { transcriber, structurer });
+  await registerLumenRoutes(app, context, {
+    transcriber,
+    structurer,
+    audioCleanupOwner: audioCleanup.owner
+  });
 
-  if (
-    context.db &&
-    durableOutbox.enabled &&
-    (durableOutbox.transport === "jetstream" || context.config.internalServiceToken)
-  ) {
+  if (context.db && durableOutbox.enabled && (durableOutbox.transport === "jetstream" || auditToken)) {
     const workerId = `lumen-outbox-${randomUUID()}`;
     const outbox = new PostgresLumenOutbox(
       context.db,
@@ -57,7 +91,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
           })
         : new HttpOutboxDispatcher<Record<string, unknown>>({
             workerId,
-            internalToken: context.config.internalServiceToken!,
+            internalToken: auditToken!,
+            fetch: createWorkloadFetch("lumen-service", auditToken!),
             claim: (limit) => outbox.claim(limit),
             complete: (eventId) => outbox.complete(eventId),
             fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
@@ -127,7 +162,7 @@ export async function verifyLumenSchema(context: ServiceContext): Promise<void> 
             ) as "currentVersion"`
   );
   const currentVersion = Number(result.rows[0]?.currentVersion ?? 0);
-  if (!result.rows[0]?.encounters || !result.rows[0]?.records || currentVersion < 26) {
+  if (!result.rows[0]?.encounters || !result.rows[0]?.records || currentVersion < 39) {
     throw new Error("LUMEN schema is incomplete; run migrations");
   }
 }
@@ -192,4 +227,14 @@ function requireCredentialFreeNatsUrl(value: string | undefined): string {
     throw new Error("NATS_URL must be a nats: or tls: endpoint without path, query, or hash");
   }
   return normalized;
+}
+
+function createWorkloadFetch(caller: string, token: string): typeof fetch {
+  return (input, init) => {
+    const headers = new Headers(init?.headers);
+    for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
+      headers.set(name, value);
+    }
+    return fetch(input, { ...init, headers });
+  };
 }

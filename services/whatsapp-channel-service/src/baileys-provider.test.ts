@@ -616,7 +616,7 @@ describe("BaileysWhatsAppWebTestProvider", () => {
     await provider.close();
   });
 
-  it("waits for an in-flight accepted callback to reach durable capture during controlled close", async () => {
+  it("waits for durable capture and its database projection during controlled close", async () => {
     const { runtime, socket } = createFakeRuntime(true);
     let releaseMapping!: () => void;
     socket.signalRepository.lidMapping.getPNForLID.mockImplementation(
@@ -625,8 +625,14 @@ describe("BaileysWhatsAppWebTestProvider", () => {
           releaseMapping = () => resolveMapping(ADDRESS);
         })
     );
+    let releaseInbound!: () => void;
     const provider = new BaileysWhatsAppWebTestProvider(await config(), runtime);
-    const inbound = vi.fn(async (_message: import("./types.js").WhatsAppInboundText) => undefined);
+    const inbound = vi.fn(
+      async (_message: import("./types.js").WhatsAppInboundText) =>
+        new Promise<void>((resolveInbound) => {
+          releaseInbound = resolveInbound;
+        })
+    );
     provider.setInboundHandler(inbound);
     await provider.connect(TENANT_ID);
 
@@ -640,6 +646,10 @@ describe("BaileysWhatsAppWebTestProvider", () => {
     expect(closeCompleted).toBe(false);
 
     releaseMapping();
+    await vi.waitFor(() => expect(inbound).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(closeCompleted).toBe(false);
+    releaseInbound();
     await closing;
     await receiving;
     expect(inbound).toHaveBeenCalledTimes(1);

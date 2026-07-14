@@ -2,20 +2,40 @@
 
 ## Secuencia de despliegue
 
-`db-role-bootstrap` se conecta con el administrador de migraciones, crea o rota
-los ocho roles `LOGIN` y les fuerza `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`,
-`NOINHERIT`, `NOREPLICATION` y `NOBYPASSRLS`. No concede permisos. Después,
-`migrations` usa la misma conexión administrativa y `024-service-database-roles.sql`
-aplica la matriz de privilegios.
+`migrations` se conecta primero con el administrador. El fence aditivo
+`020-service-role-nologin-fence.sql` desactiva como `NOLOGIN` cualquier identidad
+existente antes de validar privilegios y falla si todavía existe una sesión de
+servicio; `024-service-database-roles.sql` crea las
+identidades faltantes y aplica la matriz publicada, y el fence aditivo de
+membresías rechaza relaciones en cualquiera de las dos direcciones. La
+validación y sus checksums deben quedar confirmados antes de activar una identidad
+de runtime.
 
-La migración también es segura fuera de Compose: si el bootstrap no se ejecutó,
-crea las identidades faltantes como `NOLOGIN` y aplica igualmente los grants. De
-ese modo nunca registra un checksum como falso no-op. Un bootstrap posterior
-puede activarlas sin cambiar la matriz. La migración falla si un rol tiene
-capacidades administrativas, membresías o es propietario de objetos.
+Antes de ejecutar migraciones se detienen y drenan todos los runtimes con base de
+datos. Después, `db-role-bootstrap` toma un lock de sesión con espera acotada y
+una primera transacción confirma como `NOLOGIN` cada identidad fija que ya
+exista, antes de validar presencia o drift. Por eso un rol faltante, una
+membresía o una capacidad insegura no deja a las demás identidades aceptando
+sesiones nuevas. Tras el fence comprueba los tres contratos, que existen los
+ocho roles y que su matriz inmutable es segura. En una segunda transacción
+vuelve a aplicar la allow-list de 024 y los grants mínimos de objetos
+posteriores, valida que no haya sesiones antiguas y sólo entonces rota las ocho
+contraseñas y activa los roles como `LOGIN`, forzando
+`NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOINHERIT`, `NOREPLICATION` y
+`NOBYPASSRLS`. Si falla la reparación, la validación o cualquier activación, la
+rotación completa se revierte y todos los roles permanecen `NOLOGIN`: no puede
+quedar una rotación parcial ni sobrevivir un privilegio agregado fuera de la
+matriz. Se drenan las sesiones y se corrige la causa antes de reintentar; nunca se
+activa un rol manualmente para eludir el fence.
 
-Cada runtime recibe una URL distinta y `EXPECTED_DATABASE_ROLE`, obligatorio al
-conectar a PostgreSQL en produccion. El runtime exige que `current_user` y
+Compose codifica el orden obligatorio `migrations` → `db-role-bootstrap` →
+runtimes con base de datos. Ejecutar el bootstrap antes de la migración es un
+error deliberado y no una ruta alternativa de aprovisionamiento.
+
+Cada runtime recibe una URL restringida y `EXPECTED_DATABASE_ROLE`, obligatorio al
+conectar a PostgreSQL en produccion. Las diez aplicaciones se distribuyen entre ocho roles:
+Identity/Tenant comparten `hyperion_access` y Agent/Prompt comparten `hyperion_sofia`; los demás
+contextos usan una identidad propia. El runtime exige que `current_user` y
 `session_user` coincidan, comprueba capacidades y membresias antes de registrar
 rutas o arrancar workers y liga el rol a un mapa normativo `serviceName -> rol`;
 una identidad incorrecta cierra el pool y aborta el arranque.
@@ -54,13 +74,17 @@ explícito revisado; conceder defaults por esquema sería demasiado amplio.
 
 Las contraseñas Compose son ocho secretos distintos. Deben tener al menos 24
 caracteres y limitarse a caracteres URI no reservados; el bootstrap nunca las
-incluye en logs ni errores.
+incluye en logs ni errores. `MIGRATION_LOCK_TIMEOUT_MS` acota tanto el lock del
+runner como el mutex del bootstrap y `MIGRATION_STATEMENT_TIMEOUT_MS` limita cada
+transacción de DDL/roles.
 
 ## Verificación
 
 Las pruebas de migraciones cubren la secuencia `NOLOGIN` → bootstrap `LOGIN`,
-atributos de rol, consultas reales con los ocho contextos, escrituras con
-triggers, ownership fail-closed y denegaciones como LUMEN → Access/PULSO y
-Channel → LUMEN. La configuración renderizada de Compose también se inspecciona
-para confirmar que sólo `db-role-bootstrap` y `migrations` reciben la URL
-administrativa.
+fence persistente ante sesiones sin drenar, rollback atómico ante un fallo
+parcial, reparación de privilege drift,
+membresías en ambas direcciones, atributos de rol, consultas reales con los ocho
+contextos, grants posteriores a 024, ownership fail-closed y denegaciones como
+LUMEN → Access/PULSO y Channel → LUMEN. La configuración renderizada de Compose
+también se inspecciona para confirmar el orden y que sólo `db-role-bootstrap` y
+`migrations` reciben la URL administrativa.

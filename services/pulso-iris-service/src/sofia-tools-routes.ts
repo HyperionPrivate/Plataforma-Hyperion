@@ -1,8 +1,7 @@
-import { timingSafeEqual } from "node:crypto";
 import { envelope } from "@hyperion/contracts";
 import type { DatabaseClient } from "@hyperion/database";
-import type { ServiceContext } from "@hyperion/service-runtime";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { readInternalCredential, validateInternalAuthorization, type ServiceContext } from "@hyperion/service-runtime";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AgendaProviderError } from "./agenda-provider.js";
 import type { AuditEmitter } from "./audit-client.js";
@@ -98,8 +97,12 @@ export async function registerSofiaToolRoutes(
   context: ServiceContext,
   emitAudit: AuditEmitter
 ): Promise<void> {
+  const sofiaToken = readInternalCredential(process.env, "SOFIA_TO_PULSO_TOKEN");
   app.post("/internal/v1/tenants/:tenantId/pulso-iris/sofia/tools/:toolName", async (request, reply) => {
-    if (!authorizeInternal(request, reply, context.config.internalServiceToken)) return;
+    const authError = validateInternalAuthorization(request.headers, { "agent-service": sofiaToken });
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
     const tenantId = readTenantId(request.params);
     if (!tenantId) return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
     if (!context.db) return reply.code(503).send(envelope({ error: "Database unavailable" }, request.id));
@@ -908,22 +911,6 @@ function readToolName(params: unknown): ToolName | undefined {
       ? (params as { toolName?: unknown }).toolName
       : undefined;
   return typeof value === "string" && value in toolSchemas ? (value as ToolName) : undefined;
-}
-
-function authorizeInternal(request: FastifyRequest, reply: FastifyReply, token: string | undefined): boolean {
-  const authorization = request.headers.authorization;
-  const supplied = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
-  if (!token || !safeEqual(supplied, token)) {
-    void reply.code(401).send(envelope({ error: "Internal authentication required" }, request.id));
-    return false;
-  }
-  return true;
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 type TransactionExecutor = Parameters<Parameters<DatabaseClient["transaction"]>[0]>[0];

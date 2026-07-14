@@ -129,6 +129,7 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
   private readonly captureBarriers = new Set<Promise<void>>();
   private readonly allowedPhoneHashes: ReadonlySet<string>;
   private eventSpool?: EncryptedChannelEventSpool;
+  private closePromise?: Promise<void>;
   private inboundHandler: (message: WhatsAppInboundText) => Promise<void> = async () => undefined;
   private statusHandler: (tenantId: string, status: WhatsAppConnectionStatus) => Promise<void> = async () => undefined;
   private deliveryHandler: (update: WhatsAppDeliveryUpdate) => Promise<boolean> = async () => true;
@@ -300,7 +301,12 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     return { providerMessageId, sentAt };
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closePromise ??= this.closeOnce();
+    return this.closePromise;
+  }
+
+  private async closeOnce(): Promise<void> {
     this.connectAttempts.clear();
     for (const [tenantId, connection] of this.connections) {
       if (connection.reconnectTimer) clearTimeout(connection.reconnectTimer);
@@ -311,8 +317,12 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     this.connections.clear();
     this.rateWindows.clear();
     this.reconnectAfterSpool.clear();
-    await withTimeout(Promise.allSettled([...this.captureBarriers]), 5_000).catch(() => undefined);
-    await Promise.allSettled(this.statusProjectionTails.values());
+    // Accepted socket callbacks first reach the encrypted spool. Once all
+    // capture barriers settle, no retained event may still be projected after
+    // shutdown: drain both the spool and status tails before returning.
+    await settleUntilEmpty(() => [...this.captureBarriers]);
+    await settleUntilEmpty(() => [...this.spoolDrains.values()]);
+    await settleUntilEmpty(() => [...this.statusProjectionTails.values()]);
   }
 
   private async openSocket(tenantId: string, connection: TenantConnection): Promise<void> {
@@ -1032,6 +1042,14 @@ async function protectSessionDirectory(directory: string): Promise<void> {
       if (entry.isFile()) await chmod(path, 0o600).catch(() => undefined);
     })
   );
+}
+
+async function settleUntilEmpty(readOperations: () => Promise<unknown>[]): Promise<void> {
+  while (true) {
+    const operations = readOperations();
+    if (operations.length === 0) return;
+    await Promise.allSettled(operations);
+  }
 }
 
 async function wait(delayMs: number): Promise<void> {

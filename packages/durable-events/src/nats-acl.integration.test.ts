@@ -100,12 +100,38 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
     await expectPublishDenied(channel, "hyperion.events.sofia.audit.event.record.v1", "acl-denied-channel-audit");
   });
 
+  it("allows Channel to publish both contracts during the explicit v1-to-v2 rollout", async () => {
+    await expectPublishAllowed(
+      channel,
+      "hyperion.events.channel.inbound.received.v1",
+      `acl-allowed-channel-v1-${Date.now()}`
+    );
+    await expectPublishAllowed(
+      channel,
+      "hyperion.events.channel.inbound.received.v2",
+      `acl-allowed-channel-v2-${Date.now()}`
+    );
+  });
+
   it("rejects topology publishing a domain event", async () => {
     await expectPublishDenied(topology, "hyperion.events.channel.inbound.received.v1", "acl-denied-topology-domain");
   });
 
   it("rejects PULSO publishing a Channel-owned event", async () => {
     await expectPublishDenied(pulso, "hyperion.events.channel.inbound.received.v1", "acl-denied-pulso-channel");
+  });
+
+  it("allows PULSO to publish both message contracts during the explicit v1-to-v2 rollout", async () => {
+    await expectPublishAllowed(
+      pulso,
+      "hyperion.events.pulso.message.received.v1",
+      `acl-allowed-pulso-v1-${Date.now()}`
+    );
+    await expectPublishAllowed(
+      pulso,
+      "hyperion.events.pulso.message.received.v2",
+      `acl-allowed-pulso-v2-${Date.now()}`
+    );
   });
 
   it("allows each Audit producer only its source-scoped subject", async () => {

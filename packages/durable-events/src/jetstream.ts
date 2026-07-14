@@ -177,6 +177,7 @@ export class JetStreamOutboxDispatcher<TPayload = JsonValue> {
 
   /** Opens and authenticates the publisher session before the service advertises readiness. */
   async initialize(): Promise<void> {
+    if (this.#stopping) throw new Error("jetstream_publisher_stopped");
     await this.#getSession();
   }
 
@@ -255,20 +256,14 @@ export class JetStreamOutboxDispatcher<TPayload = JsonValue> {
       this.#interval = undefined;
     }
 
+    const session = this.#session;
+    this.#session = undefined;
+    const closing = session === undefined ? Promise.resolve() : this.#closeSessionOnce(session);
+    await this.#activeDrain;
     try {
-      await this.#activeDrain;
-      const session = this.#session;
-      this.#session = undefined;
-      this.#sessionPromise = undefined;
-      if (session !== undefined) {
-        try {
-          await this.#closeSessionOnce(session);
-        } catch {
-          throw new Error("jetstream_close_error");
-        }
-      }
-    } finally {
-      this.#stopping = false;
+      await closing;
+    } catch {
+      throw new Error("jetstream_close_error");
     }
   }
 
@@ -304,7 +299,11 @@ export class JetStreamOutboxDispatcher<TPayload = JsonValue> {
     }
 
     const seenIds = new Set<string>();
-    for (const event of boundedEvents) {
+    for (const [index, event] of boundedEvents.entries()) {
+      if (this.#stopping) {
+        result.skipped += boundedEvents.length - index;
+        break;
+      }
       let eventId = "";
       try {
         eventId = typeof event?.id === "string" ? event.id : "";
@@ -360,6 +359,7 @@ export class JetStreamOutboxDispatcher<TPayload = JsonValue> {
         version: event.version,
         occurredAt: event.occurredAt,
         tenantId: event.tenantId,
+        ...(event.streamId === undefined ? {} : { streamId: event.streamId, streamSequence: event.streamSequence }),
         payload: event.payload
       };
       payload = new TextEncoder().encode(stableStringify(envelope));
@@ -401,6 +401,7 @@ export class JetStreamOutboxDispatcher<TPayload = JsonValue> {
   }
 
   async #getSession(): Promise<JetStreamPublisherSession> {
+    if (this.#stopping) throw new Error("jetstream_publisher_stopped");
     if (this.#session !== undefined) {
       return this.#session;
     }
@@ -419,6 +420,10 @@ export class JetStreamOutboxDispatcher<TPayload = JsonValue> {
         typeof session.close !== "function"
       ) {
         throw new TypeError("invalid_jetstream_session");
+      }
+      if (this.#stopping) {
+        await this.#closeSessionOnce(session);
+        throw new Error("jetstream_publisher_stopped");
       }
       this.#session = session;
       return session;
@@ -507,14 +512,14 @@ function createNatsSessionFactory(options: {
           }
         },
         close: async () => {
-          if (connection?.isClosed()) {
+          if (ownedConnection.isClosed()) {
             return;
           }
           try {
-            await connection?.drain();
+            await withinCloseTimeout(ownedConnection.drain(), options.connectTimeoutMs);
           } catch {
-            if (connection !== undefined && !connection.isClosed()) {
-              await connection.close();
+            if (!ownedConnection.isClosed()) {
+              await ownedConnection.close();
             }
           }
         }
@@ -539,6 +544,21 @@ async function withinReadinessTimeout<T>(operation: Promise<T>, timeoutMs: numbe
       operation,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error("jetstream_readiness_timeout")), timeoutMs);
+        timer.unref?.();
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function withinCloseTimeout(operation: Promise<void>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("jetstream_close_timeout")), timeoutMs);
         timer.unref?.();
       })
     ]);
@@ -660,7 +680,20 @@ function isValidEvent<TPayload>(event: ClaimedOutboxEvent<TPayload>): boolean {
     typeof event.occurredAt === "string" &&
     event.occurredAt.length > 0 &&
     Number.isFinite(Date.parse(event.occurredAt)) &&
-    (event.tenantId === null || (typeof event.tenantId === "string" && event.tenantId.length > 0))
+    (event.tenantId === null || (typeof event.tenantId === "string" && event.tenantId.length > 0)) &&
+    isValidStreamPosition(event.streamId, event.streamSequence)
+  );
+}
+
+function isValidStreamPosition(streamId: unknown, streamSequence: unknown): boolean {
+  if (streamId === undefined && streamSequence === undefined) {
+    return true;
+  }
+  return (
+    isSafeText(streamId, CONFIGURATION_VALUE_MAX_LENGTH) &&
+    typeof streamSequence === "number" &&
+    Number.isSafeInteger(streamSequence) &&
+    streamSequence > 0
   );
 }
 

@@ -1,4 +1,5 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface TemporaryAudioFile {
@@ -10,7 +11,10 @@ export interface TemporaryAudioFile {
 export interface TemporaryAudioOptions {
   rootDirectory: string;
   extension: string;
+  cleanupOwner: string;
+  cleanupKey: string;
   cleanupState?: TemporaryAudioCleanupState;
+  removeDirectory?: (path: string) => Promise<void>;
 }
 
 export interface TemporaryAudioCleanupState {
@@ -29,9 +33,9 @@ export class TemporaryAudioError extends Error {
 }
 
 /**
- * Stages audio in an isolated, private directory for the duration of one
- * operation. The request directory and its contents are removed in `finally`
- * on success, provider failure, timeout and cancellation.
+ * Stages audio in an isolated, private, deterministic directory for one
+ * processing attempt. Only the trusted owner and UUID are used to construct
+ * the path; neither a database value nor an HTTP value can supply a path.
  */
 export async function withTemporaryAudioFile<T>(
   audio: Buffer,
@@ -41,6 +45,11 @@ export async function withTemporaryAudioFile<T>(
   // Until a request directory exists, there is no temporary audio to remove.
   if (options.cleanupState) options.cleanupState.deleted = true;
   const extension = validateExtension(options.extension);
+  const deterministicDirectory = temporaryAudioRequestDirectory(
+    options.rootDirectory,
+    options.cleanupOwner,
+    options.cleanupKey
+  );
   let requestDirectory: string | undefined;
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -48,7 +57,10 @@ export async function withTemporaryAudioFile<T>(
     try {
       await mkdir(options.rootDirectory, { recursive: true, mode: 0o700 });
       await chmod(options.rootDirectory, 0o700);
-      requestDirectory = await mkdtemp(join(options.rootDirectory, "request-"));
+      await mkdir(deterministicDirectory.ownerDirectory, { recursive: true, mode: 0o700 });
+      await chmod(deterministicDirectory.ownerDirectory, 0o700);
+      requestDirectory = deterministicDirectory.requestDirectory;
+      await mkdir(requestDirectory, { mode: 0o700 });
       if (options.cleanupState) options.cleanupState.deleted = false;
       await chmod(requestDirectory, 0o700);
     } catch (error) {
@@ -83,7 +95,10 @@ export async function withTemporaryAudioFile<T>(
   if (requestDirectory) {
     if (options.cleanupState) options.cleanupState.deleted = false;
     try {
-      await rm(requestDirectory, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 });
+      await (options.removeDirectory ?? removeTemporaryAudioDirectory)(requestDirectory);
+      // Remove only the now-empty owner directory. ENOTEMPTY means another
+      // active attempt exists and is intentionally left untouched.
+      await rmdir(deterministicDirectory.ownerDirectory).catch(() => undefined);
       if (options.cleanupState) options.cleanupState.deleted = true;
     } catch (error) {
       throw new TemporaryAudioError("cleanup", error);
@@ -94,10 +109,45 @@ export async function withTemporaryAudioFile<T>(
   return outcome.value;
 }
 
+export function temporaryAudioRequestDirectory(
+  rootDirectory: string,
+  cleanupOwner: string,
+  cleanupKey: string
+): { ownerDirectory: string; requestDirectory: string } {
+  const owner = validateCleanupOwner(cleanupOwner);
+  const attemptId = validateCleanupKey(cleanupKey);
+  const ownerKey = createHash("sha256").update(owner, "utf8").digest("hex").slice(0, 32);
+  const ownerDirectory = join(rootDirectory, `owner-${ownerKey}`);
+  return {
+    ownerDirectory,
+    requestDirectory: join(ownerDirectory, `attempt-${attemptId}`)
+  };
+}
+
+export async function removeTemporaryAudioDirectory(path: string): Promise<void> {
+  await rm(path, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 });
+}
+
 function validateExtension(value: string): string {
   const extension = value.trim().toLowerCase();
   if (!/^[a-z0-9]{1,8}$/.test(extension)) {
     throw new TemporaryAudioError("create");
   }
   return extension;
+}
+
+function validateCleanupOwner(value: string): string {
+  const owner = value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(owner)) {
+    throw new TemporaryAudioError("create");
+  }
+  return owner;
+}
+
+function validateCleanupKey(value: string): string {
+  const attemptId = value.trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(attemptId)) {
+    throw new TemporaryAudioError("create");
+  }
+  return attemptId;
 }

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -73,6 +73,7 @@ function input(overrides: Partial<SpeechToTextInput> = {}): SpeechToTextInput {
     audio: validWavFixture(),
     mimeType: "audio/wav",
     durationSeconds: 12.5,
+    cleanupKey: randomUUID(),
     ...overrides
   };
 }
@@ -92,6 +93,7 @@ function providerOptions(
     timeoutMs: 10_000,
     baseUrl: "https://api.elevenlabs.test",
     tempRootDirectory,
+    cleanupOwner: "lumen-stt-test-1",
     fetchImpl,
     ...overrides
   };

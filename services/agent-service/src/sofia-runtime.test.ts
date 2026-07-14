@@ -1,4 +1,5 @@
 import type { DatabaseClient } from "@hyperion/database";
+import { createService } from "@hyperion/service-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { LlmCompletionInput, LlmProvider } from "./llm-provider.js";
 import {
@@ -16,7 +17,176 @@ import {
   SofiaRuntime
 } from "./sofia-runtime.js";
 
+describe("SOFIA runtime lifecycle", () => {
+  it("stops admission and waits for active ingest and job iterations exactly once", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = new SofiaRuntime({
+        db: { query: vi.fn(), transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
+        logger: { warn: vi.fn() },
+        llm: { name: "test", model: "test", isConfigured: () => true } as unknown as LlmProvider,
+        internalServiceToken: "controlled-token",
+        channelUrl: "http://channel.test",
+        promptFlowUrl: "http://prompt.test",
+        pulsoIrisUrl: "http://pulso.test",
+        auditUrl: "http://audit.test",
+        pollIntervalMs: 60_000
+      });
+      const ingest = deferred<number>();
+      const job = deferred<boolean>();
+      const ingestOnce = vi.spyOn(runtime, "ingestOnce").mockReturnValue(ingest.promise);
+      const processOne = vi.spyOn(runtime, "processOne").mockReturnValue(job.promise);
+
+      runtime.start();
+      expect(ingestOnce).toHaveBeenCalledTimes(1);
+      expect(processOne).toHaveBeenCalledTimes(1);
+      expect(runtime.isRunning()).toBe(true);
+
+      const firstStop = runtime.stop();
+      expect(runtime.stop()).toBe(firstStop);
+      expect(runtime.isRunning()).toBe(false);
+      let stopped = false;
+      void firstStop.then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+
+      ingest.resolve(0);
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      job.resolve(true);
+      await firstStop;
+
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(ingestOnce).toHaveBeenCalledTimes(1);
+      expect(processOne).toHaveBeenCalledTimes(1);
+      expect(stopped).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels internal HTTP work and returns a max-attempt job to the retry queue", async () => {
+    const tenantId = "00000000-0000-4000-8000-000000000201";
+    const conversationId = "00000000-0000-4000-8000-000000000202";
+    const jobId = "00000000-0000-4000-8000-000000000203";
+    const messageId = "00000000-0000-4000-8000-000000000204";
+    const promptStarted = deferred<void>();
+    let failedJobParameters: unknown[] | undefined;
+    let queuedConversation = false;
+    let responsePersisted = false;
+    const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
+      if (sql.includes("sofia-confirmation:recovery-candidates")) return dbResult([]);
+      if (sql.includes("agent_runtime.claim_next_job")) {
+        return dbResult([
+          {
+            id: jobId,
+            tenantId,
+            conversationId,
+            inboundEventId: "00000000-0000-4000-8000-000000000205",
+            attemptCount: 4,
+            maxAttempts: 4,
+            input: {
+              patientId: "00000000-0000-4000-8000-000000000206",
+              messageId,
+              threadBindingId: "00000000-0000-4000-8000-000000000207",
+              occurredAt: new Date().toISOString()
+            }
+          }
+        ]);
+      }
+      if (sql.includes("select m.body")) return dbResult([{ body: "Necesito una cita", conversationStatus: "active" }]);
+      if (sql.includes("insert into agent_runtime.executions")) {
+        return dbResult([{ id: "00000000-0000-4000-8000-000000000208" }]);
+      }
+      if (sql.includes("update agent_runtime.jobs") && sql.includes("last_error_code = $5")) {
+        failedJobParameters = parameters;
+      }
+      if (sql.includes("jsonb_build_object('sofiaStatus', $3::text") && parameters?.[2] === "queued") {
+        queuedConversation = true;
+      }
+      if (sql.includes("insert into pulso_iris.messages")) responsePersisted = true;
+      return dbResult([]);
+    });
+    const db = {
+      query,
+      transaction: vi.fn(async (callback: (tx: { query: typeof query }) => Promise<unknown>) => callback({ query })),
+      close: vi.fn()
+    } as unknown as DatabaseClient;
+    const fetchImpl = vi.fn(
+      async (url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          if (!String(url).includes("prompt-flows/SOFIA/active")) {
+            reject(new Error(`Unexpected request: ${String(url)}`));
+            return;
+          }
+          promptStarted.resolve(undefined);
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        })
+    );
+    const logger = { warn: vi.fn() };
+    const complete = vi.fn();
+    const runtime = new SofiaRuntime({
+      db,
+      logger,
+      llm: { name: "controlled", model: "controlled", isConfigured: () => true, complete } as unknown as LlmProvider,
+      internalServiceToken: "controlled-token",
+      channelUrl: "http://channel.test",
+      promptFlowUrl: "http://prompt.test",
+      pulsoIrisUrl: "http://pulso.test",
+      auditUrl: "http://audit.test",
+      pollIntervalMs: 60_000,
+      inboundPollingEnabled: false,
+      fetchImpl: fetchImpl as typeof fetch
+    });
+
+    runtime.start();
+    await promptStarted.promise;
+    await expect(
+      Promise.race([
+        runtime.stop().then(() => "stopped"),
+        new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 500))
+      ])
+    ).resolves.toBe("stopped");
+
+    expect(runtime.isRunning()).toBe(false);
+    expect(complete).not.toHaveBeenCalled();
+    expect(responsePersisted).toBe(false);
+    expect(failedJobParameters?.[2]).toBe("retry_scheduled");
+    expect(failedJobParameters?.[4]).toBe("shutdown_interrupted");
+    expect(failedJobParameters?.[5]).toBe(true);
+    expect(queuedConversation).toBe(true);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("greatest(attempt_count - 1, 0)"))).toBe(true);
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/whatsapp/messages"))).toBe(false);
+    expect(logger.warn.mock.calls.some(([message]) => message === "SOFIA used deterministic fallback")).toBe(false);
+  });
+});
+
 describe("SOFIA deterministic urgency guard", () => {
+  it("never accepts the legacy shared constructor credential in production", () => {
+    const previousEnvironment = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      expect(
+        () =>
+          new SofiaRuntime({
+            db: { query: vi.fn(), transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
+            logger: { warn: vi.fn() },
+            llm: { name: "test", model: "test", isConfigured: () => true } as unknown as LlmProvider,
+            internalServiceToken: "legacy-shared-token",
+            channelUrl: "http://channel.test",
+            promptFlowUrl: "http://prompt.test",
+            pulsoIrisUrl: "http://pulso.test",
+            auditUrl: "http://audit.test"
+          })
+      ).toThrow("SOFIA_TO_CHANNEL_TOKEN");
+    } finally {
+      if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousEnvironment;
+    }
+  });
+
   it("stops scheduling for controlled urgency phrases", () => {
     expect(isUrgencySignal("Perdí la visión de forma repentina")).toBe(true);
     expect(isUrgencySignal("Tuve un golpe fuerte en el ojo")).toBe(true);
@@ -95,7 +265,11 @@ describe("SOFIA deterministic urgency guard", () => {
     }));
     let routeHandler:
       | ((
-          request: { headers: { authorization: string }; params: { tenantId: string }; id: string },
+          request: {
+            headers: { authorization: string; "x-hyperion-caller": string };
+            params: { tenantId: string };
+            id: string;
+          },
           reply: unknown
         ) => Promise<unknown>)
       | undefined;
@@ -107,14 +281,17 @@ describe("SOFIA deterministic urgency guard", () => {
     registerSofiaReadinessRoute(app as never, {
       db: { query, transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
       llm: { model: "controlled", isConfigured: () => true } as unknown as LlmProvider,
-      internalServiceToken: "internal-controlled-token",
+      integrationToken: "integration-to-sofia-controlled-token",
       workerEnabled: true,
       runtime: { isRunning: () => true }
     });
 
     const response = (await routeHandler!(
       {
-        headers: { authorization: "Bearer internal-controlled-token" },
+        headers: {
+          authorization: "Bearer integration-to-sofia-controlled-token",
+          "x-hyperion-caller": "integration-service"
+        },
         params: { tenantId: "00000000-0000-4000-8000-000000000001" },
         id: "controlled-readiness"
       },
@@ -125,6 +302,45 @@ describe("SOFIA deterministic urgency guard", () => {
     expect(String(query.mock.calls[0]?.[0])).toContain("sofia_whatsapp_internal_v5");
     expect(String(query.mock.calls[0]?.[0])).toContain("016-sofia-search-constraints.sql");
     expect(String(query.mock.calls[0]?.[0])).toContain("order by f.version desc, f.updated_at desc");
+  });
+
+  it("rejects readiness impersonation before querying tenant state", async () => {
+    process.env.DATABASE_URL = "postgresql://unused/sofia-readiness-test";
+    const query = vi.fn();
+    const database = {
+      query,
+      transaction: vi.fn(),
+      close: vi.fn()
+    } as unknown as DatabaseClient;
+    const handle = await createService({
+      serviceName: "agent-service",
+      databaseRequired: true,
+      createDatabase: () => database,
+      registerRoutes: (app) =>
+        registerSofiaReadinessRoute(app, {
+          db: database,
+          llm: { model: "controlled", isConfigured: () => true } as unknown as LlmProvider,
+          integrationToken: "integration-to-sofia-controlled-token",
+          workerEnabled: true,
+          runtime: { isRunning: () => true }
+        })
+    });
+    try {
+      const response = await handle.app.inject({
+        method: "GET",
+        url: "/internal/v1/tenants/00000000-0000-4000-8000-000000000001/sofia/readiness",
+        headers: {
+          authorization: "Bearer integration-to-sofia-controlled-token",
+          "x-hyperion-caller": "pulso-iris-service"
+        }
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(query).not.toHaveBeenCalled();
+    } finally {
+      await handle.app.close();
+      delete process.env.DATABASE_URL;
+    }
   });
 });
 
@@ -595,6 +811,7 @@ describe("SOFIA fresh availability guard", () => {
     await expect(runtime.processOne()).resolves.toBe(true);
     expect(complete).toHaveBeenCalledTimes(1);
     const completionInput = complete.mock.calls[0]![0];
+    expect(completionInput.signal).toBeInstanceOf(AbortSignal);
     expect(completionInput.toolChoice).toEqual({ name: "search_availability" });
     expect(completionInput.messages.some((message) => message.content?.includes("horarios antiguos"))).toBe(true);
     expect(persistedResponse).toContain("no pude consultar la disponibilidad actual");
@@ -1277,6 +1494,10 @@ describe("SOFIA deterministic confirmation execution", () => {
     expect(result.responseText).toContain("No hay una acción pendiente para confirmar");
     expect(result.executionStatus).toBe("fallback");
     expect(result.executionToolNames).toEqual([]);
+    expect(result.auditOutboxPayloads).toEqual([
+      expect.objectContaining({ eventType: "agent.execution.completed", entityId: CONFIRMATION_IDS.execution }),
+      expect.objectContaining({ eventType: "agent.response.created", entityId: CONFIRMATION_IDS.responseMessage })
+    ]);
   });
 
   it("does not attribute a tool when the confirmation does not match the pending action", async () => {
@@ -1572,9 +1793,15 @@ describe("SOFIA deterministic confirmation execution", () => {
     expect(result.recoveryCandidateSql).toContain("patient.tenant_id = j.tenant_id");
     expect(result.recoveryCandidateSql).toContain("patient.conversation_id = j.conversation_id");
     expect(result.recoveryCandidateSql).toContain("patient.id::text = j.input->>'messageId'");
+    expect(result.recoveryCandidateSql).toContain("predecessor.stream_id = j.stream_id");
+    expect(result.recoveryCandidateSql).toContain("predecessor.stream_sequence < j.stream_sequence");
+    expect(result.recoveryCandidateSql).toContain("predecessor.status <> 'completed'");
     expect(result.recoveryClaimSql).toContain("j.tenant_id = $2");
     expect(result.recoveryClaimSql).toContain("j.conversation_id = $4");
     expect(result.recoveryClaimSql).toContain("j.input->>'messageId' = $5");
+    expect(result.recoveryClaimSql).toContain("predecessor.stream_id = j.stream_id");
+    expect(result.recoveryClaimSql).toContain("predecessor.stream_sequence < j.stream_sequence");
+    expect(result.recoveryClaimSql).toContain("predecessor.status <> 'completed'");
     expect(result.recoveryClaimParameters?.slice(1, 5)).toEqual([
       CONFIRMATION_IDS.tenant,
       CONFIRMATION_IDS.job,
@@ -1844,6 +2071,7 @@ async function runConfirmationScenario(input: {
   let normalClaimCalls = 0;
   const mutationCalls: Array<{ tool: string; body: Record<string, unknown> }> = [];
   const toolCalls: string[] = [];
+  const auditOutboxPayloads: Array<Record<string, unknown>> = [];
   const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
     if (sql.includes("sofia-confirmation:recovery-candidates")) {
       recoveryCandidateSql = sql;
@@ -2006,6 +2234,13 @@ async function runConfirmationScenario(input: {
       jobFailure = String(parameters?.[3] ?? "");
       return dbResult([]);
     }
+    if (sql.includes("insert into agent_runtime.outbox_events")) {
+      auditOutboxPayloads.push(
+        JSON.parse(String(parameters?.[3])) as Record<string, unknown>,
+        JSON.parse(String(parameters?.[4])) as Record<string, unknown>
+      );
+      return dbResult([]);
+    }
     return dbResult([]);
   });
   const db = {
@@ -2063,6 +2298,7 @@ async function runConfirmationScenario(input: {
     complete,
     mutationCalls,
     toolCalls,
+    auditOutboxPayloads,
     responseText,
     executionStatus,
     executionToolNames,
@@ -2084,4 +2320,12 @@ function jsonResponse(data: unknown): Response {
 
 function dbResult<T>(rows: T[]) {
   return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
 }

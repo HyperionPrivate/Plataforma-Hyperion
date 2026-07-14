@@ -12,7 +12,10 @@ await startService({
     "015-sofia-fresh-availability.sql",
     "016-sofia-search-constraints.sql",
     "021-autonomous-event-flow.sql",
-    "026-audit-source-provenance.sql"
+    "026-audit-source-provenance.sql",
+    "035-pulso-sofia-conversation-ordering.sql",
+    "036-pulso-sofia-conversation-ordering-backfill.sql",
+    "037-pulso-sofia-conversation-ordering-indexes.sql"
   ],
   registerRoutes
 });

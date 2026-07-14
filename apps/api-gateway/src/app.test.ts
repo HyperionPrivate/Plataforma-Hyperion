@@ -10,6 +10,10 @@ const ADMIN_TOKEN = "admin-test-token-1234567890";
 const COORDINATOR_TOKEN = "coordinator-test-token-1234567890";
 const ADVISOR_TOKEN = "advisor-test-token-1234567890";
 const AUDITOR_TOKEN = "auditor-test-token-1234567890";
+const GATEWAY_TO_IDENTITY_TOKEN = "gateway-to-identity-test-token-001";
+const GATEWAY_TO_INTEGRATION_TOKEN = "gateway-to-integration-test-token-02";
+const GATEWAY_TO_PULSO_TOKEN = "gateway-to-pulso-test-token-0001";
+const GATEWAY_TO_LUMEN_TOKEN = "gateway-to-lumen-test-token-0002";
 
 const isolatedServiceUrls = {
   IDENTITY_SERVICE_URL: "http://127.0.0.1:65511",
@@ -77,7 +81,13 @@ beforeAll(async () => {
     databaseRequired: false,
     publicApi: true,
     registerRoutes: createGatewayRoutes({
-      resolveSession: async (token) => sessions[token]
+      resolveSession: async (token) => sessions[token],
+      gatewayCredentials: {
+        identity: GATEWAY_TO_IDENTITY_TOKEN,
+        integration: GATEWAY_TO_INTEGRATION_TOKEN,
+        pulsoIris: GATEWAY_TO_PULSO_TOKEN,
+        lumen: GATEWAY_TO_LUMEN_TOKEN
+      }
     })
   });
   app = handle.app;
@@ -153,6 +163,87 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(502);
   });
 
+  it("fails closed when a product-specific gateway identity is missing", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    let isolatedApp: FastifyInstance | undefined;
+    try {
+      const handle = await createService({
+        serviceName: "api-gateway",
+        databaseRequired: false,
+        publicApi: true,
+        registerRoutes: createGatewayRoutes({
+          resolveSession: async (token) => sessions[token],
+          gatewayCredentials: { identity: "", integration: "", pulsoIris: "", lumen: "" }
+        })
+      });
+      isolatedApp = handle.app;
+
+      const pulso = await isolatedApp.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      const lumen = await isolatedApp.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/worklist`,
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+      const identity = await isolatedApp.inject({
+        method: "GET",
+        url: "/v1/identity/operators",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
+      const integration = await isolatedApp.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/integrations/whatsapp/status`,
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+
+      expect(pulso.statusCode).toBe(503);
+      expect(lumen.statusCode).toBe(503);
+      expect(identity.statusCode).toBe(503);
+      expect(integration.statusCode).toBe(503);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      await isolatedApp?.close();
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("uses distinct gateway identities for Identity and Integration", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+    );
+    try {
+      const identity = await app.inject({
+        method: "GET",
+        url: "/v1/identity/operators",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
+      const integration = await app.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/integrations/whatsapp/status`,
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+
+      expect(identity.statusCode).toBe(200);
+      expect(integration.statusCode).toBe(200);
+      const identityHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      const integrationHeaders = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
+      expect(identityHeaders.get("authorization")).toBe(`Bearer ${GATEWAY_TO_IDENTITY_TOKEN}`);
+      expect(integrationHeaders.get("authorization")).toBe(`Bearer ${GATEWAY_TO_INTEGRATION_TOKEN}`);
+      expect(identityHeaders.get("x-hyperion-caller")).toBe("api-gateway");
+      expect(integrationHeaders.get("x-hyperion-caller")).toBe("api-gateway");
+      expect(identityHeaders.get("authorization")).not.toBe(integrationHeaders.get("authorization"));
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("allows coordinator to write configuration", async () => {
     const response = await app.inject({
       method: "POST",
@@ -221,6 +312,10 @@ describe("api-gateway authentication", () => {
       expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
         `${isolatedServiceUrls.PULSO_IRIS_SERVICE_URL}/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/sites`
       );
+      const upstreamHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(upstreamHeaders.get("authorization")).toBe(`Bearer ${GATEWAY_TO_PULSO_TOKEN}`);
+      expect(upstreamHeaders.get("x-hyperion-caller")).toBe("api-gateway");
+      expect(upstreamHeaders.get("authorization")).not.toBe(`Bearer ${COORDINATOR_TOKEN}`);
     } finally {
       fetchMock.mockRestore();
     }
@@ -253,13 +348,14 @@ describe("api-gateway authentication", () => {
     expect(duplicateSeparator.statusCode).toBe(400);
   });
 
-  it("evicts the cached session immediately after a successful logout", async () => {
+  it("revalidates sessions across gateway replicas immediately after logout", async () => {
     let meRequests = 0;
+    let revoked = false;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith("/v1/auth/me")) {
         meRequests += 1;
-        if (meRequests === 1) {
+        if (!revoked) {
           return new Response(JSON.stringify({ data: sessions[COORDINATOR_TOKEN] }), {
             status: 200,
             headers: { "content-type": "application/json" }
@@ -271,6 +367,7 @@ describe("api-gateway authentication", () => {
         });
       }
       if (url.endsWith("/v1/auth/logout")) {
+        revoked = true;
         return new Response(JSON.stringify({ data: { loggedOut: true } }), {
           status: 200,
           headers: { "content-type": "application/json" }
@@ -279,44 +376,52 @@ describe("api-gateway authentication", () => {
       throw new Error(`Unexpected upstream request: ${url}`);
     });
 
-    let cachedApp: FastifyInstance | undefined;
+    let firstReplica: FastifyInstance | undefined;
+    let secondReplica: FastifyInstance | undefined;
     try {
-      const handle = await createService({
+      const firstHandle = await createService({
         serviceName: "api-gateway",
         databaseRequired: false,
         publicApi: true,
         registerRoutes: createGatewayRoutes()
       });
-      cachedApp = handle.app;
+      const secondHandle = await createService({
+        serviceName: "api-gateway",
+        databaseRequired: false,
+        publicApi: true,
+        registerRoutes: createGatewayRoutes()
+      });
+      firstReplica = firstHandle.app;
+      secondReplica = secondHandle.app;
 
-      const first = await cachedApp.inject({
+      const first = await firstReplica.inject({
         method: "GET",
         url: "/v1/platform/catalog",
         headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
       });
-      const cached = await cachedApp.inject({
+      const second = await secondReplica.inject({
         method: "GET",
         url: "/v1/platform/catalog",
         headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
       });
-      const logout = await cachedApp.inject({
+      const logout = await firstReplica.inject({
         method: "POST",
         url: "/v1/auth/logout",
         headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
       });
-      const afterLogout = await cachedApp.inject({
+      const afterLogout = await secondReplica.inject({
         method: "GET",
         url: "/v1/platform/catalog",
         headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
       });
 
       expect(first.statusCode).toBe(200);
-      expect(cached.statusCode).toBe(200);
+      expect(second.statusCode).toBe(200);
       expect(logout.statusCode).toBe(200);
       expect(afterLogout.statusCode).toBe(401);
-      expect(meRequests).toBe(2);
+      expect(meRequests).toBe(4);
     } finally {
-      await cachedApp?.close();
+      await Promise.allSettled([firstReplica?.close(), secondReplica?.close()]);
       fetchMock.mockRestore();
     }
   });

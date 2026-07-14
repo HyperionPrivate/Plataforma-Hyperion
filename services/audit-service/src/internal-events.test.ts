@@ -2,7 +2,9 @@ import { createService, type ServiceContext, type ServiceHandle } from "@hyperio
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerRoutes } from "./app.js";
 
-const TEST_TOKEN = "test-internal-token";
+const SOFIA_TOKEN = "test-sofia-to-audit-token";
+const LUMEN_TOKEN = "test-lumen-to-audit-token";
+const CHANNEL_TOKEN = "test-channel-to-audit-token";
 const EVENT_ID = "11111111-1111-4111-8111-111111111111";
 const TENANT_ID = "22222222-2222-4222-8222-222222222222";
 const OTHER_TENANT_ID = "33333333-3333-4333-8333-333333333333";
@@ -127,7 +129,9 @@ describe("POST /internal/v1/events", () => {
 
   beforeEach(async () => {
     process.env.DATABASE_URL = "postgresql://unused/audit-tests";
-    process.env.INTERNAL_SERVICE_TOKEN = TEST_TOKEN;
+    process.env.SOFIA_TO_AUDIT_TOKEN = SOFIA_TOKEN;
+    process.env.LUMEN_TO_AUDIT_TOKEN = LUMEN_TOKEN;
+    process.env.CHANNEL_TO_AUDIT_TOKEN = CHANNEL_TOKEN;
     database = new FakeTransactionalDatabase();
     const handle = await createService({
       serviceName: "audit-service",
@@ -141,7 +145,9 @@ describe("POST /internal/v1/events", () => {
   afterEach(async () => {
     await app.close();
     delete process.env.DATABASE_URL;
-    delete process.env.INTERNAL_SERVICE_TOKEN;
+    delete process.env.SOFIA_TO_AUDIT_TOKEN;
+    delete process.env.LUMEN_TO_AUDIT_TOKEN;
+    delete process.env.CHANNEL_TO_AUDIT_TOKEN;
   });
 
   it("requires the configured internal bearer token before touching the database", async () => {
@@ -153,12 +159,24 @@ describe("POST /internal/v1/events", () => {
     const wrongToken = await app.inject({
       method: "POST",
       url: "/internal/v1/events",
-      headers: { authorization: "Bearer wrong-token" },
+      headers: { authorization: "Bearer wrong-token", "x-hyperion-caller": "agent-service" },
       payload: buildEnvelope()
     });
 
     expect(missingToken.statusCode).toBe(401);
     expect(wrongToken.statusCode).toBe(401);
+    expect(database.transactionCount).toBe(0);
+  });
+
+  it("rejects cross-workload impersonation even when the supplied token is otherwise valid", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/v1/events",
+      headers: { authorization: `Bearer ${SOFIA_TOKEN}`, "x-hyperion-caller": "lumen-service" },
+      payload: buildEnvelope()
+    });
+
+    expect(response.statusCode).toBe(401);
     expect(database.transactionCount).toBe(0);
   });
 
@@ -181,6 +199,29 @@ describe("POST /internal/v1/events", () => {
       event_type: "appointment.registered",
       entity_type: "appointment",
       source_event_id: EVENT_ID
+    });
+  });
+
+  it("derives direct-write provenance from the authenticated caller", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/audit/events",
+      headers: {
+        authorization: `Bearer ${CHANNEL_TOKEN}`,
+        "x-hyperion-caller": "whatsapp-channel-service"
+      },
+      payload: {
+        tenantId: TENANT_ID,
+        eventType: "channel.message.received",
+        entityType: "channel_message",
+        metadata: { sourceService: "agent-service", retained: true }
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(database.auditEvents[0]?.metadata).toEqual({
+      sourceService: "whatsapp-channel-service",
+      retained: true
     });
   });
 
@@ -251,7 +292,7 @@ describe("POST /internal/v1/events", () => {
     expect(database.auditEvents).toHaveLength(1);
   });
 
-  it("binds idempotency to source and event type, not only to the payload", async () => {
+  it("rejects a source-scoped contract that does not match the authenticated workload", async () => {
     const first = await postEvent(app, buildEnvelope());
     const conflictingOrigin = await postEvent(app, {
       ...buildEnvelope(),
@@ -259,7 +300,7 @@ describe("POST /internal/v1/events", () => {
     });
 
     expect(first.statusCode).toBe(201);
-    expect(conflictingOrigin.statusCode).toBe(409);
+    expect(conflictingOrigin.statusCode).toBe(400);
     expect(database.inboxEvents.get(EVENT_ID)).toMatchObject({
       sourceService: "sofia-automation",
       eventType: "sofia.audit.event.record.v1"
@@ -268,13 +309,12 @@ describe("POST /internal/v1/events", () => {
   });
 
   it("records the source declared by a valid LUMEN HTTP contract instead of using a default", async () => {
-    // The shared HTTP bearer token authenticates an internal caller but cannot
-    // attest which service sent it. The strict type/source mapping is therefore
-    // declarative here; JetStream subject ACLs provide the stronger guarantee.
-    const response = await postEvent(app, {
-      ...buildEnvelope(),
-      type: "lumen.audit.event.record.v1"
-    });
+    const response = await postEvent(
+      app,
+      { ...buildEnvelope(), type: "lumen.audit.event.record.v1" },
+      "lumen-service",
+      LUMEN_TOKEN
+    );
 
     expect(response.statusCode).toBe(201);
     expect(database.inboxEvents.get(EVENT_ID)).toMatchObject({
@@ -331,11 +371,16 @@ function buildEnvelope(metadataOverride?: { metadata: Record<string, unknown> })
   };
 }
 
-async function postEvent(app: ServiceHandle["app"], payload: Record<string, unknown>) {
+async function postEvent(
+  app: ServiceHandle["app"],
+  payload: Record<string, unknown>,
+  caller = "agent-service",
+  token = SOFIA_TOKEN
+) {
   return app.inject({
     method: "POST",
     url: "/internal/v1/events",
-    headers: { authorization: `Bearer ${TEST_TOKEN}` },
+    headers: { authorization: `Bearer ${token}`, "x-hyperion-caller": caller },
     payload
   });
 }

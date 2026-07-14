@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseBuffer } from "music-metadata";
 import { SpeechToTextError, isSpeechToTextError } from "./provider-errors.js";
@@ -19,6 +19,8 @@ export interface SpeechToTextInput {
   durationSeconds: number;
   audioSha256?: string;
   signal?: AbortSignal;
+  /** Durable processing-attempt UUID; used only to derive the private temp directory. */
+  cleanupKey?: string;
 }
 
 export interface PreparedSpeechToTextInput extends SpeechToTextInput {
@@ -61,6 +63,7 @@ export interface ElevenLabsSpeechToTextProviderOptions {
   zeroRetentionMode?: boolean;
   baseUrl?: string;
   tempRootDirectory?: string;
+  cleanupOwner?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -146,7 +149,8 @@ export function prepareSpeechToTextInput(input: SpeechToTextInput): PreparedSpee
     mimeType,
     durationSeconds: input.durationSeconds,
     audioSha256: calculatedHash,
-    signal: input.signal
+    signal: input.signal,
+    cleanupKey: input.cleanupKey
   };
 }
 
@@ -184,6 +188,7 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
   private readonly timeoutMs: number;
   private readonly baseUrl: string;
   private readonly tempRootDirectory: string;
+  private readonly cleanupOwner: string;
   private readonly fetchImpl: typeof fetch;
   private readonly configurationValid: boolean;
 
@@ -197,6 +202,11 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
     this.baseUrl = (options.baseUrl ?? "https://api.elevenlabs.io").replace(/\/+$/, "");
     this.tempRootDirectory =
       options.tempRootDirectory ?? process.env.LUMEN_AUDIO_TEMP_DIR?.trim() ?? join(tmpdir(), "hyperion-lumen-audio");
+    this.cleanupOwner =
+      options.cleanupOwner ??
+      process.env.LUMEN_INSTANCE_ID?.trim() ??
+      process.env.HOSTNAME?.trim() ??
+      hostname().trim();
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.configurationValid =
       this.model === ELEVENLABS_STT_MODEL &&
@@ -204,7 +214,8 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
       Number.isInteger(this.timeoutMs) &&
       this.timeoutMs > 0 &&
       this.timeoutMs <= ELEVENLABS_STT_TIMEOUT_MS &&
-      Boolean(this.tempRootDirectory);
+      Boolean(this.tempRootDirectory) &&
+      /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(this.cleanupOwner);
   }
 
   isConfigured(): boolean {
@@ -234,6 +245,8 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
         {
           rootDirectory: this.tempRootDirectory,
           extension: AUDIO_FORMATS[mimeBaseType(prepared.mimeType)]!.extension,
+          cleanupOwner: this.cleanupOwner,
+          cleanupKey: prepared.cleanupKey ?? "",
           cleanupState
         },
         async (temporaryAudio) => {

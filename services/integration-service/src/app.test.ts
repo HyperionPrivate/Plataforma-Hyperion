@@ -1,8 +1,13 @@
 import Fastify from "fastify";
+import { createInternalAuthorizationHeaders } from "@hyperion/service-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerRoutes } from "./app.js";
 
 const tenantId = "00000000-0000-4000-8000-000000000001";
+const CHANNEL_TOKEN = "integration-to-channel-test-token";
+const SOFIA_TOKEN = "integration-to-sofia-test-token";
+const GATEWAY_TOKEN = "gateway-to-integration-test-token-001";
+const gatewayHeaders = createInternalAuthorizationHeaders("api-gateway", GATEWAY_TOKEN);
 const status = {
   tenantId,
   providerMode: "whatsapp_web_test",
@@ -20,6 +25,9 @@ describe("WhatsApp integration facade RBAC", () => {
   let app: ReturnType<typeof Fastify>;
 
   beforeEach(async () => {
+    process.env.INTEGRATION_TO_CHANNEL_TOKEN = CHANNEL_TOKEN;
+    process.env.INTEGRATION_TO_SOFIA_TOKEN = SOFIA_TOKEN;
+    process.env.GATEWAY_TO_INTEGRATION_TOKEN = GATEWAY_TOKEN;
     fetchImpl.mockReset();
     dbQuery.mockReset();
     dbQuery.mockResolvedValue({ rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] });
@@ -32,8 +40,7 @@ describe("WhatsApp integration facade RBAC", () => {
         host: "127.0.0.1",
         port: 8087,
         serviceVersion: "test",
-        corsAllowedOrigins: [],
-        internalServiceToken: "internal-controlled-token"
+        corsAllowedOrigins: []
       },
       db: {
         query: dbQuery,
@@ -45,6 +52,9 @@ describe("WhatsApp integration facade RBAC", () => {
   });
 
   afterEach(async () => {
+    delete process.env.INTEGRATION_TO_CHANNEL_TOKEN;
+    delete process.env.INTEGRATION_TO_SOFIA_TOKEN;
+    delete process.env.GATEWAY_TO_INTEGRATION_TOKEN;
     vi.unstubAllGlobals();
     await app.close();
   });
@@ -56,7 +66,7 @@ describe("WhatsApp integration facade RBAC", () => {
     const read = await app.inject({
       method: "GET",
       url: `/v1/tenants/${tenantId}/integrations/whatsapp/status`,
-      headers: { "x-operator-role": "coordinator" }
+      headers: { ...gatewayHeaders, "x-operator-role": "coordinator" }
     });
     expect(read.statusCode).toBe(200);
     expect(read.json().data).toMatchObject({ providerMode: "whatsapp_web_test", state: "qr_pending" });
@@ -64,7 +74,7 @@ describe("WhatsApp integration facade RBAC", () => {
     const mutate = await app.inject({
       method: "POST",
       url: `/v1/tenants/${tenantId}/integrations/whatsapp/connect`,
-      headers: { "x-operator-role": "coordinator" },
+      headers: { ...gatewayHeaders, "x-operator-role": "coordinator" },
       payload: {}
     });
     expect(mutate.statusCode).toBe(403);
@@ -76,7 +86,7 @@ describe("WhatsApp integration facade RBAC", () => {
       const response = await app.inject({
         method: "GET",
         url: `/v1/tenants/${tenantId}/integrations/whatsapp/${path}`,
-        headers: { "x-operator-role": "auditor" }
+        headers: { ...gatewayHeaders, "x-operator-role": "auditor" }
       });
       expect(response.statusCode).toBe(403);
     }
@@ -102,12 +112,15 @@ describe("WhatsApp integration facade RBAC", () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/tenants/${tenantId}/integrations/whatsapp/qr`,
-      headers: { "x-operator-role": "admin" }
+      headers: { ...gatewayHeaders, "x-operator-role": "admin" }
     });
     expect(response.statusCode).toBe(200);
     expect(response.body).not.toContain("sessionMaterial");
     expect(response.body).not.toContain("must-not-leak");
-    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({ authorization: "Bearer internal-controlled-token" });
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({
+      authorization: `Bearer ${CHANNEL_TOKEN}`,
+      "x-hyperion-caller": "integration-service"
+    });
     expect(response.headers["cache-control"]).toContain("no-store");
     expect(response.headers.pragma).toBe("no-cache");
   });
@@ -135,7 +148,7 @@ describe("WhatsApp integration facade RBAC", () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/tenants/${tenantId}/pulso-iris/sofia/readiness`,
-      headers: { "x-operator-role": "coordinator" }
+      headers: { ...gatewayHeaders, "x-operator-role": "coordinator" }
     });
 
     expect(response.statusCode).toBe(200);
@@ -144,9 +157,23 @@ describe("WhatsApp integration facade RBAC", () => {
       canReceiveMessages: false,
       canBookAppointments: false
     });
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({ authorization: `Bearer ${CHANNEL_TOKEN}` });
+    expect(fetchImpl.mock.calls[1]?.[1]?.headers).toMatchObject({ authorization: `Bearer ${SOFIA_TOKEN}` });
     const promptQuery = String(dbQuery.mock.calls[1]?.[0]);
     expect(promptQuery).toContain("sofia_whatsapp_internal_v5");
     expect(promptQuery).toContain("016-sofia-search-constraints.sql");
     expect(promptQuery).toContain("order by f.version desc, f.updated_at desc");
+  });
+
+  it("does not trust operator headers without the gateway workload identity", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantId}/integrations/whatsapp/connect`,
+      headers: { "x-operator-role": "admin" },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

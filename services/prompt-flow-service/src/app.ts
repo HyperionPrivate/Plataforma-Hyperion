@@ -1,8 +1,8 @@
-import { timingSafeEqual } from "node:crypto";
 import { envelope, tenantIdSchema } from "@hyperion/contracts";
-import type { RouteRegistrar } from "@hyperion/service-runtime";
+import { readInternalCredential, validateInternalAuthorization, type RouteRegistrar } from "@hyperion/service-runtime";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  const sofiaToken = readInternalCredential(process.env, "SOFIA_TO_PROMPT_FLOW_TOKEN");
   app.get("/v1/prompt-flows", async (request) => {
     if (!context.db) return envelope([], request.id);
     const result = await context.db.query(`
@@ -15,8 +15,9 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.get("/internal/v1/tenants/:tenantId/prompt-flows/SOFIA/active", async (request, reply) => {
-    if (!hasInternalToken(request.headers.authorization, context.config.internalServiceToken)) {
-      return reply.code(401).send(envelope({ error: "Internal authentication required" }, request.id));
+    const authError = validateInternalAuthorization(request.headers, { "agent-service": sofiaToken });
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
     }
     const params = request.params as { tenantId?: unknown };
     const tenantId = tenantIdSchema.safeParse(params.tenantId);
@@ -50,10 +51,3 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     );
   });
 };
-
-function hasInternalToken(authorization: string | undefined, expected: string | undefined): boolean {
-  if (!expected || !authorization?.startsWith("Bearer ")) return false;
-  const supplied = Buffer.from(authorization.slice(7).trim());
-  const target = Buffer.from(expected);
-  return supplied.length === target.length && timingSafeEqual(supplied, target);
-}

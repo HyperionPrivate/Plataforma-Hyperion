@@ -101,20 +101,9 @@ update audit_runtime.inbox_events
    )
  where contract_hash is null;
 
-alter table audit_runtime.inbox_events
-  alter column contract_hash set not null,
-  drop constraint if exists ck_audit_inbox_contract_hash,
-  add constraint ck_audit_inbox_contract_hash
-    check (contract_hash ~ '^[a-f0-9]{64}$'),
-  drop constraint if exists ck_audit_inbox_source_contract,
-  add constraint ck_audit_inbox_source_contract check (
-    (source_service = 'sofia-automation' and event_type = 'sofia.audit.event.record.v1')
-    or (source_service = 'lumen-service' and event_type = 'lumen.audit.event.record.v1')
-    or (source_service = 'legacy-unknown' and event_type = 'legacy.audit.event.record.v1')
-  );
-
-create index if not exists ix_audit_inbox_source_received
-  on audit_runtime.inbox_events(source_service, event_type, received_at desc);
+-- The NOT NULL/check contract and the operational index are deliberately
+-- installed by 027/028. Keeping expansion/backfill separate avoids combining
+-- a potentially large rewrite with every lock-heavy contract operation.
 
 -- Replace the LUMEN approval trigger body installed by 022 so every future
 -- record uses the LUMEN-scoped wrapper event contract.

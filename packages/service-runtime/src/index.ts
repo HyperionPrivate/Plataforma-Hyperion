@@ -6,7 +6,19 @@ import { readServiceConfig, type ServiceConfig } from "@hyperion/config";
 import { type ServiceHealth, type ServiceName, serviceHealthSchema } from "@hyperion/contracts";
 import { checkDatabase, createDatabase, type DatabaseClient } from "@hyperion/database";
 import { createLogger, type Logger } from "@hyperion/logger";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import { resolveShutdownTimeoutMs, resolveTrustedProxies } from "./runtime-config.js";
+
+export {
+  INTERNAL_CALLER_HEADER,
+  createInternalAuthorizationHeaders,
+  readInternalCaller,
+  readInternalCredential,
+  validateInternalAuthorization,
+  type InternalAuthorizationFailure,
+  type InternalCredentialMap,
+  type InternalRequestHeaders
+} from "./internal-auth.js";
 
 export interface ServiceContext {
   config: ServiceConfig;
@@ -40,6 +52,11 @@ export interface RuntimeOptions {
   publicApi?: boolean;
   registerRoutes?: RouteRegistrar;
   createDatabase?: (connectionString: string) => DatabaseClient;
+  /**
+   * Grace period for all onClose hooks. It cannot be shorter than the
+   * runtime's supported dispatcher drain budget.
+   */
+  shutdownTimeoutMs?: number;
 }
 
 export interface SchemaVersionRequirement {
@@ -50,7 +67,6 @@ export interface SchemaVersionRequirement {
   minimumVersion: number;
 }
 
-const SHUTDOWN_TIMEOUT_MS = 10_000;
 const ACCESS_LOG_EXCLUDED_PATHS = new Set(["/health", "/ready"]);
 const RESERVED_READINESS_NAMES = new Set(["postgres", "postgres_role", "schema_migrations"]);
 const READINESS_NAME_PATTERN = /^[a-z][a-z0-9_.-]{0,127}$/;
@@ -80,9 +96,10 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
   }
   const logger = createLogger(options.serviceName);
   const readinessChecks = new Map<string, RuntimeReadinessCheck["check"]>();
+  const trustedProxies = resolveTrustedProxies(process.env.TRUST_PROXY);
   const app = Fastify({
     logger: false,
-    trustProxy: true,
+    trustProxy: trustedProxies,
     bodyLimit: 1_048_576,
     requestIdHeader: "x-request-id",
     genReqId: () => randomUUID()
@@ -141,25 +158,41 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
     registerReadinessCheck: (check) => registerRuntimeReadinessCheck(readinessChecks, check)
   };
 
+  let databaseClosePromise: Promise<void> | undefined;
+  const closeDatabase = (): Promise<void> => {
+    if (!db) return Promise.resolve();
+    databaseClosePromise ??= Promise.resolve().then(async () => db.close());
+    return databaseClosePromise;
+  };
+
+  // Fastify/Avvio closes hooks in reverse registration order. Register the
+  // pool first so route-owned dispatchers registered later drain before it.
+  app.addHook("onClose", async () => {
+    await closeDatabase();
+  });
+
   app.get("/health", async () => {
     return buildHealth(options.serviceName, config.serviceVersion, "ok");
   });
 
-  app.get("/ready", async () => {
+  app.get("/ready", async (_request, reply) => {
     if (!db) {
       const status = options.databaseRequired ? "down" : "ok";
-      return buildReadinessHealth(
-        options.serviceName,
-        config.serviceVersion,
-        status,
-        [
-          {
-            name: "postgres",
-            status,
-            detail: options.databaseRequired ? "DATABASE_URL is required" : "not configured"
-          }
-        ],
-        readinessChecks
+      return sendReadiness(
+        reply,
+        buildReadinessHealth(
+          options.serviceName,
+          config.serviceVersion,
+          status,
+          [
+            {
+              name: "postgres",
+              status,
+              detail: options.databaseRequired ? "DATABASE_URL is required" : "not configured"
+            }
+          ],
+          readinessChecks
+        )
       );
     }
 
@@ -181,12 +214,9 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
             status: "down",
             detail: databaseRoleProblem
           });
-          return buildReadinessHealth(
-            options.serviceName,
-            config.serviceVersion,
-            "down",
-            dependencies,
-            readinessChecks
+          return sendReadiness(
+            reply,
+            buildReadinessHealth(options.serviceName, config.serviceVersion, "down", dependencies, readinessChecks)
           );
         }
 
@@ -205,7 +235,10 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
           detail: `missing migration: ${missingMigration}`
         });
 
-        return buildReadinessHealth(options.serviceName, config.serviceVersion, "down", dependencies, readinessChecks);
+        return sendReadiness(
+          reply,
+          buildReadinessHealth(options.serviceName, config.serviceVersion, "down", dependencies, readinessChecks)
+        );
       }
 
       if ((options.requiredMigrations ?? []).length > 0) {
@@ -225,12 +258,9 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
             status: "down",
             detail: schemaVersionProblem
           });
-          return buildReadinessHealth(
-            options.serviceName,
-            config.serviceVersion,
-            "down",
-            dependencies,
-            readinessChecks
+          return sendReadiness(
+            reply,
+            buildReadinessHealth(options.serviceName, config.serviceVersion, "down", dependencies, readinessChecks)
           );
         }
 
@@ -241,21 +271,27 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
         });
       }
 
-      return buildReadinessHealth(options.serviceName, config.serviceVersion, "ok", dependencies, readinessChecks);
+      return sendReadiness(
+        reply,
+        buildReadinessHealth(options.serviceName, config.serviceVersion, "ok", dependencies, readinessChecks)
+      );
     } catch (error) {
       logger.error("database readiness failed", { error: error instanceof Error ? error.message : String(error) });
-      return buildReadinessHealth(
-        options.serviceName,
-        config.serviceVersion,
-        "down",
-        [
-          {
-            name: "postgres",
-            status: "down",
-            detail: "database readiness failed"
-          }
-        ],
-        readinessChecks
+      return sendReadiness(
+        reply,
+        buildReadinessHealth(
+          options.serviceName,
+          config.serviceVersion,
+          "down",
+          [
+            {
+              name: "postgres",
+              status: "down",
+              detail: "database readiness failed"
+            }
+          ],
+          readinessChecks
+        )
       );
     }
   });
@@ -267,17 +303,21 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
       try {
         await app.close();
       } finally {
-        await db?.close();
+        await closeDatabase();
       }
       throw error;
     }
   }
 
-  app.addHook("onClose", async () => {
-    await db?.close();
-  });
-
   return { app, context };
+}
+
+async function sendReadiness(
+  reply: FastifyReply,
+  pendingHealth: ServiceHealth | Promise<ServiceHealth>
+): Promise<FastifyReply> {
+  const health = await pendingHealth;
+  return reply.code(health.status === "ok" ? 200 : 503).send(health);
 }
 
 function registerRuntimeReadinessCheck(
@@ -346,7 +386,8 @@ async function findDatabaseRoleProblem(db: DatabaseClient, expectedRole: string)
               database_role.rolcreaterole, database_role.rolinherit, database_role.rolreplication,
               database_role.rolbypassrls,
               exists(select 1 from pg_auth_members membership
-                      where membership.member = database_role.oid) as "hasMemberships"
+                      where membership.member = database_role.oid
+                         or membership.roleid = database_role.oid) as "hasMemberships"
          from pg_roles database_role
         where database_role.rolname = current_user`
     );
@@ -436,6 +477,7 @@ function normalizeExpectedDatabaseRole(value: string | undefined): string | unde
 }
 
 export async function startService(options: RuntimeOptions): Promise<void> {
+  const shutdownTimeoutMs = resolveShutdownTimeoutMs(options.shutdownTimeoutMs, process.env.SHUTDOWN_TIMEOUT_MS);
   const { app, context } = await createService(options);
   const { config, logger } = context;
 
@@ -453,7 +495,7 @@ export async function startService(options: RuntimeOptions): Promise<void> {
     const failsafe = setTimeout(() => {
       logger.error("shutdown timed out, forcing exit");
       process.exit(1);
-    }, SHUTDOWN_TIMEOUT_MS);
+    }, shutdownTimeoutMs);
     failsafe.unref();
 
     app.close().then(

@@ -34,7 +34,7 @@ describe("audit-client", () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: true });
     const emit = createAuditClient({
       auditServiceUrl: "http://audit.local",
-      internalServiceToken: "secret",
+      workloadToken: "secret",
       logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
@@ -51,6 +51,7 @@ describe("audit-client", () => {
     const [url, init] = fetchImpl.mock.calls[0]!;
     expect(url).toBe("http://audit.local/v1/audit/events");
     expect(init.headers.authorization).toBe("Bearer secret");
+    expect(init.headers["x-hyperion-caller"]).toBe("pulso-iris-service");
     expect(JSON.parse(String(init.body)).metadata.source).toBe("pulso-iris-service");
   });
 

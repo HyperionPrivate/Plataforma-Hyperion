@@ -4,7 +4,8 @@ import { readDurableOutboxConfiguration, registerChannelRoutes } from "./app.js"
 import type { WhatsAppChannelService } from "./channel-service.js";
 
 const TENANT_ID = "00000000-0000-4000-8000-000000000001";
-const TOKEN = "test-internal-service-token";
+const INTEGRATION_TOKEN = "test-integration-to-channel-token";
+const SOFIA_TOKEN = "test-sofia-to-channel-token";
 let app: ServiceHandle["app"] | undefined;
 
 afterEach(async () => {
@@ -17,7 +18,11 @@ describe("whatsapp-channel internal API", () => {
     ({ app } = await createService({
       serviceName: "whatsapp-channel-service",
       registerRoutes: (instance) =>
-        registerChannelRoutes(instance, { channel: fakeChannel(), internalServiceToken: TOKEN })
+        registerChannelRoutes(instance, {
+          channel: fakeChannel(),
+          integrationCredential: INTEGRATION_TOKEN,
+          sofiaCredential: SOFIA_TOKEN
+        })
     }));
 
     const missing = await app.inject({
@@ -27,7 +32,7 @@ describe("whatsapp-channel internal API", () => {
     const wrong = await app.inject({
       method: "GET",
       url: `/internal/v1/tenants/${TENANT_ID}/whatsapp/qr`,
-      headers: { authorization: "Bearer wrong" }
+      headers: { authorization: "Bearer wrong", "x-hyperion-caller": "integration-service" }
     });
 
     expect(missing.statusCode).toBe(401);
@@ -41,14 +46,15 @@ describe("whatsapp-channel internal API", () => {
       registerRoutes: (instance) =>
         registerChannelRoutes(instance, {
           channel: fakeChannel(rawQr),
-          internalServiceToken: TOKEN
+          integrationCredential: INTEGRATION_TOKEN,
+          sofiaCredential: SOFIA_TOKEN
         })
     }));
 
     const response = await app.inject({
       method: "GET",
       url: `/internal/v1/tenants/${TENANT_ID}/whatsapp/qr`,
-      headers: { authorization: `Bearer ${TOKEN}` }
+      headers: integrationHeaders()
     });
     const payload = response.json().data;
 
@@ -63,19 +69,23 @@ describe("whatsapp-channel internal API", () => {
     });
     expect(payload.qrDataUrl).toMatch(/^data:image\/png;base64,/);
     expect(JSON.stringify(payload)).not.toContain(rawQr);
-    expect(JSON.stringify(payload)).not.toContain(TOKEN);
+    expect(JSON.stringify(payload)).not.toContain(INTEGRATION_TOKEN);
   });
 
   it("returns only a masked account identifier in status", async () => {
     ({ app } = await createService({
       serviceName: "whatsapp-channel-service",
       registerRoutes: (instance) =>
-        registerChannelRoutes(instance, { channel: fakeChannel(), internalServiceToken: TOKEN })
+        registerChannelRoutes(instance, {
+          channel: fakeChannel(),
+          integrationCredential: INTEGRATION_TOKEN,
+          sofiaCredential: SOFIA_TOKEN
+        })
     }));
     const response = await app.inject({
       method: "GET",
       url: `/internal/v1/tenants/${TENANT_ID}/whatsapp/status`,
-      headers: { authorization: `Bearer ${TOKEN}` }
+      headers: integrationHeaders()
     });
 
     expect(response.json().data).toMatchObject({
@@ -85,6 +95,47 @@ describe("whatsapp-channel internal API", () => {
       phoneMasked: "********4567",
       sessionRestorable: false
     });
+  });
+
+  it("binds management and message routes to different caller identities", async () => {
+    ({ app } = await createService({
+      serviceName: "whatsapp-channel-service",
+      registerRoutes: (instance) =>
+        registerChannelRoutes(instance, {
+          channel: fakeChannel(),
+          integrationCredential: INTEGRATION_TOKEN,
+          sofiaCredential: SOFIA_TOKEN
+        })
+    }));
+
+    const integrationCannotSend = await app.inject({
+      method: "POST",
+      url: `/internal/v1/tenants/${TENANT_ID}/whatsapp/messages`,
+      headers: integrationHeaders(),
+      payload: {
+        threadBindingId: "00000000-0000-4000-8000-000000000002",
+        messageId: "00000000-0000-4000-8000-000000000003",
+        text: "hola",
+        idempotencyKey: "identity-bound-message"
+      }
+    });
+    const sofiaCannotManage = await app.inject({
+      method: "GET",
+      url: `/internal/v1/tenants/${TENANT_ID}/whatsapp/status`,
+      headers: sofiaHeaders()
+    });
+    const spoofedCaller = await app.inject({
+      method: "GET",
+      url: `/internal/v1/tenants/${TENANT_ID}/whatsapp/status`,
+      headers: {
+        authorization: `Bearer ${INTEGRATION_TOKEN}`,
+        "x-hyperion-caller": "agent-service"
+      }
+    });
+
+    expect(integrationCannotSend.statusCode).toBe(401);
+    expect(sofiaCannotManage.statusCode).toBe(401);
+    expect(spoofedCaller.statusCode).toBe(401);
   });
 });
 
@@ -175,4 +226,18 @@ function fakeChannel(rawQr = "qr"): WhatsAppChannelService {
     }),
     qr: () => ({ qr: rawQr, expiresAt: "2026-07-09T20:00:00.000Z" })
   } as unknown as WhatsAppChannelService;
+}
+
+function integrationHeaders(): Record<string, string> {
+  return {
+    authorization: `Bearer ${INTEGRATION_TOKEN}`,
+    "x-hyperion-caller": "integration-service"
+  };
+}
+
+function sofiaHeaders(): Record<string, string> {
+  return {
+    authorization: `Bearer ${SOFIA_TOKEN}`,
+    "x-hyperion-caller": "agent-service"
+  };
 }

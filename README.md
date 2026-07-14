@@ -29,11 +29,16 @@ propiedad explícita de datos y despliegues por servicio.
 - Gateway HTTP como entrada pública prevista, sin dependencia de arranque sobre los productos.
 - Diez runtimes de servicio y una consola web, con targets Docker independientes.
 - Contratos compartidos TypeScript/Zod, validaciones de contratos y controles arquitectónicos en CI.
-- PostgreSQL compartido como etapa de transición, con identidades y privilegios restringidos por contexto.
-- Outbox/inbox para efectos asíncronos y un primer flujo durable Channel -> PULSO -> SOFÍA -> Audit.
+- PostgreSQL compartido como etapa de transición: las migraciones validan identidades `NOLOGIN` y privilegios
+  por contexto antes de que un bootstrap transaccional active los ocho roles de servicio.
+- Outbox/inbox en los handoffs durables implementados, incluido Channel -> PULSO -> SOFÍA -> Audit; las emisiones
+  best-effort restantes están inventariadas como deuda y no forman parte de esa garantía.
 - LUMEN con esquema, readiness, proyecciones, inbox y outbox propios, sin SQL de runtime sobre Access o PULSO.
-- Barreras de CI que impiden aumentar accesos SQL, claves foráneas cruzadas y acoplamientos de arranque ya
-  inventariados.
+- Runtimes con readiness HTTP real, cierre drenado y confianza de proxy desactivada salvo IP/CIDR explícito.
+- Llamadas HTTP internas autenticadas por vínculo productor→consumidor: cada receptor valida conjuntamente la
+  identidad `x-hyperion-caller` y una credencial exclusiva de ese vínculo, sin token global reutilizable.
+- Barreras de CI sobre SQL literal de runtimes, claves foráneas, objetos declarados y acoplamientos de arranque, y
+  smokes del stack base y del overlay JetStream. Los cuerpos PL/pgSQL requieren revisión manual adicional.
 
 > **Madurez arquitectónica:** Hyperion está en una migración incremental hacia microservicios autónomos. El
 > clúster PostgreSQL y la cadena principal de migraciones todavía son compartidos, y existe deuda heredada
@@ -84,15 +89,19 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-Antes de iniciar Compose se deben sustituir todos los placeholders, incluidos el secreto administrador, el token
-interno y las contraseñas PostgreSQL de servicio. Las credenciales reales nunca se guardan en Git.
+Antes de iniciar Compose se deben sustituir todos los placeholders, incluidos el secreto administrador, las
+credenciales HTTP separadas por vínculo `*_TO_*_TOKEN`, `WHATSAPP_PHONE_HASH_KEY` y las contraseñas PostgreSQL
+de servicio. Ningún valor puede reutilizarse para otro propósito y las credenciales reales nunca se guardan en
+Git.
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml up --build
 ```
 
-El stack base usa el transporte HTTP reversible y no incluye NATS. La activación y el ensayo aislado de
-JetStream están documentados por separado.
+Compose hace cumplir la secuencia `migrations` → `db-role-bootstrap` → runtimes con base de datos. El stack base
+usa el transporte HTTP reversible y no incluye NATS. La activación y el ensayo aislado de JetStream están
+documentados por separado; el overlay continúa siendo un piloto, aunque CI también comprueba que puede
+construirse y arrancar.
 
 ## Documentación
 

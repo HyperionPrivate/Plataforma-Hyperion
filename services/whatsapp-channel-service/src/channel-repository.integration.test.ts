@@ -74,6 +74,8 @@ describeIntegration("PostgresChannelRepository", () => {
       bindings: number;
       outbox: number;
       outboxType: string;
+      outboxStreamId: string;
+      outboxStreamSequence: number;
       body: string;
       phoneHash: string;
       outboxPayload: Record<string, unknown>;
@@ -83,6 +85,8 @@ describeIntegration("PostgresChannelRepository", () => {
          (select count(*)::int from channel_runtime.thread_bindings where tenant_id = $1) as bindings,
          (select count(*)::int from channel_runtime.outbox_events where tenant_id = $1) as outbox,
          (select event_type from channel_runtime.outbox_events where tenant_id = $1 limit 1) as "outboxType",
+         (select stream_id::text from channel_runtime.outbox_events where tenant_id = $1 limit 1) as "outboxStreamId",
+         (select stream_sequence::int from channel_runtime.outbox_events where tenant_id = $1 limit 1) as "outboxStreamSequence",
          (select body from channel_runtime.inbound_events where tenant_id = $1 limit 1) as body,
          (select phone_e164_hash from channel_runtime.thread_bindings where tenant_id = $1 limit 1) as "phoneHash",
          (select payload from channel_runtime.outbox_events where tenant_id = $1 limit 1) as "outboxPayload"`,
@@ -96,7 +100,9 @@ describeIntegration("PostgresChannelRepository", () => {
       events: 1,
       bindings: 1,
       outbox: 1,
-      outboxType: "channel.inbound.received.v1",
+      outboxType: "channel.inbound.received.v2",
+      outboxStreamId: first.threadBindingId,
+      outboxStreamSequence: 1,
       body: message.body,
       phoneHash: message.phoneHash
     });

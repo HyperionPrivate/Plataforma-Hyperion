@@ -41,6 +41,40 @@ describe("SOFIA tool time contract", () => {
   });
 });
 
+describe("SOFIA tool cancellation", () => {
+  it("propagates shutdown to an in-flight PULSO request", async () => {
+    const controller = new AbortController();
+    const reason = new Error("controlled tool shutdown");
+    const fetchImpl = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        })
+    );
+    const client = new SofiaToolClient({
+      pulsoIrisUrl: "http://pulso.test",
+      internalServiceToken: "internal-test-token",
+      db: { query: vi.fn(), transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
+      fetchImpl: fetchImpl as typeof fetch,
+      signal: controller.signal
+    });
+
+    const identification = client.identifyPatient({
+      tenantId: context.tenantId,
+      phoneHash: "a".repeat(64),
+      phoneMasked: "+57******1234",
+      threadBindingId: "00000000-0000-4000-8000-000000000006",
+      externalMessageId: "provider-message-1",
+      body: "Hola"
+    });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    controller.abort(reason);
+
+    await expect(identification).rejects.toBe(reason);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("SOFIA tool confirmation barrier", () => {
   it("accepts only an explicit bounded confirmation", () => {
     expect(isExplicitConfirmation("CONFIRMO cancelar")).toBe(true);
@@ -228,6 +262,9 @@ describe("SOFIA tool confirmation barrier", () => {
     }));
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer internal-test-token");
+      expect(headers.get("x-hyperion-caller")).toBe("agent-service");
       expect(body).toMatchObject({
         patientId: context.patientId,
         conversationId: context.conversationId,

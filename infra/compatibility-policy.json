@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "self": {
+    "channelInbound": "current_v2",
+    "lumenAudioCleanup": "deterministic_v2"
+  },
+  "legacyBaseOverrides": {
+    "f89a42d8a4e3da8936c1848af25fe119cc4e1438": {
+      "channelInbound": "legacy_pre_outbox_v1",
+      "lumenAudioCleanup": "legacy_ephemeral_v1"
+    }
+  }
+}

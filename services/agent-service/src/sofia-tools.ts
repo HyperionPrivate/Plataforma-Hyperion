@@ -1,4 +1,5 @@
 import type { DatabaseClient } from "@hyperion/database";
+import { createInternalAuthorizationHeaders } from "@hyperion/service-runtime";
 import { z } from "zod";
 import type { LlmToolDefinition } from "./llm-provider.js";
 
@@ -244,9 +245,12 @@ export class SofiaToolClient {
   constructor(
     private readonly options: {
       pulsoIrisUrl: string;
-      internalServiceToken: string;
+      pulsoToken?: string;
+      /** Test-only compatibility; production never falls back to this shared credential. */
+      internalServiceToken?: string;
       db: DatabaseClient;
       fetchImpl?: typeof fetch;
+      signal?: AbortSignal;
     }
   ) {}
 
@@ -258,11 +262,13 @@ export class SofiaToolClient {
     externalMessageId: string;
     body: string;
   }): Promise<{ patientId: string; conversationId: string; messageId: string }> {
+    this.options.signal?.throwIfAborted();
     const data = await this.call(input.tenantId, "identify_patient_by_phone", input);
     return z.object({ patientId: uuid, conversationId: uuid, messageId: uuid }).parse(data);
   }
 
   async confirmPendingAction(context: SofiaToolContext): Promise<SofiaConfirmationResult> {
+    this.options.signal?.throwIfAborted();
     const confirmationIntent = parseExplicitConfirmation(context.currentMessageBody);
     if (!confirmationIntent) {
       return {
@@ -389,6 +395,7 @@ export class SofiaToolClient {
     code: string,
     message: string
   ): Promise<SofiaConfirmationResult> {
+    this.options.signal?.throwIfAborted();
     const state = await this.loadConfirmationState(context.tenantId, context.conversationId);
     const existingReceipt = state.confirmationReceipts[context.currentMessageId];
     if (existingReceipt) return confirmationResultFromReceipt(existingReceipt, true);
@@ -450,6 +457,7 @@ export class SofiaToolClient {
   }
 
   async execute(name: string, rawArguments: string, context: SofiaToolContext): Promise<unknown> {
+    this.options.signal?.throwIfAborted();
     if (!(name in businessSchemas)) return { ok: false, code: "unknown_tool", message: "Herramienta no disponible" };
     const toolName = name as SofiaToolName;
     let toolArguments: Record<string, unknown>;
@@ -607,6 +615,7 @@ export class SofiaToolClient {
     try {
       data = await this.call(context.tenantId, toolName, payload);
     } catch (error) {
+      this.options.signal?.throwIfAborted();
       if (error instanceof ToolCallError) {
         return { ok: false, status: error.status, ...error.payload };
       }
@@ -835,6 +844,7 @@ export class SofiaToolClient {
       });
       return { ok: true, data };
     } catch (error) {
+      this.options.signal?.throwIfAborted();
       if (error instanceof ToolCallError) return classifyToolCallFailure(error);
       return {
         ok: false,
@@ -1076,15 +1086,24 @@ export class SofiaToolClient {
   }
 
   private async call(tenantId: string, toolName: string, body: unknown): Promise<unknown> {
+    this.options.signal?.throwIfAborted();
+    const token =
+      this.options.pulsoToken ?? (process.env.NODE_ENV === "test" ? this.options.internalServiceToken : undefined);
+    if (!token) throw new Error("SOFIA_TO_PULSO_TOKEN is required for SOFIA tools");
+    const timeoutSignal = AbortSignal.timeout(5_000);
     const response = await (this.options.fetchImpl ?? fetch)(
       `${this.options.pulsoIrisUrl}/internal/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/sofia/tools/${toolName}`,
       {
         method: "POST",
-        headers: { authorization: `Bearer ${this.options.internalServiceToken}`, "content-type": "application/json" },
+        headers: {
+          ...createInternalAuthorizationHeaders("agent-service", token),
+          "content-type": "application/json"
+        },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(5_000)
+        signal: this.options.signal ? AbortSignal.any([this.options.signal, timeoutSignal]) : timeoutSignal
       }
     );
+    this.options.signal?.throwIfAborted();
     const payload = (await response.json()) as { data?: unknown };
     if (!response.ok) throw new ToolCallError(response.status, isRecord(payload.data) ? payload.data : {});
     return payload.data;

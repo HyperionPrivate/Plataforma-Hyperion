@@ -15,7 +15,11 @@ import {
   type ServiceHealth,
   type ServiceName
 } from "@hyperion/contracts";
-import type { RouteRegistrar } from "@hyperion/service-runtime";
+import {
+  createInternalAuthorizationHeaders,
+  readInternalCredential,
+  type RouteRegistrar
+} from "@hyperion/service-runtime";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 interface DownstreamService {
@@ -39,8 +43,6 @@ const UPSTREAM_TIMEOUT_MS = 2_500;
 const LUMEN_AI_TIMEOUT_MS = 130_000;
 const LUMEN_REQUEST_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const HEALTH_CACHE_TTL_MS = 5_000;
-const SESSION_CACHE_TTL_MS = 30_000;
-const SESSION_CACHE_MAX_ENTRIES = 1_000;
 
 type HttpMethod = "GET" | "POST" | "PATCH";
 
@@ -48,10 +50,23 @@ const PUBLIC_PATHS = new Set(["/v1/auth/login"]);
 
 let healthCache: { expiresAt: number; payload: PlatformHealth } | undefined;
 
-export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolver }): RouteRegistrar {
+export function createGatewayRoutes(overrides?: {
+  resolveSession?: SessionResolver;
+  gatewayCredentials?: { identity?: string; integration?: string; pulsoIris?: string; lumen?: string };
+}): RouteRegistrar {
   return async (app) => {
     const urls = readServiceUrls();
-    const resolveSession = overrides?.resolveSession ?? createCachedSessionResolver(urls.identity);
+    const resolveSession = overrides?.resolveSession ?? createFreshSessionResolver(urls.identity);
+    const gatewayCredentials = {
+      identity:
+        overrides?.gatewayCredentials?.identity ?? readInternalCredential(process.env, "GATEWAY_TO_IDENTITY_TOKEN"),
+      integration:
+        overrides?.gatewayCredentials?.integration ??
+        readInternalCredential(process.env, "GATEWAY_TO_INTEGRATION_TOKEN"),
+      pulsoIris:
+        overrides?.gatewayCredentials?.pulsoIris ?? readInternalCredential(process.env, "GATEWAY_TO_PULSO_TOKEN"),
+      lumen: overrides?.gatewayCredentials?.lumen ?? readInternalCredential(process.env, "GATEWAY_TO_LUMEN_TOKEN")
+    };
 
     // Authenticate before Fastify parses potentially large LUMEN audio payloads.
     app.addHook("onRequest", async (request, reply) => {
@@ -123,15 +138,42 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
     });
 
     app.get("/v1/identity/operators", async (request, reply) => {
-      return proxyJson(request, reply, buildUpstreamUrl(urls.identity, request), "GET");
+      return proxyJson(
+        request,
+        reply,
+        buildUpstreamUrl(urls.identity, request),
+        "GET",
+        undefined,
+        UPSTREAM_TIMEOUT_MS,
+        undefined,
+        gatewayCredentials.identity ?? null
+      );
     });
 
     app.post("/v1/identity/operators", async (request, reply) => {
-      return proxyJson(request, reply, buildUpstreamUrl(urls.identity, request), "POST", request.body);
+      return proxyJson(
+        request,
+        reply,
+        buildUpstreamUrl(urls.identity, request),
+        "POST",
+        request.body,
+        UPSTREAM_TIMEOUT_MS,
+        undefined,
+        gatewayCredentials.identity ?? null
+      );
     });
 
     app.patch("/v1/identity/operators/:operatorId", async (request, reply) => {
-      return proxyJson(request, reply, buildUpstreamUrl(urls.identity, request), "PATCH", request.body);
+      return proxyJson(
+        request,
+        reply,
+        buildUpstreamUrl(urls.identity, request),
+        "PATCH",
+        request.body,
+        UPSTREAM_TIMEOUT_MS,
+        undefined,
+        gatewayCredentials.identity ?? null
+      );
     });
 
     app.get("/v1/platform/catalog", async (request) => {
@@ -190,26 +232,71 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
     });
 
     app.get("/v1/tenants/:tenantId/integrations/whatsapp/status", async (request, reply) => {
-      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "GET");
+      return proxyJson(
+        request,
+        reply,
+        buildUpstreamUrl(urls.integration, request),
+        "GET",
+        undefined,
+        UPSTREAM_TIMEOUT_MS,
+        undefined,
+        gatewayCredentials.integration ?? null
+      );
     });
 
     app.post("/v1/tenants/:tenantId/integrations/whatsapp/connect", async (request, reply) => {
-      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "POST", request.body ?? {});
+      return proxyJson(
+        request,
+        reply,
+        buildUpstreamUrl(urls.integration, request),
+        "POST",
+        request.body ?? {},
+        UPSTREAM_TIMEOUT_MS,
+        undefined,
+        gatewayCredentials.integration ?? null
+      );
     });
 
     app.get("/v1/tenants/:tenantId/integrations/whatsapp/qr", async (request, reply) => {
       reply.header("cache-control", "no-store, private, max-age=0");
       reply.header("pragma", "no-cache");
       reply.header("expires", "0");
-      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "GET");
+      return proxyJson(
+        request,
+        reply,
+        buildUpstreamUrl(urls.integration, request),
+        "GET",
+        undefined,
+        UPSTREAM_TIMEOUT_MS,
+        undefined,
+        gatewayCredentials.integration ?? null
+      );
     });
 
     app.post("/v1/tenants/:tenantId/integrations/whatsapp/disconnect", async (request, reply) => {
-      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "POST", request.body ?? {});
+      return proxyJson(
+        request,
+        reply,
+        buildUpstreamUrl(urls.integration, request),
+        "POST",
+        request.body ?? {},
+        UPSTREAM_TIMEOUT_MS,
+        undefined,
+        gatewayCredentials.integration ?? null
+      );
     });
 
     app.get("/v1/tenants/:tenantId/pulso-iris/sofia/readiness", async (request, reply) => {
-      return proxyJson(request, reply, buildUpstreamUrl(urls.integration, request), "GET");
+      return proxyJson(
+        request,
+        reply,
+        buildUpstreamUrl(urls.integration, request),
+        "GET",
+        undefined,
+        UPSTREAM_TIMEOUT_MS,
+        undefined,
+        gatewayCredentials.integration ?? null
+      );
     });
 
     // Proxy generico de PULSO IRIS: la validacion de tenant y la membresia
@@ -229,7 +316,10 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
           reply,
           buildUpstreamUrl(urls.pulsoIris, request, true),
           method,
-          method === "GET" ? undefined : request.body
+          method === "GET" ? undefined : request.body,
+          UPSTREAM_TIMEOUT_MS,
+          undefined,
+          gatewayCredentials.pulsoIris ?? null
         );
       }
     });
@@ -251,7 +341,9 @@ export function createGatewayRoutes(overrides?: { resolveSession?: SessionResolv
           buildUpstreamUrl(urls.lumen, request, true),
           method,
           method === "GET" ? undefined : request.body,
-          LUMEN_AI_TIMEOUT_MS
+          LUMEN_AI_TIMEOUT_MS,
+          undefined,
+          gatewayCredentials.lumen ?? null
         );
       }
     });
@@ -360,6 +452,10 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
     return undefined;
   }
 
+  if (path.startsWith("/v1/identity/operators")) {
+    return "Admin role required";
+  }
+
   if (method === "GET") {
     if (path.includes("/integrations/whatsapp/") || path.endsWith("/pulso-iris/sofia/readiness")) {
       return role === "coordinator" ? undefined : "Admin or coordinator role required";
@@ -369,10 +465,6 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
 
   if (path === "/v1/auth/logout") {
     return undefined;
-  }
-
-  if (path.startsWith("/v1/identity/operators")) {
-    return "Admin role required";
   }
 
   if (role === "auditor") {
@@ -408,17 +500,11 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
   return "Forbidden";
 }
 
-function createCachedSessionResolver(identityUrl: string): SessionResolver {
-  const cache = new Map<string, { expiresAt: number; session: AuthMe }>();
+function createFreshSessionResolver(identityUrl: string): SessionResolver {
   const tokenStates = new Map<string, { activeRequests: number; generation: number }>();
 
   const resolve: SessionResolver = async (token) => {
     const key = createHash("sha256").update(token).digest("hex");
-    const cached = cache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.session;
-    }
-
     const tokenState = tokenStates.get(key) ?? { activeRequests: 0, generation: 0 };
     tokenStates.set(key, tokenState);
     tokenState.activeRequests += 1;
@@ -430,7 +516,6 @@ function createCachedSessionResolver(identityUrl: string): SessionResolver {
       });
 
       if (!response.ok) {
-        cache.delete(key);
         return undefined;
       }
 
@@ -442,11 +527,6 @@ function createCachedSessionResolver(identityUrl: string): SessionResolver {
       if (requestGeneration !== tokenState.generation) {
         return undefined;
       }
-
-      if (cache.size >= SESSION_CACHE_MAX_ENTRIES) {
-        cache.clear();
-      }
-      cache.set(key, { expiresAt: Date.now() + SESSION_CACHE_TTL_MS, session });
 
       return session;
     } catch {
@@ -463,7 +543,6 @@ function createCachedSessionResolver(identityUrl: string): SessionResolver {
     const key = createHash("sha256").update(token).digest("hex");
     const tokenState = tokenStates.get(key);
     if (tokenState) tokenState.generation += 1;
-    cache.delete(key);
   };
 
   return resolve;
@@ -507,12 +586,18 @@ async function proxyJson(
   method: "GET" | "POST" | "PATCH",
   body?: unknown,
   timeoutMs = UPSTREAM_TIMEOUT_MS,
-  onUpstreamSuccess?: () => void
+  onUpstreamSuccess?: () => void,
+  gatewayCredential?: string | null
 ): Promise<unknown> {
+  if (gatewayCredential === null || gatewayCredential === "") {
+    return reply.code(503).send(envelope({ error: "Gateway workload identity is not configured" }, request.id));
+  }
   const requestAbort = createRequestAbortSignal(request, reply);
   try {
     const headers: Record<string, string> = { "x-request-id": request.id };
-    if (request.headers.authorization) {
+    if (gatewayCredential !== undefined) {
+      Object.assign(headers, createInternalAuthorizationHeaders("api-gateway", gatewayCredential));
+    } else if (request.headers.authorization) {
       headers.authorization = request.headers.authorization;
     }
     if (request.session) {

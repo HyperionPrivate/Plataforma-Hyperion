@@ -7,7 +7,13 @@ import {
   operatorListSchema,
   operatorPatchSchema
 } from "@hyperion/contracts";
-import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import {
+  readInternalCredential,
+  validateInternalAuthorization,
+  type RouteRegistrar,
+  type ServiceContext
+} from "@hyperion/service-runtime";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   generateSessionToken,
   hashPassword,
@@ -36,6 +42,8 @@ interface OperatorListRow {
 }
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_IDENTITY_TOKEN");
+
   if (context.db) {
     await ensureInitialAdmin(context);
   }
@@ -53,7 +61,10 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     );
   });
 
-  app.get("/v1/identity/operators", async (request) => {
+  app.get("/v1/identity/operators", async (request, reply) => {
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const auth = requireAdmin(request.headers["x-operator-role"]);
+    if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
     if (!context.db) {
       return envelope([], request.id);
     }
@@ -78,6 +89,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.post("/v1/identity/operators", async (request, reply) => {
+    if (!requireGateway(request, reply, gatewayToken)) return;
     const auth = requireAdmin(request.headers["x-operator-role"]);
     if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
 
@@ -106,6 +118,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.patch("/v1/identity/operators/:operatorId", async (request, reply) => {
+    if (!requireGateway(request, reply, gatewayToken)) return;
     const auth = requireAdmin(request.headers["x-operator-role"]);
     if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
 
@@ -259,6 +272,13 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     return envelope({ loggedOut: true }, request.id);
   });
 };
+
+function requireGateway(request: FastifyRequest, reply: FastifyReply, token: string | undefined): boolean {
+  const failure = validateInternalAuthorization(request.headers, { "api-gateway": token });
+  if (!failure) return true;
+  void reply.code(failure.statusCode).send(envelope({ error: failure.message }, request.id));
+  return false;
+}
 
 async function countOperators(context: ServiceContext): Promise<number> {
   if (!context.db) {

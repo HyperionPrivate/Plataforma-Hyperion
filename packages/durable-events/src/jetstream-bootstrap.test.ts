@@ -9,9 +9,9 @@ import {
 } from "./jetstream-consumer.js";
 
 describe("JetStream topology bootstrap", () => {
-  it("owns seven active durables plus the drain-only legacy Audit durable", () => {
-    expect(HYPERION_KNOWN_CONSUMERS).toHaveLength(8);
-    expect(new Set(HYPERION_KNOWN_CONSUMERS.map(({ durableName }) => durableName)).size).toBe(8);
+  it("owns active durables, separate v1 rollout durables and the drain-only Audit durable", () => {
+    expect(HYPERION_KNOWN_CONSUMERS).toHaveLength(10);
+    expect(new Set(HYPERION_KNOWN_CONSUMERS.map(({ durableName }) => durableName)).size).toBe(10);
     expect(HYPERION_KNOWN_CONSUMERS).toEqual(
       expect.arrayContaining([
         {
@@ -25,6 +25,18 @@ describe("JetStream topology bootstrap", () => {
         {
           eventType: "audit.event.record.v1",
           durableName: "audit_event_record_v1"
+        },
+        {
+          eventType: "channel.inbound.received.v2",
+          durableName: "pulso_channel_inbound_v2"
+        },
+        {
+          eventType: "pulso.message.received.v1",
+          durableName: "sofia_pulso_message_v1"
+        },
+        {
+          eventType: "pulso.message.received.v2",
+          durableName: "sofia_pulso_message_v2"
         }
       ])
     );
@@ -35,8 +47,8 @@ describe("JetStream topology bootstrap", () => {
     const first = await provisionHyperionJetStreamTopology(fixture.adapter);
     const second = await provisionHyperionJetStreamTopology(fixture.adapter);
 
-    expect(first.consumers).toHaveLength(8);
-    expect(first.consumers.filter(({ result }) => result.consumerCreated)).toHaveLength(8);
+    expect(first.consumers).toHaveLength(10);
+    expect(first.consumers.filter(({ result }) => result.consumerCreated)).toHaveLength(10);
     expect(first.consumers.filter(({ result }) => result.streamCreated)).toHaveLength(1);
     expect(second.consumers.every(({ result }) => !result.streamCreated && !result.consumerCreated)).toBe(true);
   });

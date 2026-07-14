@@ -1,0 +1,66 @@
+# CI-only override for the final N-1 rollback rehearsal. It must never be used
+# for the initial N-1 boot because the service roles do not exist until the
+# current migrations and role bootstrap have completed.
+#
+# The old Compose model injected the PostgreSQL administrator URL into every
+# runtime. This override proves that the old images can at least start and
+# become ready with the current, workload-scoped identities instead.
+services:
+  identity-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_access:${ACCESS_DATABASE_PASSWORD:?ACCESS_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_access
+
+  tenant-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_access:${ACCESS_DATABASE_PASSWORD:?ACCESS_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_access
+
+  agent-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD:?SOFIA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_sofia
+
+  prompt-flow-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD:?SOFIA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_sofia
+
+  knowledge-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_knowledge:${KNOWLEDGE_DATABASE_PASSWORD:?KNOWLEDGE_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_knowledge
+
+  audit-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_audit:${AUDIT_DATABASE_PASSWORD:?AUDIT_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_audit
+
+  integration-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_integration:${INTEGRATION_DATABASE_PASSWORD:?INTEGRATION_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_integration
+
+  pulso-iris-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_pulso:${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_pulso
+
+  whatsapp-channel-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_channel:${CHANNEL_DATABASE_PASSWORD:?CHANNEL_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_channel
+
+  lumen-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_lumen:${LUMEN_DATABASE_PASSWORD:?LUMEN_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_lumen
+      PGAPPNAME: ${LUMEN_N1_CLEANUP_SCOPE_ID:?LUMEN_N1_CLEANUP_SCOPE_ID is required}
+      ELEVENLABS_STT_TIMEOUT_MS: ${ELEVENLABS_STT_TIMEOUT_MS:-120000}
+      # The final rollback probe must enter the exact N-1 writer and remain
+      # in-flight without sending clinical or synthetic bytes to a provider.
+      # This ESM preload replaces fetch with an abort-aware pending promise;
+      # the CI script then destroys the container/tmpfs with SIGKILL.
+      ELEVENLABS_API_KEY: ci-synthetic-key-never-transmitted
+      ELEVENLABS_ZERO_RETENTION_MODE: "true"
+      NODE_OPTIONS: --import=data:text/javascript;base64,aW1wb3J0e3dyaXRlRmlsZVN5bmN9ZnJvbSJub2RlOmZzIjtjb25zdCBvcmlnaW5hbEZldGNoPWdsb2JhbFRoaXMuZmV0Y2guYmluZChnbG9iYWxUaGlzKTtjb25zdCBpbnRlcm5hbEhvc3RzPW5ldyBTZXQoWyIxMjcuMC4wLjEiLCJsb2NhbGhvc3QiLCJbOjoxXSIsImlkZW50aXR5LXNlcnZpY2UiLCJ0ZW5hbnQtc2VydmljZSIsImFnZW50LXNlcnZpY2UiLCJwcm9tcHQtZmxvdy1zZXJ2aWNlIiwia25vd2xlZGdlLXNlcnZpY2UiLCJhdWRpdC1zZXJ2aWNlIiwiaW50ZWdyYXRpb24tc2VydmljZSIsInB1bHNvLWlyaXMtc2VydmljZSIsIndoYXRzYXBwLWNoYW5uZWwtc2VydmljZSIsImx1bWVuLXNlcnZpY2UiLCJhcGktZ2F0ZXdheSJdKTtnbG9iYWxUaGlzLmZldGNoPShpbnB1dCxvcHRpb25zPXt9KT0+e2NvbnN0IHJhdz1pbnB1dCBpbnN0YW5jZW9mIFJlcXVlc3Q/aW5wdXQudXJsOlN0cmluZyhpbnB1dCk7bGV0IHVybDt0cnl7dXJsPW5ldyBVUkwocmF3KTt9Y2F0Y2h7cmV0dXJuIFByb21pc2UucmVqZWN0KG5ldyBFcnJvcigiQ0kgb3V0Ym91bmQgZmV0Y2ggYmxvY2tlZCIpKTt9Y29uc3QgaXNQcm92aWRlckJvdW5kYXJ5PXVybC5wcm90b2NvbD09PSJodHRwczoiJiZ1cmwuaG9zdG5hbWU9PT0iYXBpLmVsZXZlbmxhYnMuaW8iJiZ1cmwucG9ydD09PSIiJiZ1cmwudXNlcm5hbWU9PT0iIiYmdXJsLnBhc3N3b3JkPT09IiImJnVybC5wYXRobmFtZT09PSIvdjEvc3BlZWNoLXRvLXRleHQiJiZ1cmwuc2VhcmNoPT09Ij9lbmFibGVfbG9nZ2luZz1mYWxzZSImJnVybC5oYXNoPT09IiI7aWYoaXNQcm92aWRlckJvdW5kYXJ5KXt3cml0ZUZpbGVTeW5jKCIvdG1wL2x1bWVuLWF1ZGlvLy5wcm92aWRlci1uZXR3b3JrLWJsb2NrZWQiLCJibG9ja2VkIix7bW9kZTowbzYwMH0pO3JldHVybiBuZXcgUHJvbWlzZSgoX3Jlc29sdmUscmVqZWN0KT0+e2NvbnN0IHNpZ25hbD1vcHRpb25zLnNpZ25hbDtpZihzaWduYWw/LmFib3J0ZWQpe3JlamVjdChzaWduYWwucmVhc29uKTtyZXR1cm47fXNpZ25hbD8uYWRkRXZlbnRMaXN0ZW5lcigiYWJvcnQiLCgpPT5yZWplY3Qoc2lnbmFsLnJlYXNvbikse29uY2U6dHJ1ZX0pO30pO31pZih1cmwucHJvdG9jb2w9PT0iaHR0cDoiJiZpbnRlcm5hbEhvc3RzLmhhcyh1cmwuaG9zdG5hbWUpKXJldHVybiBvcmlnaW5hbEZldGNoKGlucHV0LG9wdGlvbnMpO3JldHVybiBQcm9taXNlLnJlamVjdChuZXcgRXJyb3IoIkNJIG91dGJvdW5kIGZldGNoIGJsb2NrZWQiKSk7fTs=

@@ -206,6 +206,9 @@ importers:
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
+      fastify:
+        specifier: ^5.2.1
+        version: 5.10.0
 
   services/integration-service:
     dependencies:

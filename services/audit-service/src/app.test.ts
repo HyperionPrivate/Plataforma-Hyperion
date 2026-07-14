@@ -2,14 +2,17 @@ import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerRoutes } from "./app.js";
 
-const TEST_TOKEN = "test-internal-token";
+const TEST_TOKEN = "test-channel-to-audit-token";
+const CALLER = "whatsapp-channel-service";
 
 describe("audit-service without internal token configured", () => {
   let app: ServiceHandle["app"];
 
   beforeAll(async () => {
     delete process.env.DATABASE_URL;
-    delete process.env.INTERNAL_SERVICE_TOKEN;
+    delete process.env.CHANNEL_TO_AUDIT_TOKEN;
+    delete process.env.PULSO_TO_AUDIT_TOKEN;
+    delete process.env.SOFIA_TO_AUDIT_TOKEN;
     const handle = await createService({
       serviceName: "audit-service",
       databaseRequired: true,
@@ -22,7 +25,7 @@ describe("audit-service without internal token configured", () => {
     await app.close();
   });
 
-  it("refuses event writes when INTERNAL_SERVICE_TOKEN is missing", async () => {
+  it("refuses event writes when workload credentials are missing", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/audit/events",
@@ -30,7 +33,7 @@ describe("audit-service without internal token configured", () => {
     });
 
     expect(response.statusCode).toBe(503);
-    expect(response.json().data.error).toContain("INTERNAL_SERVICE_TOKEN");
+    expect(response.json().data.error).toContain("credentials are not configured");
   });
 });
 
@@ -39,7 +42,7 @@ describe("audit-service with internal token configured", () => {
 
   beforeAll(async () => {
     delete process.env.DATABASE_URL;
-    process.env.INTERNAL_SERVICE_TOKEN = TEST_TOKEN;
+    process.env.CHANNEL_TO_AUDIT_TOKEN = TEST_TOKEN;
     const handle = await createService({
       serviceName: "audit-service",
       databaseRequired: true,
@@ -50,7 +53,7 @@ describe("audit-service with internal token configured", () => {
 
   afterAll(async () => {
     await app.close();
-    delete process.env.INTERNAL_SERVICE_TOKEN;
+    delete process.env.CHANNEL_TO_AUDIT_TOKEN;
   });
 
   it("rejects writes without a bearer token", async () => {
@@ -67,7 +70,7 @@ describe("audit-service with internal token configured", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/audit/events",
-      headers: { authorization: "Bearer wrong-token" },
+      headers: { authorization: "Bearer wrong-token", "x-hyperion-caller": CALLER },
       payload: { eventType: "test.event", entityType: "test" }
     });
 
@@ -78,12 +81,23 @@ describe("audit-service with internal token configured", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/audit/events",
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, "x-hyperion-caller": CALLER },
       payload: { eventType: "test.event", entityType: "test" }
     });
 
     expect(response.statusCode).toBe(503);
     expect(response.json().data.error).toContain("DATABASE_URL");
+  });
+
+  it("rejects a valid edge token when a different workload claims it", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/audit/events",
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, "x-hyperion-caller": "pulso-iris-service" },
+      payload: { eventType: "test.event", entityType: "test" }
+    });
+
+    expect(response.statusCode).toBe(401);
   });
 
   it("lists events as an empty envelope without a database", async () => {

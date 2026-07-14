@@ -28,7 +28,7 @@ describeIntegration("SOFIA internal agenda tools", () => {
 
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
-    process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
+    process.env.SOFIA_TO_PULSO_TOKEN = INTERNAL_TOKEN;
     client = new Client({ connectionString: TEST_DATABASE_URL });
     await client.connect();
     const fixtures = await createFixtures(client);
@@ -52,7 +52,7 @@ describeIntegration("SOFIA internal agenda tools", () => {
       await client.end();
     }
     delete process.env.DATABASE_URL;
-    delete process.env.INTERNAL_SERVICE_TOKEN;
+    delete process.env.SOFIA_TO_PULSO_TOKEN;
   });
 
   it("creates one patient, conversation and message for a redelivered inbound event", async () => {
@@ -493,7 +493,10 @@ describeIntegration("SOFIA internal agenda tools", () => {
 });
 
 function internalHeaders() {
-  return { authorization: `Bearer ${INTERNAL_TOKEN}` };
+  return {
+    authorization: `Bearer ${INTERNAL_TOKEN}`,
+    "x-hyperion-caller": "agent-service"
+  };
 }
 
 async function createFixtures(client: pg.Client) {

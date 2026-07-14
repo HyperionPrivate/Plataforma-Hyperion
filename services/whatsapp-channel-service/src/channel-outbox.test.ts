@@ -9,9 +9,11 @@ describe("PostgresChannelOutbox", () => {
         {
           id: "00000000-0000-4000-8000-000000000101",
           tenantId: "00000000-0000-4000-8000-000000000102",
-          eventType: "channel.inbound.received.v1",
-          eventVersion: 1,
+          eventType: "channel.inbound.received.v2",
+          eventVersion: 2,
           occurredAt: new Date("2026-07-13T12:00:00.000Z"),
+          streamId: "00000000-0000-4000-8000-000000000104",
+          streamSequence: "7",
           payload: { inboundEventId: "00000000-0000-4000-8000-000000000103" }
         }
       ])
@@ -22,15 +24,44 @@ describe("PostgresChannelOutbox", () => {
 
     expect(claimed).toEqual([
       expect.objectContaining({
-        type: "channel.inbound.received.v1",
+        type: "channel.inbound.received.v2",
         occurredAt: "2026-07-13T12:00:00.000Z",
+        streamId: "00000000-0000-4000-8000-000000000104",
+        streamSequence: 7,
         destination: "http://pulso.local/internal/v1/events/channel-inbound"
       })
     ]);
-    expect(db.calls[0]?.params).toEqual(["channel-worker", 20]);
+    expect(db.calls[0]?.params).toEqual(["channel-worker", 20, null]);
     expect(db.calls[0]?.sql).toContain("for update skip locked");
+    expect(db.calls[0]?.sql).toContain("predecessor.stream_sequence < candidate.stream_sequence");
+    expect(db.calls[0]?.sql).toContain("predecessor.status <> 'published'");
+    expect(db.calls[0]?.sql).toContain("candidate.tenant_id = $3::uuid");
     expect(db.calls[0]?.sql).toContain("terminalized_sources");
     expect(db.calls[0]?.sql).toContain("'outboxStatus', 'dead_letter'");
+  });
+
+  it("keeps a legacy v1 envelope strict while the database still uses its sequence for head-of-line blocking", async () => {
+    const db = fakeDatabase([
+      response([
+        {
+          id: "00000000-0000-4000-8000-000000000101",
+          tenantId: "00000000-0000-4000-8000-000000000102",
+          eventType: "channel.inbound.received.v1",
+          eventVersion: 1,
+          occurredAt: new Date("2026-07-13T12:00:00.000Z"),
+          streamId: "00000000-0000-4000-8000-000000000104",
+          streamSequence: "8",
+          payload: { inboundEventId: "00000000-0000-4000-8000-000000000103" }
+        }
+      ])
+    ]);
+    const outbox = new PostgresChannelOutbox(db.client, "channel-worker", "http://pulso.local");
+
+    const claimed = await outbox.claim(1);
+
+    expect(claimed[0]).toMatchObject({ type: "channel.inbound.received.v1", version: 1 });
+    expect(claimed[0]).not.toHaveProperty("streamId");
+    expect(claimed[0]).not.toHaveProperty("streamSequence");
   });
 
   it("completes the outbox and its inbound source in the same transaction", async () => {

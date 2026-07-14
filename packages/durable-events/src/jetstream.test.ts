@@ -11,10 +11,12 @@ import {
 
 const EVENT: ClaimedOutboxEvent = {
   id: "10dc657b-2dd8-4354-b10f-0cdf5741d7bc",
-  type: "channel.inbound.received.v1",
-  version: 1,
+  type: "channel.inbound.received.v2",
+  version: 2,
   occurredAt: "2026-07-13T15:00:00.000Z",
   tenantId: "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c",
+  streamId: "0790ebc5-9058-4dcb-8be0-5e3e85858738",
+  streamSequence: 7,
   payload: { conversationId: "controlled-conversation", body: "controlled-message" },
   destination: "ignored-by-jetstream"
 };
@@ -112,9 +114,9 @@ describe("JetStreamOutboxDispatcher", () => {
     expect(sessionFactory).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledTimes(1);
     const [subject, bytes, options] = publish.mock.calls[0]!;
-    expect(subject).toBe("hyperion.events.channel.inbound.received.v1");
+    expect(subject).toBe("hyperion.events.channel.inbound.received.v2");
     expect(new TextDecoder().decode(bytes)).toBe(
-      '{"id":"10dc657b-2dd8-4354-b10f-0cdf5741d7bc","occurredAt":"2026-07-13T15:00:00.000Z","payload":{"body":"controlled-message","conversationId":"controlled-conversation"},"tenantId":"7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c","type":"channel.inbound.received.v1","version":1}'
+      '{"id":"10dc657b-2dd8-4354-b10f-0cdf5741d7bc","occurredAt":"2026-07-13T15:00:00.000Z","payload":{"body":"controlled-message","conversationId":"controlled-conversation"},"streamId":"0790ebc5-9058-4dcb-8be0-5e3e85858738","streamSequence":7,"tenantId":"7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c","type":"channel.inbound.received.v2","version":2}'
     );
     expect(options).toEqual({
       msgID: EVENT.id,
@@ -310,6 +312,33 @@ describe("JetStreamOutboxDispatcher", () => {
     expect(dispatcher.isRunning).toBe(false);
     expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the active session and does not publish the remainder of a claimed batch on stop", async () => {
+    let releasePublish!: (ack: JetStreamPublishAck) => void;
+    const pending = new Promise<JetStreamPublishAck>((resolve) => {
+      releasePublish = resolve;
+    });
+    const publish = vi.fn(async () => pending);
+    const close = vi.fn(async () => undefined);
+    const secondEvent = { ...EVENT, id: "event-2" };
+    const dispatcher = createDispatcher({
+      claim: async () => [EVENT, secondEvent],
+      sessionFactory: sessionFactory({ publish, close }),
+      batchSize: 2
+    });
+
+    const draining = dispatcher.drainOnce();
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce());
+    const stopping = dispatcher.stop();
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    releasePublish(ACK);
+    const result = await draining;
+    await stopping;
+
+    expect(result).toMatchObject({ claimed: 2, completed: 1, skipped: 1 });
+    expect(publish).toHaveBeenCalledOnce();
+    await expect(dispatcher.drainOnce()).resolves.toMatchObject({ claimed: 0 });
   });
 
   it("reports only a sanitized close failure", async () => {

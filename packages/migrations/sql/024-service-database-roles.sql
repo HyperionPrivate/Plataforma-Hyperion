@@ -1,10 +1,10 @@
 -- Incremental PostgreSQL isolation for Compose service identities.
 --
--- Compose creates and rotates LOGIN roles before migrations through
--- packages/migrations/src/bootstrap-roles.ts. For upgrade/local runs that do
--- not execute that bootstrap, this migration creates the same identities as
--- NOLOGIN roles so its checksum can never record a false no-op. A later
--- bootstrap can safely activate them without changing the privilege matrix.
+-- Compose runs migrations while service identities remain NOLOGIN. This
+-- migration creates or preserves that fenced state so its checksum can never
+-- record a false no-op. Only after all migrations succeed does
+-- packages/migrations/src/bootstrap-roles.ts validate the privilege matrix,
+-- rotate credentials atomically and activate the roles.
 
 do $$
 declare

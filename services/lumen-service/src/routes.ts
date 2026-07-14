@@ -47,6 +47,7 @@ import { decodeBase64SpeechToTextInput, type SpeechToTextProvider, type SpeechTo
 export interface LumenRouteDependencies {
   transcriber: SpeechToTextProvider;
   structurer: ClinicalStructurer;
+  audioCleanupOwner: string;
 }
 
 interface WorklistRow {
@@ -209,7 +210,8 @@ export async function registerLumenRoutes(
           model: dependencies.transcriber.model,
           mimeType: prepared.mimeType,
           source: input.source,
-          durationSeconds: input.durationSeconds
+          durationSeconds: input.durationSeconds,
+          cleanupOwner: dependencies.audioCleanupOwner
         });
       });
       if (reservation.state === "not_found") {
@@ -229,7 +231,11 @@ export async function registerLumenRoutes(
       const requestAbort = createRequestAbortSignal(request, reply);
       let transcription: SpeechToTextResult | undefined;
       try {
-        transcription = await dependencies.transcriber.transcribe({ ...prepared, signal: requestAbort.signal });
+        transcription = await dependencies.transcriber.transcribe({
+          ...prepared,
+          cleanupKey: reservation.attemptId,
+          signal: requestAbort.signal
+        });
         throwIfRequestAborted(requestAbort.signal);
         const completedTranscription = transcription;
         const outcome = await scope.db.transaction(async (client) => {
@@ -1210,6 +1216,12 @@ function sendReservationConflict(
       .header("retry-after", "2")
       .code(409)
       .send(envelope({ error: "Clinical processing is already in progress" }, request.id));
+  }
+  if (reservation.state === "cleanup_pending") {
+    return reply
+      .header("retry-after", "5")
+      .code(409)
+      .send(envelope({ error: "Previous clinical processing is awaiting secure temporary-audio cleanup" }, request.id));
   }
   return reply
     .code(409)

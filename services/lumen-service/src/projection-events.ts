@@ -1,7 +1,12 @@
 import { envelope } from "@hyperion/contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import type { JetStreamEventHandler, JsonValue } from "@hyperion/durable-events";
-import type { RouteRegistrar } from "@hyperion/service-runtime";
+import {
+  readInternalCaller,
+  readInternalCredential,
+  validateInternalAuthorization,
+  type RouteRegistrar
+} from "@hyperion/service-runtime";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
@@ -100,8 +105,12 @@ interface ProjectionRow {
 }
 
 export const registerLumenProjectionEventRoutes: RouteRegistrar = (app, context) => {
+  const projectionCredentials = {
+    "identity-service": readInternalCredential(process.env, "ACCESS_TO_LUMEN_TOKEN"),
+    "pulso-iris-service": readInternalCredential(process.env, "PULSO_TO_LUMEN_TOKEN")
+  };
   app.post("/internal/v1/events/lumen-projections", async (request, reply) => {
-    const authError = validateInternalToken(context.config.internalServiceToken, request.headers.authorization);
+    const authError = validateInternalAuthorization(request.headers, projectionCredentials);
     if (authError) {
       return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
     }
@@ -112,6 +121,11 @@ export const registerLumenProjectionEventRoutes: RouteRegistrar = (app, context)
     const parsed = lumenProjectionEventSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send(envelope({ error: "Invalid LUMEN projection event" }, request.id));
+    }
+    const caller = readInternalCaller(request.headers)!;
+    const expectedCaller = parsed.data.type.startsWith("access.") ? "identity-service" : "pulso-iris-service";
+    if (caller !== expectedCaller) {
+      return reply.code(403).send(envelope({ error: "Event contract is not authorized for this caller" }, request.id));
     }
 
     try {
@@ -428,24 +442,6 @@ function canonicalJson(value: unknown): string {
     return `{${entries.join(",")}}`;
   }
   throw new TypeError("Projection event contains a non-JSON value");
-}
-
-function validateInternalToken(
-  token: string | undefined,
-  authorization: string | undefined
-): { statusCode: number; message: string } | undefined {
-  if (!token) return { statusCode: 503, message: "INTERNAL_SERVICE_TOKEN is required" };
-  const expected = `Bearer ${token}`;
-  if (!authorization || !constantTimeEquals(authorization, expected)) {
-    return { statusCode: 401, message: "Unauthorized" };
-  }
-  return undefined;
-}
-
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function constantTimeHexEquals(left: string, right: string): boolean {

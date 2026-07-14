@@ -3,11 +3,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readDurableOutboxConfiguration, registerRoutes } from "./app.js";
 
 const VALID_TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";
+const GATEWAY_TOKEN = "gateway-to-pulso-test-token";
 
 let app: ServiceHandle["app"];
 
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
+  process.env.GATEWAY_TO_PULSO_TOKEN = GATEWAY_TOKEN;
   const handle = await createService({
     serviceName: "pulso-iris-service",
     databaseRequired: true,
@@ -18,6 +20,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+  delete process.env.GATEWAY_TO_PULSO_TOKEN;
 });
 
 describe("pulso-iris-service routes", () => {
@@ -42,7 +45,8 @@ describe("pulso-iris-service routes", () => {
   it("rejects tenant ids that are not UUIDs", async () => {
     const response = await app.inject({
       method: "GET",
-      url: "/v1/tenants/123/pulso-iris/conversations"
+      url: "/v1/tenants/123/pulso-iris/conversations",
+      headers: gatewayHeaders()
     });
 
     expect(response.statusCode).toBe(400);
@@ -51,24 +55,39 @@ describe("pulso-iris-service routes", () => {
   it("returns 503 for tenant data when the database is not configured", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`,
+      headers: gatewayHeaders()
     });
 
     expect(response.statusCode).toBe(503);
     expect(response.json().data.error).toContain("DATABASE_URL");
   });
 
+  it("rejects a valid edge token asserted by the wrong workload", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`,
+      headers: {
+        authorization: `Bearer ${GATEWAY_TOKEN}`,
+        "x-hyperion-caller": "agent-service"
+      }
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
   it("reports readiness as down without a database", async () => {
     const response = await app.inject({ method: "GET", url: "/ready" });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(503);
     expect(response.json().status).toBe("down");
   });
 
   it("validates the tenant on config routes", async () => {
     const response = await app.inject({
       method: "GET",
-      url: "/v1/tenants/no-uuid/pulso-iris/config/sites"
+      url: "/v1/tenants/no-uuid/pulso-iris/config/sites",
+      headers: gatewayHeaders()
     });
 
     expect(response.statusCode).toBe(400);
@@ -78,6 +97,7 @@ describe("pulso-iris-service routes", () => {
     const response = await app.inject({
       method: "POST",
       url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/professionals`,
+      headers: gatewayHeaders(),
       payload: { name: "Dra. Prueba", professionalType: "optometrist" }
     });
 
@@ -87,7 +107,8 @@ describe("pulso-iris-service routes", () => {
   it("returns 503 for availability rules when the database is not configured", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/availability-rules`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/availability-rules`,
+      headers: gatewayHeaders()
     });
 
     expect(response.statusCode).toBe(503);
@@ -96,7 +117,8 @@ describe("pulso-iris-service routes", () => {
   it("returns 503 for agenda blocks when the database is not configured", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/agenda-blocks`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/agenda-blocks`,
+      headers: gatewayHeaders()
     });
 
     expect(response.statusCode).toBe(503);
@@ -105,12 +127,20 @@ describe("pulso-iris-service routes", () => {
   it("returns 503 for availability slots when the database is not configured", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/availability/slots`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/availability/slots`,
+      headers: gatewayHeaders()
     });
 
     expect(response.statusCode).toBe(503);
   });
 });
+
+function gatewayHeaders() {
+  return {
+    authorization: `Bearer ${GATEWAY_TOKEN}`,
+    "x-hyperion-caller": "api-gateway"
+  };
+}
 
 describe("pulso-iris durable outbox configuration", () => {
   const natsTestSecret = "nats-test-secret-with-24-characters";

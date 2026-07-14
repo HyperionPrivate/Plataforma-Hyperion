@@ -1,18 +1,21 @@
 # Produccion
 
-Este repositorio contiene controles y procedimientos para ambientes con datos operativos. La habilitacion
-productiva exige validar el despliegue, los backups y la recuperacion del ambiente concreto. La unica excepcion
-autorizada al uso de datos operativos es la demo clinica LUMEN descrita abajo, aislada y marcada con datos
-sinteticos; esos registros no se presentan como datos reales ni deben entrar en los flujos operativos de PULSO
-IRIS.
+Este repositorio contiene controles y procedimientos para ambientes con datos operativos. La habilitación
+productiva exige validar el despliegue, los backups y la recuperación del ambiente concreto. Este runbook no
+autoriza datos clínicos reales en LUMEN: la única ejecución LUMEN cubierta es la demo sintética aislada; sus
+registros no se presentan como reales ni deben entrar en los flujos operativos de PULSO IRIS.
 
 ## Secretos
 
 - No se guardan claves reales en Git.
 - Toda clave compartida por chat, correo o canal no secreto debe rotarse antes de dejarla como acceso permanente.
 - `.env.example` contiene placeholders y valores no secretos para documentar la configuracion esperada.
-- `INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD`, las ocho contraseñas PostgreSQL de servicio y las
-  credenciales de proveedores deben vivir fuera del repositorio.
+- `POSTGRES_PASSWORD`, las ocho contraseñas PostgreSQL, las credenciales HTTP por vínculo
+  `*_TO_*_TOKEN` y las credenciales de proveedores deben vivir fuera del repositorio.
+- Cada `*_TO_*_TOKEN` se entrega únicamente a su productor y consumidor, tiene al menos 24 caracteres
+  seguros y no se reutiliza en otro vínculo, en PostgreSQL, en NATS ni con proveedores.
+- Los tokens por vínculo son una barrera transicional. Un entorno empresarial debe añadir identidad de workload
+  gestionada, mTLS y rotación externa sin retirar la autorización específica por productor/ruta.
 - Las contraseñas `*_DATABASE_PASSWORD` son distintas entre sí, tienen al menos 24 caracteres URI no
   reservados y nunca se reutilizan como contraseña administrativa.
 
@@ -26,14 +29,38 @@ El VPS debe quedar con acceso por llave SSH, firewall activo y login root por pa
 - Consola web: `${WEB_CONSOLE_HOST_PORT:-3000}`.
 - PostgreSQL no se publica al host; solo queda disponible dentro de la red Docker.
 
+## Runtime compartido
+
+`/health` es liveness del proceso. `/ready` devuelve HTTP 200 sólo cuando las dependencias requeridas están
+disponibles y HTTP 503 cuando el cuerpo reporta `status: down`; balanceadores y probes pueden usar el código HTTP
+sin interpretar JSON.
+
+El cierre concede 65 segundos por defecto para que los hooks drenen el trabajo en curso antes de forzar la
+salida. `SHUTDOWN_TIMEOUT_MS` puede configurarse entre 55000 y 900000 milisegundos, pero no debe reducirse por
+debajo del peor tiempo medido del batch. Compose concede 75 segundos mediante `SHUTDOWN_GRACE_PERIOD`; debe
+superar el timeout del runtime por al menos cinco segundos. La barrera de arquitectura valida ambos presupuestos.
+Los dispatchers y consumidores cierran antes que el pool PostgreSQL. En SOFÍA un único coordinador detiene en
+paralelo el runtime, el publicador y todos los consumidores JetStream; cada consumidor limita su parada a 15
+segundos y, si el drenaje de NATS agota su plazo, fuerza el cierre del transporte sin confirmar el mensaje activo.
+Las consultas de los runtimes tienen `lock_timeout=5000ms`, `statement_timeout=10000ms` y
+`query_timeout=12000ms`; las migraciones usan un cliente administrativo separado. SOFÍA propaga la señal de
+cierre a DeepSeek y a sus herramientas HTTP, no convierte una cancelación en una respuesta fallback y limita el
+drenaje de su dispatcher a cinco entregas de tres segundos. Sus eventos de auditoría de finalización se confirman
+en el outbox dentro de la misma transacción que completa el job.
+
+`TRUST_PROXY` queda vacío o `false` cuando el servicio es alcanzable directamente. Sólo debe configurarse detrás
+de un proxy controlado y acepta una lista separada por comas de IP o CIDR explícitos. El runtime rechaza `true`,
+hostnames, reglas inválidas y redes `/0`; documentar los hops reales antes de habilitarlo.
+
 ## JetStream
 
-El transporte productivo predeterminado sigue siendo HTTP. El overlay
+El transporte predeterminado del stack base sigue siendo HTTP. El overlay
 `infra/docker-compose.jetstream.yml` usa identidades y ACL por servicio, pero permanece como piloto de un solo
 nodo: una replica, DLQ con la misma retencion y sin alerta/redrive operativos. No habilitarlo en produccion hasta
 desplegar cluster con replicas, TLS interno, limites de capacidad, monitorizacion y una prueba documentada de
 recuperacion. Cuando se evalua en un ambiente aislado, los seis `NATS_*_PASSWORD` deben ser distintos y nunca
-reutilizar `INTERNAL_SERVICE_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea siete durables activos y el
+reutilizar credenciales HTTP `*_TO_*_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea los durables
+versionados declarados por la topología y el
 durable temporal `audit_event_record_v1`: Audit consume por separado `sofia.audit.event.record.v1` y
 `lumen.audit.event.record.v1`, mientras el tercero sólo drena mensajes publicados antes de la migración y los
 marca `legacy-unknown`. Ninguna identidad runtime puede publicar nuevos eventos en el subject genérico. Cuando
@@ -45,9 +72,9 @@ como bypass paralelo de las ACL.
 
 Este ensayo valida la secuencia de activacion sin tocar el proyecto Compose habitual ni datos operativos. Crear
 `.env.rehearsal.local` a partir de `.env.example`, completar las ocho contraseñas PostgreSQL, las seis de NATS,
-`POSTGRES_PASSWORD` e `INTERNAL_SERVICE_TOKEN`, y mantener el archivo fuera de Git. Todas las contraseñas
-PostgreSQL, incluida la administrativa, deben usar al menos 24 caracteres URI no reservados. Para impedir llamadas
-a proveedores durante el ensayo se fijan además:
+todos los vínculos HTTP `*_TO_*_TOKEN` enumerados allí y `POSTGRES_PASSWORD`, y mantener el archivo fuera de Git.
+Todas las contraseñas PostgreSQL, incluida la administrativa, deben usar al menos 24 caracteres URI no reservados.
+Para impedir llamadas a proveedores durante el ensayo se fijan además:
 
 ```dotenv
 WHATSAPP_WEB_TEST_ENABLED=false
@@ -79,10 +106,13 @@ pnpm compose:check
 docker compose @Compose config --quiet
 docker compose @Compose build
 docker compose @Compose up -d --wait --wait-timeout 120 postgres nats
-docker compose @Compose run --rm --no-deps db-role-bootstrap
 docker compose @Compose run --rm --no-deps migrations
+docker compose @Compose run --rm --no-deps db-role-bootstrap
 docker compose @Compose run --rm --no-deps jetstream-topology-bootstrap
 ```
+
+No iniciar ningún runtime con base de datos entre `migrations` y `db-role-bootstrap`: la migración deja las ocho
+identidades como `NOLOGIN` y el bootstrap sólo las activa cuando toda la matriz ya quedó validada y confirmada.
 
 El E2E comparte los durables reales del piloto. Channel, PULSO, SOFIA, Audit y LUMEN deben permanecer detenidos
 mientras se ejecuta, para que ningún worker compita por sus mensajes. La imagen `autonomy-e2e-runner` sólo existe
@@ -213,24 +243,65 @@ reemplazar backups anteriores para recuperarse de un fallo. La restauracion no f
 script: requiere un procedimiento separado, controlado, con destino explicitamente aprobado y una
 ventana operativa propia.
 
-Antes de ejecutar migraciones, `db-role-bootstrap` crea o rota las identidades PostgreSQL de servicio. Solo
-ese proceso y `migrations` reciben la conexion administrativa; los diez runtimes usan su URL restringida y
-verifican `EXPECTED_DATABASE_ROLE` antes de registrar rutas o workers. El orden obligatorio es:
+`migrations` crea o desactiva primero como `NOLOGIN` las identidades PostgreSQL de servicio, exige que no queden
+sesiones de runtime, aplica la matriz de privilegios y confirma su validación. Después, `db-role-bootstrap` toma
+un mutex con espera acotada, vuelve a confirmar el fence `NOLOGIN` y, en una transacción final, repara la matriz,
+valida que no haya sesiones antiguas y activa o rota juntas las ocho identidades. Si cualquier alteración falla,
+PostgreSQL revierte la rotación completa y los roles permanecen `NOLOGIN`. Solo esos dos procesos reciben la conexión
+administrativa; los diez runtimes usan su URL restringida y verifican `EXPECTED_DATABASE_ROLE` antes de registrar
+rutas o workers. El orden obligatorio es:
 
 ```bash
-docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps db-role-bootstrap
+docker compose --env-file .env -f infra/docker-compose.yml stop \
+  identity-service tenant-service agent-service prompt-flow-service knowledge-service \
+  audit-service integration-service pulso-iris-service whatsapp-channel-service lumen-service
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps migrations
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps db-role-bootstrap
 ```
 
-La segunda ejecucion aplica, entre otras, `024-service-database-roles.sql`, que materializa la matriz de
-privilegios. Despues se verifican ambos logs, se despliegan los servicios y se validan sus endpoints de
-readiness. La matriz y sus denegaciones esperadas estan descritas en
+La primera ejecución aplica, entre otras, los fences y `024-service-database-roles.sql`; la segunda vuelve a
+aplicar y validar la matriz vigente antes de activar los roles. Después se verifican ambos logs, se despliegan los
+servicios y se validan sus endpoints de readiness. Si el bootstrap informa sesiones activas o deja los roles
+`NOLOGIN`, se completa el drenaje y se reintenta el bootstrap; no se corrige con `ALTER ROLE` manual.
+La matriz y sus denegaciones esperadas están descritas en
 [`architecture/POSTGRESQL-SERVICE-ROLES.md`](architecture/POSTGRESQL-SERVICE-ROLES.md).
+
+El runner aplica por defecto `lock_timeout=10000ms` y `statement_timeout=300000ms` a cada migración. Sólo se
+ajustan con enteros positivos en `MIGRATION_LOCK_TIMEOUT_MS` y `MIGRATION_STATEMENT_TIMEOUT_MS`, después de medir
+la ventana; aumentar un valor no sustituye revisar el lock esperado. La migración 021 se divide en bloques
+autocommit idempotentes y crea sus índices de forma concurrente. La procedencia Audit separa expansión y
+backfill (026), contrato validado (027) e índice concurrente idempotente fuera de transacción (028). La migración
+022 instala un trigger-fence antes del backfill histórico 023 para cubrir writers Channel N-1 que ya estaban en
+curso.
+
+En cada PR, CI construye todas las imágenes y resuelve de forma fail-closed el contrato del SHA base desde
+`infra/compatibility-policy.json`. Si la base ya contiene el descriptor usa sus capacidades `current_v2` y
+`deterministic_v2`; la única excepción bootstrap está ligada al SHA histórico exacto y declara los contratos
+legacy. Una base legacy deja un inbound pre-outbox pendiente con el binario N-1 detenido; la migración/backfill lo
+convierte en v1, current lo drena con compatibilidad temporal, cierra esa ventana y prueba un inbound v2. Una base
+current conserva el escritor y los contratos v2 sin abrir una ventana legacy.
+
+Después CI vuelve a las imágenes base exactas sobre el mismo volumen. Una base pre-durable valida su polling
+Channel → SOFÍA original y no se presenta como productora de inbox/outbox inexistentes; una base `current_v2`
+genera tráfico nuevo y exige Channel → PULSO → SOFÍA, posiciones durables, ejecución y outbound. La migración 038
+protege por separado escritores v1 durables transicionales: sólo acepta tipos exactos y posiciones verificadas
+contra el ledger propietario. CI comprueba además identidad del clúster, ledger, liveness y readiness en las etapas
+aplicables. Para LUMEN, `legacy_ephemeral_v1` ensaya la
+ventana administrativa cercada; `deterministic_v2` ensaya caída, expiración controlada de lease, recuperación y
+eliminación del temporal sin degradar al protocolo legacy.
+
+El rehearsal es deliberadamente HTTP: no prueba un mensaje JetStream pendiente creado por N-1 y el overlay sigue
+siendo un piloto separado. Tampoco demuestra compatibilidad universal: antes de producción se debe ensayar una
+copia de cardinalidad representativa, generar tráfico concurrente, medir locks y ejecutar operaciones de negocio
+durante upgrade y rollback. Los timeouts y smokes fallan cerrado, pero no sustituyen esa validación operativa. Dos
+checksums exactos de borradores no publicados de 021/026 se aceptan sólo para actualizar ambientes de ensayo tras
+validar su catálogo; el rollback soportado es a la base real del PR, no a commits intermedios de esta rama.
 
 ## Demo clinica LUMEN
 
-LUMEN usa datos sinteticos separados de la operacion real. Despues de aplicar en orden las migraciones
-hasta `022-lumen-autonomy.sql` (y la matriz de roles vigente), el unico seed autorizado para este vertical es:
+LUMEN usa datos sinteticos separados de la operacion real. Después de aplicar en orden todas las migraciones
+versionadas vigentes —incluidos recuperación, contrato e índices de limpieza de audio— y activar la matriz de
+roles, el único seed autorizado para este vertical es:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
@@ -256,6 +327,11 @@ ELEVENLABS_STT_LANGUAGE=spa
 ELEVENLABS_STT_TIMEOUT_MS=120000
 ELEVENLABS_ZERO_RETENTION_MODE=true
 LUMEN_AUDIO_TEMP_DIR=/tmp/lumen-audio
+LUMEN_INSTANCE_ID=lumen-stateful-0
+LUMEN_AUDIO_CLEANUP_RETRY_MS=30000
+LUMEN_AUDIO_CLEANUP_BATCH_SIZE=25
+LUMEN_AUDIO_CLEANUP_LEASE_TTL_MS=1800000
+LUMEN_AUDIO_CLEANUP_HEARTBEAT_MS=30000
 ```
 
 La clave debe provisionarse directamente en el `.env` privado del VPS mediante el canal secreto
@@ -284,10 +360,103 @@ La entrada acepta solo MIME de audio permitidos, maximo 5 MiB decodificados y du
 1 y 90 segundos. Antes de crear el temporal o llamar al proveedor, LUMEN deriva la duracion real del
 contenedor y falla cerrado si no puede determinarla, supera 90 segundos o no coincide con la declarada;
 los timestamps de palabras del proveedor aportan una segunda comprobacion. El archivo vive unicamente
-en el `tmpfs` privado, no ejecutable y limitado del contenedor LUMEN; se elimina en `finally` tanto en
-exito como en error. No se guardan audio, base64, identificadores crudos del proveedor ni transcript
-completo en logs. PostgreSQL conserva el transcript, revision humana, proveedor/modelo, duracion
-verificada, estados, timestamps, hashes tecnicos e idempotencia.
+en el `tmpfs` privado, no ejecutable y limitado del contenedor LUMEN. La finalizacion intenta eliminarlo
+en exito, error, cancelacion y aborto; si el sistema de archivos no confirma el borrado, el intento queda
+en `cleanup_pending` y el reconciliador de arranque y periodico lo reintenta antes de permitir un estado
+terminal. Cada replica debe tener un `LUMEN_INSTANCE_ID` estable y exclusivo. No se guardan audio, rutas,
+base64, identificadores crudos del proveedor ni transcript completo en logs. PostgreSQL conserva el
+transcript, revision humana, proveedor/modelo, duracion verificada, estados, timestamps, hashes tecnicos e
+idempotencia.
+
+El reconciliador adquiere una lease exclusiva por `LUMEN_INSTANCE_ID`; una segunda réplica con el mismo valor
+falla el arranque y la pérdida de heartbeat cambia `/ready` a HTTP 503. El TTL predeterminado es 30 minutos, su
+mínimo es 20 minutos y el heartbeat predeterminado es 30 segundos. Un reemplazo conserva la identidad. En Compose,
+el `tmpfs` privado se destruye al eliminar el contenedor y el proceso nuevo reconcilia tanto el intento
+`processing` como la ausencia confirmada de su ruta determinista. Si otro orquestador usa almacenamiento temporal
+persistente, debe volver a montar la misma frontera exclusiva hasta completar la limpieza. Para escalar se asignan
+identidades y directorios distintos; nunca se duplica un owner en dos procesos.
+
+Después de una terminación no controlada, el reemplazo con la misma identidad espera a que expire la lease anterior;
+el intervalo de 20–30 minutos es un cerco deliberado que cubre el tiempo máximo de transcripción y apagado, no un
+parámetro para acelerar manualmente. El workload debe derivar `LUMEN_INSTANCE_ID` de una identidad estable (por
+ejemplo, el ordinal de un workload con estado), nunca de un nombre aleatorio de despliegue. Si queda trabajo
+determinista no terminal de otra identidad cuya lease expiró o desapareció, todas las réplicas actuales pasan a
+`not ready`: el operador debe restaurar esa misma identidad y su frontera de almacenamiento para reconciliarla. Una
+réplica distinta no reclama ni borra automáticamente directorios ajenos.
+
+### Ventana de rollback LUMEN N-1
+
+La imagen exacta anterior a la migración 029 usa directorios aleatorios y no conoce `cleanup_owner`. No se debe
+asignarle un owner ficticio ni permitir que el reconciliador actual calcule una ruta para esos intentos. Sólo puede
+existir una ventana administrativa global, identificada por un scope nuevo con formato `lumen-n1-...`. Todos los
+procesos LUMEN N-1 admitidos durante esa única ventana usan ese valor exacto en `LUMEN_N1_CLEANUP_SCOPE_ID` y
+`PGAPPNAME`; no se pueden abrir scopes paralelos. Sus directorios temporales deben formar una frontera efímera
+exclusiva y destruible en conjunto, como `tmpfs` privados. Un volumen persistente o compartido con otro workload
+invalida este procedimiento.
+
+Antes de abrir, se detienen los workloads current que serán reemplazados, se drena toda sesión `hyperion_lumen` y
+se confirma que el bootstrap normal dejó los ocho roles completos, seguros y en `LOGIN`. El operador calcula fuera
+de PostgreSQL el SHA-256 de la evidencia aprobada del rollback y abre la ventana con la imagen actual de migraciones
+y su conexión administrativa privada:
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  -e LUMEN_N1_CLEANUP_SCOPE_ID="$LUMEN_N1_CLEANUP_SCOPE_ID" \
+  -e LUMEN_N1_ROLLBACK_EVIDENCE_SHA256="$LUMEN_N1_ROLLBACK_EVIDENCE_SHA256" \
+  migrations node packages/migrations/dist/lumen-n-minus-one-compatibility.js open
+```
+
+`open` comparte el mutex global del bootstrap. Primero confirma `hyperion_lumen NOLOGIN` en una transacción y
+sólo después crea la única ventana, concede la allow-list transitoria y reactiva esa identidad. Cualquier fallo
+posterior al fence la deja en `NOLOGIN`. La allow-list contiene únicamente `USAGE` sobre `platform`/`pulso_iris`,
+`SELECT` sobre el ledger de migraciones y las tres referencias PULSO que lee N-1, e `INSERT` sobre Audit. No concede
+`UPDATE`, `DELETE`, ownership, membresías, capacidades de rol ni acceso a las tablas o funciones administrativas
+de compatibilidad. El manifest de rollback debe usar `hyperion_lumen`; no se autoriza volver a la URL administrativa
+del Compose antiguo.
+
+Al terminar, se detienen todos los procesos LUMEN N-1, se destruyen sus contenedores/pods y la frontera efímera
+completa, y se conservan fuera de PostgreSQL la hora y evidencia de esa destrucción. Después de drenar sus pools se
+cierra la ventana global:
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  -e LUMEN_N1_CLEANUP_SCOPE_ID="$LUMEN_N1_CLEANUP_SCOPE_ID" \
+  migrations node packages/migrations/dist/lumen-n-minus-one-compatibility.js close
+```
+
+`close` no confía en `application_name`: confirma primero `hyperion_lumen NOLOGIN` y falla mientras exista
+cualquier sesión de esa identidad. En ese caso el fence queda confirmado, la ventana permanece abierta y se debe
+completar el drenaje antes de reintentar. Al cerrar revoca la allow-list transitoria, verifica sus denegaciones y
+deja `hyperion_lumen NOLOGIN`; no reactiva un solo rol por separado.
+
+Un intento N-1 sólo queda terminal si su propio finalizador confirmó la eliminación. Si falla, el trigger convierte
+su escritura antigua a `cleanup_pending`; si el proceso cae, queda `processing`. El reconciliador actual filtra
+ambos porque no conoce sus rutas aleatorias. Para resolverlos se debe demostrar primero, desde el orquestador, que
+el contenedor/pod y toda la frontera temporal del scope fueron destruidos. La mera ausencia de una sesión PostgreSQL
+no es esa prueba. Después de cerrar la ventana, y mientras `hyperion_lumen` sigue en `NOLOGIN`, se registra sólo el
+hash de la evidencia, su timestamp y un UUID de atestación:
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  -e LUMEN_N1_CLEANUP_SCOPE_ID="$LUMEN_N1_CLEANUP_SCOPE_ID" \
+  -e LUMEN_N1_SCOPE_DESTRUCTION_CONFIRMED=true \
+  -e LUMEN_N1_SCOPE_DESTROYED_AT="$LUMEN_N1_SCOPE_DESTROYED_AT" \
+  -e LUMEN_N1_SCOPE_EVIDENCE_SHA256="$LUMEN_N1_SCOPE_EVIDENCE_SHA256" \
+  -e LUMEN_N1_SCOPE_ATTESTATION_ID="$LUMEN_N1_SCOPE_ATTESTATION_ID" \
+  migrations node packages/migrations/dist/lumen-n-minus-one-compatibility.js attest-destroyed-scope
+```
+
+El one-shot no inspecciona ni elimina archivos. Finaliza solamente filas `legacy_ephemeral_v1` del scope exacto y
+registra `ephemeral_scope_destroyed`; el runtime LUMEN no tiene permisos para crear esa atestación. Los logs y la
+evidencia cruda permanecen en el sistema operativo autorizado, no en PostgreSQL. Este mecanismo demuestra
+compatibilidad del contrato de base de datos con N-1; no demuestra al proveedor real, carga representativa ni
+autoriza audio clínico real.
+
+La atestación debe terminar antes de retornar a current. Sólo entonces se ejecuta el bootstrap completo de los ocho
+roles para restaurar `LOGIN`; ejecutarlo antes hace que la atestación falle cerrada. Como recuperación adicional, el
+bootstrap vuelve a aplicar la allow-list normal, revoca grants transitorios y marca cualquier ventana abierta como
+`bootstrap_reconciled`. Un `close` repetido sobre una ventana ya cerrada vuelve a comprobar las revocaciones sin
+cambiar el estado de login vigente.
 
 La estructuracion usa exclusivamente `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL` y `DEEPSEEK_MODEL`.
 La ausencia de ElevenLabs o DeepSeek se muestra como proveedor no configurado y la operacion falla
@@ -301,46 +470,70 @@ el transcript manual; tampoco debe solicitar permisos de microfono. Para una pru
 sin habilitar TLS global, crear un tunel local (no compartirlo ni usar `-g`):
 
 ```bash
-ssh -N -L 127.0.0.1:19000:127.0.0.1:19000 usuario@host-vps
+ssh -N -L 127.0.0.1:19000:127.0.0.1:3000 usuario@host-vps
 ```
 
 Con el tunel activo, abrir exactamente `http://localhost:19000/lumen/dictado`. La consola detecta
-`localhost` y envia `/api` por su proxy interno al gateway, por lo que no requiere publicar PostgreSQL
+`localhost` y envia `/api` por su proxy interno al gateway. El destino remoto `3000` corresponde a
+`WEB_CONSOLE_HOST_PORT` predeterminado; si el VPS lo cambia, sustituirlo por ese puerto real después de verificarlo.
+Esto no requiere publicar PostgreSQL
 ni abrir otro puerto. El operador debe iniciar personalmente la grabacion y conceder el permiso del
 navegador; nadie debe pulsar el microfono ni aceptar permisos en su nombre. Usar solo una frase clinica
 sintetica en el encuentro demo, nunca nombres, documentos ni datos de un paciente real.
 
-### Despliegue acotado de LUMEN
+### Despliegue de LUMEN
 
-Despues del backup validado y con `main` fusionado y verde, capturar primero IDs e imagenes de
-PostgreSQL, PULSO IRIS y WhatsApp. Si el encuentro demo ya existe, no ejecutar ningun seed durante el
-deploy. El seed LUMEN solo corresponde al aprovisionamiento inicial controlado, nunca a una
-actualizacion de una demo existente.
+Después del backup validado y con `main` fusionado y verde, capturar IDs e imágenes de PostgreSQL, PULSO IRIS y
+WhatsApp. Si el encuentro demo ya existe, no ejecutar ningún seed: el seed LUMEN corresponde sólo al
+aprovisionamiento inicial controlado.
 
-Construir y migrar, y luego desplegar exclusivamente las imagenes modificadas en el orden backend,
-gateway (solo si su codigo cambio) y consola. No ejecutar `up` sobre el proyecto completo:
+Primero clasificar el release. Si no agrega ni modifica migraciones, roles o contratos de base, el despliegue puede
+ser acotado: construir y recrear únicamente LUMEN y, sólo si cambiaron, gateway y consola. No ejecutar los one-shots
+de migración/bootstrap en esa ruta.
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml build \
-  db-role-bootstrap migrations lumen-service api-gateway web-console
-docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
-  db-role-bootstrap
-docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
-  migrations node packages/migrations/dist/index.js
+  lumen-service
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 lumen-service
+# Si también cambió gateway o consola, construir y recrear sólo esos artefactos.
+docker compose --env-file .env -f infra/docker-compose.yml build \
+  api-gateway web-console
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 api-gateway
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 web-console
 ```
 
-Esperar el `healthy` de cada etapa antes de continuar. Confirmar que la secuencia completa de migraciones
-`001`–`026` y sus checksums estan aplicados, ademas de readiness, rutas profundas y logs sanitizados.
-Antes y despues comparar IDs e imagenes de `postgres`,
-`pulso-iris-service` y `whatsapp-channel-service`; deben permanecer exactamente iguales. Si el gateway
-no cambio, omitir su build/up y confirmar tambien que conserva ID e imagen. Nunca ejecutar el seed
-general para habilitar esta demo.
+Si el release incluye cualquier migración o cambio de roles, deja de ser un despliegue acotado. Se usa la ventana
+global descrita en “Migraciones y roles”: detener y drenar los diez runtimes con base de datos, ejecutar primero
+`migrations` y después `db-role-bootstrap`, y sólo entonces volver a iniciar todos los servicios detenidos. Nunca
+ejecutar esos one-shots mientras queden sesiones runtime.
+
+```bash
+# Construir todo antes del corte evita reiniciar un runtime modificado con una imagen anterior.
+docker compose --env-file .env -f infra/docker-compose.yml build
+docker compose --env-file .env -f infra/docker-compose.yml stop \
+  identity-service tenant-service agent-service prompt-flow-service knowledge-service \
+  audit-service integration-service pulso-iris-service whatsapp-channel-service lumen-service
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps migrations
+docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps db-role-bootstrap
+docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
+  --wait --wait-timeout 300 \
+  identity-service tenant-service agent-service prompt-flow-service knowledge-service \
+  audit-service integration-service pulso-iris-service whatsapp-channel-service lumen-service
+# Ejecutar cada comando siguiente sólo si cambió ese artefacto.
+docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
+  --wait --wait-timeout 120 api-gateway
+docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
+  --wait --wait-timeout 120 web-console
+```
+
+Esperar `healthy` antes de continuar y confirmar migraciones/checksums, readiness, rutas profundas y logs
+sanitizados. Comparar IDs e imágenes antes/después: PostgreSQL nunca debe recrearse; PULSO y WhatsApp tampoco deben
+cambiar salvo que el release los incluya explícitamente. Si gateway o consola no cambiaron, omitir únicamente su
+`up`; la construcción completa anterior es deliberada para que ningún runtime modificado quede con una imagen vieja.
+Nunca ejecutar el seed general para habilitar esta demo.
 
 ## Durabilidad del canal WhatsApp privado
 

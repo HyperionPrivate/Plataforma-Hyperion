@@ -41,6 +41,29 @@ const DURABLE_EVENT_SERVICES = [
   "lumen-service"
 ];
 
+const NODE_RUNTIME_SERVICES = [...Object.keys(DATABASE_IDENTITIES), "api-gateway"];
+
+const HTTP_EDGE_IDENTITIES = {
+  GATEWAY_TO_IDENTITY_TOKEN: ["api-gateway", "identity-service"],
+  GATEWAY_TO_INTEGRATION_TOKEN: ["api-gateway", "integration-service"],
+  GATEWAY_TO_PULSO_TOKEN: ["api-gateway", "pulso-iris-service"],
+  GATEWAY_TO_LUMEN_TOKEN: ["api-gateway", "lumen-service"],
+  INTEGRATION_TO_CHANNEL_TOKEN: ["integration-service", "whatsapp-channel-service"],
+  INTEGRATION_TO_SOFIA_TOKEN: ["integration-service", "agent-service"],
+  CHANNEL_TO_PULSO_TOKEN: ["whatsapp-channel-service", "pulso-iris-service"],
+  PULSO_TO_CHANNEL_TOKEN: ["pulso-iris-service", "whatsapp-channel-service"],
+  CHANNEL_TO_AUDIT_TOKEN: ["whatsapp-channel-service", "audit-service"],
+  PULSO_TO_SOFIA_TOKEN: ["pulso-iris-service", "agent-service"],
+  PULSO_TO_AUDIT_TOKEN: ["pulso-iris-service", "audit-service"],
+  PULSO_TO_LUMEN_TOKEN: ["pulso-iris-service", "lumen-service"],
+  SOFIA_TO_CHANNEL_TOKEN: ["agent-service", "whatsapp-channel-service"],
+  SOFIA_TO_PROMPT_FLOW_TOKEN: ["agent-service", "prompt-flow-service"],
+  SOFIA_TO_PULSO_TOKEN: ["agent-service", "pulso-iris-service"],
+  SOFIA_TO_AUDIT_TOKEN: ["agent-service", "audit-service"],
+  LUMEN_TO_AUDIT_TOKEN: ["lumen-service", "audit-service"],
+  ACCESS_TO_LUMEN_TOKEN: ["identity-service", "lumen-service"]
+};
+
 export function validateComposeIdentities(base, overlay) {
   const problems = [];
 
@@ -69,7 +92,10 @@ export function validateComposeIdentities(base, overlay) {
   }
 
   problems.push(...gatewayDependencyProblems(base));
+  problems.push(...roleBootstrapDependencyProblems(base));
   problems.push(...eventTransportProblems(base, overlay));
+  problems.push(...httpWorkloadIdentityProblems(base));
+  problems.push(...shutdownLifecycleProblems(base));
 
   for (const [serviceName, expectedUser] of Object.entries(NATS_IDENTITIES)) {
     const service = requireService(overlay, serviceName, problems);
@@ -132,6 +158,30 @@ export function gatewayDependencyProblems(configuration) {
   return problems;
 }
 
+export function roleBootstrapDependencyProblems(configuration) {
+  const services = configuration.services ?? {};
+  const problems = [];
+  const migrations = services.migrations;
+  const bootstrap = services["db-role-bootstrap"];
+
+  if (migrations?.depends_on?.postgres?.condition !== "service_healthy") {
+    problems.push("migrations must wait for healthy postgres");
+  }
+  if (migrations?.depends_on?.["db-role-bootstrap"] !== undefined) {
+    problems.push("migrations must run before db-role-bootstrap");
+  }
+  if (bootstrap?.depends_on?.migrations?.condition !== "service_completed_successfully") {
+    problems.push("db-role-bootstrap must wait for successful migrations");
+  }
+
+  for (const serviceName of Object.keys(DATABASE_IDENTITIES).filter((name) => services[name])) {
+    if (!dependsTransitivelyOn(services, serviceName, "db-role-bootstrap", new Set())) {
+      problems.push(`${serviceName} must not start before db-role-bootstrap completes`);
+    }
+  }
+  return problems;
+}
+
 export function eventTransportProblems(base, overlay) {
   const problems = [];
   if (base.services?.nats) problems.push("Base Compose must not include NATS");
@@ -148,10 +198,118 @@ export function eventTransportProblems(base, overlay) {
   return problems;
 }
 
+export function httpWorkloadIdentityProblems(configuration, edges = HTTP_EDGE_IDENTITIES) {
+  const services = configuration.services ?? {};
+  const problems = [];
+  const resolvedSecrets = new Map();
+
+  for (const [serviceName, service] of Object.entries(services)) {
+    if (Object.prototype.hasOwnProperty.call(service.environment ?? {}, "INTERNAL_SERVICE_TOKEN")) {
+      problems.push(`${serviceName} must not receive the legacy INTERNAL_SERVICE_TOKEN`);
+    }
+  }
+
+  for (const [variableName, endpoints] of Object.entries(edges)) {
+    const expectedServices = new Set(endpoints);
+    const placements = Object.entries(services)
+      .filter(([, service]) => Object.prototype.hasOwnProperty.call(service.environment ?? {}, variableName))
+      .map(([serviceName]) => serviceName);
+
+    for (const serviceName of endpoints) {
+      const value = services[serviceName]?.environment?.[variableName];
+      if (typeof value !== "string" || value.length === 0) {
+        problems.push(`${serviceName} must receive ${variableName}`);
+      }
+    }
+    for (const serviceName of placements) {
+      if (!expectedServices.has(serviceName)) {
+        problems.push(`${serviceName} must not receive unrelated credential ${variableName}`);
+      }
+    }
+
+    const values = endpoints
+      .map((serviceName) => services[serviceName]?.environment?.[variableName])
+      .filter((value) => typeof value === "string");
+    const value = values[0];
+    if (values.length === endpoints.length && new Set(values).size !== 1) {
+      problems.push(`${variableName} must resolve to the same value at both edge endpoints`);
+      continue;
+    }
+    if (typeof value === "string") {
+      if (!/^[A-Za-z][A-Za-z0-9._~-]{23,}$/.test(value)) {
+        problems.push(`${variableName} must use the safe production secret contract`);
+      } else {
+        const duplicate = resolvedSecrets.get(value);
+        if (duplicate) problems.push(`${variableName} must not reuse the value of ${duplicate}`);
+        else resolvedSecrets.set(value, variableName);
+      }
+    }
+  }
+
+  const channel = services["whatsapp-channel-service"];
+  if (channel) {
+    const phoneHashKey = channel.environment?.WHATSAPP_PHONE_HASH_KEY;
+    if (typeof phoneHashKey !== "string" || !/^[A-Za-z][A-Za-z0-9._~-]{31,511}$/.test(phoneHashKey)) {
+      problems.push("whatsapp-channel-service must receive a dedicated safe WHATSAPP_PHONE_HASH_KEY");
+    } else {
+      const reusedBy = resolvedSecrets.get(phoneHashKey);
+      if (reusedBy) problems.push(`WHATSAPP_PHONE_HASH_KEY must not reuse the value of ${reusedBy}`);
+    }
+  }
+
+  return problems;
+}
+
+export function shutdownLifecycleProblems(configuration, serviceNames = NODE_RUNTIME_SERVICES) {
+  const problems = [];
+  const services = configuration.services ?? {};
+
+  for (const serviceName of serviceNames) {
+    const service = services[serviceName];
+    if (!service) continue;
+
+    const timeout = Number(service.environment?.SHUTDOWN_TIMEOUT_MS);
+    if (!Number.isSafeInteger(timeout) || timeout < 55_000 || timeout > 900_000) {
+      problems.push(`${serviceName} must declare a valid SHUTDOWN_TIMEOUT_MS between 55000 and 900000`);
+      continue;
+    }
+
+    const grace = composeDurationMilliseconds(service.stop_grace_period);
+    if (grace === undefined) {
+      problems.push(`${serviceName} must declare stop_grace_period`);
+    } else if (grace < timeout + 5_000) {
+      problems.push(`${serviceName} stop_grace_period must exceed SHUTDOWN_TIMEOUT_MS by at least 5000ms`);
+    }
+  }
+
+  return problems;
+}
+
+function composeDurationMilliseconds(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value / 1_000_000;
+  if (typeof value !== "string") return undefined;
+
+  const units = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
+  const parts = [...value.matchAll(/(\d+)(ms|s|m|h)/g)];
+  if (parts.length === 0 || parts.map((part) => part[0]).join("") !== value) return undefined;
+  return parts.reduce((total, part) => total + Number(part[1]) * units[part[2]], 0);
+}
+
 function requireService(configuration, serviceName, problems) {
   const service = configuration.services?.[serviceName];
   if (!service) problems.push(`Compose service ${serviceName} is missing`);
   return service;
+}
+
+function dependsTransitivelyOn(services, serviceName, target, visited) {
+  if (visited.has(serviceName)) return false;
+  visited.add(serviceName);
+  const dependencies = services[serviceName]?.depends_on ?? {};
+  if (dependencies[target]?.condition === "service_completed_successfully") return true;
+  return Object.keys(dependencies).some((dependency) => {
+    if (dependency === "postgres" || dependency === "migrations") return false;
+    return dependsTransitivelyOn(services, dependency, target, new Set(visited));
+  });
 }
 
 function connectionUsername(value, label, problems, allowNoUser = false) {

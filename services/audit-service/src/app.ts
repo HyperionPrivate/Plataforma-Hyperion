@@ -1,12 +1,19 @@
-import { timingSafeEqual } from "node:crypto";
 import { auditEventSchema, envelope } from "@hyperion/contracts";
 import { isHttpDurableEventIngressEnabled } from "@hyperion/durable-events";
-import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import {
+  readInternalCaller,
+  readInternalCredential,
+  validateInternalAuthorization,
+  type InternalCredentialMap,
+  type RouteRegistrar
+} from "@hyperion/service-runtime";
 import { readAuditEventTransportConfiguration, startAuditEventJetStreamConsumers } from "./audit-jetstream.js";
 import { parseInternalAuditEventEnvelope, receiveInternalAuditEvent } from "./event-inbox.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const durableEvents = readAuditEventTransportConfiguration(process.env);
+  const directWriteCredentials = readDirectWriteCredentials(process.env);
+  const durableEventCredentials = readDurableEventCredentials(process.env);
   if (context.db && durableEvents.transport === "jetstream") {
     const consumers = await startAuditEventJetStreamConsumers(
       (hook) => app.addHook("onClose", hook),
@@ -37,10 +44,11 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.post("/v1/audit/events", async (request, reply) => {
-    const authError = validateInternalToken(context, request.headers.authorization);
+    const authError = validateInternalAuthorization(request.headers, directWriteCredentials);
     if (authError) {
       return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
     }
+    const caller = readInternalCaller(request.headers)!;
 
     if (!context.db) {
       return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
@@ -68,7 +76,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         event.eventType,
         event.entityType,
         event.entityId ?? null,
-        JSON.stringify(event.metadata)
+        JSON.stringify({ ...event.metadata, sourceService: caller })
       ]
     );
 
@@ -77,19 +85,18 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 
   if (isHttpDurableEventIngressEnabled(durableEvents.transport)) {
     app.post("/internal/v1/events", async (request, reply) => {
-      // This shared bearer token proves only that the caller is an internal
-      // service; it cannot attest SOFIA versus LUMEN. The HTTP fallback therefore
-      // validates and derives a declared source from the source-scoped event type.
-      const authError = validateInternalToken(context, request.headers.authorization);
+      const authError = validateInternalAuthorization(request.headers, durableEventCredentials);
       if (authError) {
         return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
       }
+      const caller = readInternalCaller(request.headers)!;
+      const expectedSource = caller === "agent-service" ? "sofia-automation" : "lumen-service";
 
       if (!context.db) {
         return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
       }
 
-      const parsed = parseInternalAuditEventEnvelope(request.body);
+      const parsed = parseInternalAuditEventEnvelope(request.body, expectedSource);
       if (!parsed.success) {
         return reply.code(400).send(envelope({ error: "Invalid event envelope", issues: parsed.issues }, request.id));
       }
@@ -124,29 +131,17 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   }
 };
 
-function validateInternalToken(
-  context: ServiceContext,
-  authorization: string | undefined
-): { statusCode: number; message: string } | undefined {
-  if (!context.config.internalServiceToken) {
-    return { statusCode: 503, message: "INTERNAL_SERVICE_TOKEN is required" };
-  }
-
-  const expected = `Bearer ${context.config.internalServiceToken}`;
-  if (!authorization || !constantTimeEquals(authorization, expected)) {
-    return { statusCode: 401, message: "Unauthorized" };
-  }
-
-  return undefined;
+function readDirectWriteCredentials(env: NodeJS.ProcessEnv): InternalCredentialMap {
+  return {
+    "whatsapp-channel-service": readInternalCredential(env, "CHANNEL_TO_AUDIT_TOKEN"),
+    "pulso-iris-service": readInternalCredential(env, "PULSO_TO_AUDIT_TOKEN"),
+    "agent-service": readInternalCredential(env, "SOFIA_TO_AUDIT_TOKEN")
+  };
 }
 
-function constantTimeEquals(a: string, b: string): boolean {
-  const bufferA = Buffer.from(a);
-  const bufferB = Buffer.from(b);
-
-  if (bufferA.length !== bufferB.length) {
-    return false;
-  }
-
-  return timingSafeEqual(bufferA, bufferB);
+function readDurableEventCredentials(env: NodeJS.ProcessEnv): InternalCredentialMap {
+  return {
+    "agent-service": readInternalCredential(env, "SOFIA_TO_AUDIT_TOKEN"),
+    "lumen-service": readInternalCredential(env, "LUMEN_TO_AUDIT_TOKEN")
+  };
 }

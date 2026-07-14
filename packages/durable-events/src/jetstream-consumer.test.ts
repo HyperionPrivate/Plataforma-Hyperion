@@ -101,6 +101,45 @@ describe("DurableJetStreamConsumer", () => {
     await consumer.stop();
   });
 
+  it("preserves a complete ordered stream position for a v2 handler", async () => {
+    const ordered = {
+      ...EVENT,
+      type: "channel.inbound.received.v2",
+      version: 2,
+      streamId: "0790ebc5-9058-4dcb-8be0-5e3e85858738",
+      streamSequence: 9
+    };
+    const message = createMessage({
+      subject: "hyperion.events.channel.inbound.received.v2",
+      data: new TextEncoder().encode(JSON.stringify(ordered))
+    });
+    const session = createSession({ next: async () => message });
+    const handler = vi.fn(async () => ({ action: "ack" }) as const);
+    const consumer = createConsumer({
+      eventType: "channel.inbound.received.v2",
+      durableName: "pulso_channel_inbound_v2",
+      sessionFactory: async () => session,
+      handler
+    });
+
+    await expect(consumer.consumeOnce()).resolves.toMatchObject({ status: "acked" });
+    expect(handler).toHaveBeenCalledWith(ordered, expect.any(Object));
+    await consumer.stop();
+  });
+
+  it("dead-letters an envelope that supplies only half of an ordered stream position", async () => {
+    const partial = { ...EVENT, streamId: "0790ebc5-9058-4dcb-8be0-5e3e85858738" };
+    const message = createMessage({ data: new TextEncoder().encode(JSON.stringify(partial)) });
+    const session = createSession({ next: async () => message });
+    const handler = vi.fn(async () => ({ action: "ack" }) as const);
+    const consumer = createConsumer({ sessionFactory: async () => session, handler });
+
+    await expect(consumer.consumeOnce()).resolves.toMatchObject({ status: "terminated" });
+    expect(handler).not.toHaveBeenCalled();
+    expect(message.term).toHaveBeenCalledWith("invalid_envelope");
+    await consumer.stop();
+  });
+
   it("naks a retry decision with a bounded handler delay", async () => {
     const message = createMessage();
     const session = createSession({ next: async () => message });
@@ -350,6 +389,59 @@ describe("DurableJetStreamConsumer", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it("forces the transport closed and bounds stop when graceful close and pull are blocked", async () => {
+    vi.useFakeTimers();
+    const next = vi.fn(async () => new Promise<null>(() => undefined));
+    const close = vi.fn(async () => new Promise<void>(() => undefined));
+    const forceClose = vi.fn(async () => undefined);
+    const session = createSession({ next, close, forceClose });
+    const consumer = createConsumer({
+      sessionFactory: async () => session,
+      connectTimeoutMs: 100,
+      stopTimeoutMs: 200
+    });
+
+    consumer.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(next).toHaveBeenCalledOnce();
+
+    const stopping = consumer.stop();
+    await vi.advanceTimersByTimeAsync(80);
+    expect(close).toHaveBeenCalledOnce();
+    expect(forceClose).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(120);
+    await expect(stopping).resolves.toBeUndefined();
+
+    expect(consumer.isRunning).toBe(false);
+    await expect(consumer.consumeOnce()).resolves.toEqual({ status: "idle" });
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it("bounds stop and never acknowledges after a handler remains blocked", async () => {
+    vi.useFakeTimers();
+    const message = createMessage();
+    const handler = vi.fn(async () => new Promise<{ action: "ack" }>(() => undefined));
+    const session = createSession({ next: async () => message });
+    const consumer = createConsumer({
+      sessionFactory: async () => session,
+      handler,
+      stopTimeoutMs: 100
+    });
+
+    consumer.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler).toHaveBeenCalledOnce();
+
+    const stopping = consumer.stop();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(stopping).resolves.toBeUndefined();
+
+    expect(message.ack).not.toHaveBeenCalled();
+    expect(message.nak).not.toHaveBeenCalled();
+    expect(message.term).not.toHaveBeenCalled();
+    expect(consumer.isRunning).toBe(false);
+  });
+
   it("closes a broken session and reconnects on the next pull", async () => {
     const first = createSession({ next: async () => Promise.reject(new Error("private disconnect")) });
     const second = createSession({ next: async () => createMessage() });
@@ -378,6 +470,7 @@ describe("DurableJetStreamConsumer", () => {
     [{ authToken: "controlled-token", username: "pulso", password: "controlled-password" }, "mutually exclusive"],
     [{ username: "pulso" }, "provided together"],
     [{ pullExpiresMs: 999 }, "pullExpiresMs"],
+    [{ stopTimeoutMs: 0 }, "stopTimeoutMs"],
     [{ maxPayloadBytes: 128 * 1_024 + 1 }, "maxPayloadBytes"]
   ] as const)("rejects unsafe or unbounded configuration %o", (override, field) => {
     expect(() => createConsumer(override)).toThrow(field);

@@ -4,14 +4,20 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
-import { computeChecksum, listMigrationFiles, runMigrations } from "./runner.js";
+import {
+  computeChecksum,
+  listMigrationFiles,
+  migrationRunsInTransaction,
+  readNonTransactionalStatements,
+  runMigrations
+} from "./runner.js";
 
 const { Client } = pg;
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
 const sqlDir = fileURLToPath(new URL("../sql", import.meta.url));
 
-describeIntegration("025 -> 026 Audit source provenance upgrade", () => {
+describeIntegration("025 -> phased Audit source provenance upgrade", () => {
   it("attributes durable rows by outbox evidence and marks uncorrelated legacy rows unknown", async () => {
     const admin = new Client({ connectionString: TEST_DATABASE_URL });
     const databaseName = `hyperion_audit_provenance_${randomUUID().replaceAll("-", "")}`;
@@ -70,7 +76,11 @@ describeIntegration("025 -> 026 Audit source provenance upgrade", () => {
       }
 
       const upgraded = await runMigrations(databaseUrl, sqlDir);
-      expect(upgraded.applied).toEqual(["026-audit-source-provenance.sql"]);
+      expect(upgraded.applied.slice(0, 3)).toEqual([
+        "026-audit-source-provenance.sql",
+        "027-audit-source-provenance-contract.sql",
+        "028-audit-source-provenance-index.sql"
+      ]);
 
       const verification = new Client({ connectionString: databaseUrl });
       await verification.connect();
@@ -129,6 +139,18 @@ describeIntegration("025 -> 026 Audit source provenance upgrade", () => {
         );
         expect(defaultValue.rows[0]?.columnDefault).toBeNull();
 
+        const contract = await verification.query<{ indexValid: boolean; nullable: string }>(
+          `select column_info.is_nullable as nullable,
+                  index_info.indisvalid as "indexValid"
+             from information_schema.columns column_info
+             join pg_index index_info
+               on index_info.indexrelid = 'audit_runtime.ix_audit_inbox_source_received'::regclass
+            where column_info.table_schema = 'audit_runtime'
+              and column_info.table_name = 'inbox_events'
+              and column_info.column_name = 'contract_hash'`
+        );
+        expect(contract.rows[0]).toEqual({ nullable: "NO", indexValid: true });
+
         const triggerDefinition = await verification.query<{ definition: string }>(
           `select pg_get_functiondef('lumen.finalize_clinical_record_approval()'::regprocedure) as definition`
         );
@@ -153,6 +175,130 @@ describeIntegration("025 -> 026 Audit source provenance upgrade", () => {
       await admin.end();
     }
   }, 120_000);
+
+  it("accepts only the validated c549 draft checksum and continues with additive phases", async () => {
+    const admin = new Client({ connectionString: TEST_DATABASE_URL });
+    const databaseName = `hyperion_audit_checksum_${randomUUID().replaceAll("-", "")}`;
+    const databaseUrl = withDatabase(TEST_DATABASE_URL ?? "", databaseName);
+    let databaseCreated = false;
+
+    await admin.connect();
+    try {
+      await admin.query(`create database "${databaseName}"`);
+      databaseCreated = true;
+      await migrateThrough025(databaseUrl);
+
+      const client = new Client({ connectionString: databaseUrl });
+      await client.connect();
+      try {
+        // Recreate the exact ledger shape of the audited draft: the three
+        // additive safety fences did not exist and 026 contained its contract
+        // and ordinary index in the same successful transaction.
+        await client.query(
+          `delete from platform.schema_migrations
+            where name = any($1::text[])`,
+          [
+            [
+              "022-channel-inbound-outbox-fence.sql",
+              "020-service-role-nologin-fence.sql",
+              "024-service-role-membership-fence.sql"
+            ]
+          ]
+        );
+        await client.query(
+          "drop trigger if exists trg_channel_inbound_outbox_compat on channel_runtime.inbound_events"
+        );
+
+        const expansion = await readFile(path.join(sqlDir, "026-audit-source-provenance.sql"), "utf8");
+        await client.query(expansion);
+        await client.query(`
+          alter table audit_runtime.inbox_events
+            alter column contract_hash set not null,
+            drop constraint if exists ck_audit_inbox_contract_hash,
+            add constraint ck_audit_inbox_contract_hash
+              check (contract_hash ~ '^[a-f0-9]{64}$'),
+            drop constraint if exists ck_audit_inbox_source_contract,
+            add constraint ck_audit_inbox_source_contract check (
+              (source_service = 'sofia-automation' and event_type = 'sofia.audit.event.record.v1')
+              or (source_service = 'lumen-service' and event_type = 'lumen.audit.event.record.v1')
+              or (source_service = 'legacy-unknown' and event_type = 'legacy.audit.event.record.v1')
+            );
+          create index if not exists ix_audit_inbox_source_received
+            on audit_runtime.inbox_events(source_service, event_type, received_at desc)
+        `);
+        await client.query(
+          `insert into platform.schema_migrations (name, checksum)
+           values ('026-audit-source-provenance.sql', $1)`,
+          ["8fd9c9105633c4dbc2ffab66588fcd878733cb585eb3e05811e7c72d581277b7"]
+        );
+        await client.query("drop index audit_runtime.ix_audit_inbox_source_received");
+      } finally {
+        await client.end();
+      }
+
+      await expect(runMigrations(databaseUrl, sqlDir)).rejects.toThrow(
+        "026-audit-source-provenance.sql was modified after being applied"
+      );
+
+      const repair = new Client({ connectionString: databaseUrl });
+      await repair.connect();
+      try {
+        await repair.query(
+          `create index ix_audit_inbox_source_received
+             on audit_runtime.inbox_events(source_service, event_type, received_at desc)`
+        );
+      } finally {
+        await repair.end();
+      }
+
+      const upgraded = await runMigrations(databaseUrl, sqlDir);
+      expect(upgraded.skipped).toContain("026-audit-source-provenance.sql");
+      expect(upgraded.applied).toEqual(
+        expect.arrayContaining(["027-audit-source-provenance-contract.sql", "028-audit-source-provenance-index.sql"])
+      );
+
+      const verification = new Client({ connectionString: databaseUrl });
+      await verification.connect();
+      try {
+        const current026 = await readFile(path.join(sqlDir, "026-audit-source-provenance.sql"), "utf8");
+        const state = await verification.query<{
+          checksum: string;
+          safetyFences: number;
+          triggerInstalled: boolean;
+        }>(
+          `select migration.checksum,
+                  (select count(*)::int from platform.schema_migrations
+                    where name = any($1::text[])) as "safetyFences",
+                  to_regclass('channel_runtime.inbound_events') is not null
+                  and exists (
+                    select 1 from pg_trigger
+                     where tgrelid = 'channel_runtime.inbound_events'::regclass
+                       and tgname = 'trg_channel_inbound_outbox_compat'
+                       and not tgisinternal
+                  ) as "triggerInstalled"
+             from platform.schema_migrations migration
+            where migration.name = '026-audit-source-provenance.sql'`,
+          [
+            [
+              "022-channel-inbound-outbox-fence.sql",
+              "020-service-role-nologin-fence.sql",
+              "024-service-role-membership-fence.sql"
+            ]
+          ]
+        );
+        expect(state.rows[0]).toEqual({
+          checksum: computeChecksum(current026),
+          safetyFences: 3,
+          triggerInstalled: true
+        });
+      } finally {
+        await verification.end();
+      }
+    } finally {
+      if (databaseCreated) await admin.query(`drop database if exists "${databaseName}" with (force)`);
+      await admin.end();
+    }
+  }, 120_000);
 });
 
 async function migrateThrough025(databaseUrl: string): Promise<void> {
@@ -174,6 +320,16 @@ async function migrateThrough025(databaseUrl: string): Promise<void> {
 
     for (const file of files.slice(0, lastIndex + 1)) {
       const content = await readFile(path.join(sqlDir, file), "utf8");
+      if (!migrationRunsInTransaction(content)) {
+        for (const statement of readNonTransactionalStatements(content)) {
+          await client.query(statement);
+        }
+        await client.query("insert into platform.schema_migrations (name, checksum) values ($1, $2)", [
+          file,
+          computeChecksum(content)
+        ]);
+        continue;
+      }
       await client.query("begin");
       try {
         await client.query(content);

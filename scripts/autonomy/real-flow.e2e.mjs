@@ -8,7 +8,7 @@ import { HYPERION_EVENTS_STREAM, JetStreamOutboxDispatcher } from "../../package
 import { PostgresAgentOutbox } from "../../services/agent-service/dist/agent-outbox.js";
 import {
   PULSO_MESSAGE_EVENT_TYPE,
-  startPulsoMessageJetStreamConsumer
+  startPulsoMessageJetStreamConsumers
 } from "../../services/agent-service/dist/pulso-jetstream.js";
 import { startAuditEventJetStreamConsumers } from "../../services/audit-service/dist/audit-jetstream.js";
 import { AUDIT_EVENT_CONTRACTS } from "../../services/audit-service/dist/event-inbox.js";
@@ -26,6 +26,7 @@ const POLL_INTERVAL_MS = 100;
 const NATS_SECRET_PATTERN = /^[A-Za-z][A-Za-z0-9._~-]{23,}$/;
 
 let phase = "configuration";
+let failureDiagnostics;
 
 try {
   const effects = await run();
@@ -37,8 +38,10 @@ try {
       effects
     })}\n`
   );
-} catch {
-  process.stderr.write(`${JSON.stringify({ status: "failed", phase })}\n`);
+} catch (error) {
+  const errorCode =
+    error instanceof Error && /^[a-z0-9_]{1,128}$/.test(error.message) ? error.message : "autonomy_e2e_failed";
+  process.stderr.write(`${JSON.stringify({ status: "failed", phase, errorCode, diagnostics: failureDiagnostics })}\n`);
   process.exitCode = 1;
 }
 
@@ -77,11 +80,11 @@ async function run() {
       })
     );
     consumers.push(
-      await startPulsoMessageJetStreamConsumer(() => undefined, sofiaDb, {
+      ...(await startPulsoMessageJetStreamConsumers(sofiaDb, {
         natsUrl: configuration.natsUrl,
         username: "sofia",
         password: configuration.natsPasswords.SOFIA
-      })
+      }))
     );
     const auditConsumers = await startAuditEventJetStreamConsumers(() => undefined, auditDb, {
       transport: "jetstream",
@@ -249,6 +252,15 @@ async function run() {
 
     verified = true;
     return counts;
+  } catch (error) {
+    if (tenantId) {
+      try {
+        failureDiagnostics = await collectFailureDiagnostics(adminDb, tenantId);
+      } catch {
+        failureDiagnostics = { snapshot: "unavailable" };
+      }
+    }
+    throw error;
   } finally {
     if (verified) phase = "cleanup";
     await Promise.allSettled(dispatchers.map((dispatcher) => dispatcher.stop()));
@@ -436,4 +448,25 @@ async function cleanupSyntheticTenant(adminDb, tenantId) {
     adminDb.query("delete from audit_runtime.inbox_events where tenant_id = $1", [tenantId]),
     adminDb.query("delete from platform.audit_events where tenant_id = $1", [tenantId])
   ]);
+}
+
+async function collectFailureDiagnostics(adminDb, tenantId) {
+  return oneRow(adminDb, "failure diagnostics", {
+    text: `select
+      (select count(*)::int from channel_runtime.outbox_events
+        where tenant_id = $1) as "channelOutbox",
+      (select count(*)::int from channel_runtime.outbox_events
+        where tenant_id = $1 and status = 'published') as "channelPublished",
+      (select count(*)::int from pulso_iris.inbox_events
+        where tenant_id = $1) as "pulsoInbox",
+      (select count(*)::int from pulso_iris.inbox_events
+        where tenant_id = $1 and processed_at is not null) as "pulsoProcessed",
+      (select count(*)::int from pulso_iris.channel_threads
+        where tenant_id = $1) as "pulsoThreads",
+      (select count(*)::int from pulso_iris.messages
+        where tenant_id = $1) as "pulsoMessages",
+      (select count(*)::int from pulso_iris.outbox_events
+        where tenant_id = $1) as "pulsoOutbox"`,
+    values: [tenantId]
+  });
 }

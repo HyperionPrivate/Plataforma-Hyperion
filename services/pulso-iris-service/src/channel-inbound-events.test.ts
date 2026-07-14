@@ -1,6 +1,9 @@
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { channelInboundEventSchema, registerChannelInboundEventRoutes } from "./channel-inbound-events.js";
+import {
+  channelInboundEventSchema,
+  registerChannelInboundEventRoutesWithCompatibility
+} from "./channel-inbound-events.js";
 
 const INTERNAL_TOKEN = "test-internal-token-with-enough-entropy";
 const TENANT_ID = "20000000-0000-4000-8000-000000000001";
@@ -10,10 +13,12 @@ const THREAD_BINDING_ID = "40000000-0000-4000-8000-000000000001";
 
 const inboundEvent = {
   id: EVENT_ID,
-  type: "channel.inbound.received.v1" as const,
-  version: 1 as const,
+  type: "channel.inbound.received.v2" as const,
+  version: 2 as const,
   occurredAt: "2026-07-13T16:30:00.000Z",
   tenantId: TENANT_ID,
+  streamId: THREAD_BINDING_ID,
+  streamSequence: 1,
   payload: {
     inboundEventId: INBOUND_EVENT_ID,
     threadBindingId: THREAD_BINDING_ID,
@@ -41,19 +46,22 @@ describe("durable Channel -> PULSO event consumer", () => {
     db = new TransactionalFakeDatabase();
     app = Fastify();
     vi.clearAllMocks();
-    await registerChannelInboundEventRoutes(app, {
-      config: {
-        serviceName: "pulso-iris-service",
-        environment: "test",
-        host: "127.0.0.1",
-        port: 8088,
-        serviceVersion: "test",
-        corsAllowedOrigins: [],
-        internalServiceToken: INTERNAL_TOKEN
+    await registerChannelInboundEventRoutesWithCompatibility(
+      app,
+      {
+        config: {
+          serviceName: "pulso-iris-service",
+          environment: "test",
+          host: "127.0.0.1",
+          port: 8088,
+          serviceVersion: "test",
+          corsAllowedOrigins: []
+        },
+        db: db as never,
+        logger: logger as never
       },
-      db: db as never,
-      logger: logger as never
-    });
+      { allowLegacyV1: false, channelCredential: INTERNAL_TOKEN }
+    );
   });
 
   afterEach(async () => {
@@ -84,7 +92,7 @@ describe("durable Channel -> PULSO event consumer", () => {
     expect(response.statusCode).toBe(202);
     expect(response.json().data).toMatchObject({
       eventId: EVENT_ID,
-      outboxEventType: "pulso.message.received.v1"
+      outboxEventType: "pulso.message.received.v2"
     });
     expect(db.state.inbox).toHaveLength(1);
     expect(db.state.threads).toHaveLength(1);
@@ -102,6 +110,7 @@ describe("durable Channel -> PULSO event consumer", () => {
       messageId: response.json().data.messageId,
       occurredAt: inboundEvent.occurredAt
     });
+    expect(db.state.threads[0]?.lastInboundSequence).toBe(1);
   });
 
   it("accepts PostgreSQL RFC3339 offsets and canonicalizes them to UTC before hashing", async () => {
@@ -135,6 +144,211 @@ describe("durable Channel -> PULSO event consumer", () => {
     expect(db.state.outbox).toHaveLength(1);
   });
 
+  it("replays a historical v1 result while every new outbox write remains v2", async () => {
+    const accepted = await send(inboundEvent);
+    const historicalResult = {
+      ...accepted.json().data,
+      outboxEventType: "pulso.message.received.v1"
+    };
+    db.state.inbox[0]!.result = historicalResult;
+
+    const replayed = await send(inboundEvent);
+
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json().data).toEqual(historicalResult);
+    expect(db.state.outbox).toHaveLength(1);
+    expect(db.state.outbox[0]?.eventType).toBe("pulso.message.received.v2");
+  });
+
+  it("rolls back gaps, then advances only contiguous positions and rejects sequence reuse", async () => {
+    const second = {
+      ...inboundEvent,
+      id: "10000000-0000-4000-8000-000000000002",
+      streamSequence: 2,
+      payload: {
+        ...inboundEvent.payload,
+        inboundEventId: "30000000-0000-4000-8000-000000000002",
+        externalMessageId: "message-002",
+        body: "Segundo mensaje"
+      }
+    };
+    const third = {
+      ...second,
+      id: "10000000-0000-4000-8000-000000000003",
+      streamSequence: 3,
+      payload: {
+        ...second.payload,
+        inboundEventId: "30000000-0000-4000-8000-000000000003",
+        externalMessageId: "message-003",
+        body: "Tercer mensaje"
+      }
+    };
+
+    const firstGap = await send(second);
+    expect(firstGap.statusCode).toBe(409);
+    expect(firstGap.json().data).toMatchObject({ expectedSequence: 1, receivedSequence: 2 });
+    expect(db.state.inbox).toHaveLength(0);
+    expect(db.state.threads).toHaveLength(0);
+
+    expect((await send(inboundEvent)).statusCode).toBe(202);
+    const laterGap = await send(third);
+    expect(laterGap.statusCode).toBe(409);
+    expect(laterGap.json().data).toMatchObject({ expectedSequence: 2, receivedSequence: 3 });
+    expect(db.state.threads[0]?.lastInboundSequence).toBe(1);
+
+    expect((await send(second)).statusCode).toBe(202);
+    expect(db.state.threads[0]?.lastInboundSequence).toBe(2);
+
+    const reused = await send({
+      ...second,
+      id: "10000000-0000-4000-8000-000000000004",
+      payload: {
+        ...second.payload,
+        inboundEventId: "30000000-0000-4000-8000-000000000004",
+        externalMessageId: "message-004"
+      }
+    });
+    expect(reused.statusCode).toBe(409);
+    expect(db.state.inbox).toHaveLength(2);
+    expect(db.state.messages).toHaveLength(2);
+  });
+
+  it("requires the ordered stream id to match the payload thread binding", async () => {
+    const response = await send({
+      ...inboundEvent,
+      streamId: "40000000-0000-4000-8000-000000000099"
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(db.transactionCalls).toBe(0);
+  });
+
+  it("keeps v1 strict and disabled by default, then accepts it only in an explicit audited rollout window", async () => {
+    const legacy = {
+      id: inboundEvent.id,
+      type: "channel.inbound.received.v1" as const,
+      version: 1 as const,
+      occurredAt: inboundEvent.occurredAt,
+      tenantId: inboundEvent.tenantId,
+      payload: inboundEvent.payload
+    };
+    const disabled = await send(legacy);
+    expect(disabled.statusCode).toBe(400);
+    expect(db.transactionCalls).toBe(0);
+
+    await app.close();
+    app = Fastify();
+    await registerChannelInboundEventRoutesWithCompatibility(
+      app,
+      {
+        config: {
+          serviceName: "pulso-iris-service",
+          environment: "test",
+          host: "127.0.0.1",
+          port: 8088,
+          serviceVersion: "test",
+          corsAllowedOrigins: []
+        },
+        db: db as never,
+        logger: logger as never
+      },
+      {
+        allowLegacyV1: true,
+        channelCredential: INTERNAL_TOKEN,
+        resolveLegacyPosition: (event) => db.resolveChannelPosition(event.payload.inboundEventId)
+      }
+    );
+
+    db.setChannelPosition(INBOUND_EVENT_ID, THREAD_BINDING_ID, 1);
+    const accepted = await send(legacy);
+    expect(accepted.statusCode).toBe(202);
+    expect(db.state.threads[0]?.lastInboundSequence).toBe(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("legacy Channel event accepted"),
+      expect.objectContaining({ eventId: legacy.id, compatibilityMode: "channel_inbound_v1" })
+    );
+
+    const orderedSecond = {
+      ...inboundEvent,
+      id: "10000000-0000-4000-8000-000000000012",
+      streamSequence: 2,
+      payload: {
+        ...inboundEvent.payload,
+        inboundEventId: "30000000-0000-4000-8000-000000000012",
+        externalMessageId: "message-012"
+      }
+    };
+    expect((await send(orderedSecond)).statusCode).toBe(202);
+
+    const rolledBackV1 = {
+      id: "10000000-0000-4000-8000-000000000013",
+      type: "channel.inbound.received.v1" as const,
+      version: 1 as const,
+      occurredAt: inboundEvent.occurredAt,
+      tenantId: inboundEvent.tenantId,
+      payload: {
+        ...inboundEvent.payload,
+        inboundEventId: "30000000-0000-4000-8000-000000000013",
+        externalMessageId: "message-013"
+      }
+    };
+    db.setChannelPosition(rolledBackV1.payload.inboundEventId, THREAD_BINDING_ID, 3);
+    expect((await send(rolledBackV1)).statusCode).toBe(202);
+    expect(db.state.threads[0]?.lastInboundSequence).toBe(3);
+  });
+
+  it("retries a v1 successor delivered before an earlier v2 event, then advances 1 to 2", async () => {
+    await app.close();
+    app = Fastify();
+    await registerChannelInboundEventRoutesWithCompatibility(
+      app,
+      {
+        config: {
+          serviceName: "pulso-iris-service",
+          environment: "test",
+          host: "127.0.0.1",
+          port: 8088,
+          serviceVersion: "test",
+          corsAllowedOrigins: []
+        },
+        db: db as never,
+        logger: logger as never
+      },
+      {
+        allowLegacyV1: true,
+        channelCredential: INTERNAL_TOKEN,
+        resolveLegacyPosition: (event) => db.resolveChannelPosition(event.payload.inboundEventId)
+      }
+    );
+
+    const legacySecond = {
+      id: "10000000-0000-4000-8000-000000000022",
+      type: "channel.inbound.received.v1" as const,
+      version: 1 as const,
+      occurredAt: "2026-07-13T16:31:00.000Z",
+      tenantId: TENANT_ID,
+      payload: {
+        ...inboundEvent.payload,
+        inboundEventId: "30000000-0000-4000-8000-000000000022",
+        externalMessageId: "message-022",
+        body: "Segundo mensaje legado",
+        receivedAt: "2026-07-13T16:30:59.000Z"
+      }
+    };
+    db.setChannelPosition(legacySecond.payload.inboundEventId, THREAD_BINDING_ID, 2);
+
+    const premature = await send(legacySecond);
+    expect(premature.statusCode).toBe(409);
+    expect(premature.json().data).toMatchObject({ expectedSequence: 1, receivedSequence: 2 });
+    expect(db.state.inbox).toHaveLength(0);
+    expect(db.state.messages).toHaveLength(0);
+
+    expect((await send(inboundEvent)).statusCode).toBe(202);
+    expect((await send(legacySecond)).statusCode).toBe(202);
+    expect(db.state.threads[0]?.lastInboundSequence).toBe(2);
+    expect(db.state.messages).toHaveLength(2);
+  });
+
   it("rejects the same event id with a different canonical payload", async () => {
     await send(inboundEvent);
     const conflict = await send({
@@ -146,6 +360,44 @@ describe("durable Channel -> PULSO event consumer", () => {
     expect(conflict.json().data).toMatchObject({ eventId: EVENT_ID });
     expect(db.state.messages).toHaveLength(1);
     expect(db.state.outbox).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      label: "thread binding id",
+      streamId: "40000000-0000-4000-8000-000000000099",
+      phoneHash: inboundEvent.payload.phoneHash
+    },
+    {
+      label: "phone identity",
+      streamId: THREAD_BINDING_ID,
+      phoneHash: "b".repeat(64)
+    }
+  ])("fails closed when the existing external thread conflicts by $label", async ({ streamId, phoneHash }) => {
+    expect((await send(inboundEvent)).statusCode).toBe(202);
+
+    const conflict = await send({
+      ...inboundEvent,
+      id: "10000000-0000-4000-8000-000000000099",
+      streamId,
+      streamSequence: streamId === THREAD_BINDING_ID ? 2 : 1,
+      payload: {
+        ...inboundEvent.payload,
+        inboundEventId: "30000000-0000-4000-8000-000000000099",
+        threadBindingId: streamId,
+        externalMessageId: "message-conflicting-thread",
+        phoneHash
+      }
+    });
+
+    expect(conflict.statusCode).toBe(409);
+    expect(db.state.threads).toHaveLength(1);
+    expect(db.state.threads[0]).toMatchObject({
+      id: THREAD_BINDING_ID,
+      phoneHash: inboundEvent.payload.phoneHash,
+      lastInboundSequence: 1
+    });
+    expect(db.state.messages).toHaveLength(1);
   });
 
   it("rolls back the inbox and every projection when the outbox write fails", async () => {
@@ -181,7 +433,10 @@ describe("durable Channel -> PULSO event consumer", () => {
     return app.inject({
       method: "POST",
       url: "/internal/v1/events/channel-inbound",
-      headers: { authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: {
+        authorization: `Bearer ${INTERNAL_TOKEN}`,
+        "x-hyperion-caller": "whatsapp-channel-service"
+      },
       payload
     });
   }
@@ -191,6 +446,8 @@ interface FakeInboxRow {
   eventId: string;
   tenantId: string;
   payloadHash: string;
+  streamId: string;
+  streamSequence: number | null;
   result: unknown;
 }
 
@@ -203,6 +460,7 @@ interface FakeThreadRow {
   phoneMasked: string;
   patientId: string | null;
   conversationId: string | null;
+  lastInboundSequence: number;
 }
 
 interface FakePatientRow {
@@ -237,6 +495,13 @@ interface FakeOutboxRow {
   payload: Record<string, unknown>;
 }
 
+interface FakeChannelPosition {
+  tenantId: string;
+  eventId: string;
+  streamId: string;
+  streamSequence: number;
+}
+
 interface FakeState {
   inbox: FakeInboxRow[];
   threads: FakeThreadRow[];
@@ -244,6 +509,7 @@ interface FakeState {
   conversations: FakeConversationRow[];
   messages: FakeMessageRow[];
   outbox: FakeOutboxRow[];
+  channelPositions: FakeChannelPosition[];
 }
 
 class TransactionalFakeDatabase {
@@ -252,6 +518,16 @@ class TransactionalFakeDatabase {
   transactionCalls = 0;
   failWhenSqlIncludes: string | undefined;
   private nextId = 1;
+
+  setChannelPosition(eventId: string, streamId: string, streamSequence: number): void {
+    this.state.channelPositions.push({ tenantId: TENANT_ID, eventId, streamId, streamSequence });
+  }
+
+  async resolveChannelPosition(eventId: string): Promise<{ streamId: string; streamSequence: number }> {
+    const position = this.state.channelPositions.find((row) => row.tenantId === TENANT_ID && row.eventId === eventId);
+    if (!position) throw new Error("Channel position is unavailable");
+    return { streamId: position.streamId, streamSequence: position.streamSequence };
+  }
 
   async transaction<T>(work: (transaction: { query: TransactionalFakeDatabase["query"] }) => Promise<T>) {
     this.transactionCalls += 1;
@@ -272,13 +548,38 @@ class TransactionalFakeDatabase {
       throw new Error("injected transactional failure");
     }
 
+    if (sql.startsWith('select position.stream_id as "streamid"')) {
+      const position = state.channelPositions.find(
+        (row) => row.tenantId === stringParam(params, 0) && row.eventId === stringParam(params, 1)
+      );
+      return rows<T>(position ? [{ streamId: position.streamId, streamSequence: position.streamSequence }] : []);
+    }
+
     if (sql.startsWith("insert into pulso_iris.inbox_events")) {
       const eventId = stringParam(params, 0);
       if (state.inbox.some((row) => row.eventId === eventId)) return rows<T>([]);
+      const streamId = stringParam(params, 6);
+      const streamSequence = nullableNumberParam(params, 7);
+      if (
+        streamSequence !== null &&
+        state.inbox.some(
+          (row) =>
+            row.tenantId === stringParam(params, 1) &&
+            row.streamId === streamId &&
+            row.streamSequence === streamSequence
+        )
+      ) {
+        const error = new Error("duplicate stream position") as Error & { code: string; constraint: string };
+        error.code = "23505";
+        error.constraint = "uq_pulso_channel_inbox_stream_sequence";
+        throw error;
+      }
       state.inbox.push({
         eventId,
         tenantId: stringParam(params, 1),
         payloadHash: stringParam(params, 4),
+        streamId,
+        streamSequence,
         result: null
       });
       return rows<T>([{ eventId }]);
@@ -305,14 +606,25 @@ class TransactionalFakeDatabase {
           phoneHash: stringParam(params, 4),
           phoneMasked: stringParam(params, 5),
           patientId: null,
-          conversationId: null
+          conversationId: null,
+          lastInboundSequence: 0
         };
         state.threads.push(thread);
       } else {
+        if (thread.id !== stringParam(params, 0) || thread.phoneHash !== stringParam(params, 4)) {
+          return rows<T>([]);
+        }
         thread.phoneHash = stringParam(params, 4);
         thread.phoneMasked = stringParam(params, 5);
       }
-      return rows<T>([{ id: thread.id, patientId: thread.patientId, conversationId: thread.conversationId }]);
+      return rows<T>([
+        {
+          id: thread.id,
+          patientId: thread.patientId,
+          conversationId: thread.conversationId,
+          lastInboundSequence: thread.lastInboundSequence
+        }
+      ]);
     }
 
     if (sql.startsWith("insert into pulso_iris.administrative_patients")) {
@@ -402,11 +714,13 @@ class TransactionalFakeDatabase {
           row.provider === stringParam(params, 1) &&
           row.externalThreadId === stringParam(params, 2)
       );
-      if (thread) {
+      if (thread && thread.lastInboundSequence === numberParam(params, 9)) {
         thread.phoneHash = stringParam(params, 3);
         thread.phoneMasked = stringParam(params, 4);
         thread.patientId = stringParam(params, 5);
         thread.conversationId = stringParam(params, 6);
+        thread.lastInboundSequence = numberParam(params, 8);
+        return rows<T>([{ id: thread.id }]);
       }
       return rows<T>([]);
     }
@@ -446,7 +760,27 @@ class TransactionalFakeDatabase {
       const inbox = state.inbox.find(
         (row) => row.eventId === stringParam(params, 0) && row.tenantId === stringParam(params, 1)
       );
-      if (inbox) inbox.result = JSON.parse(stringParam(params, 2));
+      if (inbox) {
+        const streamId = stringParam(params, 3);
+        const streamSequence = numberParam(params, 4);
+        if (
+          state.inbox.some(
+            (row) =>
+              row !== inbox &&
+              row.tenantId === inbox.tenantId &&
+              row.streamId === streamId &&
+              row.streamSequence === streamSequence
+          )
+        ) {
+          const error = new Error("duplicate stream position") as Error & { code: string; constraint: string };
+          error.code = "23505";
+          error.constraint = "uq_pulso_channel_inbox_stream_sequence";
+          throw error;
+        }
+        inbox.result = JSON.parse(stringParam(params, 2));
+        inbox.streamId = streamId;
+        inbox.streamSequence = streamSequence;
+      }
       return rows<T>([]);
     }
 
@@ -462,7 +796,15 @@ class TransactionalFakeDatabase {
 }
 
 function emptyState(): FakeState {
-  return { inbox: [], threads: [], patients: [], conversations: [], messages: [], outbox: [] };
+  return {
+    inbox: [],
+    threads: [],
+    patients: [],
+    conversations: [],
+    messages: [],
+    outbox: [],
+    channelPositions: []
+  };
 }
 
 function normalizeSql(sql: string): string {
@@ -472,6 +814,19 @@ function normalizeSql(sql: string): string {
 function stringParam(params: unknown[], index: number): string {
   const value = params[index];
   if (typeof value !== "string") throw new Error(`Expected string parameter at index ${index}`);
+  return value;
+}
+
+function numberParam(params: unknown[], index: number): number {
+  const value = params[index];
+  if (typeof value !== "number") throw new Error(`Expected number parameter at index ${index}`);
+  return value;
+}
+
+function nullableNumberParam(params: unknown[], index: number): number | null {
+  const value = params[index];
+  if (value === null) return null;
+  if (typeof value !== "number") throw new Error(`Expected nullable number parameter at index ${index}`);
   return value;
 }
 

@@ -1,0 +1,8 @@
+# CI-only override used by the N-1 compatibility rehearsal. Both Compose
+# projects mount the same explicitly named volumes while keeping their images,
+# containers and networks isolated.
+volumes:
+  postgres_data:
+    name: ${HYPERION_COMPAT_POSTGRES_VOLUME:?HYPERION_COMPAT_POSTGRES_VOLUME is required}
+  whatsapp_sessions:
+    name: ${HYPERION_COMPAT_WHATSAPP_VOLUME:?HYPERION_COMPAT_WHATSAPP_VOLUME is required}

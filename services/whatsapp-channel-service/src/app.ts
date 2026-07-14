@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { envelope, tenantIdSchema } from "@hyperion/contracts";
 import {
   HttpOutboxDispatcher,
@@ -6,13 +6,22 @@ import {
   readNatsAuthentication,
   type NatsAuthentication
 } from "@hyperion/durable-events";
-import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import {
+  createInternalAuthorizationHeaders,
+  readInternalCredential,
+  validateInternalAuthorization,
+  type InternalCredentialMap,
+  type RouteRegistrar,
+  type ServiceContext
+} from "@hyperion/service-runtime";
 import QRCode from "qrcode";
 import { z } from "zod";
 import { BaileysWhatsAppWebTestProvider } from "./baileys-provider.js";
+import { ChannelAuditEmitter } from "./audit-emitter.js";
 import { PostgresChannelOutbox } from "./channel-outbox.js";
 import { PostgresChannelRepository } from "./channel-repository.js";
 import { WhatsAppChannelService } from "./channel-service.js";
+import { registerChannelEventPositionRoute } from "./event-position-routes.js";
 import { readWhatsAppProviderConfig } from "./provider-config.js";
 import { WhatsAppProviderDisabledError } from "./types.js";
 
@@ -40,15 +49,30 @@ const failureSchema = completionSchema.extend({
 
 export interface ChannelRouteDependencies {
   channel?: WhatsAppChannelService;
-  internalServiceToken?: string;
+  integrationCredential?: string;
+  pulsoCredential?: string;
+  sofiaCredential?: string;
 }
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const durableOutbox = readDurableOutboxConfiguration(process.env);
+  const channelToPulsoToken = readInternalCredential(process.env, "CHANNEL_TO_PULSO_TOKEN");
+  const channelToAuditToken = readInternalCredential(process.env, "CHANNEL_TO_AUDIT_TOKEN");
   const dependencies: ChannelRouteDependencies = {
-    internalServiceToken: context.config.internalServiceToken
+    integrationCredential: readInternalCredential(process.env, "INTEGRATION_TO_CHANNEL_TOKEN"),
+    pulsoCredential: readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN"),
+    sofiaCredential: readInternalCredential(process.env, "SOFIA_TO_CHANNEL_TOKEN")
   };
   if (context.db) {
+    const auditEmitter = new ChannelAuditEmitter({
+      auditUrl: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
+      credential: channelToAuditToken,
+      authorizationHeaders: (credential) => createInternalAuthorizationHeaders("whatsapp-channel-service", credential),
+      warn: (eventType) => context.logger.warn("whatsapp audit emission failed", { eventType })
+    });
+    // Registered before Channel.stop(): Fastify closes hooks in LIFO order, so
+    // Channel first closes all producers and only then do we drain audit calls.
+    app.addHook("onClose", async () => auditEmitter.stop());
     const provider = new BaileysWhatsAppWebTestProvider(readWhatsAppProviderConfig(), undefined, (reason, metadata) =>
       context.logger.info("whatsapp channel diagnostic", { reason, ...metadata })
     );
@@ -57,16 +81,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       provider,
       repository,
       500,
-      (event) => {
-        const token = context.config.internalServiceToken;
-        if (!token) return;
-        void fetch(`${process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086"}/v1/audit/events`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-          body: JSON.stringify({ ...event, actorId: "agent:SOFIA" }),
-          signal: AbortSignal.timeout(2_000)
-        }).catch(() => context.logger.warn("whatsapp audit emission failed", { eventType: event.eventType }));
-      },
+      (event) => auditEmitter.emit(event),
       (errorCode) => context.logger.warn("whatsapp runtime operation deferred", { errorCode })
     );
     dependencies.channel = channel;
@@ -79,7 +94,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     }
     app.addHook("onClose", async () => channel.stop());
 
-    if (durableOutbox.transport === "jetstream" || context.config.internalServiceToken) {
+    if (durableOutbox.transport === "jetstream" || channelToPulsoToken) {
       const workerId = `channel-outbox-${randomUUID()}`;
       const outbox = new PostgresChannelOutbox(
         context.db,
@@ -106,7 +121,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
               })
             : new HttpOutboxDispatcher<Record<string, unknown>>({
                 workerId,
-                internalToken: context.config.internalServiceToken!,
+                internalToken: channelToPulsoToken!,
+                fetch: createWorkloadFetch("whatsapp-channel-service", channelToPulsoToken!),
                 claim: (limit) => outbox.claim(limit),
                 complete: (eventId) => outbox.complete(eventId),
                 fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
@@ -127,6 +143,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     }
   }
   registerChannelRoutes(app, dependencies, context);
+  registerChannelEventPositionRoute(app, context, dependencies.pulsoCredential);
 };
 
 type DurableOutboxConfiguration =
@@ -202,7 +219,10 @@ export function registerChannelRoutes(
 ): void {
   app.addHook("preHandler", async (request, reply) => {
     if (!request.url.startsWith("/internal/")) return;
-    const authError = validateInternalToken(dependencies.internalServiceToken, request.headers.authorization);
+    const authError = validateInternalAuthorization(
+      request.headers,
+      credentialsForChannelRoute(request.routeOptions.url, dependencies)
+    );
     if (authError) {
       await reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
     }
@@ -343,22 +363,40 @@ export function registerChannelRoutes(
   });
 }
 
-function validateInternalToken(
-  configuredToken: string | undefined,
-  authorization: string | undefined
-): { statusCode: number; message: string } | undefined {
-  if (!configuredToken) return { statusCode: 503, message: "INTERNAL_SERVICE_TOKEN is required" };
-  const expected = `Bearer ${configuredToken}`;
-  if (!authorization || !constantTimeEquals(authorization, expected)) {
-    return { statusCode: 401, message: "Unauthorized" };
+function credentialsForChannelRoute(
+  routeUrl: string | undefined,
+  dependencies: ChannelRouteDependencies
+): InternalCredentialMap {
+  if (
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/messages" ||
+    routeUrl === "/internal/v1/whatsapp/inbound/claim" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/inbound/:eventId/complete" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/inbound/:eventId/fail"
+  ) {
+    return { "agent-service": dependencies.sofiaCredential };
   }
-  return undefined;
+  if (
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/status" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/connect" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/qr" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/disconnect"
+  ) {
+    return { "integration-service": dependencies.integrationCredential };
+  }
+  if (routeUrl === "/internal/v1/tenants/:tenantId/channel-inbound/:eventId/stream-position") {
+    return { "pulso-iris-service": dependencies.pulsoCredential };
+  }
+  return {};
 }
 
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+function createWorkloadFetch(caller: string, token: string): typeof fetch {
+  return (input, init) => {
+    const headers = new Headers(init?.headers);
+    for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
+      headers.set(name, value);
+    }
+    return fetch(input, { ...init, headers });
+  };
 }
 
 function requireChannel(
