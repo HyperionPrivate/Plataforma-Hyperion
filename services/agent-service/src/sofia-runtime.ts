@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
+import type { DatabaseClient } from "@hyperion/database";
 import {
   createInternalAuthorizationHeaders,
   validateInternalAuthorization,
@@ -296,15 +296,7 @@ export class SofiaRuntime {
           ]
         );
         if (insertedJob.rows[0]) {
-          await this.options.db.query(
-            `update pulso_iris.conversations
-             set metadata = metadata || jsonb_build_object(
-                   'sofiaStatus', 'queued',
-                   'lastSofiaActivityAt', now()
-                 ), updated_at = now()
-             where tenant_id = $1 and id = $2`,
-            [event.tenantId, identity.conversationId]
-          );
+          await this.setConversationRuntime(event.tenantId, identity.conversationId, "queued");
         }
         await this.callChannel(`/internal/v1/tenants/${event.tenantId}/whatsapp/inbound/${event.id}/complete`, "POST", {
           workerId: this.workerId
@@ -1078,7 +1070,7 @@ export class SofiaRuntime {
           })
         ]
       );
-      await this.setConversationRuntime(job.tenantId, job.conversationId, "responded", inferIntent(toolNames), tx);
+      await this.setConversationRuntime(job.tenantId, job.conversationId, "responded", inferIntent(toolNames));
     });
   }
 
@@ -1166,17 +1158,18 @@ export class SofiaRuntime {
     metadata: Record<string, unknown>
   ): Promise<{ id: string; body: string }> {
     const externalId = `sofia-job:${job.id}`;
-    const inserted = await this.options.db.query<{ id: string; body: string }>(
-      `insert into pulso_iris.messages
-         (tenant_id, conversation_id, sender, body, provider, external_message_id, delivery_status, metadata)
-       values ($1, $2, 'sofia', $3, 'whatsapp_web_test', $4, 'queued', $5::jsonb)
-       on conflict (tenant_id, provider, external_message_id)
-         where provider is not null and external_message_id is not null
-       do update set body = pulso_iris.messages.body
-        returning id, body`,
-      [job.tenantId, job.conversationId, body, externalId, JSON.stringify(metadata)]
+    const payload = await this.callInternal(
+      `${this.options.pulsoIrisUrl}/internal/v1/tenants/${encodeURIComponent(job.tenantId)}/pulso-iris/messages/sofia-outbound`,
+      "POST",
+      this.credentials.pulso,
+      {
+        conversationId: job.conversationId,
+        body,
+        externalMessageId: externalId,
+        metadata
+      }
     );
-    return inserted.rows[0]!;
+    return z.object({ id: z.string().uuid(), body: z.string() }).parse(payload);
   }
 
   private async failInbound(tenantId: string, eventId: string, error: unknown): Promise<void> {
@@ -1225,7 +1218,9 @@ export class SofiaRuntime {
         shutdownInterrupted
       ]
     );
-    await this.setConversationRuntime(job.tenantId, job.conversationId, shutdownInterrupted ? "queued" : "failed");
+    await this.setConversationRuntime(job.tenantId, job.conversationId, shutdownInterrupted ? "queued" : "failed", undefined, {
+      allowDuringShutdown: true
+    });
     this.options.logger.warn("SOFIA job failed", {
       jobId: job.id,
       terminal,
@@ -1239,14 +1234,14 @@ export class SofiaRuntime {
     conversationId: string,
     status: string,
     intent?: string,
-    executor: DatabaseExecutor = this.options.db
+    options: { allowDuringShutdown?: boolean } = {}
   ) {
-    await executor.query(
-      `update pulso_iris.conversations
-       set metadata = metadata || jsonb_build_object('sofiaStatus', $3::text, 'lastSofiaActivityAt', now()),
-           primary_intent = coalesce($4, primary_intent), updated_at = now()
-       where tenant_id = $1 and id = $2`,
-      [tenantId, conversationId, status, intent ?? null]
+    await this.callInternal(
+      `${this.options.pulsoIrisUrl}/internal/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/conversations/${encodeURIComponent(conversationId)}/sofia-runtime`,
+      "PATCH",
+      this.credentials.pulso,
+      { sofiaStatus: status, primaryIntent: intent },
+      options
     );
   }
 
@@ -1263,8 +1258,14 @@ export class SofiaRuntime {
     );
   }
 
-  private async callInternal(url: string, method: "GET" | "POST", token: string, body?: unknown): Promise<unknown> {
-    this.throwIfShuttingDown();
+  private async callInternal(
+    url: string,
+    method: "GET" | "POST" | "PATCH",
+    token: string,
+    body?: unknown,
+    options: { allowDuringShutdown?: boolean } = {}
+  ): Promise<unknown> {
+    if (!options.allowDuringShutdown) this.throwIfShuttingDown();
     const timeoutSignal = AbortSignal.timeout(5_000);
     const response = await this.fetchImpl(url, {
       method,
@@ -1272,10 +1273,12 @@ export class SofiaRuntime {
         ...createInternalAuthorizationHeaders("agent-service", token),
         "content-type": "application/json"
       },
-      body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
-      signal: AbortSignal.any([this.shutdownController.signal, timeoutSignal])
+      body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
+      signal: options.allowDuringShutdown
+        ? timeoutSignal
+        : AbortSignal.any([this.shutdownController.signal, timeoutSignal])
     });
-    this.throwIfShuttingDown();
+    if (!options.allowDuringShutdown) this.throwIfShuttingDown();
     const payload = (await response.json()) as { data?: unknown };
     if (!response.ok) throw new Error(`Internal dependency returned status ${response.status}`);
     return payload.data;

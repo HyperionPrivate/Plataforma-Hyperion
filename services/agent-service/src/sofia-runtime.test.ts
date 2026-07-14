@@ -103,10 +103,6 @@ describe("SOFIA runtime lifecycle", () => {
       if (sql.includes("update agent_runtime.jobs") && sql.includes("last_error_code = $5")) {
         failedJobParameters = parameters;
       }
-      if (sql.includes("jsonb_build_object('sofiaStatus', $3::text") && parameters?.[2] === "queued") {
-        queuedConversation = true;
-      }
-      if (sql.includes("insert into pulso_iris.messages")) responsePersisted = true;
       return dbResult([]);
     });
     const db = {
@@ -116,9 +112,38 @@ describe("SOFIA runtime lifecycle", () => {
     } as unknown as DatabaseClient;
     const fetchImpl = vi.fn(
       async (url: string | URL | Request, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          if (!String(url).includes("prompt-flows/SOFIA/active")) {
-            reject(new Error(`Unexpected request: ${String(url)}`));
+        new Promise<Response>((resolve, reject) => {
+          const target = String(url);
+          if (target.includes("/sofia-runtime")) {
+            const body = JSON.parse(String(init?.body ?? "{}")) as { sofiaStatus?: string };
+            if (body.sofiaStatus === "queued") queuedConversation = true;
+            resolve(
+              new Response(JSON.stringify({ data: { updated: true } }), {
+                status: 200,
+                headers: { "content-type": "application/json" }
+              })
+            );
+            return;
+          }
+          if (target.includes("/sofia-state/") || target.includes("/messages/sofia-outbound")) {
+            if (target.includes("/messages/sofia-outbound")) responsePersisted = true;
+            resolve(
+              new Response(
+                JSON.stringify({
+                  data: {
+                    updated: true,
+                    applied: true,
+                    id: "00000000-0000-4000-8000-000000000209",
+                    body: "x"
+                  }
+                }),
+                { status: 200, headers: { "content-type": "application/json" } }
+              )
+            );
+            return;
+          }
+          if (!target.includes("prompt-flows/SOFIA/active")) {
+            reject(new Error(`Unexpected request: ${target}`));
             return;
           }
           promptStarted.resolve(undefined);
@@ -786,6 +811,13 @@ describe("SOFIA fresh availability guard", () => {
           appointmentTypes: [{ id: selection.appointmentTypeId, name: "Tipo controlado" }]
         });
       }
+      if (target.includes("/messages/sofia-outbound")) {
+        persistedResponse = String((JSON.parse(String(init?.body)) as { body?: unknown }).body ?? "");
+        return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: durableResponse });
+      }
+      if (target.includes("/sofia-state/") || target.includes("/sofia-runtime")) {
+        return jsonResponse({ applied: true, updated: true });
+      }
       if (target.includes("/whatsapp/messages")) {
         enqueuedResponse = String((JSON.parse(String(init?.body)) as { text?: unknown }).text ?? "");
       }
@@ -889,10 +921,6 @@ describe("SOFIA fresh availability guard", () => {
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
       }
-      if (sql.includes("insert into pulso_iris.messages")) {
-        persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse }]);
-      }
       return dbResult([]);
     });
     const db = {
@@ -927,7 +955,7 @@ describe("SOFIA fresh availability guard", () => {
         model: "controlled",
         latencyMs: 1
       });
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
@@ -945,6 +973,28 @@ describe("SOFIA fresh availability guard", () => {
         });
       }
       if (target.includes("/sofia/tools/search_availability")) return jsonResponse({ slots: [slot] });
+      if (target.includes("/messages/sofia-outbound")) {
+        persistedResponse = String(
+          (JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { body?: string }).body ?? ""
+        );
+        return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse });
+      }
+      if (target.includes("/sofia-state/load")) {
+        return jsonResponse({ state: {
+          agendaSelection: {
+            siteId: slot.siteId,
+            professionalId: slot.professionalId,
+            payerId: slot.payerId,
+            appointmentTypeId: slot.appointmentTypeId
+          }
+        } });
+      }
+      if (target.includes("/sofia-state/mutate")) {
+        return jsonResponse({ applied: true });
+      }
+      if (target.includes("/sofia-runtime")) {
+        return jsonResponse({ updated: true });
+      }
       return jsonResponse({ accepted: true });
     });
     const runtime = new SofiaRuntime({
@@ -1017,10 +1067,6 @@ describe("SOFIA fresh availability guard", () => {
       if (sql.includes("select sender, body from")) {
         return dbResult([{ sender: "patient", body: "Quiero la cita del lunes 13 de julio a las 9:00 a. m." }]);
       }
-      if (sql.includes("and (($3::text is null")) {
-        pendingActionUpdates += 1;
-        return dbResult([{}]);
-      }
       if (sql.includes("coalesce(metadata->'sofiaState'")) {
         return dbResult([
           {
@@ -1039,10 +1085,6 @@ describe("SOFIA fresh availability guard", () => {
       if (sql.includes("select full_name")) return dbResult([{ fullName: "Paciente controlado" }]);
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
-      }
-      if (sql.includes("insert into pulso_iris.messages")) {
-        persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse }]);
       }
       return dbResult([]);
     });
@@ -1105,6 +1147,30 @@ describe("SOFIA fresh availability guard", () => {
       if (target.includes("/sofia/tools/search_availability")) {
         searchPayload = JSON.parse(String(init?.body)) as Record<string, unknown>;
         return jsonResponse({ slots: [slot] });
+      }
+      if (target.includes("/messages/sofia-outbound")) {
+        persistedResponse = String(
+          (JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { body?: string }).body ?? ""
+        );
+        return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse });
+      }
+      if (target.includes("/sofia-state/load")) {
+        return jsonResponse({ state: {
+          agendaSelection: {
+            siteId: slot.siteId,
+            professionalId: slot.professionalId,
+            payerId: slot.payerId,
+            appointmentTypeId: slot.appointmentTypeId
+          }
+        } });
+      }
+      if (target.includes("/sofia-state/mutate")) {
+        const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { op?: string };
+        if (body.op === "stage_pending_action") pendingActionUpdates += 1;
+        return jsonResponse({ applied: true });
+      }
+      if (target.includes("/sofia-runtime")) {
+        return jsonResponse({ updated: true });
       }
       return jsonResponse({ accepted: true });
     });
@@ -1222,14 +1288,6 @@ describe("SOFIA fresh availability guard", () => {
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
       }
-      if (sql.includes("and (($3::text is null")) {
-        pendingActionUpdates += 1;
-        return dbResult([{}]);
-      }
-      if (sql.includes("insert into pulso_iris.messages")) {
-        persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse }]);
-      }
       return dbResult([]);
     });
     const db = {
@@ -1243,7 +1301,7 @@ describe("SOFIA fresh availability guard", () => {
       model: "controlled",
       latencyMs: 1
     });
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
@@ -1274,6 +1332,30 @@ describe("SOFIA fresh availability guard", () => {
             }
           ]
         });
+      }
+      if (target.includes("/messages/sofia-outbound")) {
+        persistedResponse = String(
+          (JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { body?: string }).body ?? ""
+        );
+        return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse });
+      }
+      if (target.includes("/sofia-state/load")) {
+        return jsonResponse({ state: {
+          agendaSelection: {
+            siteId: exactSlot.siteId,
+            professionalId: exactSlot.professionalId,
+            payerId: exactSlot.payerId,
+            appointmentTypeId: exactSlot.appointmentTypeId
+          }
+        } });
+      }
+      if (target.includes("/sofia-state/mutate")) {
+        const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { op?: string };
+        if (body.op === "stage_pending_action") pendingActionUpdates += 1;
+        return jsonResponse({ applied: true });
+      }
+      if (target.includes("/sofia-runtime")) {
+        return jsonResponse({ updated: true });
       }
       return jsonResponse({ accepted: true });
     });
@@ -1379,10 +1461,6 @@ describe("SOFIA fresh availability guard", () => {
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
       }
-      if (sql.includes("insert into pulso_iris.messages")) {
-        persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse }]);
-      }
       return dbResult([]);
     });
     const db = {
@@ -1402,7 +1480,7 @@ describe("SOFIA fresh availability guard", () => {
       .mockResolvedValueOnce(searchToolCall("refined-search"))
       .mockResolvedValueOnce({ content: "Usa el primer resultado.", toolCalls: [], model: "controlled", latencyMs: 1 });
     let searchCalls = 0;
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
@@ -1437,6 +1515,28 @@ describe("SOFIA fresh availability guard", () => {
             }
           ]
         });
+      }
+      if (target.includes("/messages/sofia-outbound")) {
+        persistedResponse = String(
+          (JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { body?: string }).body ?? ""
+        );
+        return jsonResponse({ id: "00000000-0000-4000-8000-000000000019", body: persistedResponse });
+      }
+      if (target.includes("/sofia-state/load")) {
+        return jsonResponse({ state: {
+          agendaSelection: {
+            siteId: searchArguments.siteId,
+            professionalId: searchArguments.professionalId,
+            payerId: searchArguments.payerId,
+            appointmentTypeId: searchArguments.appointmentTypeId
+          }
+        } });
+      }
+      if (target.includes("/sofia-state/mutate")) {
+        return jsonResponse({ applied: true });
+      }
+      if (target.includes("/sofia-runtime")) {
+        return jsonResponse({ updated: true });
       }
       return jsonResponse({ accepted: true });
     });
@@ -2263,6 +2363,107 @@ async function runConfirmationScenario(input: {
         version: 6,
         systemPrompt: "Prompt administrativo controlado para las pruebas de SOFIA."
       });
+    }
+    if (target.includes("/messages/sofia-outbound")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+      responseText = String(body.body ?? "");
+      return jsonResponse({ id: CONFIRMATION_IDS.responseMessage, body: responseText });
+    }
+    if (target.includes("/sofia-runtime")) {
+      return jsonResponse({ updated: true });
+    }
+    if (target.includes("/sofia-state/load")) {
+      if (input.confirmationStateError && !confirmationStateErrorThrown) {
+        confirmationStateErrorThrown = true;
+        throw input.confirmationStateError;
+      }
+      const pending = confirmationState.pendingAction as { stagedAt?: string; jobId?: string; tool?: string } | undefined;
+      const grant = confirmationState.confirmationGrant as
+        | { expiresAt?: string; actionId?: string; jobId?: string }
+        | undefined;
+      const pendingAt = Date.parse(pending?.stagedAt ?? "");
+      const grantAt = Date.parse(grant?.expiresAt ?? "");
+      const pendingExpired = input.pendingExpired ?? (Number.isFinite(pendingAt) && pendingAt + 15 * 60 * 1_000 <= Date.now());
+      const grantExpired = Number.isFinite(grantAt) && grantAt <= Date.now();
+      if (pendingExpired || grantExpired) {
+        confirmationState = {
+          ...confirmationState,
+          ...(pendingExpired ? { pendingAction: null } : {}),
+          ...(grantExpired ? { confirmationGrant: null } : {})
+        };
+        return jsonResponse({
+          state: confirmationState,
+          expiredAction: pendingExpired
+            ? { actionId: pending?.jobId, tool: pending?.tool }
+            : { actionId: grant?.actionId ?? grant?.jobId, tool: "create_appointment_hold" }
+        });
+      }
+      return jsonResponse({ state: confirmationState });
+    }
+    if (target.includes("/sofia-state/mutate")) {
+      const mutation = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      if (mutation.op === "claim_pending_action") {
+        confirmationState = {
+          ...confirmationState,
+          pendingAction: null,
+          confirmationGrant: null,
+          confirmationExecution: mutation.execution
+        };
+        return jsonResponse({ applied: true });
+      }
+      if (mutation.op === "move_execution_to_grant") {
+        confirmationState = {
+          ...confirmationState,
+          pendingAction: null,
+          confirmationExecution: null,
+          confirmationGrant: mutation.grant
+        };
+        return jsonResponse({ applied: true });
+      }
+      if (
+        mutation.op === "store_execution_receipt" ||
+        mutation.op === "store_pending_receipt" ||
+        mutation.op === "store_grant_receipt"
+      ) {
+        const messageId = String(
+          mutation.op === "store_execution_receipt" ? mutation.confirmationMessageId : mutation.currentMessageId
+        );
+        const existingReceipts =
+          typeof confirmationState.confirmationReceipts === "object" && confirmationState.confirmationReceipts !== null
+            ? (confirmationState.confirmationReceipts as Record<string, unknown>)
+            : {};
+        confirmationState = {
+          ...confirmationState,
+          pendingAction: null,
+          confirmationExecution: null,
+          confirmationGrant: null,
+          confirmationReceipts: { ...existingReceipts, [messageId]: mutation.receipt as Record<string, unknown> }
+        };
+        return jsonResponse({ applied: true });
+      }
+      if (mutation.op === "stage_pending_action" || mutation.op === "replace_pending_with_grant") {
+        confirmationState = { ...confirmationState, ...(mutation.patch as Record<string, unknown>) };
+        return jsonResponse({ applied: true });
+      }
+      if (mutation.op === "clear_confirmed_grant" || mutation.op === "clear_confirmed_pending") {
+        confirmationState = { ...confirmationState, pendingAction: null, confirmationGrant: null };
+        return jsonResponse({ applied: true });
+      }
+      if (mutation.op === "save_conversation_state") {
+        confirmationState = { ...confirmationState, ...(mutation.patch as Record<string, unknown>) };
+        return jsonResponse({ applied: true });
+      }
+      if (mutation.op === "clear_last_availability") {
+        const next = { ...confirmationState };
+        delete next.lastAvailability;
+        delete next.lastAvailabilityAt;
+        delete next.lastAvailabilitySchemaVersion;
+        delete next.lastAvailabilityJobId;
+        delete next.lastAvailabilityQuery;
+        confirmationState = next;
+        return jsonResponse({ applied: true });
+      }
+      return jsonResponse({ applied: true });
     }
     if (target.includes("/sofia/tools/get_catalog")) {
       return jsonResponse({ sites: [], professionals: [], payers: [], appointmentTypes: [] });

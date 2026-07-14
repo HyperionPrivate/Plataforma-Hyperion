@@ -229,7 +229,6 @@ describeIntegration("PostgreSQL service role isolation", () => {
         queries: [
           "select count(*) from pulso_iris.sites",
           "select count(*) from platform.audit_events",
-          "select count(*) from channel_runtime.thread_bindings",
           "select count(*) from pulso_iris.outbox_stream_positions",
           "select count(*) from pulso_iris.outbox_event_positions",
           "select count(*) from platform.schema_migrations"
@@ -239,7 +238,6 @@ describeIntegration("PostgreSQL service role isolation", () => {
         role: "hyperion_channel",
         queries: [
           "select count(*) from channel_runtime.connections",
-          "select count(*) from pulso_iris.messages",
           "select count(*) from channel_runtime.claim_next_inbound_event('role-permission-test')",
           "select count(*) from platform.schema_migrations"
         ]
@@ -383,6 +381,8 @@ describeIntegration("PostgreSQL service role isolation", () => {
     await withRole("hyperion_channel", async (channel) => {
       await expectPermissionDenied(channel, "select count(*) from lumen.encounters");
       await expectPermissionDenied(channel, "select count(*) from platform.audit_events");
+      await expectPermissionDenied(channel, "select count(*) from pulso_iris.messages");
+      await expectPermissionDenied(channel, "update pulso_iris.messages set delivery_status = delivery_status where false");
     });
 
     await withRole("hyperion_audit", async (audit) => {
@@ -392,10 +392,17 @@ describeIntegration("PostgreSQL service role isolation", () => {
 
     await withRole("hyperion_sofia", async (sofia) => {
       await expectPermissionDenied(sofia, "select count(*) from pulso_iris.outbox_event_positions");
+      await expectPermissionDenied(sofia, "update pulso_iris.conversations set updated_at = updated_at where false");
+      await expectPermissionDenied(
+        sofia,
+        "insert into pulso_iris.messages (tenant_id, conversation_id, sender, body) values (null, null, 'sofia', 'x')"
+      );
     });
 
     await withRole("hyperion_pulso", async (pulso) => {
       await expectPermissionDenied(pulso, "select count(*) from channel_runtime.outbox_event_positions");
+      await expectPermissionDenied(pulso, "select count(*) from channel_runtime.thread_bindings");
+      await expectPermissionDenied(pulso, "update channel_runtime.inbound_events set updated_at = updated_at where false");
     });
   });
 

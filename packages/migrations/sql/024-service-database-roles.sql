@@ -223,8 +223,8 @@ begin
   -- Schema visibility. LUMEN intentionally receives no USAGE outside lumen.
   grant usage on schema platform to hyperion_access, hyperion_sofia, hyperion_knowledge,
     hyperion_audit, hyperion_integration, hyperion_pulso, hyperion_channel;
-  grant usage on schema pulso_iris to hyperion_sofia, hyperion_integration, hyperion_pulso, hyperion_channel;
-  grant usage on schema channel_runtime to hyperion_sofia, hyperion_pulso, hyperion_channel;
+  grant usage on schema pulso_iris to hyperion_sofia, hyperion_integration, hyperion_pulso;
+  grant usage on schema channel_runtime to hyperion_sofia, hyperion_channel;
   grant usage on schema agent_runtime to hyperion_sofia;
   grant usage on schema audit_runtime to hyperion_audit;
   grant usage on schema lumen to hyperion_lumen;
@@ -282,8 +282,6 @@ begin
   grant select on table platform.products to hyperion_sofia;
   grant select on table pulso_iris.administrative_patients, pulso_iris.conversations,
     pulso_iris.messages to hyperion_sofia;
-  grant update on table pulso_iris.conversations to hyperion_sofia;
-  grant insert, update on table pulso_iris.messages to hyperion_sofia;
   grant select on table channel_runtime.outbound_messages to hyperion_sofia;
 
   grant select on table platform.agents, platform.prompt_flows to hyperion_integration;
@@ -291,10 +289,6 @@ begin
     pulso_iris.professionals to hyperion_integration;
 
   grant select on table platform.audit_events to hyperion_pulso;
-  grant select, update on table channel_runtime.thread_bindings to hyperion_pulso;
-  grant update on table channel_runtime.inbound_events to hyperion_pulso;
-
-  grant select, update on table pulso_iris.messages to hyperion_channel;
 
   -- The legacy tenant bootstrap trigger is the sole remaining write that
   -- crosses from Access into PULSO. Keep Access out of the PULSO schema: the

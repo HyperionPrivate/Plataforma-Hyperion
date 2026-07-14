@@ -29,6 +29,16 @@ describe("internal workload authentication", () => {
     ).toEqual({ statusCode: 401, message: "Unauthorized internal caller" });
   });
 
+  it("forbids a well-formed caller that is not in the receiver allow-list", () => {
+    const headers = createInternalAuthorizationHeaders("audit-service", "any-token-value-000000001");
+
+    expect(
+      validateInternalAuthorization(headers, {
+        "api-gateway": "gateway-edge-token-0000000001"
+      })
+    ).toEqual({ statusCode: 403, message: "Forbidden internal caller" });
+  });
+
   it("fails closed when the receiver has no workload credentials", () => {
     expect(
       validateInternalAuthorization({ authorization: "Bearer any", "x-hyperion-caller": "agent-service" }, {})

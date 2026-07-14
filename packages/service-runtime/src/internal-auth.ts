@@ -10,7 +10,7 @@ export interface InternalRequestHeaders {
 export type InternalCredentialMap = Readonly<Record<string, string | undefined>>;
 
 export type InternalAuthorizationFailure = {
-  readonly statusCode: 401 | 503;
+  readonly statusCode: 401 | 403 | 503;
   readonly message: string;
 };
 
@@ -68,9 +68,13 @@ export function validateInternalAuthorization(
   }
 
   const caller = readInternalCaller(headers);
-  const expectedToken = caller ? credentials[caller] : undefined;
-  if (!caller || !CALLER_PATTERN.test(caller) || !expectedToken) {
+  if (!caller || !CALLER_PATTERN.test(caller)) {
     return { statusCode: 401, message: "Unauthorized internal caller" };
+  }
+
+  const expectedToken = credentials[caller];
+  if (!expectedToken) {
+    return { statusCode: 403, message: "Forbidden internal caller" };
   }
 
   const authorization = headers.authorization;

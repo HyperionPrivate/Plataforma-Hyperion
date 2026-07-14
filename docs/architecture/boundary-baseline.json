@@ -176,22 +176,6 @@
       "count": 4
     },
     {
-      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->pulso-core|write|table|pulso_iris.conversations",
-      "count": 2
-    },
-    {
-      "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->pulso-core|write|table|pulso_iris.messages",
-      "count": 1
-    },
-    {
-      "id": "sql-access|services/agent-service/src/sofia-tools.ts|sofia-automation->pulso-core|read|table|pulso_iris.conversations",
-      "count": 1
-    },
-    {
-      "id": "sql-access|services/agent-service/src/sofia-tools.ts|sofia-automation->pulso-core|write|table|pulso_iris.conversations",
-      "count": 14
-    },
-    {
       "id": "sql-access|services/integration-service/src/app.ts|integration-adapter->migration-control|read|table|platform.schema_migrations",
       "count": 1
     },
@@ -218,26 +202,6 @@
     {
       "id": "sql-access|services/pulso-iris-service/src/appointment-routes.ts|pulso-core->audit|read|table|platform.audit_events",
       "count": 1
-    },
-    {
-      "id": "sql-access|services/pulso-iris-service/src/sofia-tools-routes.ts|pulso-core->channel|read|table|channel_runtime.thread_bindings",
-      "count": 1
-    },
-    {
-      "id": "sql-access|services/pulso-iris-service/src/sofia-tools-routes.ts|pulso-core->channel|write|table|channel_runtime.inbound_events",
-      "count": 1
-    },
-    {
-      "id": "sql-access|services/pulso-iris-service/src/sofia-tools-routes.ts|pulso-core->channel|write|table|channel_runtime.thread_bindings",
-      "count": 1
-    },
-    {
-      "id": "sql-access|services/whatsapp-channel-service/src/channel-repository.ts|channel->pulso-core|read|table|pulso_iris.messages",
-      "count": 3
-    },
-    {
-      "id": "sql-access|services/whatsapp-channel-service/src/channel-repository.ts|channel->pulso-core|write|table|pulso_iris.messages",
-      "count": 5
     }
   ]
 }
