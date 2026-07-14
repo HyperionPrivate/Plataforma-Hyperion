@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { HYPERION_KNOWN_CONSUMERS, provisionHyperionJetStreamTopology } from "./jetstream-bootstrap.js";
+import {
+  HYPERION_KNOWN_CONSUMERS,
+  provisionHyperionJetStreamTopology,
+  readJetStreamTopologyBootstrapOptions
+} from "./jetstream-bootstrap.js";
 import {
   hyperionConsumerConfiguration,
   hyperionStreamConfiguration,
@@ -9,9 +13,56 @@ import {
 } from "./jetstream-consumer.js";
 
 describe("JetStream topology bootstrap", () => {
+  it("rejects example credentials in production despite legacy bypass signals", () => {
+    expect(() =>
+      readJetStreamTopologyBootstrapOptions({
+        NODE_ENV: "production",
+        HYPERION_ENVIRONMENT: "production",
+        CI: "true",
+        HYPERION_ALLOW_EXAMPLE_SECRETS: "true",
+        NATS_URL: "nats://nats:4222",
+        NATS_USERNAME: "topology",
+        NATS_PASSWORD: "replace-topology-nats-secret-01"
+      })
+    ).toThrow(/NATS_PASSWORD/);
+  });
+
+  it("accepts example credentials only for an explicit local rehearsal", () => {
+    expect(
+      readJetStreamTopologyBootstrapOptions({
+        NODE_ENV: "production",
+        HYPERION_ENVIRONMENT: "local",
+        NATS_URL: "nats://nats:4222",
+        NATS_USERNAME: "topology",
+        NATS_PASSWORD: "replace-topology-nats-secret-01"
+      })
+    ).toMatchObject({
+      server: "nats://nats:4222",
+      username: "topology",
+      password: "replace-topology-nats-secret-01",
+      allowToken: true
+    });
+  });
+
+  it("blocks the pilot bootstrap in canonical production despite declarative HA values", () => {
+    expect(() =>
+      readJetStreamTopologyBootstrapOptions({
+        NODE_ENV: "test",
+        HYPERION_ENVIRONMENT: "production",
+        NATS_URL: "tls://nats.internal:4222",
+        NATS_USERNAME: "topology",
+        NATS_PASSWORD: "real-topology-password-0001",
+        PRODUCTION_JETSTREAM_ENABLED: "true",
+        JETSTREAM_REPLICAS: "3",
+        JETSTREAM_MAX_BYTES: "10737418240",
+        JETSTREAM_MAX_MSGS: "1000000"
+      })
+    ).toThrow(/single-node pilot/);
+  });
+
   it("owns active durables, separate v1 rollout durables and the drain-only Audit durable", () => {
-    expect(HYPERION_KNOWN_CONSUMERS).toHaveLength(12);
-    expect(new Set(HYPERION_KNOWN_CONSUMERS.map(({ durableName }) => durableName)).size).toBe(12);
+    expect(HYPERION_KNOWN_CONSUMERS).toHaveLength(13);
+    expect(new Set(HYPERION_KNOWN_CONSUMERS.map(({ durableName }) => durableName)).size).toBe(13);
     expect(HYPERION_KNOWN_CONSUMERS).toEqual(
       expect.arrayContaining([
         {
@@ -39,6 +90,10 @@ describe("JetStream topology bootstrap", () => {
           durableName: "pulso_channel_inbound_v2"
         },
         {
+          eventType: "channel.delivery.updated.v1",
+          durableName: "pulso_channel_delivery_v1"
+        },
+        {
           eventType: "pulso.message.received.v1",
           durableName: "sofia_pulso_message_v1"
         },
@@ -55,8 +110,8 @@ describe("JetStream topology bootstrap", () => {
     const first = await provisionHyperionJetStreamTopology(fixture.adapter);
     const second = await provisionHyperionJetStreamTopology(fixture.adapter);
 
-    expect(first.consumers).toHaveLength(12);
-    expect(first.consumers.filter(({ result }) => result.consumerCreated)).toHaveLength(12);
+    expect(first.consumers).toHaveLength(13);
+    expect(first.consumers.filter(({ result }) => result.consumerCreated)).toHaveLength(13);
     expect(first.consumers.filter(({ result }) => result.streamCreated)).toHaveLength(1);
     expect(second.consumers.every(({ result }) => !result.streamCreated && !result.consumerCreated)).toBe(true);
   });

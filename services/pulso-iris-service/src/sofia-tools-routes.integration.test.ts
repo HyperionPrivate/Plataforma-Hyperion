@@ -25,6 +25,8 @@ describeIntegration("SOFIA internal agenda tools", () => {
   let conversationId = "";
   let messageId = "";
   const events: EmitAuditEventInput[] = [];
+  const auditAttempts: Array<{ event: EmitAuditEventInput; executor: object }> = [];
+  let rejectedAuditEventType: EmitAuditEventInput["eventType"] | undefined;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -41,7 +43,11 @@ describeIntegration("SOFIA internal agenda tools", () => {
         await registerSofiaToolRoutes(
           serviceApp,
           context,
-          async (event) => {
+          async (event, executor) => {
+            auditAttempts.push({ event, executor });
+            if (event.eventType === rejectedAuditEventType) {
+              throw new Error(`controlled audit failure: ${event.eventType}`);
+            }
             events.push(event);
           },
           {
@@ -151,6 +157,52 @@ describeIntegration("SOFIA internal agenda tools", () => {
       tenantId,
       conversationId
     ]);
+  });
+
+  it("rolls back an audited mutation and reuses one transaction executor for its audit batch", async () => {
+    const auditStart = auditAttempts.length;
+    rejectedAuditEventType = "handoff.assigned";
+    try {
+      const failed = await callTool("create_urgent_handoff", {
+        patientId,
+        conversationId,
+        triggerCode: "symptom_or_urgency_signal"
+      });
+      expect(failed.statusCode).toBe(500);
+    } finally {
+      rejectedAuditEventType = undefined;
+    }
+
+    const rolledBack = await client.query<{ handoffs: number; status: string }>(
+      `select
+         (select count(*)::int from pulso_iris.handoffs
+          where tenant_id = $1 and conversation_id = $2 and trigger_code = 'symptom_or_urgency_signal') as handoffs,
+         (select status from pulso_iris.conversations where tenant_id = $1 and id = $2) as status`,
+      [tenantId, conversationId]
+    );
+    expect(rolledBack.rows[0]).toMatchObject({ handoffs: 0, status: "active" });
+    expect(auditAttempts.slice(auditStart).map(({ event }) => event.eventType)).toEqual(["handoff.assigned"]);
+
+    const succeeded = await callTool("create_urgent_handoff", {
+      patientId,
+      conversationId,
+      triggerCode: "symptom_or_urgency_signal"
+    });
+    expect(succeeded.statusCode).toBe(200);
+    const successfulAttempts = auditAttempts.slice(auditStart + 1);
+    expect(successfulAttempts.map(({ event }) => event.eventType)).toEqual(["handoff.assigned", "agent.tool.executed"]);
+    expect(successfulAttempts[0]?.executor).toBe(successfulAttempts[1]?.executor);
+
+    await client.query(`delete from pulso_iris.handoffs where tenant_id = $1 and conversation_id = $2`, [
+      tenantId,
+      conversationId
+    ]);
+    await client.query(
+      `update pulso_iris.conversations
+       set status = 'active', primary_intent = 'identifying', updated_at = now()
+       where tenant_id = $1 and id = $2`,
+      [tenantId, conversationId]
+    );
   });
 
   it("rejects cross-tenant thread binding and write without explicit confirmation", async () => {

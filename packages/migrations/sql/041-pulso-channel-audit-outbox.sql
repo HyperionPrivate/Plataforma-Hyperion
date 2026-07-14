@@ -1,6 +1,6 @@
--- Durable audit outbox for PULSO domain mutations and Channel message.sent.
--- Reuses each owner's outbox_events table with a nullable dedupe_key so audit
--- rows stay independent from ordered message/inbound stream positions.
+-- Expand phase for durable PULSO/Channel audit events.  Nullable columns and
+-- NOT VALID checks keep this phase bounded: new writes are protected
+-- immediately, while historical validation and index scans run separately.
 
 alter table pulso_iris.outbox_events
   add column if not exists dedupe_key text;
@@ -10,11 +10,8 @@ alter table pulso_iris.outbox_events
 
 alter table pulso_iris.outbox_events
   add constraint ck_pulso_outbox_dedupe_key
-    check (dedupe_key is null or length(btrim(dedupe_key)) between 3 and 240);
-
-create unique index if not exists uq_pulso_outbox_dedupe
-  on pulso_iris.outbox_events (tenant_id, dedupe_key)
-  where dedupe_key is not null;
+    check (dedupe_key is null or length(btrim(dedupe_key)) between 3 and 240)
+    not valid;
 
 alter table channel_runtime.outbox_events
   add column if not exists dedupe_key text;
@@ -24,11 +21,8 @@ alter table channel_runtime.outbox_events
 
 alter table channel_runtime.outbox_events
   add constraint ck_channel_outbox_dedupe_key
-    check (dedupe_key is null or length(btrim(dedupe_key)) between 3 and 240);
-
-create unique index if not exists uq_channel_outbox_dedupe
-  on channel_runtime.outbox_events (tenant_id, dedupe_key)
-  where dedupe_key is not null;
+    check (dedupe_key is null or length(btrim(dedupe_key)) between 3 and 240)
+    not valid;
 
 -- Expand the Audit inbox source contract for the new durable producers.
 alter table audit_runtime.inbox_events
@@ -42,6 +36,3 @@ alter table audit_runtime.inbox_events
     or (source_service = 'whatsapp-channel-service' and event_type = 'channel.audit.event.record.v1')
     or (source_service = 'legacy-unknown' and event_type = 'legacy.audit.event.record.v1')
   ) not valid;
-
-alter table audit_runtime.inbox_events
-  validate constraint ck_audit_inbox_source_contract;

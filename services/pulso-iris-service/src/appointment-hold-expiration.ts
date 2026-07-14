@@ -1,33 +1,39 @@
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { AuditEmitter } from "./audit-client.js";
 
-type Database = Pick<NonNullable<ServiceContext["db"]>, "query">;
+type Database = NonNullable<ServiceContext["db"]>;
+type QueryableDatabase = Pick<Database, "query">;
 
 const DEFAULT_TICK_MS = 30_000;
 
 export async function expireAppointmentHolds(db: Database, emitAudit: AuditEmitter): Promise<number> {
-  const expired = await db.query<{ id: string; tenantId: string }>(
-    `update pulso_iris.appointment_holds
-     set status = 'expired', updated_at = now()
-     where status = 'active'
-       and expires_at <= now()
-     returning id, tenant_id as "tenantId"`
-  );
+  return db.transaction(async (tx) => {
+    const expired = await tx.query<{ id: string; tenantId: string }>(
+      `update pulso_iris.appointment_holds
+       set status = 'expired', updated_at = now()
+       where status = 'active'
+         and expires_at <= now()
+       returning id, tenant_id as "tenantId"`
+    );
 
-  for (const hold of expired.rows) {
-    await emitAudit({
-      tenantId: hold.tenantId,
-      actorId: "system",
-      eventType: "appointment.hold.expired",
-      entityType: "appointment_hold",
-      entityId: hold.id
-    });
-  }
+    for (const hold of expired.rows) {
+      await emitAudit(
+        {
+          tenantId: hold.tenantId,
+          actorId: "system",
+          eventType: "appointment.hold.expired",
+          entityType: "appointment_hold",
+          entityId: hold.id
+        },
+        tx
+      );
+    }
 
-  return expired.rowCount ?? expired.rows.length;
+    return expired.rowCount ?? expired.rows.length;
+  });
 }
 
-export async function deferOverdueExternalConfirmations(db: Database): Promise<number> {
+export async function deferOverdueExternalConfirmations(db: QueryableDatabase): Promise<number> {
   const deferred = await db.query(
     `update pulso_iris.appointments
      set status = 'deferred',

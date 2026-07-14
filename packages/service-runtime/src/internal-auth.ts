@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { isRestrictedDeploymentEnvironment } from "@hyperion/config";
 
 export const INTERNAL_CALLER_HEADER = "x-hyperion-caller" as const;
 
@@ -21,19 +22,15 @@ const PRODUCTION_CREDENTIAL_PATTERN = /^[A-Za-z][A-Za-z0-9._~-]{23,}$/;
  * Reads a workload credential without ever returning an invalid production
  * secret. Development and test environments may use shorter controlled values.
  */
-export function readInternalCredential(
-  env: NodeJS.ProcessEnv,
-  variableName: string,
-  environment = env.NODE_ENV ?? "development"
-): string | undefined {
+export function readInternalCredential(env: NodeJS.ProcessEnv, variableName: string): string | undefined {
   const value = env[variableName]?.trim();
   if (!value) return undefined;
 
   if ([...value].some((character) => /\s/u.test(character) || isAsciiControl(character))) {
     throw new Error(`${variableName} must not contain whitespace or control characters`);
   }
-  if (environment === "production" && !PRODUCTION_CREDENTIAL_PATTERN.test(value)) {
-    throw new Error(`${variableName} must be at least 24 safe characters in production`);
+  if (isRestrictedDeploymentEnvironment(env) && !PRODUCTION_CREDENTIAL_PATTERN.test(value)) {
+    throw new Error(`${variableName} must be at least 24 safe characters in production/staging`);
   }
   return value;
 }

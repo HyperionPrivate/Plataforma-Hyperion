@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createOperatorAssertion, verifyOperatorAssertion } from "./operator-assertion.js";
+import {
+  OPERATOR_ASSERTION_HEADER,
+  createOperatorAssertion,
+  readOperatorAssertionKey,
+  validateOperatorAssertionContext,
+  verifyOperatorAssertion
+} from "./operator-assertion.js";
 
 describe("operator assertion", () => {
   const secret = "gateway-operator-assertion-key-01";
@@ -14,6 +20,49 @@ describe("operator assertion", () => {
       role: "admin",
       expiresAtUnix: 2_000_000_000
     });
+  });
+
+  it("binds tenant-scoped assertions to the exact forwarded context", () => {
+    const tenantId = "22222222-2222-4222-8222-222222222222";
+    const operatorId = "11111111-1111-4111-8111-111111111111";
+    const assertion = createOperatorAssertion(
+      { operatorId, role: "admin", tenantId, expiresAtUnix: 2_000_000_000 },
+      secret
+    );
+    const headers = {
+      [OPERATOR_ASSERTION_HEADER]: assertion,
+      "x-operator-id": operatorId,
+      "x-operator-role": "admin"
+    };
+
+    expect(validateOperatorAssertionContext(headers, secret, tenantId, 1_999_999_000)).toBeUndefined();
+    expect(
+      validateOperatorAssertionContext({ ...headers, "x-operator-role": "advisor" }, secret, tenantId, 1_999_999_000)
+    ).toEqual({
+      statusCode: 403,
+      message: "Operator assertion mismatch"
+    });
+    expect(
+      validateOperatorAssertionContext(headers, secret, "33333333-3333-4333-8333-333333333333", 1_999_999_000)
+    ).toEqual({ statusCode: 403, message: "Operator assertion mismatch" });
+    expect(validateOperatorAssertionContext(headers, secret, tenantId, 2_000_000_001)).toEqual({
+      statusCode: 403,
+      message: "Operator assertion mismatch"
+    });
+  });
+
+  it("requires an assertion key only in restricted deployment environments", () => {
+    expect(readOperatorAssertionKey({ HYPERION_ENVIRONMENT: "local" })).toBeUndefined();
+    expect(readOperatorAssertionKey({ HYPERION_ENVIRONMENT: "ci" })).toBeUndefined();
+    expect(() => readOperatorAssertionKey({ HYPERION_ENVIRONMENT: "staging" })).toThrow(
+      "GATEWAY_OPERATOR_ASSERTION_KEY is required"
+    );
+    expect(
+      readOperatorAssertionKey({
+        HYPERION_ENVIRONMENT: "production",
+        GATEWAY_OPERATOR_ASSERTION_KEY: secret
+      })
+    ).toBe(secret);
   });
 
   it("rejects forged roles and expired assertions", () => {

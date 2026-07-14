@@ -31,8 +31,9 @@ propiedad explícita de datos y despliegues por servicio.
 - Contratos compartidos TypeScript/Zod, validaciones de contratos y controles arquitectónicos en CI.
 - PostgreSQL compartido como etapa de transición: las migraciones validan identidades `NOLOGIN` y privilegios
   por contexto antes de que un bootstrap transaccional active los ocho roles de servicio.
-- Outbox/inbox en los handoffs durables implementados, incluido Channel -> PULSO -> SOFÍA -> Audit; las emisiones
-  best-effort restantes están inventariadas como deuda y no forman parte de esa garantía.
+- Outbox/inbox en los handoffs durables implementados: mensajes inbound, resultados de entrega Channel → PULSO,
+  procesamiento PULSO → SOFÍA y auditorías de Channel, PULSO y SOFÍA → Audit. PULSO encola la auditoría
+  dentro de la misma transacción que la mutación relevante y Audit aplica el evento con inbox idempotente.
 - LUMEN con esquema, readiness, proyecciones, inbox y outbox propios, sin SQL de runtime sobre Access o PULSO.
 - Runtimes con readiness HTTP real, cierre drenado y confianza de proxy desactivada salvo IP/CIDR explícito.
 - Llamadas HTTP internas autenticadas por vínculo productor→consumidor: cada receptor valida conjuntamente la

@@ -69,4 +69,13 @@ describe("internal workload authentication", () => {
       readInternalCredential({ NODE_ENV: "production", EDGE_TOKEN: "Valid-edge-token-safe-0001" }, "EDGE_TOKEN")
     ).toBe("Valid-edge-token-safe-0001");
   });
+
+  it("does not let NODE_ENV=test weaken a canonical production deployment", () => {
+    expect(() =>
+      readInternalCredential(
+        { NODE_ENV: "test", HYPERION_ENVIRONMENT: "production", EDGE_TOKEN: "short" },
+        "EDGE_TOKEN"
+      )
+    ).toThrow(/production\/staging/);
+  });
 });

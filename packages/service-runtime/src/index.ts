@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
-import { assertNoPlaceholderSecrets, readServiceConfig, type ServiceConfig } from "@hyperion/config";
+import {
+  assertNoPlaceholderSecrets,
+  isRestrictedDeploymentEnvironment,
+  readServiceConfig,
+  type ServiceConfig
+} from "@hyperion/config";
 import { type ServiceHealth, type ServiceName, serviceHealthSchema } from "@hyperion/contracts";
 import { checkDatabase, createDatabase, type DatabaseClient } from "@hyperion/database";
 import { createLogger, type Logger } from "@hyperion/logger";
@@ -23,17 +28,26 @@ export {
 export {
   OPERATOR_ASSERTION_HEADER,
   createOperatorAssertion,
+  readOperatorAssertionKey,
+  validateOperatorAssertionContext,
   verifyOperatorAssertion,
-  type OperatorAssertionClaims
+  type OperatorAssertionClaims,
+  type OperatorAssertionFailure,
+  type OperatorAssertionHeaders
 } from "./operator-assertion.js";
 export { assertJetStreamProductionGate } from "./jetstream-production-gate.js";
 export {
   assertNoPlaceholderSecrets,
   ENV_EXAMPLE_PLACEHOLDER_VALUES,
   findPlaceholderSecretProblems,
+  HYPERION_DEPLOYMENT_ENVIRONMENTS,
+  isCiDeploymentEnvironment,
   isPlaceholderSecret,
+  isRestrictedDeploymentEnvironment,
+  readDeploymentEnvironment,
   REQUIRED_SECRET_ENV_KEYS,
-  shouldEnforcePlaceholderRejection
+  shouldEnforcePlaceholderRejection,
+  type HyperionDeploymentEnvironment
 } from "@hyperion/config";
 
 export interface ServiceContext {
@@ -109,8 +123,8 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
   if (config.databaseUrl && expectedDatabaseRole && expectedDatabaseRole !== normativeDatabaseRole) {
     throw new Error("EXPECTED_DATABASE_ROLE does not match the service database identity");
   }
-  if (config.databaseUrl && config.environment === "production" && !expectedDatabaseRole) {
-    throw new Error("EXPECTED_DATABASE_ROLE is required for a production database connection");
+  if (config.databaseUrl && isRestrictedDeploymentEnvironment(process.env) && !expectedDatabaseRole) {
+    throw new Error("EXPECTED_DATABASE_ROLE is required for a production/staging database connection");
   }
   const logger = createLogger(options.serviceName);
   const readinessChecks = new Map<string, RuntimeReadinessCheck["check"]>();

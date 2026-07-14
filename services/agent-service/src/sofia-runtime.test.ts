@@ -191,7 +191,9 @@ describe("SOFIA runtime lifecycle", () => {
 describe("SOFIA deterministic urgency guard", () => {
   it("never accepts the legacy shared constructor credential in production", () => {
     const previousEnvironment = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
+    const previousHyperionEnvironment = process.env.HYPERION_ENVIRONMENT;
+    process.env.NODE_ENV = "test";
+    process.env.HYPERION_ENVIRONMENT = "production";
     try {
       expect(
         () =>
@@ -209,6 +211,8 @@ describe("SOFIA deterministic urgency guard", () => {
     } finally {
       if (previousEnvironment === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = previousEnvironment;
+      if (previousHyperionEnvironment === undefined) delete process.env.HYPERION_ENVIRONMENT;
+      else process.env.HYPERION_ENVIRONMENT = previousHyperionEnvironment;
     }
   });
 

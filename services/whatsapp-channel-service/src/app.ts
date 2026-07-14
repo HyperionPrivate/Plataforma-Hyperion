@@ -8,6 +8,7 @@ import {
 } from "@hyperion/durable-events";
 import {
   createInternalAuthorizationHeaders,
+  isRestrictedDeploymentEnvironment,
   readInternalCredential,
   validateInternalAuthorization,
   type InternalCredentialMap,
@@ -18,6 +19,7 @@ import QRCode from "qrcode";
 import { z } from "zod";
 import { BaileysWhatsAppWebTestProvider } from "./baileys-provider.js";
 import { PostgresChannelAuditOutbox } from "./channel-audit-outbox.js";
+import { PostgresChannelDeliveryOutbox } from "./channel-delivery-outbox.js";
 import { PostgresChannelOutbox } from "./channel-outbox.js";
 import { PostgresChannelRepository, OutboundEnqueueError } from "./channel-repository.js";
 import { WhatsAppChannelService } from "./channel-service.js";
@@ -137,6 +139,54 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       }
     }
 
+    if (durableOutbox.transport === "jetstream" || channelToPulsoToken) {
+      const deliveryWorkerId = `channel-delivery-outbox-${randomUUID()}`;
+      const deliveryOutbox = new PostgresChannelDeliveryOutbox(
+        context.db,
+        deliveryWorkerId,
+        process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088"
+      );
+      if (durableOutbox.enabled) {
+        const deliveryDispatcher =
+          durableOutbox.transport === "jetstream"
+            ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+                workerId: deliveryWorkerId,
+                servers: durableOutbox.natsUrl,
+                ...durableOutbox.authentication,
+                connectionName: deliveryWorkerId,
+                subjectPrefix: "hyperion.events",
+                expectedStream: "HYPERION_EVENTS",
+                claim: (limit) => deliveryOutbox.claim(limit),
+                complete: (eventId) => deliveryOutbox.complete(eventId),
+                fail: (eventId, errorCode) => deliveryOutbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                connectTimeoutMs: 5_000,
+                publishTimeoutMs: 5_000
+              })
+            : new HttpOutboxDispatcher<Record<string, unknown>>({
+                workerId: deliveryWorkerId,
+                internalToken: channelToPulsoToken!,
+                fetch: createWorkloadFetch("whatsapp-channel-service", channelToPulsoToken!),
+                claim: (limit) => deliveryOutbox.claim(limit),
+                complete: (eventId) => deliveryOutbox.complete(eventId),
+                fail: (eventId, errorCode) => deliveryOutbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                timeoutMs: 5_000
+              });
+        app.addHook("onClose", async () => deliveryDispatcher.stop());
+        if (deliveryDispatcher instanceof JetStreamOutboxDispatcher) {
+          await deliveryDispatcher.initialize();
+          context.registerReadinessCheck?.({
+            name: "jetstream_channel_delivery_publisher",
+            check: () => deliveryDispatcher.checkReadiness()
+          });
+        }
+        deliveryDispatcher.start();
+      }
+    }
+
     if (durableOutbox.transport === "jetstream" || channelToAuditToken) {
       const auditWorkerId = `channel-audit-outbox-${randomUUID()}`;
       const auditOutbox = new PostgresChannelAuditOutbox(
@@ -223,7 +273,7 @@ export function readDurableOutboxConfiguration(env: NodeJS.ProcessEnv): DurableO
         required: true,
         minimumSecretLength: 24,
         serverConfigurationSafe: true,
-        allowToken: env.NODE_ENV !== "production"
+        allowToken: !isRestrictedDeploymentEnvironment(env)
       }
     )!
   };

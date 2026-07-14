@@ -149,16 +149,87 @@ $$;`
     expect(migration).not.toContain("create index if not exists ix_audit_inbox_source_received");
   });
 
-  it("adds durable PULSO/Channel audit outbox dedupe and expands the inbox contract", async () => {
-    const migrationPath = fileURLToPath(new URL("../sql/041-pulso-channel-audit-outbox.sql", import.meta.url));
-    const migration = await readFile(migrationPath, "utf8");
+  it("phases durable PULSO/Channel audit outbox dedupe and the Audit inbox contract", async () => {
+    const expandPath = fileURLToPath(new URL("../sql/041-pulso-channel-audit-outbox.sql", import.meta.url));
+    const indexPath = fileURLToPath(new URL("../sql/042-pulso-channel-audit-outbox-indexes.sql", import.meta.url));
+    const contractPath = fileURLToPath(new URL("../sql/043-pulso-channel-audit-outbox-contract.sql", import.meta.url));
+    const [expand, indexes, contract] = await Promise.all([
+      readFile(expandPath, "utf8"),
+      readFile(indexPath, "utf8"),
+      readFile(contractPath, "utf8")
+    ]);
 
-    expect(migration).toContain("uq_pulso_outbox_dedupe");
-    expect(migration).toContain("uq_channel_outbox_dedupe");
-    expect(migration).toContain("pulso.audit.event.record.v1");
-    expect(migration).toContain("channel.audit.event.record.v1");
-    expect(migration).toContain("pulso-iris-service");
-    expect(migration).toContain("whatsapp-channel-service");
+    expect(expand).toContain("pulso.audit.event.record.v1");
+    expect(expand).toContain("channel.audit.event.record.v1");
+    expect(expand).toContain("pulso-iris-service");
+    expect(expand).toContain("whatsapp-channel-service");
+    expect(expand.match(/\)\s+not valid;/gi)).toHaveLength(3);
+    expect(expand).not.toMatch(/create\s+(unique\s+)?index/i);
+
+    expect(indexes.trimStart()).toMatch(/^-- hyperion:no-transaction/);
+    expect(indexes).toContain("drop index concurrently if exists pulso_iris.uq_pulso_outbox_dedupe");
+    expect(indexes).toContain("create unique index concurrently uq_pulso_outbox_dedupe");
+    expect(indexes).toContain("drop index concurrently if exists channel_runtime.uq_channel_outbox_dedupe");
+    expect(indexes).toContain("create unique index concurrently uq_channel_outbox_dedupe");
+    expect(indexes).toContain("index_info.indisvalid");
+    expect(indexes).toContain("pg_catalog.pg_get_indexdef(index_info.indexrelid)");
+    expect(readNonTransactionalStatements(indexes)).toHaveLength(5);
+
+    expect(contract).toContain("validate constraint ck_pulso_outbox_dedupe_key");
+    expect(contract).toContain("validate constraint ck_channel_outbox_dedupe_key");
+    expect(contract).toContain("validate constraint ck_audit_inbox_source_contract");
+  });
+
+  it("phases the durable Channel delivery inbox position contract after 043", async () => {
+    const expandPath = fileURLToPath(new URL("../sql/044-pulso-channel-delivery-inbox.sql", import.meta.url));
+    const indexPath = fileURLToPath(new URL("../sql/045-pulso-channel-delivery-inbox-index.sql", import.meta.url));
+    const contractPath = fileURLToPath(
+      new URL("../sql/046-pulso-channel-delivery-inbox-contract.sql", import.meta.url)
+    );
+    const [expand, indexes, contract] = await Promise.all([
+      readFile(expandPath, "utf8"),
+      readFile(indexPath, "utf8"),
+      readFile(contractPath, "utf8")
+    ]);
+
+    expect(migrationRunsInTransaction(expand)).toBe(true);
+    expect(expand).toContain("ck_pulso_channel_delivery_inbox_stream_position");
+    expect(expand).toContain("channel.delivery.updated.v1");
+    expect(expand).toContain("stream_id is not null");
+    expect(expand).toContain("stream_sequence is not null and stream_sequence > 0");
+    expect(expand.match(/\)\s+not valid;/gi)).toHaveLength(1);
+    expect(expand).not.toMatch(/create\s+(unique\s+)?index/i);
+
+    expect(migrationRunsInTransaction(indexes)).toBe(false);
+    expect(indexes.trimStart()).toMatch(/^-- hyperion:no-transaction/);
+    expect(indexes).toContain(
+      "drop index concurrently if exists pulso_iris.uq_pulso_channel_delivery_inbox_stream_sequence"
+    );
+    expect(indexes).toContain("create unique index concurrently uq_pulso_channel_delivery_inbox_stream_sequence");
+    expect(indexes).toContain("on pulso_iris.inbox_events(tenant_id, source_service, stream_id, stream_sequence)");
+    expect(indexes).toContain("event_type = 'channel.delivery.updated.v1'");
+    expect(indexes).toContain("index_info.indisvalid");
+    expect(indexes).toContain("index_info.indisready");
+    expect(indexes).toContain("pg_catalog.pg_get_indexdef(index_info.indexrelid)");
+    expect(readNonTransactionalStatements(indexes)).toHaveLength(3);
+
+    expect(migrationRunsInTransaction(contract)).toBe(true);
+    expect(contract).toContain("validate constraint ck_pulso_channel_delivery_inbox_stream_position");
+    expect(contract).toContain("constraint_info.convalidated");
+    expect(contract).toContain("udt_name = 'uuid'");
+    expect(contract).toContain("udt_name = 'int8'");
+
+    const sqlDir = fileURLToPath(new URL("../sql", import.meta.url));
+    const files = await listMigrationFiles(sqlDir);
+    const auditContract = files.indexOf("043-pulso-channel-audit-outbox-contract.sql");
+    const deliveryExpand = files.indexOf("044-pulso-channel-delivery-inbox.sql");
+    const deliveryIndex = files.indexOf("045-pulso-channel-delivery-inbox-index.sql");
+    const deliveryContract = files.indexOf("046-pulso-channel-delivery-inbox-contract.sql");
+
+    expect(auditContract).toBeGreaterThanOrEqual(0);
+    expect(deliveryExpand).toBe(auditContract + 1);
+    expect(deliveryIndex).toBe(deliveryExpand + 1);
+    expect(deliveryContract).toBe(deliveryIndex + 1);
   });
 
   it("contracts and indexes Audit provenance in bounded follow-up phases", async () => {

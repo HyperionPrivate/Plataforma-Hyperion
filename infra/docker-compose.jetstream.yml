@@ -5,10 +5,17 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
+        environment_lower="$$(printf '%s' "$${HYPERION_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
         set -- "$${NATS_TOPOLOGY_PASSWORD}" "$${NATS_CHANNEL_PASSWORD}" "$${NATS_PULSO_PASSWORD}" "$${NATS_SOFIA_PASSWORD}" "$${NATS_AUDIT_PASSWORD}" "$${NATS_LUMEN_PASSWORD}"
         while [ "$${#}" -gt 0 ]; do
           current="$${1}"
           shift
+          current_lower="$$(printf '%s' "$${current}" | tr '[:upper:]' '[:lower:]')"
+          if { [ "$${environment_lower}" = production ] || [ "$${environment_lower}" = staging ]; } \
+            && [ "$${current_lower#replace-}" != "$${current_lower}" ]; then
+            echo "NATS example passwords are refused in production/staging" >&2
+            exit 1
+          fi
           if [ "$${#current}" -lt 24 ]; then
             echo "NATS service passwords must contain at least 24 characters" >&2
             exit 1
@@ -35,6 +42,7 @@ services:
         done
         exec nats-server -c /etc/nats/nats-server.conf
     environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
       NATS_TOPOLOGY_PASSWORD: ${NATS_TOPOLOGY_PASSWORD:?NATS_TOPOLOGY_PASSWORD is required for JetStream}
       NATS_CHANNEL_PASSWORD: ${NATS_CHANNEL_PASSWORD:?NATS_CHANNEL_PASSWORD is required for JetStream}
       NATS_PULSO_PASSWORD: ${NATS_PULSO_PASSWORD:?NATS_PULSO_PASSWORD is required for JetStream}
@@ -62,6 +70,8 @@ services:
     restart: "no"
     command: ["node", "packages/durable-events/dist/jetstream-bootstrap.js"]
     environment:
+      NODE_ENV: production
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
       NATS_URL: nats://nats:4222
       NATS_USERNAME: topology
       NATS_PASSWORD: ${NATS_TOPOLOGY_PASSWORD:?NATS_TOPOLOGY_PASSWORD is required for JetStream}

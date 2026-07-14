@@ -158,6 +158,53 @@ describe("identity-service routes", () => {
     expect(response.statusCode).toBe(403);
   });
 
+  it("rejects a tenant-bound assertion on the tenantless operator-management context", async () => {
+    const operatorId = "22222222-2222-4222-8222-222222222222";
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/identity/operators",
+      headers: {
+        ...gatewayHeaders,
+        "x-operator-id": operatorId,
+        "x-operator-role": "admin",
+        [OPERATOR_ASSERTION_HEADER]: createOperatorAssertion(
+          {
+            operatorId,
+            role: "admin",
+            tenantId: "33333333-3333-4333-8333-333333333333",
+            expiresAtUnix: Math.floor(Date.now() / 1000) + 60
+          },
+          ASSERTION_KEY
+        )
+      }
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("rejects ambiguous repeated operator headers", async () => {
+    const operatorId = "22222222-2222-4222-8222-222222222222";
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/identity/operators",
+      headers: {
+        ...gatewayHeaders,
+        "x-operator-id": [operatorId, operatorId],
+        "x-operator-role": ["admin", "admin"],
+        [OPERATOR_ASSERTION_HEADER]: createOperatorAssertion(
+          {
+            operatorId,
+            role: "admin",
+            expiresAtUnix: Math.floor(Date.now() / 1000) + 60
+          },
+          ASSERTION_KEY
+        )
+      }
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
   it("requires a database for admin operator creation when assertion is valid", async () => {
     const operatorId = "22222222-2222-4222-8222-222222222222";
     const response = await app.inject({

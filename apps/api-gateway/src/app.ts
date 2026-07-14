@@ -20,6 +20,7 @@ import {
   createOperatorAssertion,
   OPERATOR_ASSERTION_HEADER,
   readInternalCredential,
+  readOperatorAssertionKey,
   type RouteRegistrar
 } from "@hyperion/service-runtime";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -66,6 +67,7 @@ export function createGatewayRoutes(overrides?: {
   };
 }): RouteRegistrar {
   return async (app) => {
+    readOperatorAssertionKey(process.env);
     const urls = readServiceUrls();
     const resolveSession = overrides?.resolveSession ?? createFreshSessionResolver(urls.identity);
     const gatewayCredentials = {
@@ -627,12 +629,14 @@ async function proxyJson(
     if (request.session) {
       headers["x-operator-id"] = request.session.operator.id;
       headers["x-operator-role"] = request.session.operator.role;
-      const assertionKey = readInternalCredential(process.env, "GATEWAY_OPERATOR_ASSERTION_KEY");
+      const assertionKey = readOperatorAssertionKey(process.env);
       if (assertionKey) {
+        const tenantId = readCanonicalTenantId(request.canonicalPath);
         headers[OPERATOR_ASSERTION_HEADER] = createOperatorAssertion(
           {
             operatorId: request.session.operator.id,
             role: request.session.operator.role,
+            ...(tenantId ? { tenantId } : {}),
             expiresAtUnix: Math.floor(Date.now() / 1000) + 60
           },
           assertionKey

@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "@hyperion/database";
-import { createInternalAuthorizationHeaders } from "@hyperion/service-runtime";
+import { createInternalAuthorizationHeaders, isCiDeploymentEnvironment } from "@hyperion/service-runtime";
 import { z } from "zod";
 import type { LlmToolDefinition } from "./llm-provider.js";
 
@@ -682,7 +682,8 @@ export class SofiaToolClient {
   private async callOwner(path: string, body: unknown): Promise<unknown> {
     this.options.signal?.throwIfAborted();
     const token =
-      this.options.pulsoToken ?? (process.env.NODE_ENV === "test" ? this.options.internalServiceToken : undefined);
+      this.options.pulsoToken ??
+      (isCiDeploymentEnvironment(process.env) ? this.options.internalServiceToken : undefined);
     if (!token) throw new Error("SOFIA_TO_PULSO_TOKEN is required for SOFIA tools");
     const timeoutSignal = AbortSignal.timeout(5_000);
     const response = await (this.options.fetchImpl ?? fetch)(`${this.options.pulsoIrisUrl}${path}`, {
@@ -1026,7 +1027,8 @@ export class SofiaToolClient {
   private async call(tenantId: string, toolName: string, body: unknown): Promise<unknown> {
     this.options.signal?.throwIfAborted();
     const token =
-      this.options.pulsoToken ?? (process.env.NODE_ENV === "test" ? this.options.internalServiceToken : undefined);
+      this.options.pulsoToken ??
+      (isCiDeploymentEnvironment(process.env) ? this.options.internalServiceToken : undefined);
     if (!token) throw new Error("SOFIA_TO_PULSO_TOKEN is required for SOFIA tools");
     const timeoutSignal = AbortSignal.timeout(5_000);
     const response = await (this.options.fetchImpl ?? fetch)(

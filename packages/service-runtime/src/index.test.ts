@@ -21,6 +21,8 @@ afterEach(async () => {
   delete process.env.SHUTDOWN_TIMEOUT_MS;
   delete process.env.HYPERION_ALLOW_EXAMPLE_SECRETS;
   delete process.env.HYPERION_ENVIRONMENT;
+  delete process.env.CI;
+  delete process.env.POSTGRES_PASSWORD;
 });
 
 describe("service runtime", () => {
@@ -213,8 +215,8 @@ describe("service runtime", () => {
   });
 
   it("requires an explicit database identity in production", async () => {
-    process.env.NODE_ENV = "production";
-    process.env.HYPERION_ALLOW_EXAMPLE_SECRETS = "true";
+    process.env.NODE_ENV = "test";
+    process.env.HYPERION_ENVIRONMENT = "production";
     process.env.DATABASE_URL = "postgres://runtime-test";
     let databaseCreated = false;
     let routesRegistered = false;
@@ -252,9 +254,40 @@ describe("service runtime", () => {
     ).rejects.toThrow(/placeholder secrets/);
   });
 
+  it("rejects malformed deployment declarations before database or route side effects", async () => {
+    for (const testCase of [
+      {
+        environment: { NODE_ENV: "development", HYPERION_ENVIRONMENT: "   " },
+        expectedError: /HYPERION_ENVIRONMENT must be one of/
+      },
+      {
+        environment: { NODE_ENV: "prodution" },
+        expectedError: /NODE_ENV must be one of/
+      }
+    ]) {
+      delete process.env.NODE_ENV;
+      delete process.env.HYPERION_ENVIRONMENT;
+      Object.assign(process.env, testCase.environment);
+      process.env.DATABASE_URL = "postgres://runtime-test";
+      const createDatabase = vi.fn(() => createFakeDatabase([]));
+      const registerRoutes = vi.fn();
+
+      await expect(
+        createService({
+          serviceName: "tenant-service",
+          databaseRequired: true,
+          createDatabase,
+          registerRoutes
+        })
+      ).rejects.toThrow(testCase.expectedError);
+
+      expect(createDatabase).not.toHaveBeenCalled();
+      expect(registerRoutes).not.toHaveBeenCalled();
+    }
+  });
+
   it("binds the configured database identity to the service context", async () => {
     process.env.NODE_ENV = "production";
-    process.env.HYPERION_ALLOW_EXAMPLE_SECRETS = "true";
     process.env.DATABASE_URL = "postgres://runtime-test";
     process.env.EXPECTED_DATABASE_ROLE = "hyperion_audit";
     let databaseCreated = false;
@@ -482,7 +515,7 @@ function createFakeDatabase(
 
       return { rows: [] } as never;
     },
-    transaction: async (work) => work(database),
+    transaction: async (work) => work(database as never),
     close: vi.fn(async () => undefined)
   };
   return database;

@@ -1,3 +1,4 @@
+import { createDatabase } from "@hyperion/database";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -558,9 +559,10 @@ describeIntegration("pulso-iris tenant isolation", () => {
       [tenantA]
     );
 
-    const completed = await runSimulatorTick(client as never, async (event) => {
+    const simulatorDb = createDatabase(TEST_DATABASE_URL ?? "");
+    const completed = await runSimulatorTick(simulatorDb, async (event) => {
       events.push({ eventType: event.eventType, actorId: event.actorId });
-    });
+    }).finally(() => simulatorDb.close());
     expect(completed).toBeGreaterThanOrEqual(1);
 
     const appointment = await client.query<{ status: string; metadata: Record<string, unknown> }>(

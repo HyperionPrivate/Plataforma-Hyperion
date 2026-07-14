@@ -40,10 +40,90 @@ describe("placeholder secret rejection", () => {
     const environment: NodeJS.ProcessEnv = {
       NODE_ENV: "development",
       HYPERION_ENVIRONMENT: "staging",
+      HYPERION_ALLOW_EXAMPLE_SECRETS: "true",
+      CI: "true",
       POSTGRES_PASSWORD: "replace-with-real-secret"
     };
 
     expect(() => assertNoPlaceholderSecrets(environment)).toThrow(/POSTGRES_PASSWORD/);
+  });
+
+  it("does not let CI or the legacy example-secret flag downgrade production", () => {
+    for (const environment of [
+      {
+        NODE_ENV: "production",
+        CI: "true",
+        POSTGRES_PASSWORD: "replace-with-real-secret"
+      },
+      {
+        NODE_ENV: "production",
+        HYPERION_ALLOW_EXAMPLE_SECRETS: "true",
+        POSTGRES_PASSWORD: "replace-with-real-secret"
+      },
+      {
+        NODE_ENV: "production",
+        CI: "true",
+        HYPERION_ALLOW_EXAMPLE_SECRETS: "true",
+        POSTGRES_PASSWORD: "replace-with-real-secret"
+      }
+    ] satisfies NodeJS.ProcessEnv[]) {
+      expect(shouldEnforcePlaceholderRejection(environment)).toBe(true);
+      expect(() => assertNoPlaceholderSecrets(environment)).toThrow(/POSTGRES_PASSWORD/);
+    }
+  });
+
+  it("rejects empty or invalid deployment declarations instead of guessing", () => {
+    for (const hyperionEnvironment of ["", "   ", "unexpected"]) {
+      expect(() =>
+        shouldEnforcePlaceholderRejection({
+          NODE_ENV: "development",
+          HYPERION_ENVIRONMENT: hyperionEnvironment,
+          POSTGRES_PASSWORD: "replace-with-real-secret"
+        })
+      ).toThrow(/HYPERION_ENVIRONMENT must be one of/);
+    }
+
+    for (const nodeEnvironment of ["", "   ", "prodution"]) {
+      expect(() =>
+        shouldEnforcePlaceholderRejection({
+          NODE_ENV: nodeEnvironment,
+          POSTGRES_PASSWORD: "replace-with-real-secret"
+        })
+      ).toThrow(/NODE_ENV must be one of/);
+    }
+  });
+
+  it("allows placeholders only in an explicitly declared local or CI rehearsal", () => {
+    for (const hyperionEnvironment of ["local", "ci"]) {
+      const environment: NodeJS.ProcessEnv = {
+        NODE_ENV: "production",
+        HYPERION_ENVIRONMENT: hyperionEnvironment,
+        POSTGRES_PASSWORD: "replace-with-real-secret"
+      };
+
+      expect(shouldEnforcePlaceholderRejection(environment)).toBe(false);
+      expect(() => assertNoPlaceholderSecrets(environment)).not.toThrow();
+    }
+  });
+
+  it("checks the credential name used by the JetStream topology workload", () => {
+    const environment: NodeJS.ProcessEnv = {
+      HYPERION_ENVIRONMENT: "production",
+      NATS_PASSWORD: "replace-topology-nats-secret-01"
+    };
+
+    expect(findPlaceholderSecretProblems(environment)).toEqual(["NATS_PASSWORD"]);
+    expect(() => assertNoPlaceholderSecrets(environment)).toThrow(/NATS_PASSWORD/);
+  });
+
+  it("checks the legacy NATS token credential", () => {
+    const environment: NodeJS.ProcessEnv = {
+      HYPERION_ENVIRONMENT: "production",
+      NATS_AUTH_TOKEN: "replace-with-real-secret"
+    };
+
+    expect(findPlaceholderSecretProblems(environment)).toEqual(["NATS_AUTH_TOKEN"]);
+    expect(() => assertNoPlaceholderSecrets(environment)).toThrow(/NATS_AUTH_TOKEN/);
   });
 
   it("accepts replace-* secrets in development", () => {

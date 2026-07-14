@@ -43,6 +43,10 @@ const DURABLE_EVENT_SERVICES = [
 
 const NODE_RUNTIME_SERVICES = [...Object.keys(DATABASE_IDENTITIES), "api-gateway"];
 
+export const DEPLOYMENT_ENVIRONMENT_BASE_SERVICES = ["migrations", "db-role-bootstrap", ...NODE_RUNTIME_SERVICES];
+
+export const DEPLOYMENT_ENVIRONMENT_OVERLAY_SERVICES = ["nats", "jetstream-topology-bootstrap"];
+
 const HTTP_EDGE_IDENTITIES = {
   GATEWAY_TO_IDENTITY_TOKEN: ["api-gateway", "identity-service"],
   GATEWAY_TO_INTEGRATION_TOKEN: ["api-gateway", "integration-service"],
@@ -52,7 +56,13 @@ const HTTP_EDGE_IDENTITIES = {
   GATEWAY_TO_AUDIT_TOKEN: ["api-gateway", "audit-service"],
   GATEWAY_TO_KNOWLEDGE_TOKEN: ["api-gateway", "knowledge-service"],
   GATEWAY_TO_SOFIA_TOKEN: ["api-gateway", "agent-service"],
-  GATEWAY_OPERATOR_ASSERTION_KEY: ["api-gateway", "identity-service"],
+  GATEWAY_OPERATOR_ASSERTION_KEY: [
+    "api-gateway",
+    "identity-service",
+    "integration-service",
+    "pulso-iris-service",
+    "lumen-service"
+  ],
   INTEGRATION_TO_CHANNEL_TOKEN: ["integration-service", "whatsapp-channel-service"],
   INTEGRATION_TO_SOFIA_TOKEN: ["integration-service", "agent-service"],
   CHANNEL_TO_PULSO_TOKEN: ["whatsapp-channel-service", "pulso-iris-service"],
@@ -99,6 +109,7 @@ export function validateComposeIdentities(base, overlay) {
   problems.push(...gatewayDependencyProblems(base));
   problems.push(...roleBootstrapDependencyProblems(base));
   problems.push(...eventTransportProblems(base, overlay));
+  problems.push(...deploymentEnvironmentProblems(base, overlay));
   problems.push(...httpWorkloadIdentityProblems(base));
   problems.push(...shutdownLifecycleProblems(base));
 
@@ -199,6 +210,44 @@ export function eventTransportProblems(base, overlay) {
     if (overlay.services?.[serviceName]?.environment?.DURABLE_EVENT_TRANSPORT !== "jetstream") {
       problems.push(`${serviceName} must use JetStream when the overlay is active`);
     }
+  }
+  return problems;
+}
+
+export function deploymentEnvironmentProblems(
+  base,
+  overlay,
+  baseServiceNames = DEPLOYMENT_ENVIRONMENT_BASE_SERVICES,
+  overlayServiceNames = DEPLOYMENT_ENVIRONMENT_OVERLAY_SERVICES
+) {
+  const problems = [];
+  const observed = new Set();
+  const allowed = new Set(["local", "ci", "staging", "production"]);
+
+  for (const [configuration, serviceNames] of [
+    [base, baseServiceNames],
+    [overlay, overlayServiceNames]
+  ]) {
+    for (const serviceName of serviceNames) {
+      const environment = configuration.services?.[serviceName]?.environment ?? {};
+      const deploymentEnvironment = environment.HYPERION_ENVIRONMENT;
+      if (typeof deploymentEnvironment !== "string" || !allowed.has(deploymentEnvironment.toLowerCase())) {
+        problems.push(`${serviceName} must declare HYPERION_ENVIRONMENT as local, ci, staging or production`);
+      } else {
+        observed.add(deploymentEnvironment.toLowerCase());
+      }
+
+      if (Object.prototype.hasOwnProperty.call(environment, "HYPERION_ALLOW_EXAMPLE_SECRETS")) {
+        problems.push(`${serviceName} must not receive the legacy HYPERION_ALLOW_EXAMPLE_SECRETS bypass`);
+      }
+      if (Object.prototype.hasOwnProperty.call(environment, "CI")) {
+        problems.push(`${serviceName} must not use ambient CI as a deployment security decision`);
+      }
+    }
+  }
+
+  if (observed.size > 1) {
+    problems.push("all environment-aware Compose workloads must receive the same HYPERION_ENVIRONMENT");
   }
   return problems;
 }

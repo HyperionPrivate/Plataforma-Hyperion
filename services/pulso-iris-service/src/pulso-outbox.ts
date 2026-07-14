@@ -47,13 +47,15 @@ export class PostgresPulsoOutbox {
          set status = 'dead_letter', locked_at = null, locked_by = null,
              last_error_code = coalesce(last_error_code, 'lease_attempts_exhausted'), updated_at = now()
          where status = 'processing' and locked_at < now() - interval '2 minutes'
-           and ($3::uuid is null or tenant_id = $3::uuid)
-           and attempt_count >= max_attempts
+            and ($3::uuid is null or tenant_id = $3::uuid)
+            and event_type in ($4, $5)
+            and attempt_count >= max_attempts
        ), candidates as (
          select candidate.id from pulso_iris.outbox_events candidate
          where (candidate.status in ('queued', 'retry_scheduled')
                 or (candidate.status = 'processing' and candidate.locked_at < now() - interval '2 minutes'))
-           and ($3::uuid is null or candidate.tenant_id = $3::uuid)
+            and ($3::uuid is null or candidate.tenant_id = $3::uuid)
+            and candidate.event_type in ($4, $5)
            and candidate.stream_id is not null
            and candidate.stream_sequence is not null
            and candidate.source_stream_id is not null
@@ -79,7 +81,13 @@ export class PostgresPulsoOutbox {
                  event.stream_id as "streamId", event.stream_sequence as "streamSequence",
                  event.source_stream_id as "sourceStreamId",
                  event.source_stream_sequence as "sourceStreamSequence"`,
-      [this.workerId, Math.max(1, Math.min(20, Math.trunc(limit))), scopedTenantId]
+      [
+        this.workerId,
+        Math.max(1, Math.min(20, Math.trunc(limit))),
+        scopedTenantId,
+        PULSO_MESSAGE_EVENT_V1_TYPE,
+        PULSO_MESSAGE_EVENT_V2_TYPE
+      ]
     );
     return result.rows.map((row) => {
       if (row.eventType !== PULSO_MESSAGE_EVENT_V1_TYPE && row.eventType !== PULSO_MESSAGE_EVENT_V2_TYPE) {

@@ -12,6 +12,8 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      HYPERION_ENVIRONMENT: ci
     services:
       postgres:
         image: postgres:16-alpine
@@ -111,6 +113,11 @@ jobs:
         run: NATS_USERNAME=topology NATS_PASSWORD="$NATS_TOPOLOGY_PASSWORD" node packages/durable-events/dist/jetstream-bootstrap.js
         env:
           NATS_URL: nats://127.0.0.1:4222
+      - name: Test autonomous Channel to Audit flow
+        run: pnpm autonomy:e2e
+        env:
+          TEST_DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_test
+          NATS_URL: nats://127.0.0.1:4222
       - name: Verify NATS service ACL denials
         shell: bash
         run: >-
@@ -122,11 +129,6 @@ jobs:
           TEST_NATS_LUMEN_PASSWORD="$NATS_LUMEN_PASSWORD"
           TEST_NATS_TOPOLOGY_PASSWORD="$NATS_TOPOLOGY_PASSWORD"
           pnpm --filter @hyperion/durable-events exec vitest run src/nats-acl.integration.test.ts
-      - name: Test autonomous Channel to Audit flow
-        run: pnpm autonomy:e2e
-        env:
-          TEST_DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_test
-          NATS_URL: nats://127.0.0.1:4222
       - name: Stop NATS JetStream test server
         if: always()
         shell: bash
@@ -139,6 +141,8 @@ jobs:
   docker-build-and-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    env:
+      HYPERION_ENVIRONMENT: ci
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -256,6 +260,7 @@ jobs:
       POSTGRES_USER: hyperion
       POSTGRES_PASSWORD: compatibility-postgres-password-0001
       POSTGRES_DB: hyperion
+      HYPERION_ENVIRONMENT: ci
       INTERNAL_SERVICE_TOKEN: compatibility-internal-token-0002
       WHATSAPP_PHONE_HASH_KEY: compatibility-phone-hash-key-0000003
       HYPERION_COMPAT_POSTGRES_VOLUME: hyperion-compat-postgres-${{ github.run_id }}-${{ github.run_attempt }}
@@ -462,6 +467,48 @@ jobs:
           docker compose --env-file .env.example -p hyperion-compat-current
           -f infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml
           down --remove-orphans
+      - name: Exercise Channel delivery drain states against PostgreSQL
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.n-minus-one-roles-ci.yml)
+          "${n1_compose[@]}" config --quiet
+          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
+          bash scripts/ci/verify-n-minus-one-delivery-drain-states.sh \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+      - name: Reject N-1 SQL-window privilege drift against PostgreSQL
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.n-minus-one-roles-ci.yml)
+          "${n1_compose[@]}" config --quiet
+          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
+          bash scripts/ci/verify-n-minus-one-sql-window-drift.sh \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+      - name: Verify Channel delivery is drained before N-1 rollback
+        id: n1_delivery_drain
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.n-minus-one-roles-ci.yml)
+          "${n1_compose[@]}" config --quiet
+          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
+          delivery_snapshot=$(bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh \
+            verify-delivery-drained .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml)
+          [[ $delivery_snapshot =~ ^[0-9]+:[0-9a-f]{32}$ ]]
+          echo "snapshot=$delivery_snapshot" >> "$GITHUB_OUTPUT"
       - name: Open bounded LUMEN compatibility for the final N-1 rollback
         id: open_lumen_n1_compatibility
         if: ${{ steps.n_minus_one_schema.outputs.lumen_contract == 'legacy' }}
@@ -520,17 +567,13 @@ jobs:
               .env.example hyperion-compat-n1 \
               .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
               infra/docker-compose.n-minus-one-roles-ci.yml
-            sofia_traffic_status=0
-            bash scripts/ci/verify-n-minus-one-sofia-traffic.sh .env.example hyperion-compat-n1 \
-              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
-              infra/docker-compose.n-minus-one-roles-ci.yml || sofia_traffic_status=$?
-            bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh close \
+            bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh verify-open \
               .env.example hyperion-compat-n1 \
               .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
-              infra/docker-compose.n-minus-one-roles-ci.yml || true
-            if [[ $sofia_traffic_status -ne 0 ]]; then
-              exit "$sofia_traffic_status"
-            fi
+              infra/docker-compose.n-minus-one-roles-ci.yml
+            bash scripts/ci/verify-n-minus-one-sofia-traffic.sh .env.example hyperion-compat-n1 \
+              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+              infra/docker-compose.n-minus-one-roles-ci.yml
           fi
           system_identifier=$(docker compose --env-file .env.example -p hyperion-compat-n1 \
             -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
@@ -561,6 +604,64 @@ jobs:
             .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml
+      - name: Close N-1 SQL window and verify delivery immutability
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.n-minus-one-roles-ci.yml)
+          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
+
+          # Quiesce both the delivery producer/dispatcher and the only runtime that
+          # uses the temporary SQL window before taking final evidence or revoking it.
+          channel_stop_status=0
+          "${n1_compose[@]}" stop --timeout 75 whatsapp-channel-service || channel_stop_status=$?
+          pulso_stop_status=0
+          "${n1_compose[@]}" stop --timeout 75 pulso-iris-service || pulso_stop_status=$?
+
+          delivery_probe_status=0
+          delivery_snapshot_after=$(bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh \
+            verify-delivery-drained .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml) || delivery_probe_status=$?
+          expected_delivery_snapshot='${{ steps.n1_delivery_drain.outputs.snapshot }}'
+          if [[ $delivery_probe_status -eq 0 && \
+                ( -z $expected_delivery_snapshot || $delivery_snapshot_after != "$expected_delivery_snapshot" ) ]]; then
+            echo "N-1 changed the current Channel delivery-event snapshot" >&2
+            delivery_probe_status=1
+          fi
+
+          sql_window_close_status=0
+          bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh close \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml || sql_window_close_status=$?
+          sql_window_closed_probe_status=0
+          bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh verify-closed \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml || sql_window_closed_probe_status=$?
+
+          printf 'N-1 closure statuses: Channel-stop=%s PULSO-stop=%s delivery=%s SQL-close=%s SQL-closed-probe=%s\n' \
+            "$channel_stop_status" "$pulso_stop_status" "$delivery_probe_status" \
+            "$sql_window_close_status" "$sql_window_closed_probe_status"
+          if [[ $channel_stop_status -ne 0 ]]; then
+            exit "$channel_stop_status"
+          fi
+          if [[ $pulso_stop_status -ne 0 ]]; then
+            exit "$pulso_stop_status"
+          fi
+          if [[ $delivery_probe_status -ne 0 ]]; then
+            exit "$delivery_probe_status"
+          fi
+          if [[ $sql_window_close_status -ne 0 ]]; then
+            exit "$sql_window_close_status"
+          fi
+          if [[ $sql_window_closed_probe_status -ne 0 ]]; then
+            exit "$sql_window_closed_probe_status"
+          fi
       - name: Exercise the declared LUMEN N-1 cleanup contract
         id: verify_lumen_n1_binary
         if: ${{ success() && (steps.n_minus_one_schema.outputs.lumen_contract == 'current' || steps.open_lumen_n1_compatibility.outcome == 'success') }}

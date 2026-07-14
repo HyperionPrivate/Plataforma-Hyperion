@@ -36,47 +36,29 @@ describe("audit-client", () => {
     expect(readOperatorId({})).toBeUndefined();
   });
 
-  it("enqueues durable audit events into the PULSO outbox", async () => {
+  it("rejects an unscoped executor instead of falling back to an autocommit pool", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
     const emit = createAuditClient({
-      db: { query } as never,
       logger: { warn: vi.fn() }
     });
 
-    await emit({
-      tenantId: "00000000-0000-4000-8000-000000000001",
-      actorId: "op-1",
-      eventType: "appointment.registered",
-      entityType: "appointment",
-      entityId: "00000000-0000-4000-8000-000000000002"
-    });
-
-    expect(query).toHaveBeenCalledOnce();
-    const [sql, params] = query.mock.calls[0]!;
-    expect(sql).toContain("insert into pulso_iris.outbox_events");
-    expect(sql).toContain("on conflict (tenant_id, dedupe_key)");
-    expect(params[0]).toBe("00000000-0000-4000-8000-000000000001");
-    expect(params[1]).toBe(PULSO_AUDIT_EVENT_TYPE);
-    expect(params[2]).toBe("appointment");
-    expect(params[3]).toBe("00000000-0000-4000-8000-000000000002");
-    expect(JSON.parse(String(params[5])).metadata.source).toBe("pulso-iris-service");
-  });
-
-  it("skips emission when the database client is missing", async () => {
-    const warn = vi.fn();
-    const emit = createAuditClient({ logger: { warn } });
-
-    await emit({
-      eventType: "config.updated",
-      entityType: "holiday",
-      tenantId: "00000000-0000-4000-8000-000000000001"
-    });
-
-    expect(warn).toHaveBeenCalledOnce();
+    await expect(
+      emit(
+        {
+          tenantId: "00000000-0000-4000-8000-000000000001",
+          actorId: "op-1",
+          eventType: "appointment.registered",
+          entityType: "appointment",
+          entityId: "00000000-0000-4000-8000-000000000002"
+        },
+        { query } as never
+      )
+    ).rejects.toThrow("active database transaction");
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("accepts an explicit transaction executor", async () => {
-    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: "audit-id" }], rowCount: 1 });
     await enqueuePulsoAuditEvent({ query } as never, {
       tenantId: "00000000-0000-4000-8000-000000000001",
       eventType: "appointment.cancelled",
@@ -84,5 +66,79 @@ describe("audit-client", () => {
       entityId: "00000000-0000-4000-8000-000000000003"
     });
     expect(query).toHaveBeenCalledOnce();
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("insert into pulso_iris.outbox_events");
+    expect(sql).toContain("on conflict (tenant_id, dedupe_key)");
+    expect(sql).toContain("returning id");
+    expect(params[0]).toBe("00000000-0000-4000-8000-000000000001");
+    expect(params[1]).toBe(PULSO_AUDIT_EVENT_TYPE);
+    expect(params[2]).toBe("appointment");
+    expect(params[3]).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    expect(params[3]).not.toBe("00000000-0000-4000-8000-000000000003");
+    expect(sql).toContain("id, tenant_id");
+    expect(JSON.parse(String(params[5]))).toMatchObject({
+      entityId: "00000000-0000-4000-8000-000000000003",
+      metadata: { source: "pulso-iris-service" }
+    });
+  });
+
+  it("does not let correlation metadata deduplicate separate audit facts", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: "audit-id" }], rowCount: 1 });
+    const input = {
+      tenantId: "00000000-0000-4000-8000-000000000001",
+      eventType: "config.updated" as const,
+      entityType: "configuration",
+      entityId: "00000000-0000-4000-8000-000000000004",
+      metadata: { requestId: "client-reused-request-id", auditDedupeSuffix: "client-reused-request-id" }
+    };
+
+    await enqueuePulsoAuditEvent({ query } as never, input);
+    await enqueuePulsoAuditEvent({ query } as never, input);
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0]?.[1]?.[4]).not.toBe(query.mock.calls[1]?.[1]?.[4]);
+    expect(JSON.parse(String(query.mock.calls[0]?.[1]?.[5])).metadata).toEqual({
+      source: "pulso-iris-service",
+      requestId: "client-reused-request-id"
+    });
+  });
+
+  it("accepts an exact replay for an explicit business idempotency key", async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ matches: true }], rowCount: 1 });
+
+    await expect(
+      enqueuePulsoAuditEvent({ query } as never, {
+        tenantId: "00000000-0000-4000-8000-000000000001",
+        eventType: "config.updated",
+        entityType: "configuration",
+        entityId: "00000000-0000-4000-8000-000000000005",
+        idempotencyKey: "configuration-revision-1",
+        metadata: { revision: 1 }
+      })
+    ).resolves.toBeUndefined();
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1]?.[0]).toContain("payload = $5::jsonb");
+  });
+
+  it("rejects divergent reuse of an explicit business idempotency key", async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ matches: false }], rowCount: 1 });
+
+    await expect(
+      enqueuePulsoAuditEvent({ query } as never, {
+        tenantId: "00000000-0000-4000-8000-000000000001",
+        eventType: "config.updated",
+        entityType: "configuration",
+        entityId: "00000000-0000-4000-8000-000000000006",
+        idempotencyKey: "configuration-revision-1",
+        metadata: { revision: 2 }
+      })
+    ).rejects.toThrow("idempotency key was reused for a different event");
   });
 });

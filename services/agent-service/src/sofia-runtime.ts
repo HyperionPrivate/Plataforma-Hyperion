@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "@hyperion/database";
 import {
   createInternalAuthorizationHeaders,
+  isCiDeploymentEnvironment,
   validateInternalAuthorization,
   type RouteRegistrar
 } from "@hyperion/service-runtime";
@@ -205,7 +206,7 @@ export class SofiaRuntime {
   };
 
   constructor(private readonly options: SofiaRuntimeOptions) {
-    const legacyTestToken = process.env.NODE_ENV === "test" ? options.internalServiceToken : undefined;
+    const legacyTestToken = isCiDeploymentEnvironment(process.env) ? options.internalServiceToken : undefined;
     this.credentials = {
       channel: requireWorkloadCredential(options.channelToken ?? legacyTestToken, "SOFIA_TO_CHANNEL_TOKEN"),
       promptFlow: requireWorkloadCredential(options.promptFlowToken ?? legacyTestToken, "SOFIA_TO_PROMPT_FLOW_TOKEN"),
@@ -1321,7 +1322,7 @@ export function registerSofiaReadinessRoute(
   }
 ): void {
   const integrationToken =
-    options.integrationToken ?? (process.env.NODE_ENV === "test" ? options.internalServiceToken : undefined);
+    options.integrationToken ?? (isCiDeploymentEnvironment(process.env) ? options.internalServiceToken : undefined);
   app.get("/internal/v1/tenants/:tenantId/sofia/readiness", async (request, reply) => {
     const authError = validateInternalAuthorization(request.headers, { "integration-service": integrationToken });
     if (authError) {

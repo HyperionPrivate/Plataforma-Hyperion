@@ -10,12 +10,16 @@ registros no se presentan como reales ni deben entrar en los flujos operativos d
 - No se guardan claves reales en Git.
 - Toda clave compartida por chat, correo o canal no secreto debe rotarse antes de dejarla como acceso permanente.
 - `.env.example` contiene placeholders y valores no secretos para documentar la configuracion esperada.
-- En `NODE_ENV`/`HYPERION_ENVIRONMENT` `production` o `staging`, el runtime (`@hyperion/config` /
-  `startService`) y el bootstrap de roles rechazan cualquier secreto requerido que coincida con
+- `HYPERION_ENVIRONMENT` es la clasificación canónica; sólo cuando está ausente se traduce `NODE_ENV`.
+  Una variable presente pero vacía o un valor desconocido aborta el arranque en vez de asumir `local`. En
+  `production` o `staging`, el runtime (`@hyperion/config` / `startService`) y el bootstrap de roles rechazan
+  cualquier secreto requerido que coincida con
   `/^replace-/i` o con los valores exactos de `.env.example`.
-- CI y ensayos locales que cargan `.env.example` pueden fijar `HYPERION_ALLOW_EXAMPLE_SECRETS=true`
-  (presente en el ejemplo). En VPS real: omitir esa variable (o `false`), fijar
-  `HYPERION_ENVIRONMENT=production` y sustituir todos los `replace-*`.
+- CI y ensayos locales que cargan `.env.example` deben declarar explícitamente
+  `HYPERION_ENVIRONMENT=ci` o `local`. `CI=true` y la variable histórica
+  `HYPERION_ALLOW_EXAMPLE_SECRETS` no reducen las barreras. En VPS real se fija
+  `HYPERION_ENVIRONMENT=production` y se sustituyen todos los `replace-*`; Compose propaga esa clase de despliegue
+  al gateway, migraciones, bootstrap y cada runtime.
 - `POSTGRES_PASSWORD`, las ocho contraseñas PostgreSQL, las credenciales HTTP por vínculo
   `*_TO_*_TOKEN` y las credenciales de proveedores deben vivir fuera del repositorio.
 - Cada `*_TO_*_TOKEN` se entrega únicamente a su productor y consumidor, tiene al menos 24 caracteres
@@ -23,12 +27,14 @@ registros no se presentan como reales ni deben entrar en los flujos operativos d
 - Los tokens por vínculo son una barrera transicional. Un entorno empresarial debe añadir identidad de workload
   gestionada, mTLS y rotación externa sin retirar la autorización específica por productor/ruta.
 - **A-02 (mitigado, no eliminado):** el gateway emite `x-hyperion-operator-assertion` (HMAC-SHA256 con
-  `GATEWAY_OPERATOR_ASSERTION_KEY`) junto a `x-operator-id` / `x-operator-role`. Identity exige que la
-  aserción coincida con esos headers cuando la clave está configurada, de modo que un token de arista
-  estático solo no basta para fabricar rol admin. Riesgo residual: quien robe **ambos**
-  `GATEWAY_TO_IDENTITY_TOKEN` y `GATEWAY_OPERATOR_ASSERTION_KEY` aún puede forjar claims hasta mTLS /
-  identidad de workload. Sin la clave de aserción, el fallback histórico (headers de rol) permanece
-  y debe tratarse como inaceptable en producción.
+  `GATEWAY_OPERATOR_ASSERTION_KEY`) junto a `x-operator-id` / `x-operator-role`. Identity exige coincidencia
+  exacta de operador y rol; PULSO IRIS, LUMEN e Integration exigen además que la aserción vigente esté ligada
+  al tenant de la ruta. La clave es obligatoria y su ausencia impide arrancar esos runtimes en staging y
+  producción; el fallback histórico sin firma queda limitado a local/CI. Así, un token de arista estático solo
+  no basta para fabricar identidad, rol o tenant. Riesgo residual: quien robe **el token del vínculo y la clave
+  de aserción** aún puede forjar claims hasta que se adopten mTLS e identidad de workload. Una aserción capturada
+  también puede repetirse durante su vigencia máxima de 60 segundos, pero únicamente con el token del vínculo y
+  para el mismo operador, rol y tenant (o para el contexto global admin que fue firmado).
 - Las contraseñas `*_DATABASE_PASSWORD` son distintas entre sí, tienen al menos 24 caracteres URI no
   reservados y nunca se reutilizan como contraseña administrativa.
 
@@ -65,6 +71,12 @@ cierre a DeepSeek y a sus herramientas HTTP, no convierte una cancelación en un
 drenaje de su dispatcher a cinco entregas de tres segundos. Sus eventos de auditoría de finalización se confirman
 en el outbox dentro de la misma transacción que completa el job.
 
+PULSO exige una `DatabaseTransaction` activa para encolar cada auditoría de mutación relevante; si falla el
+insert del outbox se revierte también el cambio de dominio. Channel confirma `channel.message.sent` y su evento de
+auditoría en una sola transacción. Audit aplica ambos contratos con inbox idempotente. Asimismo, Channel no llama
+el comando remoto de delivery dentro de su transacción: persiste `channel.delivery.updated.v1` con secuencia por
+mensaje y PULSO lo proyecta en otra transacción inbox+dominio.
+
 `TRUST_PROXY` queda vacío o `false` cuando el servicio es alcanzable directamente. Sólo debe configurarse detrás
 de un proxy controlado y acepta una lista separada por comas de IP o CIDR explícitos. El runtime rechaza `true`,
 hostnames, reglas inválidas y redes `/0`; documentar los hops reales antes de habilitarlo.
@@ -75,22 +87,24 @@ El transporte predeterminado del stack base sigue siendo HTTP. El overlay
 `infra/docker-compose.jetstream.yml` usa identidades y ACL por servicio, pero permanece como piloto de un solo
 nodo: una replica, DLQ con la misma retencion y sin alerta/redrive operativos. **No habilitarlo en produccion**
 hasta desplegar cluster con replicas, TLS interno, limites de capacidad, monitorizacion y una prueba documentada de
-recuperacion. El runtime refuse `DURABLE_EVENT_TRANSPORT=jetstream` cuando
-`HYPERION_ENVIRONMENT=production` o `NODE_ENV=production` salvo que existan a la vez
-`PRODUCTION_JETSTREAM_ENABLED=true`, `JETSTREAM_REPLICAS>=3`, `NATS_URL` con esquema `tls:`,
-límites positivos `JETSTREAM_MAX_BYTES` / `JETSTREAM_MAX_MSGS`, `JETSTREAM_MONITOR_URL` HTTPS y
-`JETSTREAM_REDRIVE_RUNBOOK_URL` (HTTPS o ruta `docs/…`). Levantar varios contenedores sin clustering
-real **no** satisface el gate.
-Un solo nodo sigue bloqueado: no hay atajo que simule HA.
+recuperacion. El runtime y el bootstrap rechazan incondicionalmente `DURABLE_EVENT_TRANSPORT=jetstream` cuando
+la clasificación canónica es `production` o `staging`. Declarar `PRODUCTION_JETSTREAM_ENABLED`,
+`JETSTREAM_REPLICAS`, TLS, límites, monitorización o un runbook no promueve este overlay ni evita el bloqueo:
+esas variables no sustituyen una topología real. Levantar el gate exige primero implementar y revisar en el
+repositorio el cluster, las réplicas, TLS, capacidad, alertas/redrive, recuperación y sus pruebas/ADR. Hasta
+entonces el overlay sólo se admite con `HYPERION_ENVIRONMENT=local|ci`; no existe un atajo declarativo que simule
+alta disponibilidad.
 Cuando se evalua en un ambiente aislado, los seis `NATS_*_PASSWORD` deben ser distintos y nunca
-reutilizar credenciales HTTP `*_TO_*_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea los durables
-versionados declarados por la topología y el
-durable temporal `audit_event_record_v1`: Audit consume por separado `sofia.audit.event.record.v1` y
-`lumen.audit.event.record.v1`, mientras el tercero sólo drena mensajes publicados antes de la migración y los
+reutilizar credenciales HTTP `*_TO_*_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea trece durables
+administrados: diez activos, dos de compatibilidad v1 y el drenaje temporal `audit_event_record_v1`. Audit consume
+por separado `sofia.audit.event.record.v1`, `lumen.audit.event.record.v1`, `pulso.audit.event.record.v1` y
+`channel.audit.event.record.v1`; el durable genérico sólo drena mensajes publicados antes de la migración y los
 marca `legacy-unknown`. Ninguna identidad runtime puede publicar nuevos eventos en el subject genérico. Cuando
 el durable legado permanezca vacío durante una ventana superior a la retención, se elimina en una migración de
-topología posterior. Con JetStream activo, los endpoints HTTP de entrega durable no se registran; HTTP no queda
-como bypass paralelo de las ACL.
+topología posterior. Con JetStream activo, los endpoints HTTP que reciben los sobres durables no se registran;
+el `POST` directo de delivery Channel → PULSO se conserva autenticado exclusivamente para compatibilidad N-1 y
+no es usado por el Channel actual. Esa superficie transitoria debe retirarse al cerrar la ventana N-1 y es otra
+razón por la que el overlay actual no se declara productivo.
 
 ### Ensayo local aislado de JetStream
 
@@ -166,7 +180,13 @@ docker run --rm `
   '
 ```
 
-El resultado aprobado contiene `status=passed`, las diez cuentas de efectos en `1` y limpia su tenant sintetico.
+El resultado aprobado contiene `status=passed` y 19 campos de conteo: 16 deben valer `1`; los campos
+`pulsoAuditOutbox`, `pulsoAuditInbox` y `pulsoAuditEffect` deben valer `2` porque se emiten dos auditorías PULSO.
+El ensayo limpia después su tenant sintético.
+Para Channel → PULSO, tanto el mensaje inbound como el delivery deben devolver ACK confirmado con
+`deliveryCount=1`; una segunda lectura debe quedar en `idle`, sin NAK, redelivery ni DLQ. El inbound también debe
+dejar vinculados en Channel el paciente, la conversación y el mensaje propietarios; comprobar sólo filas PULSO no
+es evidencia suficiente.
 Después se levantan consumidores de aguas abajo hacia aguas arriba, y finalmente el gateway y la consola:
 
 ```powershell
@@ -208,6 +228,9 @@ foreach ($Entry in $DisabledHttpIngress.GetEnumerator()) {
     "fetch('http://127.0.0.1:$($Entry.Value[0])$($Entry.Value[1])', { method: 'POST' }).then(r => { console.log(r.status); process.exit(r.status === 404 ? 0 : 1); })"
   if ($LASTEXITCODE -ne 0) { throw "HTTP durable ingress remains enabled for $($Entry.Key)" }
 }
+docker compose @Compose exec -T pulso-iris-service node -e `
+  "fetch('http://127.0.0.1:8088/internal/v1/events/channel-delivery', { method: 'POST' }).then(r => { console.log(r.status); process.exit(r.status === 404 ? 0 : 1); })"
+if ($LASTEXITCODE -ne 0) { throw "HTTP durable delivery ingress remains enabled for pulso-iris-service" }
 ```
 
 No ejecutar las pruebas de ACL ni de upgrade de topologia contra este broker persistente: usan mensajes o durables
@@ -320,6 +343,13 @@ backfill (026), contrato validado (027) e índice concurrente idempotente fuera 
 022 instala un trigger-fence antes del backfill histórico 023 para cubrir writers Channel N-1 que ya estaban en
 curso.
 
+La auditoría PULSO/Channel y la proyección de delivery también se migran por fases. 041 expande dedupe y el
+contrato de procedencia Audit con checks `NOT VALID`; 042 construye sus índices únicos concurrentes y 043 valida
+el contrato. 044 expande el contrato ordenado del inbox de delivery; 045 crea concurrentemente su unicidad por
+tenant/servicio/stream/secuencia y 046 valida el check y el catálogo. Un índice interrumpido se elimina y recrea
+antes de que el ledger avance, pero el cutover sigue requiriendo medir locks y duración sobre una copia
+representativa.
+
 En cada PR, CI construye todas las imágenes y resuelve de forma fail-closed el contrato del SHA base desde
 `infra/compatibility-policy.json`. Si la base ya contiene el descriptor usa sus capacidades `current_v2` y
 `deterministic_v2`; la única excepción bootstrap está ligada al SHA histórico exacto y declara los contratos
@@ -335,6 +365,25 @@ contra el ledger propietario. CI comprueba además identidad del clúster, ledge
 aplicables. Para LUMEN, `legacy_ephemeral_v1` ensaya la
 ventana administrativa cercada; `deterministic_v2` ensaya caída, expiración controlada de lease, recuperación y
 eliminación del temporal sin degradar al protocolo legacy.
+
+Después de detener los workloads current y antes de iniciar cualquier imagen N-1, el rehearsal arranca únicamente
+PostgreSQL. Un preflight inserta y elimina evidencia sintética para comprobar que el gate real rechaza
+`queued`, `retry_scheduled`, `processing` y `dead_letter`, y acepta `published`; después exige que cada evento
+`channel.delivery.updated.v1` real esté `published` y guarda un fingerprint de todas esas filas. Una base
+pre-durable abre sólo durante su polling la siguiente allow-list para `hyperion_pulso`:
+
+- `USAGE` en el esquema `channel_runtime`;
+- `SELECT` en `thread_bindings(id, patient_id, conversation_id, tenant_id)`;
+- `UPDATE` en `thread_bindings(patient_id, conversation_id, last_inbound_at, updated_at)`;
+- `SELECT` en `inbound_events(tenant_id, external_message_id, provider)`;
+- `UPDATE` en `inbound_events(thread_binding_id, message_id, updated_at)`.
+
+El probe rechaza permisos de tabla completa o cualquier columna adicional. Un paso separado con `if: always()`
+detiene primero Channel y PULSO, revoca la ventana de forma idempotente, verifica que no quede `USAGE`, `SELECT`
+ni ningún otro privilegio DML efectivo en `channel_runtime`, y compara el fingerprint para demostrar que N-1 no
+cambió eventos de delivery actuales. Como el polling histórico necesita esa excepción, el cierre termina también su capacidad
+operativa: el ensayo certifica un rollback temporal y supervisado, no un estado N-1 autónomo que pueda mantenerse
+indefinidamente.
 
 El rehearsal es deliberadamente HTTP: no prueba un mensaje JetStream pendiente creado por N-1 y el overlay sigue
 siendo un piloto separado. Tampoco demuestra compatibilidad universal: antes de producción se debe ensayar una

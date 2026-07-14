@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
-import { createDatabase, type DatabaseClient } from "@hyperion/database";
+import { createHash, randomUUID } from "node:crypto";
+import { createDatabase, type DatabaseClient, type DatabaseTransaction } from "@hyperion/database";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CHANNEL_DELIVERY_EVENT_TYPE } from "./channel-delivery-outbox.js";
 import { PostgresChannelRepository } from "./channel-repository.js";
-import { createDatabasePulsoDeliveryClient } from "./pulso-delivery.integration.test.support.js";
+import { createDatabasePulsoDeliveryGuard } from "./pulso-delivery.integration.test.support.js";
 import { WHATSAPP_PROVIDER_MODE } from "./types.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -22,7 +23,7 @@ describeIntegration("PostgresChannelRepository", () => {
       [`wa-repository-${randomUUID()}`]
     );
     tenantId = tenant.rows[0]?.id ?? "";
-    repository = new PostgresChannelRepository(db, createDatabasePulsoDeliveryClient(db));
+    repository = new PostgresChannelRepository(db, createDatabasePulsoDeliveryGuard(db));
     await repository.projectConnection(tenantId, {
       providerMode: WHATSAPP_PROVIDER_MODE,
       state: "ready",
@@ -38,6 +39,37 @@ describeIntegration("PostgresChannelRepository", () => {
     }
     await db.close();
   });
+
+  async function createClaimedOutbound(label: string) {
+    const binding = await db.query<{ id: string; conversationId: string }>(
+      `select id, conversation_id as "conversationId"
+       from channel_runtime.thread_bindings
+       where tenant_id = $1 and status = 'active' and conversation_id is not null
+       limit 1`,
+      [tenantId]
+    );
+    const bindingRow = binding.rows[0];
+    if (!bindingRow) throw new Error("Expected an active bound conversation");
+    const body = `respuesta durable ${label}`;
+    const message = await db.query<{ id: string }>(
+      `insert into pulso_iris.messages (
+         tenant_id, conversation_id, sender, body, provider, delivery_status
+       ) values ($1, $2, 'sofia', $3, $4, 'queued') returning id`,
+      [tenantId, bindingRow.conversationId, body, WHATSAPP_PROVIDER_MODE]
+    );
+    const messageId = message.rows[0]?.id ?? "";
+    const outbound = await repository.enqueueOutbound({
+      tenantId,
+      threadBindingId: bindingRow.id,
+      messageId,
+      body,
+      idempotencyKey: `repository-durable-${label}-${randomUUID()}`
+    });
+    const claimed = await repository.claimOutbound(`repository-durable-worker-${label}`);
+    if (!claimed || claimed.id !== outbound.id) throw new Error(`Expected the ${label} outbound claim`);
+    await expect(repository.markOutboundSending(claimed)).resolves.toBe(true);
+    return { messageId, outbound, claimed };
+  }
 
   it("deduplicates inbound events and creates one tenant-scoped binding", async () => {
     const message = {
@@ -267,6 +299,9 @@ describeIntegration("PostgresChannelRepository", () => {
     ).resolves.toBe(false);
     const sentAt = new Date("2026-07-10T05:00:00.000Z");
     const deliveredAt = new Date("2026-07-10T05:00:01.000Z");
+    const readAt = new Date("2026-07-10T05:00:02.000Z");
+    const failedAt = new Date("2026-07-10T05:00:03.000Z");
+    const deliveredAgainAt = new Date("2026-07-10T05:00:04.000Z");
     await expect(
       repository.updateDelivery({
         tenantId,
@@ -289,30 +324,32 @@ describeIntegration("PostgresChannelRepository", () => {
       provider: WHATSAPP_PROVIDER_MODE,
       providerMessageId: "provider-outbound-1",
       status: "read",
-      occurredAt: new Date("2026-07-10T05:00:02.000Z")
+      occurredAt: readAt
     });
     await repository.updateDelivery({
       tenantId,
       provider: WHATSAPP_PROVIDER_MODE,
       providerMessageId: "provider-outbound-1",
       status: "failed",
-      occurredAt: new Date("2026-07-10T05:00:03.000Z")
+      occurredAt: failedAt
     });
     await repository.updateDelivery({
       tenantId,
       provider: WHATSAPP_PROVIDER_MODE,
       providerMessageId: "provider-outbound-1",
       status: "delivered",
-      occurredAt: new Date("2026-07-10T05:00:04.000Z")
+      occurredAt: deliveredAgainAt
     });
     const state = await db.query<{
       outbound: string;
       message: string;
+      messageProviderId: string | null;
       deliveredAt: Date;
-      messageDeliveredAt: Date;
+      messageDeliveredAt: Date | null;
       pendingReceipts: number;
     }>(
       `select o.status as outbound, m.delivery_status as message,
+               m.provider_message_id as "messageProviderId",
                o.delivered_at as "deliveredAt", m.delivered_at as "messageDeliveredAt",
                (select count(*)::int from channel_runtime.delivery_receipts receipt
                 where receipt.tenant_id = o.tenant_id
@@ -325,11 +362,177 @@ describeIntegration("PostgresChannelRepository", () => {
     );
     expect(state.rows[0]).toEqual({
       outbound: "delivered",
-      message: "read",
+      message: "queued",
+      messageProviderId: null,
       deliveredAt,
-      messageDeliveredAt: deliveredAt,
+      messageDeliveredAt: null,
       pendingReceipts: 0
     });
+
+    const deliveryEvents = await loadDeliveryEvents(db, tenantId, input.messageId);
+    expect(deliveryEvents.map(({ payload }) => payload)).toEqual([
+      {
+        messageId: input.messageId,
+        outcome: "sent",
+        provider: WHATSAPP_PROVIDER_MODE,
+        providerMessageId: "provider-outbound-1"
+      },
+      {
+        messageId: input.messageId,
+        outcome: "reconcile",
+        provider: WHATSAPP_PROVIDER_MODE,
+        providerMessageId: "provider-outbound-1",
+        status: "delivered",
+        occurredAt: deliveredAt.toISOString()
+      },
+      {
+        messageId: input.messageId,
+        outcome: "reconcile",
+        provider: WHATSAPP_PROVIDER_MODE,
+        providerMessageId: "provider-outbound-1",
+        status: "read",
+        occurredAt: readAt.toISOString()
+      },
+      {
+        messageId: input.messageId,
+        outcome: "reconcile",
+        provider: WHATSAPP_PROVIDER_MODE,
+        providerMessageId: "provider-outbound-1",
+        status: "failed",
+        occurredAt: failedAt.toISOString()
+      },
+      {
+        messageId: input.messageId,
+        outcome: "reconcile",
+        provider: WHATSAPP_PROVIDER_MODE,
+        providerMessageId: "provider-outbound-1",
+        status: "delivered",
+        occurredAt: deliveredAgainAt.toISOString()
+      }
+    ]);
+    expect(deliveryEvents.map(({ streamId, streamSequence }) => ({ streamId, streamSequence }))).toEqual(
+      [1, 2, 3, 4, 5].map((streamSequence) => ({ streamId: input.messageId, streamSequence }))
+    );
+    for (const event of deliveryEvents) {
+      expect(event).toMatchObject({ eventType: CHANNEL_DELIVERY_EVENT_TYPE, eventVersion: 1, status: "queued" });
+      expect(event.dedupeKey).toBe(deliveryDedupeKey(input.messageId, event.payload));
+    }
+  });
+
+  it("persists failed, uncertain and receipt outcomes as ordered events before PULSO changes", async () => {
+    const failed = await createClaimedOutbound("failed");
+    await expect(
+      repository.markOutboundFailed(
+        { ...failed.claimed, attemptCount: failed.claimed.maxAttempts },
+        "provider_terminal_failure"
+      )
+    ).resolves.toBe(true);
+
+    const uncertain = await createClaimedOutbound("uncertain");
+    const uncertainAt = new Date("2026-07-10T06:00:00.000Z");
+    const deliveredAt = new Date("2026-07-10T06:00:01.000Z");
+    const providerMessageId = `provider-uncertain-${randomUUID()}`;
+    await expect(repository.markOutboundUncertain(uncertain.claimed, providerMessageId, uncertainAt)).resolves.toBe(
+      true
+    );
+    await expect(
+      repository.updateDelivery({
+        tenantId,
+        provider: WHATSAPP_PROVIDER_MODE,
+        providerMessageId,
+        status: "delivered",
+        occurredAt: deliveredAt
+      })
+    ).resolves.toBe(true);
+
+    const states = await db.query<{ id: string; outbound: string; message: string }>(
+      `select m.id, o.status as outbound, m.delivery_status as message
+       from pulso_iris.messages m
+       join channel_runtime.outbound_messages o
+         on o.tenant_id = m.tenant_id and o.message_id = m.id
+       where m.tenant_id = $1 and m.id = any($2::uuid[])
+       order by m.id`,
+      [tenantId, [failed.messageId, uncertain.messageId]]
+    );
+    expect(new Map(states.rows.map((row) => [row.id, row]))).toEqual(
+      new Map([
+        [failed.messageId, { id: failed.messageId, outbound: "dead_letter", message: "queued" }],
+        [uncertain.messageId, { id: uncertain.messageId, outbound: "delivered", message: "queued" }]
+      ])
+    );
+
+    const failedEvents = await loadDeliveryEvents(db, tenantId, failed.messageId);
+    expect(failedEvents).toEqual([
+      expect.objectContaining({
+        streamId: failed.messageId,
+        streamSequence: 1,
+        status: "queued",
+        payload: { messageId: failed.messageId, outcome: "failed" }
+      })
+    ]);
+    const uncertainEvents = await loadDeliveryEvents(db, tenantId, uncertain.messageId);
+    expect(uncertainEvents.map(({ streamSequence, payload }) => ({ streamSequence, payload }))).toEqual([
+      {
+        streamSequence: 1,
+        payload: {
+          messageId: uncertain.messageId,
+          outcome: "uncertain",
+          provider: WHATSAPP_PROVIDER_MODE,
+          providerMessageId
+        }
+      },
+      {
+        streamSequence: 2,
+        payload: {
+          messageId: uncertain.messageId,
+          outcome: "reconcile",
+          provider: WHATSAPP_PROVIDER_MODE,
+          providerMessageId,
+          status: "delivered",
+          occurredAt: deliveredAt.toISOString()
+        }
+      }
+    ]);
+    for (const event of [...failedEvents, ...uncertainEvents]) {
+      expect(event.dedupeKey).toBe(deliveryDedupeKey(String(event.payload.messageId), event.payload));
+    }
+  });
+
+  it("rolls back the Channel transition when its durable delivery event cannot be inserted", async () => {
+    const pending = await createClaimedOutbound("outbox-rollback");
+    const providerMessageId = `provider-rollback-${randomUUID()}`;
+    const failingDatabase = createOutboxFailureDatabase(db);
+    const failingRepository = new PostgresChannelRepository(failingDatabase, createDatabasePulsoDeliveryGuard(db));
+
+    await expect(
+      failingRepository.markOutboundSent(pending.claimed, providerMessageId, new Date("2026-07-10T06:30:00.000Z"))
+    ).rejects.toThrow("synthetic_channel_delivery_outbox_failure");
+
+    const rolledBack = await db.query<{ outbound: string; providerMessageId: string | null; message: string }>(
+      `select o.status as outbound, o.provider_message_id as "providerMessageId", m.delivery_status as message
+       from channel_runtime.outbound_messages o
+       join pulso_iris.messages m on m.tenant_id = o.tenant_id and m.id = o.message_id
+       where o.tenant_id = $1 and o.id = $2`,
+      [tenantId, pending.outbound.id]
+    );
+    expect(rolledBack.rows[0]).toEqual({ outbound: "sending", providerMessageId: null, message: "queued" });
+    await expect(loadDeliveryEvents(db, tenantId, pending.messageId)).resolves.toEqual([]);
+
+    await expect(
+      repository.markOutboundSent(pending.claimed, providerMessageId, new Date("2026-07-10T06:30:00.000Z"))
+    ).resolves.toBe(true);
+    await expect(loadDeliveryEvents(db, tenantId, pending.messageId)).resolves.toEqual([
+      expect.objectContaining({
+        streamId: pending.messageId,
+        streamSequence: 1,
+        payload: {
+          messageId: pending.messageId,
+          outcome: "sent",
+          provider: WHATSAPP_PROVIDER_MODE,
+          providerMessageId
+        }
+      })
+    ]);
   });
 
   it("quarantines unmatched receipts without bodies and expires stale evidence", async () => {
@@ -468,6 +671,7 @@ describeIntegration("PostgresChannelRepository", () => {
     ]);
     expect({ sent, receiptPersisted }).toEqual({ sent: true, receiptPersisted: true });
 
+    const messageId = message.rows[0]?.id ?? "";
     const state = await db.query<{ outbound: string; message: string; pending: number }>(
       `select o.status as outbound, m.delivery_status as message,
               (select count(*)::int from channel_runtime.delivery_receipts receipt
@@ -479,7 +683,30 @@ describeIntegration("PostgresChannelRepository", () => {
        where o.tenant_id = $1 and o.id = $2`,
       [tenantId, outbound.id]
     );
-    expect(state.rows[0]).toEqual({ outbound: "delivered", message: "delivered", pending: 0 });
+    expect(state.rows[0]).toEqual({ outbound: "delivered", message: "queued", pending: 0 });
+    const deliveryEvents = await loadDeliveryEvents(db, tenantId, messageId);
+    expect(deliveryEvents.map(({ streamSequence, payload }) => ({ streamSequence, payload }))).toEqual([
+      {
+        streamSequence: 1,
+        payload: {
+          messageId,
+          outcome: "sent",
+          provider: WHATSAPP_PROVIDER_MODE,
+          providerMessageId
+        }
+      },
+      {
+        streamSequence: 2,
+        payload: {
+          messageId,
+          outcome: "reconcile",
+          provider: WHATSAPP_PROVIDER_MODE,
+          providerMessageId,
+          status: "delivered",
+          occurredAt: deliveredAt.toISOString()
+        }
+      }
+    ]);
   });
 
   it("deduplicates concurrent enqueue requests for the same persisted message", async () => {
@@ -567,7 +794,7 @@ describeIntegration("PostgresChannelRepository", () => {
         threadBindingId: bindingRow.id,
         messageId: foreignMessage.rows[0]?.id ?? "",
         body: "otra conversacion",
-        idempotencyKey: "repository-outbound-1"
+        idempotencyKey: "repository-invalid-conversation"
       })
     ).rejects.toThrow("pulso_message_rejected");
     await expect(
@@ -588,16 +815,6 @@ describeIntegration("PostgresChannelRepository", () => {
         idempotencyKey: "repository-invalid-body"
       })
     ).rejects.toThrow("pulso_message_rejected");
-    await expect(
-      repository.enqueueOutbound({
-        tenantId,
-        threadBindingId: bindingRow.id,
-        messageId: boundMessage.rows[0]?.id ?? "",
-        body: "contenido persistido",
-        idempotencyKey: "repository-outbound-1"
-      })
-    ).rejects.toThrow("pulso_message_rejected");
-
     const invalidRows = await db.query<{ count: number }>(
       `select count(*)::int as count
        from channel_runtime.outbound_messages
@@ -605,6 +822,77 @@ describeIntegration("PostgresChannelRepository", () => {
       [tenantId]
     );
     expect(invalidRows.rows[0]?.count).toBe(0);
+  });
+
+  it("rejects a valid outbound when its idempotency key belongs to another message", async () => {
+    const binding = await db.query<{ id: string; conversationId: string }>(
+      `select id, conversation_id as "conversationId"
+       from channel_runtime.thread_bindings
+       where tenant_id = $1 and status = 'active' and conversation_id is not null
+       limit 1`,
+      [tenantId]
+    );
+    const bindingRow = binding.rows[0];
+    if (!bindingRow) throw new Error("Expected an active bound conversation");
+
+    const ownerBody = "respuesta propietaria de la clave";
+    const contenderBody = "respuesta valida con clave colisionada";
+    const ownerMessage = await db.query<{ id: string }>(
+      `insert into pulso_iris.messages (
+         tenant_id, conversation_id, sender, body, provider, delivery_status
+       ) values ($1, $2, 'sofia', $3, $4, 'queued') returning id`,
+      [tenantId, bindingRow.conversationId, ownerBody, WHATSAPP_PROVIDER_MODE]
+    );
+    const contenderMessage = await db.query<{ id: string }>(
+      `insert into pulso_iris.messages (
+         tenant_id, conversation_id, sender, body, provider, delivery_status
+       ) values ($1, $2, 'sofia', $3, $4, 'queued') returning id`,
+      [tenantId, bindingRow.conversationId, contenderBody, WHATSAPP_PROVIDER_MODE]
+    );
+    const ownerMessageId = ownerMessage.rows[0]?.id ?? "";
+    const contenderMessageId = contenderMessage.rows[0]?.id ?? "";
+    const idempotencyKey = `repository-conflict-${randomUUID()}`;
+
+    try {
+      await expect(
+        repository.enqueueOutbound({
+          tenantId,
+          threadBindingId: bindingRow.id,
+          messageId: ownerMessageId,
+          body: ownerBody,
+          idempotencyKey
+        })
+      ).resolves.toMatchObject({ inserted: true });
+
+      await expect(
+        repository.enqueueOutbound({
+          tenantId,
+          threadBindingId: bindingRow.id,
+          messageId: contenderMessageId,
+          body: contenderBody,
+          idempotencyKey
+        })
+      ).rejects.toThrow("outbound_conflict");
+
+      const persisted = await db.query<{ messageId: string; count: number }>(
+        `select min(message_id::text) as "messageId", count(*)::int as count
+         from channel_runtime.outbound_messages
+         where tenant_id = $1 and provider = $2 and idempotency_key = $3`,
+        [tenantId, WHATSAPP_PROVIDER_MODE, idempotencyKey]
+      );
+      expect(persisted.rows[0]).toEqual({ messageId: ownerMessageId, count: 1 });
+    } finally {
+      await db.query(
+        `delete from channel_runtime.outbound_messages
+         where tenant_id = $1 and provider = $2 and idempotency_key = $3`,
+        [tenantId, WHATSAPP_PROVIDER_MODE, idempotencyKey]
+      );
+      await db.query(
+        `delete from pulso_iris.messages
+         where tenant_id = $1 and id in ($2, $3)`,
+        [tenantId, ownerMessageId, contenderMessageId]
+      );
+    }
   });
 
   it("cancels claimed outbound rows when their durable source state changed", async () => {
@@ -642,7 +930,7 @@ describeIntegration("PostgresChannelRepository", () => {
       return { body, messageId, outboundId: outbound.id };
     };
 
-    const assertCancelled = async (outboundId: string, messageId: string) => {
+    const assertCancelled = async (outboundId: string, messageId: string, ownerStatus = "queued") => {
       const state = await db.query<{ outbound: string; errorCode: string; message: string }>(
         `select o.status as outbound, o.last_error_code as "errorCode", m.delivery_status as message
          from channel_runtime.outbound_messages o
@@ -653,8 +941,19 @@ describeIntegration("PostgresChannelRepository", () => {
       expect(state.rows[0]).toEqual({
         outbound: "cancelled",
         errorCode: "outbound_source_state_changed",
-        message: "failed"
+        message: ownerStatus
       });
+      const deliveryEvents = await loadDeliveryEvents(db, tenantId, messageId);
+      expect(deliveryEvents).toHaveLength(1);
+      expect(deliveryEvents[0]).toMatchObject({
+        eventType: CHANNEL_DELIVERY_EVENT_TYPE,
+        eventVersion: 1,
+        streamId: messageId,
+        streamSequence: 1,
+        status: "queued",
+        payload: { messageId, outcome: "cancel_source" }
+      });
+      expect(deliveryEvents[0]?.dedupeKey).toBe(deliveryDedupeKey(messageId, { messageId, outcome: "cancel_source" }));
     };
 
     const blockedBinding = await createQueued("blocked-binding");
@@ -708,7 +1007,7 @@ describeIntegration("PostgresChannelRepository", () => {
       changedLifecycle.messageId
     ]);
     await expect(repository.claimOutbound("repository-invalid-lifecycle")).resolves.toBeUndefined();
-    await assertCancelled(changedLifecycle.outboundId, changedLifecycle.messageId);
+    await assertCancelled(changedLifecycle.outboundId, changedLifecycle.messageId, "sent");
   });
 
   it("revalidates the outbound source immediately before entering sending", async () => {
@@ -754,8 +1053,18 @@ describeIntegration("PostgresChannelRepository", () => {
     expect(state.rows[0]).toEqual({
       outbound: "cancelled",
       errorCode: "outbound_source_state_changed",
-      message: "failed"
+      message: "sent"
     });
+    await expect(loadDeliveryEvents(db, tenantId, messageId)).resolves.toEqual([
+      expect.objectContaining({
+        eventType: CHANNEL_DELIVERY_EVENT_TYPE,
+        eventVersion: 1,
+        streamId: messageId,
+        streamSequence: 1,
+        status: "queued",
+        payload: { messageId, outcome: "cancel_source" }
+      })
+    ]);
   });
 
   it("rejects new outbox rows for a non-WhatsApp or non-queued SOFIA message", async () => {
@@ -791,3 +1100,73 @@ describeIntegration("PostgresChannelRepository", () => {
     }
   });
 });
+
+interface PersistedDeliveryEvent {
+  eventType: string;
+  eventVersion: number;
+  streamId: string;
+  streamSequence: number;
+  dedupeKey: string;
+  payload: Record<string, unknown>;
+  status: string;
+}
+
+async function loadDeliveryEvents(
+  db: DatabaseClient,
+  tenantId: string,
+  messageId: string
+): Promise<PersistedDeliveryEvent[]> {
+  const result = await db.query<PersistedDeliveryEvent>(
+    `select event_type as "eventType", event_version as "eventVersion",
+            stream_id::text as "streamId", stream_sequence::int as "streamSequence",
+            dedupe_key as "dedupeKey", payload, status
+     from channel_runtime.outbox_events
+     where tenant_id = $1 and event_type = $2 and stream_id = $3::uuid
+     order by stream_sequence`,
+    [tenantId, CHANNEL_DELIVERY_EVENT_TYPE, messageId]
+  );
+  return result.rows;
+}
+
+function deliveryDedupeKey(messageId: string, payload: Record<string, unknown>): string {
+  const digest = createHash("sha256").update(canonicalJson(payload), "utf8").digest("hex");
+  return `message:${messageId}:channel.delivery:${digest}`;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  throw new TypeError("Delivery event payload must be JSON serializable");
+}
+
+function createOutboxFailureDatabase(db: DatabaseClient): DatabaseClient {
+  return {
+    query: (text, params) => db.query(text, params),
+    transaction: async <T>(work: (client: DatabaseTransaction) => Promise<T>) =>
+      db.transaction(async (transaction) =>
+        work({
+          query: async (text: string, params?: unknown[]) => {
+            if (
+              text.includes("insert into channel_runtime.outbox_events") &&
+              params?.[2] === CHANNEL_DELIVERY_EVENT_TYPE
+            ) {
+              throw new Error("synthetic_channel_delivery_outbox_failure");
+            }
+            return transaction.query(text, params);
+          }
+        } as DatabaseTransaction)
+      ),
+    close: async () => {
+      throw new Error("The fault-injection database does not own the shared pool");
+    }
+  };
+}

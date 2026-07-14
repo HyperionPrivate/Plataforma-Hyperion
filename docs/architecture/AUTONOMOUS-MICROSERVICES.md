@@ -86,12 +86,33 @@ polling original y no se presenta como productora de inbox/outbox inexistentes; 
 un flujo durable nuevo Channel -> PULSO -> SOFIA. El ensayo verifica ledger, identidades restringidas, liveness,
 readiness, ejecución SOFÍA y outbound según las capacidades declaradas.
 
+Antes de iniciar cualquier workload N-1, CI detiene los runtimes actuales, arranca únicamente PostgreSQL y exige
+que todo `channel.delivery.updated.v1` existente esté `published`; además conserva un fingerprint de sus filas y
+comprueba al cierre que N-1 no las haya modificado. La revisión histórica pre-durable necesita, sólo mientras se
+ejecuta su polling, una excepción SQL directa PULSO → Channel: `USAGE` en `channel_runtime`; `SELECT` sobre
+`thread_bindings(id, patient_id, conversation_id, tenant_id)` e
+`inbound_events(tenant_id, external_message_id, provider)`; y `UPDATE` sobre
+`thread_bindings(patient_id, conversation_id, last_inbound_at, updated_at)` e
+`inbound_events(thread_binding_id, message_id, updated_at)`. La allow-list se verifica por privilegio efectivo,
+rechaza cualquier otro permiso efectivo de tabla o columna, se revoca en un paso `always()` idempotente y el
+cierre falla si queda algún acceso de esquema o DML efectivo. Por tanto, este camino demuestra un rollback acotado
+y supervisado; no convierte
+el binario pre-durable en un servicio autónomo ni autoriza mantenerlo operando después de cerrar la ventana.
+
+Los contratos nuevos de auditoría PULSO/Channel y de entrega Channel → PULSO siguen la misma disciplina. Las
+migraciones 041 y 044 son fases de expansión con checks `NOT VALID`; 042 y 045 construyen los índices únicos de
+forma concurrente y verifican su catálogo antes de avanzar el ledger; 043 y 046 validan los contratos históricos
+con los presupuestos finitos del runner. Esta secuencia reduce el bloqueo, pero no sustituye medirla con la
+cardinalidad y el tráfico del ambiente de destino.
+
 La migración 038 protege además escritores v1 durables de la transición: sus adaptadores reconstruyen siempre las
 posiciones desde los ledgers propietarios, comparan cualquier valor suministrado y fallan ante ausencia, versión o
 correlación incoherente. Son una excepción temporal explícita: funciones de trigger acotadas leen el ledger Channel
 desde PULSO y el ledger PULSO desde SOFÍA, sin conceder `SELECT` cruzado a los roles. Deben retirarse cuando ninguna
 revisión soportada emita v1. La barrera automática inventaría las rutinas y el SQL literal de runtime/FK, pero no
-interpreta sus cuerpos PL/pgSQL; por eso esta excepción requiere revisión manual mientras exista.
+interpreta sus cuerpos PL/pgSQL; por eso esta excepción requiere revisión manual mientras exista. Esta excepción
+de adaptadores v1 durables es distinta de la ventana SQL directa y columnar que necesita exclusivamente la base
+histórica pre-durable durante su polling N-1.
 
 Este recorrido N-1 cubre sólo el transporte HTTP; no demuestra mensajes JetStream pendientes entre binarios ni
 cambia su condición de piloto. Tampoco demuestra compatibilidad general de cada operación: exige además un ensayo
@@ -104,8 +125,9 @@ ni autorizan datos clínicos.
 
 ## HTTP y eventos durables
 
-El primer flujo end-to-end con handoffs durables es Channel -> PULSO -> SOFIA -> Audit. HTTP se conserva para consultas o comandos
-que necesitan respuesta inmediata. Los efectos asincronos usan outbox/inbox:
+El primer flujo end-to-end con handoffs durables es Channel -> PULSO -> SOFIA -> Audit. Incluye tanto el mensaje
+entrante como la proyección del resultado de entrega Channel → PULSO y los eventos de auditoría. HTTP se conserva
+para consultas o comandos que necesitan respuesta inmediata. Los efectos asincronos usan outbox/inbox:
 
 1. El propietario cambia su estado y agrega un evento al outbox en la misma transaccion; SOFÍA hace lo mismo con
    sus auditorías de ejecución y respuesta al completar un job.
@@ -117,12 +139,27 @@ que necesitan respuesta inmediata. Los efectos asincronos usan outbox/inbox:
 5. NATS JetStream es un transporte opt-in; HTTP sigue siendo el valor predeterminado y reversible durante la
    migracion.
 
-Esta garantía describe los handoffs durables enumerados. Las auditorías CRUD emitidas directamente por PULSO y la
-notificación `channel.message.sent` emitida directamente por Channel aún usan HTTP best-effort fuera de la
-transacción de negocio: no tienen retry/outbox ni confirmación durable. Por eso `PUL-033` y `PUL-092` permanecen
-parciales y ninguna de esas emisiones se incluye en la garantía anterior. Antes de habilitar ese alcance en
-producción deben escribirse en el outbox del propietario dentro de la misma transacción y consumirse con inbox
-idempotente en Audit.
+El cliente runtime de PULSO exige una `DatabaseTransaction` activa para encolar
+`pulso.audit.event.record.v1`: la mutación relevante y su registro de outbox se confirman o revierten juntas.
+Channel ya inserta
+`channel.audit.event.record.v1` en la transacción que marca `channel.message.sent`. Audit recibe ambos contratos,
+registra el `event_id` en su inbox y agrega el ledger idempotentemente, sin que PULSO ni Channel escriban tablas de
+Audit. Esta cobertura permite considerar `PUL-092` implementado para las mutaciones relevantes versionadas; no
+incluye auditoría de lecturas sensibles (`PUL-093`).
+
+El E2E ejecuta el cambio real `channel.message.sent`, despacha su auditoría y comprueba inbox y ledger. Para PULSO,
+el mismo E2E encola dos eventos sintéticos dentro de una transacción real, los despacha y verifica sus efectos en
+Audit; las pruebas de integración de cada ruta son las que demuestran que la mutación de dominio y ese enqueue se
+confirman o revierten juntas. La combinación aporta evidencia del contrato completo sin atribuir al E2E una ruta
+de negocio PULSO que no ejecuta.
+
+Los resultados `sent`, `failed`, `uncertain`, `reconcile` y `cancel_source` tampoco se escriben de forma remota
+dentro de una transacción Channel. Channel agrega `channel.delivery.updated.v1` a su outbox en la misma transacción
+que cambia el outbound, con un stream monotónico por mensaje; PULSO exige la siguiente secuencia y aplica el cambio
+junto con su inbox. El `POST` directo de delivery permanece como superficie autenticada de compatibilidad N-1,
+pero el runtime Channel actual no lo usa para proyectar estados. `PUL-033` sigue parcial solamente porque repetir
+la cancelación por la ruta pública aún devuelve una transición inválida; `PUL-202` sigue parcial por las mutaciones
+CRUD que todavía no exigen una clave idempotente, no por la auditoría ni por un dual-write de delivery.
 
 Cada arista HTTP interna usa una credencial `PRODUCTOR_TO_CONSUMIDOR_TOKEN` distinta. El productor envía además
 `x-hyperion-caller`; el consumidor valida en tiempo constante que identidad, secreto y ruta formen una
@@ -170,26 +207,28 @@ El overlay [`infra/docker-compose.jetstream.yml`](../../infra/docker-compose.jet
 Channel, PULSO, SOFIA, Audit y LUMEN. Las credenciales no viajan en `NATS_URL` y token/password son mecanismos
 mutuamente excluyentes. No publica puertos al host.
 
-`jetstream-topology-bootstrap` usa una imagen minima, crea el stream y diez durables administrados: siete
-primarios, dos temporales de compatibilidad v1 para Channel/PULSO y uno de drenaje legado de Audit. Luego valida
+`jetstream-topology-bootstrap` usa una imagen minima, crea el stream y trece durables administrados: diez
+activos, dos temporales de compatibilidad v1 para Channel/PULSO y uno de drenaje legado de Audit. Luego valida
 drift y sale.
 Las aplicaciones esperan su exito, se enlazan con `provisionTopology=false` y no reciben permisos CREATE/UPDATE.
 Cada usuario puede publicar exclusivamente sus eventos, consultar/pedir/confirmar sus durables y escribir su
 DLQ. La matriz exacta esta en [`infra/nats/README.md`](../../infra/nats/README.md).
 
-La procedencia de Audit se separa en `sofia.audit.event.record.v1` y `lumen.audit.event.record.v1`, con un
-durable independiente para cada origen. Las ACL impiden que SOFIA publique como LUMEN y viceversa. El durable
+La procedencia de Audit se separa en `sofia.audit.event.record.v1`, `lumen.audit.event.record.v1`,
+`pulso.audit.event.record.v1` y `channel.audit.event.record.v1`, con un durable independiente para cada origen.
+Las ACL impiden que una identidad publique con la procedencia de otra. El durable
 anterior `audit_event_record_v1` permanece sólo para drenar eventos previos a la migración como
 `legacy-unknown`; ninguna identidad runtime puede publicar eventos genéricos nuevos. Los endpoints HTTP de
-entrega durable sólo se registran cuando `DURABLE_EVENT_TRANSPORT=http`, por lo que no permiten eludir las ACL
-cuando el overlay está activo.
+sobres durables sólo se registran cuando `DURABLE_EVENT_TRANSPORT=http`, por lo que no quedan como dispatchers
+paralelos cuando el overlay está activo. El `POST` directo de delivery Channel → PULSO permanece autenticado como
+compatibilidad N-1, no es usado por el Channel actual y debe retirarse al cerrar esa ventana.
 
 El stream `HYPERION_EVENTS` conserva `hyperion.events.>` y `hyperion.dlq.>`; cada consumidor pull durable filtra
 un unico tipo, usa ACK explicito y procesa un mensaje a la vez. Los productores publican con
 `msgID = event.id` y solo completan su outbox despues del ACK de persistencia del servidor.
 
 ```powershell
-# Provisionar primero los seis NATS_*_PASSWORD distintos en .env; crean diez durables administrados.
+# Provisionar primero los seis NATS_*_PASSWORD distintos en .env; crean trece durables administrados.
 docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml up --build
 ```
 

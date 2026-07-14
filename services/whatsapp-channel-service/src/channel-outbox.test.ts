@@ -35,6 +35,9 @@ describe("PostgresChannelOutbox", () => {
     expect(db.calls[0]?.sql).toContain("for update skip locked");
     expect(db.calls[0]?.sql).toContain("predecessor.stream_sequence < candidate.stream_sequence");
     expect(db.calls[0]?.sql).toContain("predecessor.status <> 'published'");
+    expect(db.calls[0]?.sql).toContain(
+      "candidate.event_type in ('channel.inbound.received.v1', 'channel.inbound.received.v2')"
+    );
     expect(db.calls[0]?.sql).toContain("candidate.tenant_id = $3::uuid");
     expect(db.calls[0]?.sql).toContain("terminalized_sources");
     expect(db.calls[0]?.sql).toContain("'outboxStatus', 'dead_letter'");
@@ -182,7 +185,7 @@ function fakeDatabase(responses: FakeResponse[]) {
     },
     async transaction(work) {
       transactionCount += 1;
-      return work(client);
+      return work(client as never);
     },
     async close() {}
   };

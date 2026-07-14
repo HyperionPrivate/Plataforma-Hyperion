@@ -1,5 +1,7 @@
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
-import type { PulsoDeliveryClient } from "./pulso-delivery-client.js";
+import { CHANNEL_DELIVERY_EVENT_TYPE } from "./channel-delivery-outbox.js";
+import type { PulsoDeliveryClient, PulsoDeliveryOutcome } from "./pulso-delivery-client.js";
 import type { WhatsAppConnectionStatus, WhatsAppDeliveryUpdate, WhatsAppInboundText } from "./types.js";
 
 export interface PersistInboundResult {
@@ -89,10 +91,12 @@ interface ConnectionRow {
   sessionRestorable: boolean;
 }
 
+type PulsoDeliveryGuard = Pick<PulsoDeliveryClient, "guardQueuedMessage">;
+
 export class PostgresChannelRepository implements ChannelRepository {
   constructor(
     private readonly db: DatabaseClient,
-    private readonly pulsoDelivery?: PulsoDeliveryClient
+    private readonly pulsoDelivery?: PulsoDeliveryGuard
   ) {}
 
   async projectConnection(tenantId: string, status: WhatsAppConnectionStatus): Promise<void> {
@@ -386,13 +390,7 @@ export class PostgresChannelRepository implements ChannelRepository {
       );
       const source = valid.rows[0];
       if (!source?.conversationId) {
-        await cancelClaimedOutbound(
-          client,
-          this.requirePulsoDelivery(),
-          candidate.tenantId,
-          candidate.id,
-          candidate.workerId
-        );
+        await cancelClaimedOutbound(client, candidate.tenantId, candidate.id, candidate.workerId);
         return undefined;
       }
       const messageMatches = await this.requirePulsoDelivery().guardQueuedMessage(
@@ -401,13 +399,7 @@ export class PostgresChannelRepository implements ChannelRepository {
         { conversationId: source.conversationId, body: candidate.body }
       );
       if (!messageMatches) {
-        await cancelClaimedOutbound(
-          client,
-          this.requirePulsoDelivery(),
-          candidate.tenantId,
-          candidate.id,
-          candidate.workerId
-        );
+        await cancelClaimedOutbound(client, candidate.tenantId, candidate.id, candidate.workerId);
         return undefined;
       }
 
@@ -442,13 +434,7 @@ export class PostgresChannelRepository implements ChannelRepository {
       );
       const conversationId = binding.rows[0]?.conversationId;
       if (!conversationId) {
-        await cancelClaimedOutbound(
-          client,
-          this.requirePulsoDelivery(),
-          message.tenantId,
-          message.id,
-          message.workerId
-        );
+        await cancelClaimedOutbound(client, message.tenantId, message.id, message.workerId);
         return false;
       }
       const messageMatches = await this.requirePulsoDelivery().guardQueuedMessage(message.tenantId, message.messageId, {
@@ -456,13 +442,7 @@ export class PostgresChannelRepository implements ChannelRepository {
         body: message.body
       });
       if (!messageMatches) {
-        await cancelClaimedOutbound(
-          client,
-          this.requirePulsoDelivery(),
-          message.tenantId,
-          message.id,
-          message.workerId
-        );
+        await cancelClaimedOutbound(client, message.tenantId, message.id, message.workerId);
         return false;
       }
       const result = await client.query(
@@ -489,11 +469,17 @@ export class PostgresChannelRepository implements ChannelRepository {
         [message.tenantId, message.id, providerMessageId, sentAt, message.workerId]
       );
       if (!transitioned.rows[0]) return false;
-      await this.requirePulsoDelivery().updateDelivery(message.tenantId, transitioned.rows[0].messageId, {
-        outcome: "sent",
-        provider: "whatsapp_web_test",
-        providerMessageId
-      });
+      await enqueuePulsoDeliveryEvent(
+        client,
+        message.tenantId,
+        transitioned.rows[0].messageId,
+        {
+          outcome: "sent",
+          provider: "whatsapp_web_test",
+          providerMessageId
+        },
+        sentAt
+      );
       await client.query(
         `update channel_runtime.thread_bindings b
          set last_outbound_at = $3, updated_at = now()
@@ -502,13 +488,7 @@ export class PostgresChannelRepository implements ChannelRepository {
            and b.tenant_id = o.tenant_id and b.id = o.thread_binding_id`,
         [message.tenantId, message.id, sentAt]
       );
-      await reconcilePendingDeliveryReceipts(
-        client,
-        this.requirePulsoDelivery(),
-        message.tenantId,
-        "whatsapp_web_test",
-        providerMessageId
-      );
+      await reconcilePendingDeliveryReceipts(client, message.tenantId, "whatsapp_web_test", providerMessageId);
       await client.query(
         `insert into channel_runtime.outbox_events (
            tenant_id, event_type, event_version, aggregate_type, aggregate_id,
@@ -561,7 +541,7 @@ export class PostgresChannelRepository implements ChannelRepository {
       );
       if (!transitioned.rows[0]) return false;
       if (terminal) {
-        await this.requirePulsoDelivery().updateDelivery(message.tenantId, transitioned.rows[0].messageId, {
+        await enqueuePulsoDeliveryEvent(client, message.tenantId, transitioned.rows[0].messageId, {
           outcome: "failed"
         });
       }
@@ -595,19 +575,19 @@ export class PostgresChannelRepository implements ChannelRepository {
         [message.tenantId, message.id, message.workerId, providerMessageId ?? null, sentAt ?? null]
       );
       if (!transitioned.rows[0]) return false;
-      await this.requirePulsoDelivery().updateDelivery(message.tenantId, transitioned.rows[0].messageId, {
-        outcome: "uncertain",
-        provider: providerMessageId ? "whatsapp_web_test" : undefined,
-        providerMessageId
-      });
-      if (providerMessageId) {
-        await reconcilePendingDeliveryReceipts(
-          client,
-          this.requirePulsoDelivery(),
-          message.tenantId,
-          "whatsapp_web_test",
+      await enqueuePulsoDeliveryEvent(
+        client,
+        message.tenantId,
+        transitioned.rows[0].messageId,
+        {
+          outcome: "uncertain",
+          provider: providerMessageId ? "whatsapp_web_test" : undefined,
           providerMessageId
-        );
+        },
+        sentAt
+      );
+      if (providerMessageId) {
+        await reconcilePendingDeliveryReceipts(client, message.tenantId, "whatsapp_web_test", providerMessageId);
       }
       return true;
     });
@@ -628,13 +608,7 @@ export class PostgresChannelRepository implements ChannelRepository {
          )`,
         [update.tenantId, update.provider, update.providerMessageId, update.status, update.occurredAt]
       );
-      await reconcilePendingDeliveryReceipts(
-        client,
-        this.requirePulsoDelivery(),
-        update.tenantId,
-        update.provider,
-        update.providerMessageId
-      );
+      await reconcilePendingDeliveryReceipts(client, update.tenantId, update.provider, update.providerMessageId);
       await client.query(
         `with expired as (
            select provider, provider_message_id
@@ -694,18 +668,18 @@ export class PostgresChannelRepository implements ChannelRepository {
     );
     for (const orphan of orphans.rows) {
       if (orphan.status === "reconciliation_required") {
-        await this.requirePulsoDelivery().updateDelivery(orphan.tenantId, orphan.messageId, {
+        await enqueuePulsoDeliveryEvent(client, orphan.tenantId, orphan.messageId, {
           outcome: "uncertain",
           provider: orphan.providerMessageId ? "whatsapp_web_test" : undefined,
           providerMessageId: orphan.providerMessageId ?? undefined
         });
       } else {
-        await this.requirePulsoDelivery().updateDelivery(orphan.tenantId, orphan.messageId, { outcome: "failed" });
+        await enqueuePulsoDeliveryEvent(client, orphan.tenantId, orphan.messageId, { outcome: "failed" });
       }
     }
   }
 
-  private requirePulsoDelivery(): PulsoDeliveryClient {
+  private requirePulsoDelivery(): PulsoDeliveryGuard {
     if (!this.pulsoDelivery) {
       throw new Error("CHANNEL_TO_PULSO_TOKEN is required for delivery ownership isolation");
     }
@@ -729,7 +703,6 @@ async function lockDeliveryIdentity(
 
 async function reconcilePendingDeliveryReceipts(
   client: DatabaseExecutor,
-  pulsoDelivery: PulsoDeliveryClient,
   tenantId: string,
   provider: "whatsapp_web_test",
   providerMessageId: string
@@ -776,7 +749,7 @@ async function reconcilePendingDeliveryReceipts(
   const messageId = outbound.rows[0]?.messageId;
   if (!messageId) return false;
 
-  await pulsoDelivery.updateDelivery(tenantId, messageId, {
+  await enqueuePulsoDeliveryEvent(client, tenantId, messageId, {
     outcome: "reconcile",
     provider,
     providerMessageId,
@@ -976,7 +949,6 @@ function isPositiveDatabaseInteger(value: string | number | null): boolean {
 
 async function cancelClaimedOutbound(
   client: DatabaseExecutor,
-  pulsoDelivery: PulsoDeliveryClient,
   tenantId: string,
   outboundId: string,
   workerId: string
@@ -992,8 +964,120 @@ async function cancelClaimedOutbound(
   );
   const messageId = cancelled.rows[0]?.messageId;
   if (!messageId) return false;
-  await pulsoDelivery.updateDelivery(tenantId, messageId, { outcome: "cancel_source" });
+  await enqueuePulsoDeliveryEvent(client, tenantId, messageId, { outcome: "cancel_source" });
   return true;
+}
+
+async function enqueuePulsoDeliveryEvent(
+  client: DatabaseExecutor,
+  tenantId: string,
+  messageId: string,
+  update: PulsoDeliveryOutcome,
+  occurredAt: Date | string = new Date()
+): Promise<void> {
+  const payload = normalizeDeliveryPayload(messageId, update);
+  const payloadDigest = createHash("sha256").update(canonicalJson(payload), "utf8").digest("hex");
+  const dedupeKey = `message:${messageId}:channel.delivery:${payloadDigest}`;
+
+  await client.query(
+    `select pg_advisory_xact_lock(
+       hashtextextended(concat_ws(chr(31), $1::text, 'channel_delivery', $2::text), 0)
+     )`,
+    [tenantId, messageId]
+  );
+  const existing = await client.query<{ id: string }>(
+    `select id
+       from channel_runtime.outbox_events
+      where tenant_id = $1 and dedupe_key = $2
+      for update`,
+    [tenantId, dedupeKey]
+  );
+  if (existing.rows[0]) return;
+
+  const position = await client.query<{ streamSequence: string | number }>(
+    `insert into channel_runtime.outbox_stream_positions (tenant_id, stream_id, last_sequence)
+     values ($1::uuid, $2::uuid, 1)
+     on conflict (tenant_id, stream_id) do update
+       set last_sequence = channel_runtime.outbox_stream_positions.last_sequence + 1,
+           updated_at = now()
+     returning last_sequence as "streamSequence"`,
+    [tenantId, messageId]
+  );
+  const streamSequence = position.rows[0]?.streamSequence;
+  if (!isPositiveDatabaseInteger(streamSequence ?? null)) {
+    throw new Error("Unable to allocate Channel delivery event position");
+  }
+
+  const eventId = randomUUID();
+  const inserted = await client.query<{ id: string }>(
+    `insert into channel_runtime.outbox_events (
+       id, tenant_id, event_type, event_version, aggregate_type, aggregate_id,
+       stream_id, stream_sequence, dedupe_key, payload, occurred_at
+     ) values (
+       $1::uuid, $2::uuid, $3, 1, 'message_delivery', $1::uuid,
+       $4::uuid, $5::bigint, $6, $7::jsonb, $8::timestamptz
+     )
+     returning id`,
+    [
+      eventId,
+      tenantId,
+      CHANNEL_DELIVERY_EVENT_TYPE,
+      messageId,
+      streamSequence,
+      dedupeKey,
+      JSON.stringify(payload),
+      occurredAt
+    ]
+  );
+  if (inserted.rows[0]?.id !== eventId) {
+    throw new Error("Unable to persist Channel delivery event");
+  }
+}
+
+function normalizeDeliveryPayload(messageId: string, update: PulsoDeliveryOutcome): Record<string, string> {
+  switch (update.outcome) {
+    case "sent":
+      return {
+        messageId,
+        outcome: update.outcome,
+        provider: update.provider,
+        providerMessageId: update.providerMessageId
+      };
+    case "failed":
+    case "cancel_source":
+      return { messageId, outcome: update.outcome };
+    case "uncertain":
+      return {
+        messageId,
+        outcome: update.outcome,
+        ...(update.provider ? { provider: update.provider } : {}),
+        ...(update.providerMessageId ? { providerMessageId: update.providerMessageId } : {})
+      };
+    case "reconcile":
+      return {
+        messageId,
+        outcome: update.outcome,
+        provider: update.provider,
+        providerMessageId: update.providerMessageId,
+        status: update.status,
+        occurredAt: update.occurredAt
+      };
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  throw new TypeError("Channel delivery event payload must be JSON serializable");
 }
 
 async function requireConnection(client: DatabaseExecutor, tenantId: string): Promise<string> {

@@ -19,7 +19,10 @@ import {
 } from "@hyperion/durable-events";
 import {
   createInternalAuthorizationHeaders,
+  isRestrictedDeploymentEnvironment,
   readInternalCredential,
+  readOperatorAssertionKey,
+  validateOperatorAssertionContext,
   validateInternalAuthorization,
   type RouteRegistrar,
   type ServiceContext
@@ -30,6 +33,8 @@ import { startAppointmentHoldExpiration } from "./appointment-hold-expiration.js
 import { startAppointmentVerificationSimulator } from "./appointment-verification-simulator.js";
 import { createAuditClient } from "./audit-client.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
+import { registerChannelDeliveryEventRoutes } from "./channel-delivery-events.js";
+import { startChannelDeliveryJetStreamConsumer } from "./channel-delivery-jetstream.js";
 import { createLegacyChannelPositionResolver } from "./channel-position-client.js";
 import {
   readChannelInboundV1Compatibility,
@@ -50,6 +55,7 @@ import { readTenantId } from "./shared.js";
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const durableOutbox = readDurableOutboxConfiguration(process.env);
   const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_PULSO_TOKEN");
+  const operatorAssertionKey = readOperatorAssertionKey(process.env);
   const sofiaToken = readInternalCredential(process.env, "PULSO_TO_SOFIA_TOKEN");
   const sofiaToPulsoToken = readInternalCredential(process.env, "SOFIA_TO_PULSO_TOKEN");
   const channelToPulsoToken = readInternalCredential(process.env, "CHANNEL_TO_PULSO_TOKEN");
@@ -80,15 +86,20 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   }
 
   const emitAudit = createAuditClient({
-    db: context.db,
     logger: context.logger
   });
 
   app.addHook("preHandler", async (request, reply) => {
-    if (!request.url.split("?", 1)[0]?.startsWith("/v1/tenants/")) return;
+    if (!request.routeOptions.url?.startsWith("/v1/tenants/")) return;
+    const tenantId = readTenantParam(request.params);
+    if (tenantId === undefined) return;
     const authError = validateInternalAuthorization(request.headers, { "api-gateway": gatewayToken });
     if (authError) {
       return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
+    const assertionError = validateOperatorAssertionContext(request.headers, operatorAssertionKey, tenantId);
+    if (assertionError) {
+      return reply.code(assertionError.statusCode).send(envelope({ error: assertionError.message }, request.id));
     }
   });
 
@@ -102,6 +113,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   registerChannelDeliveryRoutes(app, context, channelToPulsoToken);
   registerPulsoEventPositionRoute(app, context, sofiaToPulsoToken);
   if (isHttpDurableEventIngressEnabled(durableOutbox.transport)) {
+    registerChannelDeliveryEventRoutes(app, context, channelToPulsoToken);
     await registerChannelInboundEventRoutesWithCompatibility(app, context, {
       allowLegacyV1: allowLegacyChannelInboundV1,
       resolveLegacyPosition: resolveLegacyChannelPosition,
@@ -120,6 +132,18 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     context.registerReadinessCheck?.({
       name: "jetstream_channel_inbound_consumer",
       check: () => consumer.checkReadiness()
+    });
+    const deliveryConsumer = await startChannelDeliveryJetStreamConsumer(
+      (hook) => app.addHook("onClose", hook),
+      context.db,
+      {
+        natsUrl: durableOutbox.natsUrl,
+        ...durableOutbox.authentication
+      }
+    );
+    context.registerReadinessCheck?.({
+      name: "jetstream_channel_delivery_consumer",
+      check: () => deliveryConsumer.checkReadiness()
     });
   }
 
@@ -438,6 +462,15 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 };
 
+function readTenantParam(params: unknown): string | undefined {
+  return typeof params === "object" &&
+    params !== null &&
+    "tenantId" in params &&
+    typeof (params as { tenantId?: unknown }).tenantId === "string"
+    ? (params as { tenantId: string }).tenantId
+    : undefined;
+}
+
 type DurableOutboxConfiguration =
   | { readonly transport: "http"; readonly enabled: boolean }
   | {
@@ -471,7 +504,7 @@ export function readDurableOutboxConfiguration(env: NodeJS.ProcessEnv): DurableO
         required: true,
         minimumSecretLength: 24,
         serverConfigurationSafe: true,
-        allowToken: env.NODE_ENV !== "production"
+        allowToken: !isRestrictedDeploymentEnvironment(env)
       }
     )!
   };

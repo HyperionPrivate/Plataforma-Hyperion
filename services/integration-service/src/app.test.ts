@@ -1,5 +1,9 @@
 import Fastify from "fastify";
-import { createInternalAuthorizationHeaders } from "@hyperion/service-runtime";
+import {
+  OPERATOR_ASSERTION_HEADER,
+  createInternalAuthorizationHeaders,
+  createOperatorAssertion
+} from "@hyperion/service-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerRoutes } from "./app.js";
 
@@ -7,7 +11,8 @@ const tenantId = "00000000-0000-4000-8000-000000000001";
 const CHANNEL_TOKEN = "integration-to-channel-test-token";
 const SOFIA_TOKEN = "integration-to-sofia-test-token";
 const GATEWAY_TOKEN = "gateway-to-integration-test-token-001";
-const gatewayHeaders = createInternalAuthorizationHeaders("api-gateway", GATEWAY_TOKEN);
+const ASSERTION_KEY = "gateway-operator-assertion-key-01";
+const OPERATOR_ID = "11111111-1111-4111-8111-111111111111";
 const status = {
   tenantId,
   providerMode: "whatsapp_web_test",
@@ -28,6 +33,7 @@ describe("WhatsApp integration facade RBAC", () => {
     process.env.INTEGRATION_TO_CHANNEL_TOKEN = CHANNEL_TOKEN;
     process.env.INTEGRATION_TO_SOFIA_TOKEN = SOFIA_TOKEN;
     process.env.GATEWAY_TO_INTEGRATION_TOKEN = GATEWAY_TOKEN;
+    process.env.GATEWAY_OPERATOR_ASSERTION_KEY = ASSERTION_KEY;
     fetchImpl.mockReset();
     dbQuery.mockReset();
     dbQuery.mockResolvedValue({ rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] });
@@ -55,6 +61,7 @@ describe("WhatsApp integration facade RBAC", () => {
     delete process.env.INTEGRATION_TO_CHANNEL_TOKEN;
     delete process.env.INTEGRATION_TO_SOFIA_TOKEN;
     delete process.env.GATEWAY_TO_INTEGRATION_TOKEN;
+    delete process.env.GATEWAY_OPERATOR_ASSERTION_KEY;
     vi.unstubAllGlobals();
     await app.close();
   });
@@ -66,7 +73,7 @@ describe("WhatsApp integration facade RBAC", () => {
     const read = await app.inject({
       method: "GET",
       url: `/v1/tenants/${tenantId}/integrations/whatsapp/status`,
-      headers: { ...gatewayHeaders, "x-operator-role": "coordinator" }
+      headers: gatewayHeaders("coordinator")
     });
     expect(read.statusCode).toBe(200);
     expect(read.json().data).toMatchObject({ providerMode: "whatsapp_web_test", state: "qr_pending" });
@@ -74,7 +81,7 @@ describe("WhatsApp integration facade RBAC", () => {
     const mutate = await app.inject({
       method: "POST",
       url: `/v1/tenants/${tenantId}/integrations/whatsapp/connect`,
-      headers: { ...gatewayHeaders, "x-operator-role": "coordinator" },
+      headers: gatewayHeaders("coordinator"),
       payload: {}
     });
     expect(mutate.statusCode).toBe(403);
@@ -86,7 +93,7 @@ describe("WhatsApp integration facade RBAC", () => {
       const response = await app.inject({
         method: "GET",
         url: `/v1/tenants/${tenantId}/integrations/whatsapp/${path}`,
-        headers: { ...gatewayHeaders, "x-operator-role": "auditor" }
+        headers: gatewayHeaders("auditor")
       });
       expect(response.statusCode).toBe(403);
     }
@@ -112,7 +119,7 @@ describe("WhatsApp integration facade RBAC", () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/tenants/${tenantId}/integrations/whatsapp/qr`,
-      headers: { ...gatewayHeaders, "x-operator-role": "admin" }
+      headers: gatewayHeaders("admin")
     });
     expect(response.statusCode).toBe(200);
     expect(response.body).not.toContain("sessionMaterial");
@@ -148,7 +155,7 @@ describe("WhatsApp integration facade RBAC", () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/tenants/${tenantId}/pulso-iris/sofia/readiness`,
-      headers: { ...gatewayHeaders, "x-operator-role": "coordinator" }
+      headers: gatewayHeaders("coordinator")
     });
 
     expect(response.statusCode).toBe(200);
@@ -176,4 +183,56 @@ describe("WhatsApp integration facade RBAC", () => {
     expect(response.statusCode).toBe(401);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("rejects forged roles even when the gateway edge token is valid", async () => {
+    const signedAdvisor = gatewayHeaders("advisor");
+    const forged = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantId}/integrations/whatsapp/connect`,
+      headers: { ...signedAdvisor, "x-operator-role": "admin" },
+      payload: {}
+    });
+
+    expect(forged.statusCode).toBe(403);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("requires a signed admin context before listing non-tenant integrations", async () => {
+    dbQuery.mockResolvedValueOnce({ rows: [{ id: "integration-1" }] });
+    const edgeOnly = await app.inject({
+      method: "GET",
+      url: "/v1/integrations",
+      headers: {
+        ...createInternalAuthorizationHeaders("api-gateway", GATEWAY_TOKEN),
+        "x-operator-id": OPERATOR_ID,
+        "x-operator-role": "admin"
+      }
+    });
+    const signedAdmin = await app.inject({
+      method: "GET",
+      url: "/v1/integrations",
+      headers: gatewayHeaders("admin", null)
+    });
+
+    expect(edgeOnly.statusCode).toBe(403);
+    expect(signedAdmin.statusCode).toBe(200);
+    expect(signedAdmin.json().data).toEqual([{ id: "integration-1" }]);
+  });
 });
+
+function gatewayHeaders(role: "admin" | "coordinator" | "advisor" | "auditor", tenantScope: string | null = tenantId) {
+  return {
+    ...createInternalAuthorizationHeaders("api-gateway", GATEWAY_TOKEN),
+    "x-operator-id": OPERATOR_ID,
+    "x-operator-role": role,
+    [OPERATOR_ASSERTION_HEADER]: createOperatorAssertion(
+      {
+        operatorId: OPERATOR_ID,
+        role,
+        ...(tenantScope ? { tenantId: tenantScope } : {}),
+        expiresAtUnix: Math.floor(Date.now() / 1000) + 60
+      },
+      ASSERTION_KEY
+    )
+  };
+}

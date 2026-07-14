@@ -244,7 +244,7 @@ function gateTransactionsBeforeAdvisoryLock(database: DatabaseClient, participan
     transaction: (work) =>
       database.transaction((transaction) =>
         work({
-          query: async (text, params) => {
+          query: async (text: string, params?: unknown[]) => {
             if (text.includes("pg_advisory_xact_lock")) {
               arrivals += 1;
               if (arrivals === participants) releaseBarrier?.();
@@ -252,7 +252,7 @@ function gateTransactionsBeforeAdvisoryLock(database: DatabaseClient, participan
             }
             return transaction.query(text, params);
           }
-        })
+        } as never)
       ),
     close: async () => undefined
   };

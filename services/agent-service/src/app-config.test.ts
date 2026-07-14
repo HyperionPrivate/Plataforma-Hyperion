@@ -56,7 +56,8 @@ describe("agent durable outbox configuration", () => {
   it("requires a per-service username identity in production", () => {
     expect(() =>
       readDurableOutboxConfiguration({
-        NODE_ENV: "production",
+        NODE_ENV: "test",
+        HYPERION_ENVIRONMENT: "production",
         DURABLE_EVENT_TRANSPORT: "jetstream",
         NATS_URL: "nats://nats:4222",
         NATS_AUTH_TOKEN: NATS_TEST_SECRET

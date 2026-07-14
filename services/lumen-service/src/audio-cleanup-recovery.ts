@@ -1,4 +1,5 @@
 import type { DatabaseExecutor } from "@hyperion/database";
+import { isRestrictedDeploymentEnvironment } from "@hyperion/service-runtime";
 import { randomUUID } from "node:crypto";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,9 +64,8 @@ class AudioCleanupOrphanedOwnerError extends Error {
 
 export function readLumenAudioCleanupConfiguration(env: NodeJS.ProcessEnv): LumenAudioCleanupConfiguration {
   const explicitOwner = env.LUMEN_INSTANCE_ID?.trim();
-  const environment = env.NODE_ENV?.trim() || "development";
-  if (environment !== "development" && environment !== "test" && !explicitOwner) {
-    throw new Error("LUMEN_INSTANCE_ID is required outside development and test");
+  if (isRestrictedDeploymentEnvironment(env) && !explicitOwner) {
+    throw new Error("LUMEN_INSTANCE_ID is required in production/staging");
   }
 
   const owner = explicitOwner || env.HOSTNAME?.trim() || hostname().trim();

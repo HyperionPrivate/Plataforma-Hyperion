@@ -204,7 +204,7 @@ function scriptedDatabase(results: unknown[][]) {
     },
     async transaction(work) {
       transactions += 1;
-      return work(client);
+      return work(client as never);
     },
     async close() {}
   };

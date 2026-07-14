@@ -8,10 +8,10 @@ import {
   operatorPatchSchema
 } from "@hyperion/contracts";
 import {
-  OPERATOR_ASSERTION_HEADER,
   readInternalCredential,
+  readOperatorAssertionKey,
+  validateOperatorAssertionContext,
   validateInternalAuthorization,
-  verifyOperatorAssertion,
   type RouteRegistrar,
   type ServiceContext
 } from "@hyperion/service-runtime";
@@ -45,6 +45,7 @@ interface OperatorListRow {
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_IDENTITY_TOKEN");
+  const operatorAssertionKey = readOperatorAssertionKey(process.env);
 
   if (context.db) {
     await ensureInitialAdmin(context);
@@ -65,7 +66,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 
   app.get("/v1/identity/operators", async (request, reply) => {
     if (!requireGateway(request, reply, gatewayToken)) return;
-    const auth = requireAdmin(request);
+    const auth = requireAdmin(request, operatorAssertionKey);
     if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
     if (!context.db) {
       return envelope([], request.id);
@@ -92,7 +93,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 
   app.post("/v1/identity/operators", async (request, reply) => {
     if (!requireGateway(request, reply, gatewayToken)) return;
-    const auth = requireAdmin(request);
+    const auth = requireAdmin(request, operatorAssertionKey);
     if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
 
     if (!context.db) {
@@ -121,7 +122,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 
   app.patch("/v1/identity/operators/:operatorId", async (request, reply) => {
     if (!requireGateway(request, reply, gatewayToken)) return;
-    const auth = requireAdmin(request);
+    const auth = requireAdmin(request, operatorAssertionKey);
     if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
 
     if (!context.db) {
@@ -291,31 +292,19 @@ async function countOperators(context: ServiceContext): Promise<number> {
   return Number(result.rows[0]?.total ?? 0);
 }
 
-function requireAdmin(request: FastifyRequest): { statusCode: number; message: string } | undefined {
-  const assertionKey = readInternalCredential(process.env, "GATEWAY_OPERATOR_ASSERTION_KEY");
-  const rawAssertion = request.headers[OPERATOR_ASSERTION_HEADER];
-  const assertionHeader = Array.isArray(rawAssertion) ? undefined : rawAssertion;
+function requireAdmin(
+  request: FastifyRequest,
+  assertionKey: string | undefined
+): { statusCode: number; message: string } | undefined {
   if (assertionKey) {
-    const claims = verifyOperatorAssertion(assertionHeader, assertionKey);
-    if (!claims || claims.role !== "admin") {
-      return { statusCode: 403, message: "Admin role required" };
-    }
-    const headerRole = Array.isArray(request.headers["x-operator-role"])
-      ? request.headers["x-operator-role"][0]
-      : request.headers["x-operator-role"];
-    const headerId = Array.isArray(request.headers["x-operator-id"])
-      ? request.headers["x-operator-id"][0]
-      : request.headers["x-operator-id"];
-    if (headerRole !== claims.role || headerId !== claims.operatorId) {
-      return { statusCode: 403, message: "Operator assertion mismatch" };
-    }
-    return undefined;
+    const assertionFailure = validateOperatorAssertionContext(request.headers, assertionKey, null);
+    if (assertionFailure) return assertionFailure;
   }
 
   // Residual (documented): without GATEWAY_OPERATOR_ASSERTION_KEY, role headers
   // remain forgeable by anyone holding GATEWAY_TO_IDENTITY_TOKEN.
   const rawRole = request.headers["x-operator-role"];
-  const role = Array.isArray(rawRole) ? rawRole[0] : rawRole;
+  const role = typeof rawRole === "string" ? rawRole : undefined;
   if (role !== "admin") {
     return { statusCode: 403, message: "Admin role required" };
   }

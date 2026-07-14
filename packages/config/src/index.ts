@@ -1,4 +1,13 @@
 import type { ServiceName } from "@hyperion/contracts";
+import { readDeploymentEnvironment } from "./deployment-environment.js";
+
+export {
+  HYPERION_DEPLOYMENT_ENVIRONMENTS,
+  isCiDeploymentEnvironment,
+  isRestrictedDeploymentEnvironment,
+  readDeploymentEnvironment,
+  type HyperionDeploymentEnvironment
+} from "./deployment-environment.js";
 
 export {
   assertNoPlaceholderSecrets,
@@ -49,7 +58,7 @@ const defaultPorts: Record<ServiceName, number> = {
 export function readServiceConfig(serviceName: ServiceName): ServiceConfig {
   return {
     serviceName,
-    environment: process.env.NODE_ENV ?? "development",
+    environment: readDeploymentEnvironment(process.env),
     host: process.env.HOST ?? "0.0.0.0",
     port: readNumber(process.env.PORT, defaultPorts[serviceName]),
     serviceVersion: process.env.SERVICE_VERSION ?? "0.1.0",

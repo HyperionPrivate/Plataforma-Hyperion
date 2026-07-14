@@ -182,7 +182,8 @@ describe("audit durable event transport configuration", () => {
   it("requires a per-service username identity in production", () => {
     expect(() =>
       readAuditEventTransportConfiguration({
-        NODE_ENV: "production",
+        NODE_ENV: "test",
+        HYPERION_ENVIRONMENT: "production",
         DURABLE_EVENT_TRANSPORT: "jetstream",
         NATS_URL: "nats://nats:4222",
         NATS_AUTH_TOKEN: NATS_TEST_SECRET

@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AuditEventInput } from "@hyperion/contracts";
-import type { DatabaseExecutor } from "@hyperion/database";
+import { isDatabaseTransaction, type DatabaseExecutor, type DatabaseTransaction } from "@hyperion/database";
 
 export const PULSO_AUDIT_EVENTS = [
   "agenda.settings.updated",
@@ -31,10 +31,11 @@ export interface EmitAuditEventInput {
   eventType: PulsoAuditEventType;
   entityType: string;
   entityId?: string;
+  idempotencyKey?: string;
   metadata?: Record<string, unknown>;
 }
 
-export type AuditEmitter = (input: EmitAuditEventInput, executor?: DatabaseExecutor) => Promise<void>;
+export type AuditEmitter = (input: EmitAuditEventInput, transaction: DatabaseTransaction) => Promise<void>;
 
 export const PULSO_AUDIT_EVENT_TYPE = "pulso.audit.event.record.v1" as const;
 
@@ -45,21 +46,31 @@ interface AuditLogger {
 const SOURCE = "pulso-iris-service";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export function createAuditClient(options: { db?: DatabaseExecutor; logger: AuditLogger }): AuditEmitter {
-  let warnedMissingConfig = false;
+function createAuditDedupeKey(input: EmitAuditEventInput, auditEventId: string): string {
+  if (input.idempotencyKey === undefined) {
+    return `pulso-audit:event:${auditEventId}`;
+  }
 
-  return async (input, executor) => {
-    const client = executor ?? options.db;
-    if (!client) {
-      if (!warnedMissingConfig) {
-        warnedMissingConfig = true;
-        options.logger.warn("audit emission disabled: database client missing");
-      }
-      return;
+  if (typeof input.idempotencyKey !== "string" || !input.idempotencyKey.trim()) {
+    throw new Error("Pulso audit idempotencyKey must be a non-empty string when provided");
+  }
+
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([SOURCE, input.eventType, input.entityType, input.entityId ?? null, input.idempotencyKey.trim()])
+    )
+    .digest("hex");
+  return `pulso-audit:idempotency:v1:${digest}`;
+}
+
+export function createAuditClient(options: { logger: AuditLogger }): AuditEmitter {
+  return async (input, transaction) => {
+    if (!isDatabaseTransaction(transaction)) {
+      throw new TypeError("Pulso audit events require an active database transaction");
     }
 
     try {
-      await enqueuePulsoAuditEvent(client, input);
+      await enqueuePulsoAuditEvent(transaction, input);
     } catch (error) {
       options.logger.warn("failed to enqueue audit event", {
         eventType: input.eventType,
@@ -75,17 +86,12 @@ export async function enqueuePulsoAuditEvent(db: DatabaseExecutor, input: EmitAu
     throw new Error("Pulso audit events require a tenantId UUID");
   }
 
-  const aggregateId = input.entityId && UUID_PATTERN.test(input.entityId) ? input.entityId : randomUUID();
-  const dedupeSuffix =
-    typeof input.metadata?.auditDedupeSuffix === "string" && input.metadata.auditDedupeSuffix.trim()
-      ? input.metadata.auditDedupeSuffix.trim()
-      : "v1";
-  const dedupeKey = `${input.entityType}:${input.entityId ?? aggregateId}:${input.eventType}:${dedupeSuffix}`.slice(
-    0,
-    240
-  );
+  const auditEventId = randomUUID();
+  const dedupeKey = createAuditDedupeKey(input, auditEventId);
+  const aggregateType = input.entityType.slice(0, 80);
 
   const metadata = { ...(input.metadata ?? {}) };
+  // Compatibility cleanup only: correlation metadata never controls idempotency.
   delete metadata.auditDedupeSuffix;
 
   const payload: AuditEventInput = {
@@ -100,21 +106,37 @@ export async function enqueuePulsoAuditEvent(db: DatabaseExecutor, input: EmitAu
     }
   };
 
-  await db.query(
+  const serializedPayload = JSON.stringify(payload);
+  const inserted = await db.query<{ id: string }>(
     `insert into pulso_iris.outbox_events (
-       tenant_id, event_type, event_version, aggregate_type, aggregate_id,
+       id, tenant_id, event_type, event_version, aggregate_type, aggregate_id,
        dedupe_key, payload, occurred_at
-     ) values ($1, $2, 1, $3, $4::uuid, $5, $6::jsonb, now())
-     on conflict (tenant_id, dedupe_key) where dedupe_key is not null do nothing`,
-    [
-      input.tenantId,
-      PULSO_AUDIT_EVENT_TYPE,
-      input.entityType.slice(0, 80),
-      aggregateId,
-      dedupeKey,
-      JSON.stringify(payload)
-    ]
+     ) values ($4::uuid, $1, $2, 1, $3, $4::uuid, $5, $6::jsonb, now())
+     on conflict (tenant_id, dedupe_key) where dedupe_key is not null do nothing
+     returning id`,
+    [input.tenantId, PULSO_AUDIT_EVENT_TYPE, aggregateType, auditEventId, dedupeKey, serializedPayload]
   );
+  if (inserted.rows.length > 0) {
+    return;
+  }
+
+  const existing = await db.query<{ matches: boolean }>(
+    `select (
+       event_type = $3
+       and event_version = 1
+       and aggregate_type = $4
+       and payload = $5::jsonb
+     ) as matches
+       from pulso_iris.outbox_events
+      where tenant_id = $1::uuid and dedupe_key = $2
+      for update`,
+    [input.tenantId, dedupeKey, PULSO_AUDIT_EVENT_TYPE, aggregateType, serializedPayload]
+  );
+  if (existing.rows[0]?.matches === true) {
+    return;
+  }
+
+  throw new Error("Pulso audit idempotency key was reused for a different event");
 }
 
 export function readOperatorId(headers: Record<string, unknown> | undefined): string | undefined {

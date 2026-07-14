@@ -2,12 +2,65 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEPLOYMENT_ENVIRONMENT_BASE_SERVICES,
+  DEPLOYMENT_ENVIRONMENT_OVERLAY_SERVICES,
+  deploymentEnvironmentProblems,
   eventTransportProblems,
   gatewayDependencyProblems,
   httpWorkloadIdentityProblems,
   roleBootstrapDependencyProblems,
   shutdownLifecycleProblems
 } from "./check-compose-identities.mjs";
+
+test("Compose propaga una clase de despliegue explícita a cada workload relevante", () => {
+  const servicesFor = (names, deploymentEnvironment) =>
+    Object.fromEntries(names.map((name) => [name, { environment: { HYPERION_ENVIRONMENT: deploymentEnvironment } }]));
+  const base = { services: servicesFor(DEPLOYMENT_ENVIRONMENT_BASE_SERVICES, "local") };
+  const overlay = { services: servicesFor(DEPLOYMENT_ENVIRONMENT_OVERLAY_SERVICES, "local") };
+
+  assert.deepEqual(deploymentEnvironmentProblems(base, overlay), []);
+});
+
+test("Compose rechaza entornos ausentes, divergentes y escapes heredados", () => {
+  const base = {
+    services: {
+      migrations: { environment: { HYPERION_ENVIRONMENT: "local" } },
+      "db-role-bootstrap": { environment: {} },
+      "api-gateway": {
+        environment: {
+          HYPERION_ENVIRONMENT: "production",
+          CI: "true"
+        }
+      }
+    }
+  };
+  const overlay = {
+    services: {
+      nats: {
+        environment: {
+          HYPERION_ENVIRONMENT: "local",
+          HYPERION_ALLOW_EXAMPLE_SECRETS: "true"
+        }
+      },
+      "jetstream-topology-bootstrap": { environment: { HYPERION_ENVIRONMENT: "staging" } }
+    }
+  };
+
+  assert.deepEqual(
+    deploymentEnvironmentProblems(
+      base,
+      overlay,
+      ["migrations", "db-role-bootstrap", "api-gateway"],
+      ["nats", "jetstream-topology-bootstrap"]
+    ),
+    [
+      "db-role-bootstrap must declare HYPERION_ENVIRONMENT as local, ci, staging or production",
+      "api-gateway must not use ambient CI as a deployment security decision",
+      "nats must not receive the legacy HYPERION_ALLOW_EXAMPLE_SECRETS bypass",
+      "all environment-aware Compose workloads must receive the same HYPERION_ENVIRONMENT"
+    ]
+  );
+});
 
 test("gateway rechaza acoplar su arranque a la disponibilidad de un producto", () => {
   const configuration = {

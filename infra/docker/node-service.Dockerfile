@@ -25,8 +25,10 @@ RUN pnpm -r build
 # Runtime images need executable JavaScript only. Keep tests, declarations and
 # source maps out of every later COPY --from=build boundary.
 RUN find apps packages services -path '*/dist/*' -type f \
-      \( -name '*.test.js' -o -name '*.spec.js' -o -name '*.d.ts' -o -name '*.js.map' \) \
-      -delete
+      \( -name '*.test.*' -o -name '*.spec.*' -o -name '*.d.ts' -o -name '*.js.map' \) \
+      -delete \
+  && test -z "$(find apps packages services -path '*/dist/*' -type f \
+      \( -name '*.test.*' -o -name '*.spec.*' \) -print -quit)"
 
 # Test-only runner for an isolated Compose rehearsal. It is never referenced by
 # production services and receives credentials only at container runtime.

@@ -121,6 +121,37 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
     );
   });
 
+  it("allows PULSO to pull and ACK Channel delivery while denying topology's direct pull API", async () => {
+    const subject = "hyperion.events.channel.delivery.updated.v1";
+    const messageId = `acl-allowed-channel-delivery-${Date.now()}`;
+    await expectPublishAllowed(channel, subject, messageId);
+
+    await expectRequestPublishDenied(topology, "$JS.API.CONSUMER.MSG.NEXT.HYPERION_EVENTS.pulso_channel_delivery_v1");
+
+    const consumer = await jetstream(pulso, { timeout: 2_000 }).consumers.get(
+      "HYPERION_EVENTS",
+      "pulso_channel_delivery_v1"
+    );
+    const message = await consumer.next({ expires: 2_000 });
+    expect(message).not.toBeNull();
+    expect(message?.subject).toBe(subject);
+    await expect(message!.ackAck()).resolves.toBe(true);
+  });
+
+  it("allows PULSO to publish the delivery DLQ but not the Channel-owned delivery event", async () => {
+    await expectPublishAllowed(
+      pulso,
+      "hyperion.dlq.channel.delivery.updated.v1",
+      `acl-allowed-pulso-channel-delivery-dlq-${Date.now()}`
+    );
+    await expectPublishDenied(
+      pulso,
+      "hyperion.events.channel.delivery.updated.v1",
+      "acl-denied-pulso-channel-delivery"
+    );
+    await expectPublishDenied(channel, "hyperion.dlq.channel.delivery.updated.v1", "acl-denied-channel-delivery-dlq");
+  });
+
   it("rejects topology publishing a domain event", async () => {
     await expectPublishDenied(topology, "hyperion.events.channel.inbound.received.v1", "acl-denied-topology-domain");
   });
@@ -193,6 +224,25 @@ async function expectPublishDenied(connection: NatsConnection, subject: string, 
     await client.publish(subject, new Uint8Array([1]), {
       msgID: messageId,
       expect: { streamName: "HYPERION_EVENTS" }
+    });
+  } catch (error) {
+    rejection = error;
+  }
+  expect(rejection).toBeInstanceOf(RequestError);
+  const permissionViolation = (rejection as Error | undefined)?.cause;
+  expect(permissionViolation).toBeInstanceOf(PermissionViolationError);
+  expect(permissionViolation).toMatchObject({
+    name: "PermissionViolationError",
+    operation: "publish",
+    subject
+  });
+}
+
+async function expectRequestPublishDenied(connection: NatsConnection, subject: string): Promise<void> {
+  let rejection: unknown;
+  try {
+    await connection.request(subject, new TextEncoder().encode('{"batch":1,"expires":1000000000}'), {
+      timeout: 2_000
     });
   } catch (error) {
     rejection = error;

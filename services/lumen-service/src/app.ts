@@ -8,7 +8,10 @@ import {
 } from "@hyperion/durable-events";
 import {
   createInternalAuthorizationHeaders,
+  isRestrictedDeploymentEnvironment,
   readInternalCredential,
+  readOperatorAssertionKey,
+  validateOperatorAssertionContext,
   validateInternalAuthorization,
   type RouteRegistrar,
   type ServiceContext
@@ -25,6 +28,7 @@ import { ElevenLabsSpeechToTextProvider } from "./speech-to-text.js";
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const durableOutbox = readDurableOutboxConfiguration(process.env);
   const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_LUMEN_TOKEN");
+  const operatorAssertionKey = readOperatorAssertionKey(process.env);
   const auditToken = readInternalCredential(process.env, "LUMEN_TO_AUDIT_TOKEN");
   if (context.db) await verifyLumenSchema(context);
 
@@ -49,10 +53,18 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   const structurer = new DeepSeekClinicalStructurer();
 
   app.addHook("preHandler", async (request, reply) => {
-    if (!request.url.split("?", 1)[0]?.startsWith("/v1/tenants/")) return;
+    if (!request.routeOptions.url?.startsWith("/v1/tenants/")) return;
+    const tenantId = readTenantParam(request.params);
+    if (tenantId === undefined) return;
     const authError = validateInternalAuthorization(request.headers, { "api-gateway": gatewayToken });
     if (authError) {
       return reply.code(authError.statusCode).send({ data: { error: authError.message }, requestId: request.id });
+    }
+    const assertionError = validateOperatorAssertionContext(request.headers, operatorAssertionKey, tenantId);
+    if (assertionError) {
+      return reply
+        .code(assertionError.statusCode)
+        .send({ data: { error: assertionError.message }, requestId: request.id });
     }
   });
 
@@ -148,6 +160,15 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   app.get("/v1/lumen/catalog", async (request) => ({ data: lumenCatalog, requestId: request.id }));
 };
 
+function readTenantParam(params: unknown): string | undefined {
+  return typeof params === "object" &&
+    params !== null &&
+    "tenantId" in params &&
+    typeof (params as { tenantId?: unknown }).tenantId === "string"
+    ? (params as { tenantId: string }).tenantId
+    : undefined;
+}
+
 export async function verifyLumenSchema(context: ServiceContext): Promise<void> {
   const result = await context.db!.query<{
     encounters: string | null;
@@ -200,7 +221,7 @@ export function readDurableOutboxConfiguration(env: NodeJS.ProcessEnv): DurableO
         required: true,
         minimumSecretLength: 24,
         serverConfigurationSafe: true,
-        allowToken: env.NODE_ENV !== "production"
+        allowToken: !isRestrictedDeploymentEnvironment(env)
       }
     )!
   };

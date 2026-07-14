@@ -50,13 +50,19 @@ una identidad incorrecta cierra el pool y aborta el arranque.
 | `hyperion_audit`       | Audit             | append-only (`SELECT`/`INSERT`) en ledger e inbox             | ninguna                                                                                                                 |
 | `hyperion_integration` | Integration       | `platform.integrations`                                       | lectura de agentes/prompts y configuración de agenda PULSO                                                              |
 | `hyperion_pulso`       | PULSO             | tablas y funciones `pulso_iris`                               | lectura de audit                                                                                                        |
-| `hyperion_channel`     | Channel           | tablas y funciones `channel_runtime`                          | ninguna; delivery PULSO vía HTTP autenticado                                                                            |
+| `hyperion_channel`     | Channel           | tablas y funciones `channel_runtime`                          | ninguna; delivery PULSO mediante outbox/evento autenticado                                                              |
 | `hyperion_lumen`       | LUMEN             | sólo tablas y funciones `lumen`                               | ninguna; sin `USAGE` en `platform` ni `pulso_iris`                                                                      |
 
 Los servicios que todavía usan la readiness global reciben únicamente `SELECT`
 sobre `platform.schema_migrations`; LUMEN valida `lumen.schema_version`. Los
 accesos transicionales deben reducirse junto con
 `docs/architecture/boundary-baseline.json`.
+
+Channel no recibe permisos sobre `pulso_iris`: persiste cada cambio de delivery y
+`channel.delivery.updated.v1` en su propia transacción, y PULSO aplica la proyección con su rol y un inbox
+idempotente. El `POST` directo de delivery permanece autenticado sólo para compatibilidad N-1 y no autoriza SQL
+cruzado al runtime Channel. De forma análoga, PULSO y Channel escriben sus auditorías en outboxes propios; sólo
+`hyperion_audit` agrega el ledger y su inbox.
 
 El trigger histórico que inicializa `pulso_iris.agenda_settings` al crear un
 tenant sigue siendo un acoplamiento pendiente. Para no conceder PULSO a Access,

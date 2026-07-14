@@ -368,11 +368,18 @@ describe("LUMEN temporary-audio cleanup recovery", () => {
       readLumenAudioCleanupConfiguration({ NODE_ENV: "production", LUMEN_INSTANCE_ID: "lumen-stateful-0" })
     ).toMatchObject({ owner: "lumen-stateful-0", leaseTtlMs: 30 * 60_000 });
     expect(() => readLumenAudioCleanupConfiguration({ NODE_ENV: "production", HOSTNAME: "implicit-owner" })).toThrow(
-      "LUMEN_INSTANCE_ID is required outside development and test"
+      "LUMEN_INSTANCE_ID is required in production/staging"
     );
     expect(() => readLumenAudioCleanupConfiguration({ NODE_ENV: "staging", HOSTNAME: "implicit-owner" })).toThrow(
-      "LUMEN_INSTANCE_ID is required outside development and test"
+      "LUMEN_INSTANCE_ID is required in production/staging"
     );
+    expect(() =>
+      readLumenAudioCleanupConfiguration({
+        NODE_ENV: "development",
+        HYPERION_ENVIRONMENT: "production",
+        HOSTNAME: "implicit-owner"
+      })
+    ).toThrow("LUMEN_INSTANCE_ID is required in production/staging");
     expect(() => readLumenAudioCleanupConfiguration({ LUMEN_INSTANCE_ID: "../other-owner" })).toThrow(
       "stable identifier"
     );

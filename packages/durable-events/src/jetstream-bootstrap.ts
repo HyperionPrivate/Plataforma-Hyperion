@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { assertNoPlaceholderSecrets, isRestrictedDeploymentEnvironment } from "@hyperion/config";
 import { jetstreamManager } from "@nats-io/jetstream";
 import { connect, type NatsConnection } from "@nats-io/transport-node";
 import {
@@ -13,6 +14,7 @@ import { natsInboxPrefix, readNatsAuthentication, type NatsAuthentication } from
 export const HYPERION_KNOWN_CONSUMERS = [
   { eventType: "channel.inbound.received.v1", durableName: "pulso_channel_inbound_v1" },
   { eventType: "channel.inbound.received.v2", durableName: "pulso_channel_inbound_v2" },
+  { eventType: "channel.delivery.updated.v1", durableName: "pulso_channel_delivery_v1" },
   { eventType: "pulso.message.received.v1", durableName: "sofia_pulso_message_v1" },
   { eventType: "pulso.message.received.v2", durableName: "sofia_pulso_message_v2" },
   { eventType: "sofia.audit.event.record.v1", durableName: "audit_sofia_event_record_v1" },
@@ -39,6 +41,24 @@ export interface HyperionTopologyProvisioningResult {
   readonly consumers: ReadonlyArray<
     HyperionJetStreamTopologyOptions & Readonly<{ result: HyperionJetStreamTopologyResult }>
   >;
+}
+
+export function readJetStreamTopologyBootstrapOptions(
+  environment: NodeJS.ProcessEnv = process.env
+): BootstrapHyperionJetStreamOptions {
+  assertNoPlaceholderSecrets(environment);
+  if (isRestrictedDeploymentEnvironment(environment)) {
+    throw new Error(
+      "JetStream topology bootstrap is refused in production/staging while Hyperion JetStream remains a single-node pilot"
+    );
+  }
+  return {
+    server: environment.NATS_URL ?? "",
+    authToken: environment.NATS_AUTH_TOKEN,
+    username: environment.NATS_USERNAME,
+    password: environment.NATS_PASSWORD,
+    allowToken: !isRestrictedDeploymentEnvironment(environment)
+  };
 }
 
 export async function provisionHyperionJetStreamTopology(
@@ -96,13 +116,7 @@ export async function bootstrapHyperionJetStreamTopology(
 }
 
 async function main(): Promise<void> {
-  const result = await bootstrapHyperionJetStreamTopology({
-    server: process.env.NATS_URL ?? "",
-    authToken: process.env.NATS_AUTH_TOKEN,
-    username: process.env.NATS_USERNAME,
-    password: process.env.NATS_PASSWORD,
-    allowToken: process.env.NODE_ENV !== "production"
-  });
+  const result = await bootstrapHyperionJetStreamTopology(readJetStreamTopologyBootstrapOptions());
   process.stdout.write(
     `${JSON.stringify({ status: "ready", stream: "HYPERION_EVENTS", consumers: result.consumers.length })}\n`
   );

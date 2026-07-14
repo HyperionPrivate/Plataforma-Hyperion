@@ -127,14 +127,27 @@ export async function registerSofiaToolRoutes(
     }
 
     try {
-      const result = await executeTool(context.db, tenantId, toolName, parsed.data as never, emitAudit, channelThreads);
-      await emitAudit({
-        tenantId,
-        actorId: "agent:SOFIA",
-        eventType: "agent.tool.executed",
-        entityType: "sofia_tool",
-        metadata: { tool: toolName }
-      });
+      const result =
+        toolName === "identify_patient_by_phone"
+          ? await identifyPatient(
+              context.db,
+              tenantId,
+              parsed.data as z.infer<(typeof toolSchemas)["identify_patient_by_phone"]>,
+              emitAudit,
+              channelThreads
+            )
+          : await context.db.transaction(async (tx) => {
+              const value = await executeTransactionalTool(
+                asTransactionalDatabase(tx),
+                tenantId,
+                toolName,
+                parsed.data as never,
+                emitAudit,
+                tx
+              );
+              await emitToolExecuted(tenantId, toolName, emitAudit, tx);
+              return value;
+            });
       return envelope(result, request.id);
     } catch (error) {
       if (error instanceof ToolError) {
@@ -152,50 +165,64 @@ export async function registerSofiaToolRoutes(
   });
 }
 
-async function executeTool(
+type TransactionalToolName = Exclude<ToolName, "identify_patient_by_phone">;
+
+async function executeTransactionalTool(
   db: Database,
   tenantId: string,
-  toolName: ToolName,
+  toolName: TransactionalToolName,
   input: never,
   emitAudit: AuditEmitter,
-  channelThreads: ChannelThreadClient
+  auditTransaction: TransactionExecutor
 ): Promise<unknown> {
   switch (toolName) {
     case "get_catalog":
       return getCatalog(db, tenantId);
-    case "identify_patient_by_phone":
-      return identifyPatient(
-        db,
-        tenantId,
-        input as z.infer<(typeof toolSchemas)["identify_patient_by_phone"]>,
-        emitAudit,
-        channelThreads
-      );
     case "update_patient_name":
       return updatePatientName(db, tenantId, input as z.infer<(typeof toolSchemas)["update_patient_name"]>);
     case "search_availability":
       return searchAvailability(db, tenantId, input as z.infer<(typeof toolSchemas)["search_availability"]>);
     case "create_appointment_hold":
-      return createHold(db, tenantId, input as z.infer<(typeof toolSchemas)["create_appointment_hold"]>, emitAudit);
+      return createHold(
+        db,
+        tenantId,
+        input as z.infer<(typeof toolSchemas)["create_appointment_hold"]>,
+        emitAudit,
+        auditTransaction
+      );
     case "book_appointment":
-      return bookAppointment(db, tenantId, input as z.infer<(typeof toolSchemas)["book_appointment"]>, emitAudit);
+      return bookAppointment(
+        db,
+        tenantId,
+        input as z.infer<(typeof toolSchemas)["book_appointment"]>,
+        emitAudit,
+        auditTransaction
+      );
     case "list_patient_appointments":
       return listAppointments(db, tenantId, input as z.infer<(typeof toolSchemas)["list_patient_appointments"]>);
     case "cancel_appointment":
-      return cancelAppointment(db, tenantId, input as z.infer<(typeof toolSchemas)["cancel_appointment"]>, emitAudit);
+      return cancelAppointment(
+        db,
+        tenantId,
+        input as z.infer<(typeof toolSchemas)["cancel_appointment"]>,
+        emitAudit,
+        auditTransaction
+      );
     case "reschedule_appointment":
       return rescheduleAppointment(
         db,
         tenantId,
         input as z.infer<(typeof toolSchemas)["reschedule_appointment"]>,
-        emitAudit
+        emitAudit,
+        auditTransaction
       );
     case "create_urgent_handoff":
       return createUrgentHandoff(
         db,
         tenantId,
         input as z.infer<(typeof toolSchemas)["create_urgent_handoff"]>,
-        emitAudit
+        emitAudit,
+        auditTransaction
       );
   }
 }
@@ -305,15 +332,19 @@ async function identifyPatient(
         ).rows[0]!;
 
     if (insertedMessage.rows[0]) {
-      await emitAudit({
-        tenantId,
-        actorId: "agent:SOFIA",
-        eventType: "channel.message.received",
-        entityType: "message",
-        entityId: existingMessage.id,
-        metadata: { provider: "whatsapp_web_test", channel: "whatsapp" }
-      });
+      await emitAudit(
+        {
+          tenantId,
+          actorId: "agent:SOFIA",
+          eventType: "channel.message.received",
+          entityType: "message",
+          entityId: existingMessage.id,
+          metadata: { provider: "whatsapp_web_test", channel: "whatsapp" }
+        },
+        tx
+      );
     }
+    await emitToolExecuted(tenantId, "identify_patient_by_phone", emitAudit, tx);
     return {
       patientId: patient.id,
       conversationId,
@@ -419,7 +450,8 @@ async function createHold(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["create_appointment_hold"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "book");
   const settings = await loadInternalSettings(db, tenantId);
@@ -438,16 +470,19 @@ async function createHold(
       actorId: "agent:SOFIA",
       holdDurationMinutes: settings.holdDurationMinutes
     });
-    await emitExpiredHoldAudits(result.expiredHolds, emitAudit);
+    await emitExpiredHoldAudits(result.expiredHolds, emitAudit, auditTransaction);
     if (!result.idempotent) {
-      await emitAudit({
-        tenantId,
-        actorId: "agent:SOFIA",
-        eventType: "appointment.hold.created",
-        entityType: "appointment_hold",
-        entityId: result.hold.id,
-        metadata: { expiresAt: result.hold.expiresAt, origin: "sofia_wa" }
-      });
+      await emitAudit(
+        {
+          tenantId,
+          actorId: "agent:SOFIA",
+          eventType: "appointment.hold.created",
+          entityType: "appointment_hold",
+          entityId: result.hold.id,
+          metadata: { expiresAt: result.hold.expiresAt, origin: "sofia_wa" }
+        },
+        auditTransaction
+      );
     }
     return result;
   } catch (error) {
@@ -472,7 +507,8 @@ async function bookAppointment(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["book_appointment"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "book");
   await assertHoldOwner(db, tenantId, input.holdId, input.patientId, input.conversationId);
@@ -484,22 +520,28 @@ async function bookAppointment(
     actorId: "agent:SOFIA"
   });
   if (!result.idempotent) {
-    await emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.registered",
-      entityType: "appointment",
-      entityId: result.appointment.id,
-      metadata: { mode: "internal", origin: "sofia_wa" }
-    });
-    await emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.verified",
-      entityType: "appointment",
-      entityId: result.appointment.id,
-      metadata: { verificationMode: "internal", origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.registered",
+        entityType: "appointment",
+        entityId: result.appointment.id,
+        metadata: { mode: "internal", origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.verified",
+        entityType: "appointment",
+        entityId: result.appointment.id,
+        metadata: { verificationMode: "internal", origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
   return { appointment: await findAppointmentView(db, tenantId, result.appointment.id), idempotent: result.idempotent };
 }
@@ -522,7 +564,8 @@ async function cancelAppointment(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["cancel_appointment"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "cancel");
   const result = await db.transaction(async (tx) => {
@@ -554,14 +597,17 @@ async function cancelAppointment(
     return false;
   });
   if (!result) {
-    await emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.cancelled",
-      entityType: "appointment",
-      entityId: input.appointmentId,
-      metadata: { origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.cancelled",
+        entityType: "appointment",
+        entityId: input.appointmentId,
+        metadata: { origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
   return { appointment: await findAppointmentView(db, tenantId, input.appointmentId), idempotent: result };
 }
@@ -570,7 +616,8 @@ async function rescheduleAppointment(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["reschedule_appointment"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "reschedule");
   const settings = await loadInternalSettings(db, tenantId);
@@ -616,16 +663,19 @@ async function rescheduleAppointment(
     actorId: "agent:SOFIA",
     holdDurationMinutes: settings.holdDurationMinutes
   });
-  await emitExpiredHoldAudits(reservation.expiredHolds, emitAudit);
+  await emitExpiredHoldAudits(reservation.expiredHolds, emitAudit, auditTransaction);
   if (!reservation.idempotent) {
-    await emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.hold.created",
-      entityType: "appointment_hold",
-      entityId: reservation.hold.id,
-      metadata: { expiresAt: reservation.hold.expiresAt, origin: "sofia_wa", operation: "reschedule" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.hold.created",
+        entityType: "appointment_hold",
+        entityId: reservation.hold.id,
+        metadata: { expiresAt: reservation.hold.expiresAt, origin: "sofia_wa", operation: "reschedule" }
+      },
+      auditTransaction
+    );
   }
 
   let outcome: { replacementId: string; idempotent: boolean };
@@ -689,30 +739,39 @@ async function rescheduleAppointment(
   }
 
   if (!outcome.idempotent) {
-    await emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.registered",
-      entityType: "appointment",
-      entityId: outcome.replacementId,
-      metadata: { mode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
-    });
-    await emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.verified",
-      entityType: "appointment",
-      entityId: outcome.replacementId,
-      metadata: { verificationMode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
-    });
-    await emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.rescheduled",
-      entityType: "appointment",
-      entityId: input.appointmentId,
-      metadata: { replacementAppointmentId: outcome.replacementId, origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.registered",
+        entityType: "appointment",
+        entityId: outcome.replacementId,
+        metadata: { mode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
+      },
+      auditTransaction
+    );
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.verified",
+        entityType: "appointment",
+        entityId: outcome.replacementId,
+        metadata: { verificationMode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
+      },
+      auditTransaction
+    );
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.rescheduled",
+        entityType: "appointment",
+        entityId: input.appointmentId,
+        metadata: { replacementAppointmentId: outcome.replacementId, origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
   return {
     previousAppointment: await findAppointmentView(db, tenantId, input.appointmentId),
@@ -725,7 +784,8 @@ async function createUrgentHandoff(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["create_urgent_handoff"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   const handoff = await db.transaction(async (tx) => {
     const existing = await tx.query<{ id: string }>(
@@ -754,14 +814,17 @@ async function createUrgentHandoff(
     return { ...created.rows[0]!, idempotent: false };
   });
   if (!handoff.idempotent) {
-    await emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "handoff.assigned",
-      entityType: "handoff",
-      entityId: handoff.id,
-      metadata: { triggerCode: input.triggerCode, origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "handoff.assigned",
+        entityType: "handoff",
+        entityId: handoff.id,
+        metadata: { triggerCode: input.triggerCode, origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
   return handoff;
 }
@@ -813,19 +876,41 @@ function parseExplicitConfirmation(body: string): ConfirmationAction | undefined
   return "book";
 }
 
+async function emitToolExecuted(
+  tenantId: string,
+  toolName: ToolName,
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
+): Promise<void> {
+  await emitAudit(
+    {
+      tenantId,
+      actorId: "agent:SOFIA",
+      eventType: "agent.tool.executed",
+      entityType: "sofia_tool",
+      metadata: { tool: toolName }
+    },
+    auditTransaction
+  );
+}
+
 async function emitExpiredHoldAudits(
   expiredHolds: Array<{ id: string; tenantId: string }>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ): Promise<void> {
   for (const hold of expiredHolds) {
-    await emitAudit({
-      tenantId: hold.tenantId,
-      actorId: "system:hold-expiration",
-      eventType: "appointment.hold.expired",
-      entityType: "appointment_hold",
-      entityId: hold.id,
-      metadata: { origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId: hold.tenantId,
+        actorId: "system:hold-expiration",
+        eventType: "appointment.hold.expired",
+        entityType: "appointment_hold",
+        entityId: hold.id,
+        metadata: { origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
 }
 

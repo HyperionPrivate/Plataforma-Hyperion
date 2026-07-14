@@ -3,6 +3,8 @@
  * `.env.example` may keep `replace-*` values for CI/dev; real deployments must not.
  */
 
+import { isRestrictedDeploymentEnvironment } from "./deployment-environment.js";
+
 const PLACEHOLDER_PREFIX = /^replace-/i;
 
 /** Exact secret values shipped in `.env.example` (must stay in sync when examples change). */
@@ -89,6 +91,8 @@ export const REQUIRED_SECRET_ENV_KEYS = [
   "NATS_SOFIA_PASSWORD",
   "NATS_AUDIT_PASSWORD",
   "NATS_LUMEN_PASSWORD",
+  "NATS_PASSWORD",
+  "NATS_AUTH_TOKEN",
   "WHATSAPP_PHONE_HASH_KEY",
   "INITIAL_ADMIN_PASSWORD"
 ] as const;
@@ -101,20 +105,7 @@ export function isPlaceholderSecret(value: string): boolean {
 }
 
 export function shouldEnforcePlaceholderRejection(environment: NodeJS.ProcessEnv = process.env): boolean {
-  const nodeEnv = (environment.NODE_ENV ?? "development").trim().toLowerCase();
-  const hyperionEnv = (environment.HYPERION_ENVIRONMENT ?? "").trim().toLowerCase();
-  const restricted =
-    nodeEnv === "production" || nodeEnv === "staging" || hyperionEnv === "production" || hyperionEnv === "staging";
-  if (!restricted) return false;
-
-  // Explicit Hyperion environment always enforces, even under CI.
-  if (hyperionEnv === "production" || hyperionEnv === "staging") return true;
-
-  // Compose hardcodes NODE_ENV=production for every workload. CI and local
-  // rehearsals that intentionally load `.env.example` may keep placeholders.
-  if (environment.CI === "true") return false;
-  if (environment.HYPERION_ALLOW_EXAMPLE_SECRETS === "true") return false;
-  return true;
+  return isRestrictedDeploymentEnvironment(environment);
 }
 
 export function findPlaceholderSecretProblems(environment: NodeJS.ProcessEnv = process.env): string[] {
@@ -138,8 +129,8 @@ export function findPlaceholderSecretProblems(environment: NodeJS.ProcessEnv = p
 }
 
 /**
- * Refuses known `.env.example` placeholders when NODE_ENV / HYPERION_ENVIRONMENT
- * is production or staging (fail closed). Development accepts placeholders.
+ * Refuses known `.env.example` placeholders in restricted deployments.
+ * Explicit local and CI rehearsals accept placeholders.
  */
 export function assertNoPlaceholderSecrets(environment: NodeJS.ProcessEnv = process.env): void {
   if (!shouldEnforcePlaceholderRejection(environment)) return;
@@ -149,7 +140,7 @@ export function assertNoPlaceholderSecrets(environment: NodeJS.ProcessEnv = proc
 
   throw new Error(
     `Refusing to start with .env.example placeholder secrets in production/staging: ${problems.join(", ")}. ` +
-      "Replace every replace-* value and unset HYPERION_ALLOW_EXAMPLE_SECRETS before deploying."
+      "Replace every replace-* value before deploying."
   );
 }
 

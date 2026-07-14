@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { EmitAuditEventInput } from "./audit-client.js";
+import { enqueuePulsoAuditEvent, type EmitAuditEventInput, PULSO_AUDIT_EVENT_TYPE } from "./audit-client.js";
 import { registerConfigRoutes } from "./config-routes.js";
 
 const { Client } = pg;
@@ -19,6 +19,10 @@ let professionalA: string;
 let appointmentTypeA: string;
 let payerA: string;
 const events: EmitAuditEventInput[] = [];
+let failingAuditSiteName: string | undefined;
+let failingAuditObservedUncommittedMutation = false;
+let failingAuditImportProfessionalName: string | undefined;
+let failingAuditObservedUncommittedImport = false;
 
 describeIntegration("pulso-iris configurable agenda", () => {
   beforeAll(async () => {
@@ -40,8 +44,39 @@ describeIntegration("pulso-iris configurable agenda", () => {
       serviceName: "pulso-iris-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) => {
-        await registerConfigRoutes(serviceApp, context, async (event) => {
+        await registerConfigRoutes(serviceApp, context, async (event, executor) => {
+          if (!executor) {
+            throw new Error("Config audit must receive the active transaction executor");
+          }
           events.push(event);
+          if (failingAuditSiteName && event.entityType === "site" && event.entityId) {
+            const visible = await executor.query<{ name: string }>(
+              "select name from pulso_iris.sites where tenant_id = $1 and id = $2",
+              [event.tenantId, event.entityId]
+            );
+            failingAuditObservedUncommittedMutation = visible.rows[0]?.name === failingAuditSiteName;
+            throw new Error("forced config audit failure");
+          }
+          if (
+            failingAuditImportProfessionalName &&
+            event.eventType === "agenda.configuration.imported" &&
+            event.entityId
+          ) {
+            const visible = await executor.query<{ visible: boolean }>(
+              `select
+                 exists(
+                   select 1 from pulso_iris.configuration_imports
+                   where tenant_id = $1 and id = $2
+                 ) and exists(
+                   select 1 from pulso_iris.professionals
+                   where tenant_id = $1 and name = $3
+                 ) as visible`,
+              [event.tenantId, event.entityId, failingAuditImportProfessionalName]
+            );
+            failingAuditObservedUncommittedImport = visible.rows[0]?.visible === true;
+            throw new Error("forced configuration import audit failure");
+          }
+          await enqueuePulsoAuditEvent(executor, event);
         });
       }
     });
@@ -93,6 +128,36 @@ describeIntegration("pulso-iris configurable agenda", () => {
     });
     expect(legacy.statusCode).toBe(422);
     expect(events.some((event) => event.eventType === "agenda.settings.updated")).toBe(true);
+  });
+
+  it("records both settings mutations when the client reuses x-request-id", async () => {
+    const requestId = `reused-correlation-${randomUUID()}`;
+    const first = await app.inject({
+      method: "PATCH",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/agenda-settings`,
+      headers: { "x-request-id": requestId, "x-operator-id": "config-test" },
+      payload: { bookingHorizonDays: 121 }
+    });
+    const second = await app.inject({
+      method: "PATCH",
+      url: `/v1/tenants/${tenantA}/pulso-iris/config/agenda-settings`,
+      headers: { "x-request-id": requestId, "x-operator-id": "config-test" },
+      payload: { bookingHorizonDays: 122 }
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    const persisted = await client.query<{ count: number }>(
+      `select count(*)::int as count
+         from pulso_iris.outbox_events
+        where tenant_id = $1::uuid
+          and event_type = $2
+          and payload->>'eventType' = 'agenda.settings.updated'
+          and payload->>'entityId' = $1::text
+          and payload#>>'{metadata,requestId}' = $3`,
+      [tenantA, PULSO_AUDIT_EVENT_TYPE, requestId]
+    );
+    expect(persisted.rows[0]?.count).toBe(2);
   });
 
   it("creates explicit relations and rejects cross-tenant references", async () => {
@@ -204,6 +269,61 @@ describeIntegration("pulso-iris configurable agenda", () => {
       [tenantA, importedProfessionalId]
     );
     expect(persisted.rows[0]).toEqual({ exclusions: 1, blocks: 1 });
+  });
+
+  it("rolls back a configuration mutation when its audit enqueue fails in the shared transaction", async () => {
+    failingAuditSiteName = `Sede rollback ${randomUUID()}`;
+    failingAuditObservedUncommittedMutation = false;
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/pulso-iris/config/sites`,
+        payload: { name: failingAuditSiteName }
+      });
+      expect(response.statusCode).toBe(500);
+      expect(failingAuditObservedUncommittedMutation).toBe(true);
+
+      const persisted = await client.query<{ count: number }>(
+        "select count(*)::int as count from pulso_iris.sites where tenant_id = $1 and name = $2",
+        [tenantA, failingAuditSiteName]
+      );
+      expect(persisted.rows[0]?.count).toBe(0);
+    } finally {
+      failingAuditSiteName = undefined;
+    }
+  });
+
+  it("rolls back an imported configuration and its idempotency record when audit enqueue fails", async () => {
+    failingAuditImportProfessionalName = `Profesional rollback ${randomUUID()}`;
+    failingAuditObservedUncommittedImport = false;
+    const idempotencyKey = `professionals-rollback-${randomUUID()}`;
+    const csv = [
+      "name,professional_type,subspecialty,status",
+      `${failingAuditImportProfessionalName},optometrist,,active`
+    ].join("\n");
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/pulso-iris/config/import/professionals/apply`,
+        payload: { csv, idempotencyKey }
+      });
+      expect(response.statusCode).toBe(500);
+      expect(failingAuditObservedUncommittedImport).toBe(true);
+
+      const persisted = await client.query<{ imports: number; professionals: number }>(
+        `select
+           (select count(*)::int from pulso_iris.configuration_imports
+            where tenant_id = $1 and idempotency_key = $2) as imports,
+           (select count(*)::int from pulso_iris.professionals
+            where tenant_id = $1 and name = $3) as professionals`,
+        [tenantA, idempotencyKey, failingAuditImportProfessionalName]
+      );
+      expect(persisted.rows[0]).toEqual({ imports: 0, professionals: 0 });
+    } finally {
+      failingAuditImportProfessionalName = undefined;
+    }
   });
 
   it("exports configuration as CSV without synthetic rows", async () => {

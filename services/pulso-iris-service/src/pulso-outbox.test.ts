@@ -41,6 +41,9 @@ describe("PostgresPulsoOutbox", () => {
     ]);
     expect(db.calls[0]?.sql).toContain("for update of candidate skip locked");
     expect(db.calls[0]?.sql).toContain("predecessor.status <> 'published'");
+    expect(db.calls[0]?.sql).toContain("event_type in ($4, $5)");
+    expect(db.calls[0]?.sql).toContain("candidate.event_type in ($4, $5)");
+    expect(db.calls[0]?.params?.slice(3)).toEqual(["pulso.message.received.v1", "pulso.message.received.v2"]);
   });
 
   it("uses the worker lease when completing or failing", async () => {
@@ -116,7 +119,7 @@ function fakeDatabase(rows: unknown[]) {
       return { rows, rowCount: rows.length, command: "", oid: 0, fields: [] } as never;
     },
     async transaction(work) {
-      return work(client);
+      return work(client as never);
     },
     async close() {}
   };

@@ -5,9 +5,14 @@ export {
   assertNoPlaceholderSecrets,
   ENV_EXAMPLE_PLACEHOLDER_VALUES,
   findPlaceholderSecretProblems,
+  HYPERION_DEPLOYMENT_ENVIRONMENTS,
+  isCiDeploymentEnvironment,
   isPlaceholderSecret,
+  isRestrictedDeploymentEnvironment,
+  readDeploymentEnvironment,
   REQUIRED_SECRET_ENV_KEYS,
-  shouldEnforcePlaceholderRejection
+  shouldEnforcePlaceholderRejection,
+  type HyperionDeploymentEnvironment
 } from "@hyperion/config";
 
 /**

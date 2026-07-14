@@ -1,4 +1,4 @@
-import { createService } from "@hyperion/service-runtime";
+import { OPERATOR_ASSERTION_HEADER, createService, verifyOperatorAssertion } from "@hyperion/service-runtime";
 import type { AuthMe } from "@hyperion/contracts";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ const GATEWAY_TO_INTEGRATION_TOKEN = "gateway-to-integration-test-token-02";
 const GATEWAY_TO_PULSO_TOKEN = "gateway-to-pulso-test-token-0001";
 const GATEWAY_TO_LUMEN_TOKEN = "gateway-to-lumen-test-token-0002";
 const GATEWAY_TO_TENANT_TOKEN = "gateway-to-tenant-test-token-00016";
+const OPERATOR_ASSERTION_KEY = "gateway-operator-assertion-key-01";
 
 const isolatedServiceUrls = {
   IDENTITY_SERVICE_URL: "http://127.0.0.1:65511",
@@ -32,6 +33,7 @@ const isolatedServiceUrls = {
 const previousServiceUrls = Object.fromEntries(
   Object.keys(isolatedServiceUrls).map((name) => [name, process.env[name]])
 );
+const previousOperatorAssertionKey = process.env.GATEWAY_OPERATOR_ASSERTION_KEY;
 
 const sessions: Record<string, AuthMe> = {
   [ADMIN_TOKEN]: {
@@ -77,6 +79,7 @@ let app: FastifyInstance;
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
   Object.assign(process.env, isolatedServiceUrls);
+  process.env.GATEWAY_OPERATOR_ASSERTION_KEY = OPERATOR_ASSERTION_KEY;
   const handle = await createService({
     serviceName: "api-gateway",
     databaseRequired: false,
@@ -103,6 +106,11 @@ afterAll(async () => {
     } else {
       process.env[name] = value;
     }
+  }
+  if (previousOperatorAssertionKey === undefined) {
+    delete process.env.GATEWAY_OPERATOR_ASSERTION_KEY;
+  } else {
+    process.env.GATEWAY_OPERATOR_ASSERTION_KEY = previousOperatorAssertionKey;
   }
 });
 
@@ -247,6 +255,16 @@ describe("api-gateway authentication", () => {
       expect(identityHeaders.get("x-hyperion-caller")).toBe("api-gateway");
       expect(integrationHeaders.get("x-hyperion-caller")).toBe("api-gateway");
       expect(identityHeaders.get("authorization")).not.toBe(integrationHeaders.get("authorization"));
+      expect(
+        verifyOperatorAssertion(integrationHeaders.get(OPERATOR_ASSERTION_HEADER) ?? undefined, OPERATOR_ASSERTION_KEY)
+      ).toMatchObject({
+        operatorId: sessions[COORDINATOR_TOKEN]!.operator.id,
+        role: "coordinator",
+        tenantId: AUTHORIZED_TENANT_ID
+      });
+      expect(
+        verifyOperatorAssertion(identityHeaders.get(OPERATOR_ASSERTION_HEADER) ?? undefined, OPERATOR_ASSERTION_KEY)
+      ).not.toHaveProperty("tenantId");
     } finally {
       fetchMock.mockRestore();
     }

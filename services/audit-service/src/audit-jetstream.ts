@@ -7,6 +7,7 @@ import {
   type NatsAuthentication
 } from "@hyperion/durable-events";
 import type { DatabaseClient } from "@hyperion/database";
+import { isRestrictedDeploymentEnvironment } from "@hyperion/service-runtime";
 import {
   AUDIT_EVENT_CONTRACTS,
   LEGACY_AUDIT_EVENT_CONTRACT,
@@ -90,7 +91,7 @@ export function readAuditEventTransportConfiguration(env: NodeJS.ProcessEnv): Au
         required: true,
         minimumSecretLength: 24,
         serverConfigurationSafe: true,
-        allowToken: env.NODE_ENV !== "production"
+        allowToken: !isRestrictedDeploymentEnvironment(env)
       }
     )!
   };

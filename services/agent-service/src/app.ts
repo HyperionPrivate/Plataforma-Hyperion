@@ -9,6 +9,7 @@ import {
 } from "@hyperion/durable-events";
 import {
   createInternalAuthorizationHeaders,
+  isRestrictedDeploymentEnvironment,
   readInternalCredential,
   validateInternalAuthorization,
   type RouteRegistrar
@@ -224,7 +225,7 @@ export function readDurableOutboxConfiguration(env: NodeJS.ProcessEnv): DurableO
         required: true,
         minimumSecretLength: 24,
         serverConfigurationSafe: true,
-        allowToken: env.NODE_ENV !== "production"
+        allowToken: !isRestrictedDeploymentEnvironment(env)
       }
     )!
   };
