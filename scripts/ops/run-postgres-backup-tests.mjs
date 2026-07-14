@@ -15,7 +15,14 @@ const candidates = [
 ].filter(Boolean);
 
 function runWithBash(bashPath, script) {
-  chmodSync(resolve(repositoryRoot, script), 0o755);
+  for (const relativePath of [
+    script,
+    "scripts/ops/postgres-backup.sh",
+    "scripts/ops/postgres-restore.sh",
+    "scripts/ops/postgres-offsite-copy.sh"
+  ]) {
+    chmodSync(resolve(repositoryRoot, relativePath), 0o755);
+  }
   return spawnSync(bashPath, [script], {
     cwd: repositoryRoot,
     env: process.env,
