@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createDatabase, type DatabaseClient } from "@hyperion/database";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createIntegrationOwnerState } from "./sofia-integration-owner-state.js";
+import { createIntegrationOwnerState } from "./sofia-integration-owner-state.test.support.js";
 import { SofiaToolClient } from "./sofia-tools.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
