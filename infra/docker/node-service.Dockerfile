@@ -205,9 +205,11 @@ CMD ["node", "services/whatsapp-channel-service/dist/index.js"]
 # service artifacts.
 FROM runtime-base AS migrations
 
+COPY packages/config/package.json packages/config/package.json
 COPY packages/logger/package.json packages/logger/package.json
 COPY packages/migrations/package.json packages/migrations/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/migrations..."
+COPY --from=build /app/packages/config/dist packages/config/dist
 COPY --from=build /app/packages/logger/dist packages/logger/dist
 COPY --from=build /app/packages/migrations/dist packages/migrations/dist
 COPY --from=build /app/packages/migrations/sql packages/migrations/sql
