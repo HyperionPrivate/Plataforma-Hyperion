@@ -31,7 +31,7 @@ describe("prompt-flow workload identity", () => {
       headers: { authorization: `Bearer ${TOKEN}`, "x-hyperion-caller": "integration-service" }
     });
 
-    expect(response.statusCode).toBe(401);
+    expect(response.statusCode).toBe(403);
     await app.close();
   });
 

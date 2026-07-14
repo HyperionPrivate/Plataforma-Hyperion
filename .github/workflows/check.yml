@@ -516,9 +516,21 @@ jobs:
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml
           if [[ '${{ steps.n_minus_one_schema.outputs.traffic_contract }}' == "legacy" ]]; then
-            bash scripts/ci/verify-n-minus-one-sofia-traffic.sh .env.example hyperion-compat-n1 \
+            bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh open \
+              .env.example hyperion-compat-n1 \
               .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
               infra/docker-compose.n-minus-one-roles-ci.yml
+            sofia_traffic_status=0
+            bash scripts/ci/verify-n-minus-one-sofia-traffic.sh .env.example hyperion-compat-n1 \
+              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+              infra/docker-compose.n-minus-one-roles-ci.yml || sofia_traffic_status=$?
+            bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh close \
+              .env.example hyperion-compat-n1 \
+              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+              infra/docker-compose.n-minus-one-roles-ci.yml || true
+            if [[ $sofia_traffic_status -ne 0 ]]; then
+              exit "$sofia_traffic_status"
+            fi
           fi
           system_identifier=$(docker compose --env-file .env.example -p hyperion-compat-n1 \
             -f .ci/n-minus-one/infra/docker-compose.yml -f infra/docker-compose.compatibility-ci.yml \
