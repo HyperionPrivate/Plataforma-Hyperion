@@ -131,6 +131,9 @@ importers:
 
   packages/migrations:
     dependencies:
+      '@hyperion/config':
+        specifier: workspace:*
+        version: link:../config
       '@hyperion/logger':
         specifier: workspace:*
         version: link:../logger

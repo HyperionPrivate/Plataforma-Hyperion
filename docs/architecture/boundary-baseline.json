@@ -152,6 +152,58 @@
       "count": 1
     },
     {
+      "id": "plpgsql-sql-access|packages/migrations/sql/012-whatsapp-sofia-runtime.sql|channel_runtime.claim_next_outbound_message|channel->pulso-core|write|table|pulso_iris.messages",
+      "count": 2
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/019-lumen-clinical-invariants.sql|lumen.finalize_clinical_record_approval|lumen->audit|write|table|platform.audit_events",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/019-lumen-clinical-invariants.sql|lumen.guard_approved_dictation|lumen->access|read|table|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/019-lumen-clinical-invariants.sql|lumen.guard_clinical_record|lumen->access|read|table|platform.operator_tenants",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/019-lumen-clinical-invariants.sql|lumen.guard_clinical_record|lumen->access|read|table|platform.operators",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/019-lumen-clinical-invariants.sql|lumen.guard_clinical_record|lumen->access|read|table|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/019-lumen-clinical-invariants.sql|lumen.guard_synthetic_encounter|lumen->access|read|table|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/019-lumen-clinical-invariants.sql|lumen.guard_synthetic_encounter|lumen->pulso-core|read|table|pulso_iris.administrative_patients",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/019-lumen-clinical-invariants.sql|lumen.guard_synthetic_encounter|lumen->pulso-core|read|table|pulso_iris.professionals",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/020-lumen-real-audio-pipeline.sql|lumen.guard_dictation_real_audio_lineage|lumen->access|read|table|platform.operator_tenants",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/020-lumen-real-audio-pipeline.sql|lumen.guard_dictation_real_audio_lineage|lumen->access|read|table|platform.operators",
+      "count": 1
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/020-lumen-real-audio-pipeline.sql|lumen.guard_processing_attempt_transition|lumen->access|read|table|platform.tenants",
+      "count": 1
+    },
+    {
+      "id": "sql-access|packages/service-runtime/src/index.ts|shared-packages->migration-control|read|table|platform.schema_migrations",
+      "count": 1
+    },
+    {
       "id": "sql-access|services/agent-service/src/app.ts|sofia-automation->access|read|table|platform.products",
       "count": 1
     },

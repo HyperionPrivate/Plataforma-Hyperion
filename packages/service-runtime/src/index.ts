@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
-import { readServiceConfig, type ServiceConfig } from "@hyperion/config";
+import { assertNoPlaceholderSecrets, readServiceConfig, type ServiceConfig } from "@hyperion/config";
 import { type ServiceHealth, type ServiceName, serviceHealthSchema } from "@hyperion/contracts";
 import { checkDatabase, createDatabase, type DatabaseClient } from "@hyperion/database";
 import { createLogger, type Logger } from "@hyperion/logger";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import { assertJetStreamProductionGate } from "./jetstream-production-gate.js";
 import { resolveShutdownTimeoutMs, resolveTrustedProxies } from "./runtime-config.js";
 
 export {
@@ -19,6 +20,15 @@ export {
   type InternalCredentialMap,
   type InternalRequestHeaders
 } from "./internal-auth.js";
+export { assertJetStreamProductionGate } from "./jetstream-production-gate.js";
+export {
+  assertNoPlaceholderSecrets,
+  ENV_EXAMPLE_PLACEHOLDER_VALUES,
+  findPlaceholderSecretProblems,
+  isPlaceholderSecret,
+  REQUIRED_SECRET_ENV_KEYS,
+  shouldEnforcePlaceholderRejection
+} from "@hyperion/config";
 
 export interface ServiceContext {
   config: ServiceConfig;
@@ -84,6 +94,8 @@ const DATABASE_ROLE_BY_SERVICE: Partial<Record<ServiceName, string>> = {
 };
 
 export async function createService(options: RuntimeOptions): Promise<ServiceHandle> {
+  assertNoPlaceholderSecrets(process.env);
+  assertJetStreamProductionGate(process.env);
   const requiredSchemaVersion = normalizeSchemaVersionRequirement(options.requiredSchemaVersion);
   const config = readServiceConfig(options.serviceName);
   const expectedDatabaseRole = normalizeExpectedDatabaseRole(process.env.EXPECTED_DATABASE_ROLE);

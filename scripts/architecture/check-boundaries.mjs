@@ -51,17 +51,23 @@ function stringContents(sourceText, filePath = "source.ts") {
 
 export function extractSqlAccesses(sourceText, filePath = "source.ts") {
   const accesses = [];
+  for (const content of stringContents(sourceText, filePath)) {
+    accesses.push(...extractSqlAccessesFromSql(content));
+  }
+  return accesses;
+}
+
+export function extractSqlAccessesFromSql(sqlText) {
+  const accesses = [];
   const pattern =
     /\b(from|join|insert\s+into|update|delete\s+from|truncate(?:\s+table)?|merge\s+into|copy)\s+(?:only\s+)?"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?/gi;
 
-  for (const content of stringContents(sourceText, filePath)) {
-    for (const match of content.matchAll(pattern)) {
-      const keyword = match[1].toLowerCase().replace(/\s+/g, " ");
-      const access = keyword === "from" || keyword === "join" ? "read" : "write";
-      const remainder = content.slice((match.index ?? 0) + match[0].length);
-      const objectType = access === "read" && /^\s*\(/.test(remainder) ? "routine" : "table";
-      accesses.push({ access, object: normalizeTable(match[2], match[3]), objectType });
-    }
+  for (const match of sqlText.matchAll(pattern)) {
+    const keyword = match[1].toLowerCase().replace(/\s+/g, " ");
+    const access = keyword === "from" || keyword === "join" ? "read" : "write";
+    const remainder = sqlText.slice((match.index ?? 0) + match[0].length);
+    const objectType = access === "read" && /^\s*\(/.test(remainder) ? "routine" : "table";
+    accesses.push({ access, object: normalizeTable(match[2], match[3]), objectType });
   }
 
   return accesses;
@@ -159,12 +165,19 @@ export function extractMigrationStructure(sqlText) {
   const foreignKeys = [];
   const foreignKeyEvents = [];
   const routines = [];
+  const plpgsqlAccesses = [];
+  const securityDefiners = [];
+  const triggers = [];
   const createPattern =
     /create\s+table\s+(?:if\s+not\s+exists\s+)?"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?\s*\(([\s\S]*?)\)\s*;/gi;
   const alterPattern =
     /alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?([\s\S]*?);/gi;
   const routinePattern =
     /create\s+(?:or\s+replace\s+)?(?:function|procedure)\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?/gi;
+  const routineBodyPattern =
+    /create\s+(?:or\s+replace\s+)?(?:function|procedure)\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?([\s\S]*?)\$([A-Za-z_]*)\$([\s\S]*?)\$\4\$/gi;
+  const triggerPattern =
+    /create\s+(?:or\s+replace\s+)?trigger\s+"?([a-z_][a-z0-9_]*)"?\s+[\s\S]*?\bon\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?[\s\S]*?\bexecute\s+(?:function|procedure)\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?/gi;
 
   for (const match of sql.matchAll(createPattern)) {
     const source = tableNameFromMatch(match);
@@ -212,8 +225,35 @@ export function extractMigrationStructure(sqlText) {
 
   for (const match of sql.matchAll(routinePattern)) routines.push(tableNameFromMatch(match));
 
+  for (const match of sql.matchAll(routineBodyPattern)) {
+    const routine = normalizeTable(match[1], match[2]);
+    const header = match[3] ?? "";
+    const body = match[5] ?? "";
+    const securityDefiner = /\bsecurity\s+definer\b/i.test(header);
+    if (securityDefiner) securityDefiners.push(routine);
+    for (const access of extractSqlAccessesFromSql(body)) {
+      plpgsqlAccesses.push({ routine, securityDefiner, ...access });
+    }
+  }
+
+  for (const match of sql.matchAll(triggerPattern)) {
+    triggers.push({
+      name: match[1].toLowerCase(),
+      table: normalizeTable(match[2], match[3]),
+      routine: normalizeTable(match[4], match[5])
+    });
+  }
+
   foreignKeyEvents.sort((left, right) => left.position - right.position);
-  return { declarations, foreignKeys, foreignKeyEvents, routines };
+  return {
+    declarations,
+    foreignKeys,
+    foreignKeyEvents,
+    routines,
+    plpgsqlAccesses,
+    securityDefiners,
+    triggers
+  };
 }
 
 async function walk(root, extensions) {
@@ -269,6 +309,10 @@ function managedObjectProblem(config, object, objectType) {
   return config.managedSchemas.includes(schema) && !databaseObjectOwner(config, object, objectType);
 }
 
+function isTemporaryException(config, id) {
+  return (config.temporaryExceptions ?? []).some((entry) => entry.id === id);
+}
+
 export async function detectBoundaryViolations(root, config) {
   const violations = new Map();
   const structuralErrors = [];
@@ -297,8 +341,11 @@ export async function detectBoundaryViolations(root, config) {
           structuralErrors.push(`Ruta con SQL de dominio sin propietario: ${relativePath} -> ${object}`);
           continue;
         }
+        // Migration tooling is administrative and may inspect multiple owners.
+        if (sourceOwner === "migration-control") continue;
         if (sourceOwner === targetOwner) continue;
         const id = `sql-access|${relativePath}|${sourceOwner}->${targetOwner}|${access}|${objectType}|${object}`;
+        if (isTemporaryException(config, id)) continue;
         addCount(violations, {
           id,
           kind: "sql-access",
@@ -328,6 +375,70 @@ export async function detectBoundaryViolations(root, config) {
       }
     }
 
+    for (const access of structure.plpgsqlAccesses) {
+      if (managedObjectProblem(config, access.object, access.objectType)) {
+        structuralErrors.push(
+          `Referencia PL/pgSQL a ${access.objectType === "routine" ? "rutina" : "tabla"} sin propietario: ${relativePath} -> ${access.routine} -> ${access.object}`
+        );
+        continue;
+      }
+      const sourceOwner = databaseObjectOwner(config, access.routine, "routine");
+      const targetOwner = databaseObjectOwner(config, access.object, access.objectType);
+      if (!sourceOwner) {
+        structuralErrors.push(`Rutina PL/pgSQL sin propietario: ${relativePath} -> ${access.routine}`);
+        continue;
+      }
+      if (!targetOwner || sourceOwner === targetOwner) continue;
+      const id = `plpgsql-sql-access|${relativePath}|${access.routine}|${sourceOwner}->${targetOwner}|${access.access}|${access.objectType}|${access.object}`;
+      if (isTemporaryException(config, id)) continue;
+      addCount(violations, {
+        id,
+        kind: "plpgsql-sql-access",
+        path: relativePath,
+        routine: access.routine,
+        sourceOwner,
+        targetOwner,
+        access: access.access,
+        object: access.object,
+        objectType: access.objectType,
+        securityDefiner: access.securityDefiner
+      });
+    }
+
+    for (const routine of structure.securityDefiners) {
+      const id = `security-definer|${relativePath}|${routine}`;
+      if (isTemporaryException(config, id)) continue;
+      // SECURITY DEFINER is recorded only when paired with a cross-owner body access,
+      // or when the routine itself is undeclared (already a structural error).
+      const hasCrossOwner = structure.plpgsqlAccesses.some(
+        (access) =>
+          access.routine === routine &&
+          access.securityDefiner &&
+          databaseObjectOwner(config, access.routine, "routine") &&
+          databaseObjectOwner(config, access.object, access.objectType) &&
+          databaseObjectOwner(config, access.routine, "routine") !==
+            databaseObjectOwner(config, access.object, access.objectType)
+      );
+      if (!hasCrossOwner) continue;
+      const crossId = `security-definer-cross-owner|${relativePath}|${routine}`;
+      if (isTemporaryException(config, crossId)) continue;
+      addCount(violations, {
+        id: crossId,
+        kind: "security-definer-cross-owner",
+        path: relativePath,
+        routine
+      });
+    }
+
+    for (const trigger of structure.triggers) {
+      if (managedObjectProblem(config, trigger.table, "table")) {
+        structuralErrors.push(`Trigger sobre tabla sin propietario: ${relativePath} -> ${trigger.name} -> ${trigger.table}`);
+      }
+      if (managedObjectProblem(config, trigger.routine, "routine")) {
+        structuralErrors.push(`Trigger hacia rutina sin propietario: ${relativePath} -> ${trigger.name} -> ${trigger.routine}`);
+      }
+    }
+
     for (const event of structure.foreignKeyEvents) {
       if (event.type === "drop") {
         activeForeignKeys.delete(`${event.source}|${event.constraintName}`);
@@ -350,6 +461,7 @@ export async function detectBoundaryViolations(root, config) {
     const targetOwner = tableOwner(config, target);
     if (!sourceOwner || !targetOwner || sourceOwner === targetOwner) continue;
     const id = `cross-owner-fk|${declarationPath}|${source}|${sourceOwner}->${targetOwner}|${target}`;
+    if (isTemporaryException(config, id)) continue;
     addCount(violations, {
       id,
       kind: "cross-owner-fk",

@@ -1,5 +1,21 @@
 #!/usr/bin/env bash
 
+# Verify that a Compose service stops cleanly inside the shutdown budget.
+#
+# Outbox / durable-event runtimes that should be probed (HTTP or JetStream):
+#   whatsapp-channel-service  pulso-iris-service  audit-service  lumen-service  agent-service
+#
+# Example (HTTP stack already up):
+#   bash scripts/ci/verify-compose-graceful-stop.sh \
+#     .env.example hyperion-ci-base whatsapp-channel-service 75 infra/docker-compose.yml
+#   docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml \
+#     up --detach --no-deps --no-build --wait --wait-timeout 120 whatsapp-channel-service
+#
+# CI smoke currently exercises agent-service (HTTP + JetStream). Operators should
+# rehearse Channel, PULSO, Audit and LUMEN with the same script before production
+# cutover; compose:check already enforces SHUTDOWN_TIMEOUT_MS / stop_grace_period
+# for every node runtime including those four.
+
 set -euo pipefail
 
 if (( $# < 5 )); then

@@ -70,6 +70,8 @@ export interface WhatsAppSocket {
     };
   };
   sendMessage(address: string, content: { text: string }): Promise<{ key: { id?: string | null } } | undefined>;
+  /** Optional provider receipt ack; invoked only after durable spool fsync. */
+  readMessages?(keys: Array<{ remoteJid: string; id: string; fromMe?: boolean }>): Promise<void>;
   logout(): Promise<void>;
   end(error?: Error): void;
 }
@@ -518,15 +520,16 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
       retained = false;
       this.reportIgnoredOnce(tenantId, "inbound_spool_unavailable", {});
     }
-    captureComplete();
     if (!retained) {
-      // Best effort only: without a successful fsync there is no crash-safe copy.
-      // The socket is latched degraded and requires an explicit reconnect after
-      // storage is repaired, regardless of whether this direct idempotent write wins.
+      // Do not acknowledge the provider until a crash-safe copy exists. Attempt a
+      // direct idempotent projection, then latch degraded (including dual failure).
+      captureComplete();
       await this.persistInboundBatchWithRetry(acceptedMessages);
       await this.recoverFromInboundPersistenceFailure(tenantId, connection, generation, "inbound_spool_unavailable");
       return;
     }
+    await this.acknowledgeProviderReceipts(connection, acceptedMessages);
+    captureComplete();
     const drain = await this.queueSpoolDrain(tenantId);
     if (!drain.inboundReady) {
       await this.recoverFromInboundPersistenceFailure(tenantId, connection, generation, "inbound_persistence_failed");
@@ -544,6 +547,25 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
       lastError: undefined
     };
     await this.emitStatus(tenantId);
+  }
+
+  private async acknowledgeProviderReceipts(
+    connection: TenantConnection,
+    messages: WhatsAppInboundText[]
+  ): Promise<void> {
+    const socket = connection.socket;
+    if (!socket?.readMessages || messages.length === 0) return;
+    const keys = messages.map((message) => ({
+      remoteJid: message.providerAddress,
+      id: message.externalMessageId,
+      fromMe: false
+    }));
+    try {
+      await socket.readMessages(keys);
+    } catch {
+      // Receipt ack is best-effort after fsync; durable capture already succeeded.
+      this.reportIgnoredOnce(messages[0]!.tenantId, "provider_receipt_ack_failed", {});
+    }
   }
 
   private persistInboundBatchWithRetry(messages: WhatsAppInboundText[]): Promise<boolean> {

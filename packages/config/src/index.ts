@@ -1,5 +1,14 @@
 import type { ServiceName } from "@hyperion/contracts";
 
+export {
+  assertNoPlaceholderSecrets,
+  ENV_EXAMPLE_PLACEHOLDER_VALUES,
+  findPlaceholderSecretProblems,
+  isPlaceholderSecret,
+  REQUIRED_SECRET_ENV_KEYS,
+  shouldEnforcePlaceholderRejection
+} from "./secret-placeholders.js";
+
 export interface ServiceConfig {
   serviceName: ServiceName;
   environment: string;

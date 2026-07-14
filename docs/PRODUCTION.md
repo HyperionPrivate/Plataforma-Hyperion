@@ -10,6 +10,12 @@ registros no se presentan como reales ni deben entrar en los flujos operativos d
 - No se guardan claves reales en Git.
 - Toda clave compartida por chat, correo o canal no secreto debe rotarse antes de dejarla como acceso permanente.
 - `.env.example` contiene placeholders y valores no secretos para documentar la configuracion esperada.
+- En `NODE_ENV`/`HYPERION_ENVIRONMENT` `production` o `staging`, el runtime (`@hyperion/config` /
+  `startService`) y el bootstrap de roles rechazan cualquier secreto requerido que coincida con
+  `/^replace-/i` o con los valores exactos de `.env.example`.
+- CI y ensayos locales que cargan `.env.example` pueden fijar `HYPERION_ALLOW_EXAMPLE_SECRETS=true`
+  (presente en el ejemplo). En VPS real: omitir esa variable (o `false`), fijar
+  `HYPERION_ENVIRONMENT=production` y sustituir todos los `replace-*`.
 - `POSTGRES_PASSWORD`, las ocho contraseñas PostgreSQL, las credenciales HTTP por vínculo
   `*_TO_*_TOKEN` y las credenciales de proveedores deben vivir fuera del repositorio.
 - Cada `*_TO_*_TOKEN` se entrega únicamente a su productor y consumidor, tiene al menos 24 caracteres
@@ -38,7 +44,11 @@ sin interpretar JSON.
 El cierre concede 65 segundos por defecto para que los hooks drenen el trabajo en curso antes de forzar la
 salida. `SHUTDOWN_TIMEOUT_MS` puede configurarse entre 55000 y 900000 milisegundos, pero no debe reducirse por
 debajo del peor tiempo medido del batch. Compose concede 75 segundos mediante `SHUTDOWN_GRACE_PERIOD`; debe
-superar el timeout del runtime por al menos cinco segundos. La barrera de arquitectura valida ambos presupuestos.
+superar el timeout del runtime por al menos cinco segundos. La barrera de arquitectura valida ambos presupuestos
+para todos los runtimes Node, incluidos Channel, PULSO, Audit y LUMEN. CI smoke ensaya el stop limpio de
+`agent-service` (HTTP y JetStream); el mismo script
+[`scripts/ci/verify-compose-graceful-stop.sh`](../scripts/ci/verify-compose-graceful-stop.sh) documenta cómo
+rehearsar los demás servicios de outbox antes de un corte productivo.
 Los dispatchers y consumidores cierran antes que el pool PostgreSQL. En SOFÍA un único coordinador detiene en
 paralelo el runtime, el publicador y todos los consumidores JetStream; cada consumidor limita su parada a 15
 segundos y, si el drenaje de NATS agota su plazo, fuerza el cierre del transporte sin confirmar el mensaje activo.
@@ -56,9 +66,13 @@ hostnames, reglas inválidas y redes `/0`; documentar los hops reales antes de h
 
 El transporte predeterminado del stack base sigue siendo HTTP. El overlay
 `infra/docker-compose.jetstream.yml` usa identidades y ACL por servicio, pero permanece como piloto de un solo
-nodo: una replica, DLQ con la misma retencion y sin alerta/redrive operativos. No habilitarlo en produccion hasta
-desplegar cluster con replicas, TLS interno, limites de capacidad, monitorizacion y una prueba documentada de
-recuperacion. Cuando se evalua en un ambiente aislado, los seis `NATS_*_PASSWORD` deben ser distintos y nunca
+nodo: una replica, DLQ con la misma retencion y sin alerta/redrive operativos. **No habilitarlo en produccion**
+hasta desplegar cluster con replicas, TLS interno, limites de capacidad, monitorizacion y una prueba documentada de
+recuperacion. El runtime refuse `DURABLE_EVENT_TRANSPORT=jetstream` cuando
+`HYPERION_ENVIRONMENT=production` o `NODE_ENV=production` salvo que existan a la vez
+`PRODUCTION_JETSTREAM_ENABLED=true`, `JETSTREAM_REPLICAS>=3` y `NATS_URL` con esquema `tls:`.
+Un solo nodo sigue bloqueado: no hay atajo que simule HA.
+Cuando se evalua en un ambiente aislado, los seis `NATS_*_PASSWORD` deben ser distintos y nunca
 reutilizar credenciales HTTP `*_TO_*_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea los durables
 versionados declarados por la topología y el
 durable temporal `audit_event_record_v1`: Audit consume por separado `sofia.audit.event.record.v1` y
@@ -239,9 +253,22 @@ find /opt/hyperion-platform/backups -mindepth 1 -maxdepth 1 -type f \
 Si el script falla antes de publicar, el temporal queda eliminado y el nombre final no aparece. Un
 fallo posterior al hard link puede conservar un backup final ya validado, pero nunca uno parcial;
 revisar el resultado sin borrarlo ni sobrescribirlo antes de volver a ejecutar. No borrar, renombrar ni
-reemplazar backups anteriores para recuperarse de un fallo. La restauracion no forma parte de este
-script: requiere un procedimiento separado, controlado, con destino explicitamente aprobado y una
-ventana operativa propia.
+reemplazar backups anteriores para recuperarse de un fallo.
+
+### Restore controlado
+
+La restauracion vive en `scripts/ops/postgres-restore.sh`. Exige un archivo bajo `backups/`, un nombre de
+base de datos destino aprobado y la confirmacion literal
+`HYPERION_RESTORE_CONFIRM='RESTORE <database>'`. Valida `gzip`, el catalogo `pg_restore --list` y el
+SHA-256 opcional (`HYPERION_RESTORE_SHA256`) antes de recrear solo esa base. No restaura a ciegas sobre
+el volumen productivo: el destino debe ser una base de ensayo o un host aprobado. `pnpm backup:test`
+incluye el round-trip mock de restore.
+
+### Copia offsite
+
+El dump local no basta ante fallo de disco/host. Ver [`ops/OFFSITE-BACKUP.md`](ops/OFFSITE-BACKUP.md) y el
+stub `scripts/ops/postgres-offsite-copy.sh`: la infraestructura externa (objeto, otro host o agente del
+proveedor) es obligatoria; el repositorio no inventa un destino.
 
 `migrations` crea o desactiva primero como `NOLOGIN` las identidades PostgreSQL de servicio, exige que no queden
 sesiones de runtime, aplica la matriz de privilegios y confirma su validación. Después, `db-role-bootstrap` toma
@@ -560,12 +587,14 @@ exactamente una vez en el transporte Baileys: despues de la retencion durable ha
 vez y deduplicacion PostgreSQL por tenant, proveedor e identificador externo.
 
 Si la spool no puede hacer la retencion durable, el canal intenta una proyeccion directa idempotente,
-cierra el socket y queda degradado hasta una reconexion explicita. Si PostgreSQL tambien falla en ese
-borde, el evento ya entregado por Baileys no es recuperable despues de reiniciar; se debe tratar como
-perdida potencial, no como entrega garantizada. No se conserva una copia del cuerpo sin cifrar en heap.
+cierra el socket y queda degradado hasta una reconexion explicita **sin** llamar a `readMessages` del
+proveedor. Si PostgreSQL tambien falla en ese borde (fallo dual), no hay ack de proveedor ni copia
+durable: el evento ya visto por Baileys puede perderse tras reiniciar. Tras un fsync exitoso el canal
+invoca `readMessages` antes de liberar la barrera de captura. Residual: Baileys puede haber emitido
+acks de protocolo antes del handler asíncrono; esa ventana pre-evento sigue siendo limite del borde,
+no una garantia exactamente-una-vez.
 En un apagado controlado el proveedor cierra primero los sockets y espera hasta 5 segundos las capturas
-ya iniciadas para que alcancen el fsync de la spool; la ventana anterior a esa retencion sigue siendo un
-limite del borde Baileys, no una garantia exactamente-una-vez.
+ya iniciadas para que alcancen el fsync de la spool.
 
 Los estados outbound son deliberadamente conservadores: `sent` significa que el proveedor devolvio
 un `providerMessageId`; `delivered` y `read` requieren un receipt real. Nunca promover manualmente un

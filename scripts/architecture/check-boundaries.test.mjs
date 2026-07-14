@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -293,4 +293,57 @@ test("compareWithBaseline falla ante deuda nueva, aumentada o ya retirada", () =
     result.stale.map(({ baseline: entry }) => entry.id),
     ["removed"]
   );
+});
+
+test("negative fixtures: PL/pgSQL cross-owner and packages SQL fail the scanner", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "hyperion-boundaries-neg-"));
+  try {
+    await mkdir(path.join(root, "migrations"), { recursive: true });
+    await mkdir(path.join(root, "packages", "leaky"), { recursive: true });
+    await writeFile(
+      path.join(root, "migrations", "001-negative.sql"),
+      await readFile(path.join("scripts", "architecture", "fixtures", "negative-plpgsql-cross-owner.sql"), "utf8"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(root, "packages", "leaky", "query.ts"),
+      await readFile(path.join("scripts", "architecture", "fixtures", "negative-packages-sql-access.ts"), "utf8"),
+      "utf8"
+    );
+
+    const result = await detectBoundaryViolations(root, {
+      managedSchemas: ["alpha", "beta", "foreign"],
+      pathOwners: [{ prefix: "packages/", owner: "shared-packages" }],
+      temporaryExceptions: [],
+      scan: { sourceRoots: ["packages"], migrationRoot: "migrations", excludePathContains: [] },
+      routines: { "alpha.leaky_reader": "alpha-owner" },
+      tables: {
+        "alpha.own_items": "alpha-owner",
+        "beta.foreign_records": "beta-owner",
+        "foreign.records": "beta-owner"
+      }
+    });
+
+    assert.ok(
+      result.violations.some((entry) => entry.kind === "plpgsql-sql-access" && entry.object === "beta.foreign_records"),
+      "expected PL/pgSQL cross-owner violation"
+    );
+    assert.ok(
+      result.violations.some(
+        (entry) => entry.kind === "security-definer-cross-owner" && entry.routine === "alpha.leaky_reader"
+      ),
+      "expected SECURITY DEFINER cross-owner violation"
+    );
+    assert.ok(
+      result.violations.some(
+        (entry) =>
+          entry.kind === "sql-access" &&
+          entry.path === "packages/leaky/query.ts" &&
+          entry.object === "foreign.records"
+      ),
+      "expected packages SQL access violation"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

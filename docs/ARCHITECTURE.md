@@ -3,8 +3,9 @@
 La arquitectura objetivo, los limites de contexto, la propiedad normativa de cada tabla y las decisiones
 de migracion estan en [Microservicios autonomos](architecture/AUTONOMOUS-MICROSERVICES.md). El archivo
 [`data-ownership.json`](architecture/data-ownership.json) es la fuente ejecutable usada por CI para controlar
-SQL literal de runtimes, objetos declarados y claves foráneas entre propietarios. El scanner no interpreta cuerpos
-PL/pgSQL; las excepciones de migración como los adaptadores v1 de 038 requieren revisión manual y retiro explícito.
+SQL literal de runtimes (incl. `packages/`), objetos declarados, claves foráneas entre propietarios, cuerpos
+PL/pgSQL, triggers y `SECURITY DEFINER` con acceso cruzado. Las únicas excepciones temporales permitidas son las
+documentadas en `temporaryExceptions` (hoy: adaptadores v1 de la migración 038); deben retirarse con la deuda.
 
 La plataforma se construye como monorepo TypeScript con microservicios HTTP. El gateway es la unica entrada publica prevista; los servicios de dominio quedan en red interna.
 

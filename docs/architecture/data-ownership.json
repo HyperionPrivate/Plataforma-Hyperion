@@ -2,9 +2,9 @@
   "version": 1,
   "managedSchemas": ["platform", "pulso_iris", "channel_runtime", "agent_runtime", "audit_runtime", "lumen"],
   "scan": {
-    "sourceRoots": ["apps", "services"],
+    "sourceRoots": ["apps", "services", "packages"],
     "migrationRoot": "packages/migrations/sql",
-    "excludePathContains": [".test.", ".spec."]
+    "excludePathContains": [".test.", ".spec.", "/fixtures/"]
   },
   "pathOwners": [
     { "prefix": "apps/api-gateway/", "owner": "edge-gateway" },
@@ -18,7 +18,47 @@
     { "prefix": "services/integration-service/", "owner": "integration-adapter" },
     { "prefix": "services/pulso-iris-service/", "owner": "pulso-core" },
     { "prefix": "services/whatsapp-channel-service/", "owner": "channel" },
-    { "prefix": "services/lumen-service/", "owner": "lumen" }
+    { "prefix": "services/lumen-service/", "owner": "lumen" },
+    { "prefix": "packages/migrations/", "owner": "migration-control" },
+    { "prefix": "packages/", "owner": "shared-packages" }
+  ],
+  "temporaryExceptions": [
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.resolve_legacy_channel_inbox_position|pulso-core->channel|read|table|channel_runtime.outbox_event_positions",
+      "justification": "Excepción temporal N-1 (038): adaptador v1 reconstruye posición desde el ledger Channel hasta retirar escritores legacy."
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.resolve_legacy_channel_inbox_position|pulso-core->channel|read|table|channel_runtime.outbox_events",
+      "justification": "Excepción temporal N-1 (038): adaptador v1 reconstruye posición desde el ledger Channel hasta retirar escritores legacy."
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.prepare_legacy_message_source_position|pulso-core->channel|read|table|channel_runtime.outbox_event_positions",
+      "justification": "Excepción temporal N-1 (038): adaptador v1 de mensajes PULSO consulta ledger Channel; retirada con escritores v1."
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.prepare_legacy_message_source_position|pulso-core->channel|read|table|channel_runtime.outbox_events",
+      "justification": "Excepción temporal N-1 (038): adaptador v1 de mensajes PULSO consulta ledger Channel; retirada con escritores v1."
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|agent_runtime.resolve_legacy_pulso_inbox_position|sofia-automation->pulso-core|read|table|pulso_iris.outbox_event_positions",
+      "justification": "Excepción temporal N-1 (038): adaptador SOFÍA v1 lee ledger PULSO; retirada con escritores v1."
+    },
+    {
+      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|agent_runtime.resolve_legacy_pulso_inbox_position|sofia-automation->pulso-core|read|table|pulso_iris.outbox_events",
+      "justification": "Excepción temporal N-1 (038): adaptador SOFÍA v1 lee ledger PULSO; retirada con escritores v1."
+    },
+    {
+      "id": "security-definer-cross-owner|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.resolve_legacy_channel_inbox_position",
+      "justification": "SECURITY DEFINER requerido por el adaptador N-1 038; se retira con la excepción PL/pgSQL asociada."
+    },
+    {
+      "id": "security-definer-cross-owner|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.prepare_legacy_message_source_position",
+      "justification": "SECURITY DEFINER requerido por el adaptador N-1 038; se retira con la excepción PL/pgSQL asociada."
+    },
+    {
+      "id": "security-definer-cross-owner|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|agent_runtime.resolve_legacy_pulso_inbox_position",
+      "justification": "SECURITY DEFINER requerido por el adaptador N-1 038; se retira con la excepción PL/pgSQL asociada."
+    }
   ],
   "routines": {
     "pulso_iris.initialize_agenda_settings": "pulso-core",

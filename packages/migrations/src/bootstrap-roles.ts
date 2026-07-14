@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { assertNoPlaceholderSecrets } from "@hyperion/config";
 import { createLogger } from "@hyperion/logger";
 import pg from "pg";
 import { readMigrationExecutionOptions, type MigrationExecutionOptions } from "./runner.js";
@@ -26,6 +27,8 @@ const SERVICE_ROLE_MATRIX_MIGRATION = fileURLToPath(new URL("../sql/024-service-
  * into separate raw and percent-encoded variables.
  */
 export function readServiceRolePasswords(environment: NodeJS.ProcessEnv = process.env): ServiceRolePasswords {
+  assertNoPlaceholderSecrets(environment);
+
   const passwords = new Map<ServiceDatabaseRole, string>();
   const seen = new Set<string>();
 

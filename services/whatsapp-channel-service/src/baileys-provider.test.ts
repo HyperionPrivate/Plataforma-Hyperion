@@ -225,6 +225,53 @@ describe("BaileysWhatsAppWebTestProvider", () => {
     await socket.emit("messages.upsert", messageEvent(ADDRESS, "spool-capacity-event", "private body"));
 
     expect(inbound).toHaveBeenCalledTimes(1);
+    expect(socket.readMessages).not.toHaveBeenCalled();
+    expect(socket.end).toHaveBeenCalledWith(expect.objectContaining({ message: "inbound_spool_unavailable" }));
+    expect(provider.status(TENANT_ID)).toMatchObject({
+      state: "degraded",
+      lastError: "inbound_spool_unavailable"
+    });
+    await provider.close();
+  });
+
+  it("acknowledges the provider only after durable spool fsync", async () => {
+    const { runtime, socket } = createFakeRuntime(true);
+    const provider = new BaileysWhatsAppWebTestProvider(await config(), runtime);
+    const inbound = vi.fn(async (_message: import("./types.js").WhatsAppInboundText) => undefined);
+    provider.setInboundHandler(inbound);
+    await provider.connect(TENANT_ID);
+    await socket.emit("connection.update", { connection: "open" });
+
+    await socket.emit("messages.upsert", messageEvent(ADDRESS, "ack-after-fsync", "hello"));
+
+    expect(inbound).toHaveBeenCalledTimes(1);
+    expect(socket.readMessages).toHaveBeenCalledWith([
+      expect.objectContaining({ remoteJid: ADDRESS, id: "ack-after-fsync", fromMe: false })
+    ]);
+    await provider.close();
+  });
+
+  it("degrades on dual failure when spool and PostgreSQL projection both fail", async () => {
+    const { runtime, socket } = createFakeRuntime(true);
+    const provider = new BaileysWhatsAppWebTestProvider(
+      await config({
+        inboundPersistenceMaxAttempts: 1,
+        inboundPersistenceRetryBaseDelayMs: 60_000,
+        inboundSpoolMaxBytes: 64
+      }),
+      runtime
+    );
+    const inbound = vi.fn(async () => {
+      throw new Error("postgres unavailable");
+    });
+    provider.setInboundHandler(inbound);
+    await provider.connect(TENANT_ID);
+    await socket.emit("connection.update", { connection: "open" });
+
+    await socket.emit("messages.upsert", messageEvent(ADDRESS, "dual-failure-event", "private body"));
+
+    expect(inbound).toHaveBeenCalledTimes(1);
+    expect(socket.readMessages).not.toHaveBeenCalled();
     expect(socket.end).toHaveBeenCalledWith(expect.objectContaining({ message: "inbound_spool_unavailable" }));
     expect(provider.status(TENANT_ID)).toMatchObject({
       state: "degraded",
@@ -740,6 +787,7 @@ function createFakeSocket() {
       removeAllListeners: () => handlers.clear()
     },
     sendMessage: vi.fn(async () => ({ key: { id: "provider-message-1" } })),
+    readMessages: vi.fn(async () => undefined),
     logout: vi.fn(async () => undefined),
     end: vi.fn(),
     emit: async (event: string, payload: unknown) => {

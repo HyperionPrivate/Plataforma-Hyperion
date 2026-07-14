@@ -1,5 +1,15 @@
 import { isIP } from "node:net";
 
+export { assertJetStreamProductionGate } from "./jetstream-production-gate.js";
+export {
+  assertNoPlaceholderSecrets,
+  ENV_EXAMPLE_PLACEHOLDER_VALUES,
+  findPlaceholderSecretProblems,
+  isPlaceholderSecret,
+  REQUIRED_SECRET_ENV_KEYS,
+  shouldEnforcePlaceholderRejection
+} from "@hyperion/config";
+
 /**
  * The current durable dispatchers can drain ten sequential five-second
  * deliveries. Keep enough headroom for their final database bookkeeping.

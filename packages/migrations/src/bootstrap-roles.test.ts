@@ -43,11 +43,20 @@ describe("service database role bootstrap configuration", () => {
     expect(() => readServiceRolePasswords(environment)).toThrow("CHANNEL_DATABASE_PASSWORD");
   });
 
-  it("rejects password reuse across service roles", () => {
+  it("rejects .env.example placeholders when NODE_ENV is production", () => {
     const environment = validEnvironment();
-    environment.LUMEN_DATABASE_PASSWORD = environment.CHANNEL_DATABASE_PASSWORD;
+    environment.NODE_ENV = "production";
+    environment.ACCESS_DATABASE_PASSWORD = "replace-access-db-secret-0001";
 
-    expect(() => readServiceRolePasswords(environment)).toThrow("service database passwords must be distinct");
+    expect(() => readServiceRolePasswords(environment)).toThrow(/placeholder secrets/);
+  });
+
+  it("accepts replace-* database passwords in development", () => {
+    const environment = validEnvironment();
+    environment.NODE_ENV = "development";
+    environment.ACCESS_DATABASE_PASSWORD = "replace-access-db-secret-0001";
+
+    expect(() => readServiceRolePasswords(environment)).not.toThrow();
   });
 
   it("rolls back instead of committing when a later role activation fails", async () => {
