@@ -97,7 +97,15 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
   });
 
   it("rejects publishing another service event subject", async () => {
-    await expectPublishDenied(channel, "hyperion.events.sofia.audit.event.record.v1", "acl-denied-channel-audit");
+    await expectPublishDenied(channel, "hyperion.events.sofia.audit.event.record.v1", "acl-denied-channel-sofia-audit");
+  });
+
+  it("allows Channel to publish its durable audit contract", async () => {
+    await expectPublishAllowed(
+      channel,
+      "hyperion.events.channel.audit.event.record.v1",
+      `acl-allowed-channel-audit-${Date.now()}`
+    );
   });
 
   it("allows Channel to publish both contracts during the explicit v1-to-v2 rollout", async () => {
@@ -132,6 +140,11 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
       "hyperion.events.pulso.message.received.v2",
       `acl-allowed-pulso-v2-${Date.now()}`
     );
+    await expectPublishAllowed(
+      pulso,
+      "hyperion.events.pulso.audit.event.record.v1",
+      `acl-allowed-pulso-audit-${Date.now()}`
+    );
   });
 
   it("allows each Audit producer only its source-scoped subject", async () => {
@@ -148,6 +161,8 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
 
     await expectPublishDenied(sofia, "hyperion.events.lumen.audit.event.record.v1", "acl-denied-sofia-as-lumen");
     await expectPublishDenied(lumen, "hyperion.events.sofia.audit.event.record.v1", "acl-denied-lumen-as-sofia");
+    await expectPublishDenied(pulso, "hyperion.events.sofia.audit.event.record.v1", "acl-denied-pulso-as-sofia");
+    await expectPublishDenied(channel, "hyperion.events.pulso.audit.event.record.v1", "acl-denied-channel-as-pulso");
   });
 
   it("rejects the removed ambiguous Audit subject for every runtime identity", async () => {

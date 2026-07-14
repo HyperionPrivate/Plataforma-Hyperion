@@ -202,25 +202,71 @@ describe("POST /internal/v1/events", () => {
     });
   });
 
-  it("derives direct-write provenance from the authenticated caller", async () => {
-    const response = await app.inject({
+  it("accepts channel durable audit events and stays idempotent on redelivery", async () => {
+    const envelope = {
+      id: EVENT_ID,
+      type: "channel.audit.event.record.v1",
+      version: 1,
+      occurredAt: "2026-07-13T12:00:00.000Z",
+      tenantId: TENANT_ID,
+      payload: {
+        tenantId: TENANT_ID,
+        actorId: "agent:SOFIA",
+        eventType: "channel.message.sent",
+        entityType: "message",
+        entityId: "44444444-4444-4444-8444-444444444444",
+        metadata: { provider: "whatsapp_web_test" }
+      }
+    };
+
+    const first = await app.inject({
       method: "POST",
-      url: "/v1/audit/events",
+      url: "/internal/v1/events",
       headers: {
         authorization: `Bearer ${CHANNEL_TOKEN}`,
         "x-hyperion-caller": "whatsapp-channel-service"
       },
+      payload: envelope
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/internal/v1/events",
+      headers: {
+        authorization: `Bearer ${CHANNEL_TOKEN}`,
+        "x-hyperion-caller": "whatsapp-channel-service"
+      },
+      payload: envelope
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().data).toMatchObject({ status: "duplicate", eventId: EVENT_ID });
+    expect(database.inboxEvents.get(EVENT_ID)).toMatchObject({
+      sourceService: "whatsapp-channel-service",
+      eventType: "channel.audit.event.record.v1"
+    });
+    expect(database.auditEvents).toHaveLength(1);
+  });
+
+  it("derives direct-write provenance from the authenticated Sofía caller", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/audit/events",
+      headers: {
+        authorization: `Bearer ${SOFIA_TOKEN}`,
+        "x-hyperion-caller": "agent-service"
+      },
       payload: {
         tenantId: TENANT_ID,
-        eventType: "channel.message.received",
-        entityType: "channel_message",
-        metadata: { sourceService: "agent-service", retained: true }
+        eventType: "agent.tool.executed",
+        entityType: "agent_tool",
+        metadata: { sourceService: "lumen-service", retained: true }
       }
     });
 
     expect(response.statusCode).toBe(201);
     expect(database.auditEvents[0]?.metadata).toEqual({
-      sourceService: "whatsapp-channel-service",
+      sourceService: "agent-service",
       retained: true
     });
   });

@@ -27,13 +27,6 @@ export class WhatsAppChannelService {
     private readonly provider: WhatsAppProvider,
     private readonly repository: ChannelRepository,
     private readonly pollIntervalMs = 500,
-    private readonly emitAudit: (event: {
-      tenantId: string;
-      eventType: "channel.message.sent";
-      entityType: "message";
-      entityId: string;
-      metadata: Record<string, unknown>;
-    }) => void = () => undefined,
     private readonly reportRuntimeError: (errorCode: string) => void = () => undefined,
     private readonly restoreRetryMs = 5_000,
     private readonly providerSendTimeoutMs = 15_000
@@ -193,15 +186,7 @@ export class WhatsAppChannelService {
               providerResult.providerMessageId,
               providerResult.sentAt
             );
-            continue;
           }
-          this.emitAudit({
-            tenantId: message.tenantId,
-            eventType: "channel.message.sent",
-            entityType: "message",
-            entityId: message.messageId,
-            metadata: { provider: "whatsapp_web_test", deliveryStatus: "sent" }
-          });
         } catch (error) {
           try {
             if (providerResult || !isDefinitelyNotSent(error)) {

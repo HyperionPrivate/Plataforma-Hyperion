@@ -41,7 +41,9 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
       serviceName: "pulso-iris-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) => {
-        const emitAudit = (event: EmitAuditEventInput) => events.push(event);
+        const emitAudit = async (event: EmitAuditEventInput) => {
+          events.push(event);
+        };
         await registerConfigRoutes(serviceApp, context, emitAudit);
         await registerAppointmentRoutes(serviceApp, context, emitAudit);
         await registerAvailabilityRoutes(serviceApp, context);
@@ -124,7 +126,9 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
        where tenant_id = $1 and id = $2`,
       [tenantId, holdId]
     );
-    const expired = await expireAppointmentHolds(client as never, (event) => events.push(event));
+    const expired = await expireAppointmentHolds(client as never, async (event) => {
+      events.push(event);
+    });
     expect(expired).toBe(1);
     expect(events.some((event) => event.eventType === "appointment.hold.expired" && event.entityId === holdId)).toBe(
       true

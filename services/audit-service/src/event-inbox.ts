@@ -15,6 +15,14 @@ export const AUDIT_EVENT_CONTRACTS = {
   lumen: {
     eventType: "lumen.audit.event.record.v1",
     sourceService: "lumen-service"
+  },
+  pulso: {
+    eventType: "pulso.audit.event.record.v1",
+    sourceService: "pulso-iris-service"
+  },
+  channel: {
+    eventType: "channel.audit.event.record.v1",
+    sourceService: "whatsapp-channel-service"
   }
 } as const;
 

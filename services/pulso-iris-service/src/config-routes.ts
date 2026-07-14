@@ -198,23 +198,23 @@ const relationPatchSchema = z.object({ status: pulsoIrisAgendaStatusSchema });
 export async function registerConfigRoutes(
   app: FastifyInstance,
   context: ServiceContext,
-  emitAudit: AuditEmitter = () => undefined
+  emitAudit: AuditEmitter = async () => undefined
 ): Promise<void> {
   const base = "/v1/tenants/:tenantId/pulso-iris/config";
 
-  const emitConfigUpdated = (
+  const emitConfigUpdated = async (
     request: { id: string; headers: Record<string, unknown> | { [key: string]: unknown } },
     tenantId: string,
     entityType: string,
     entityId: string
   ) => {
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: readOperatorId(request.headers as Record<string, unknown>),
       eventType: "config.updated",
       entityType,
       entityId,
-      metadata: { requestId: request.id }
+      metadata: { requestId: request.id, auditDedupeSuffix: request.id }
     });
   };
 
@@ -290,13 +290,13 @@ export async function registerConfigRoutes(
       return reply.code(404).send(envelope({ error: "Agenda settings not found" }, request.id));
     }
 
-    emitAudit({
+    await emitAudit({
       tenantId: scope.tenantId,
       actorId: operatorId,
       eventType: "agenda.settings.updated",
       entityType: "agenda_settings",
       entityId: scope.tenantId,
-      metadata: { requestId: request.id, mode: updated.mode, status: updated.status }
+      metadata: { requestId: request.id, mode: updated.mode, status: updated.status, auditDedupeSuffix: request.id }
     });
     return envelope(pulsoIrisAgendaSettingsSchema.parse(updated), request.id);
   });
@@ -336,7 +336,7 @@ export async function registerConfigRoutes(
         [scope.tenantId, input.professionalId, input.siteId, input.status ?? null]
       );
       const created = result.rows[0] as { id?: string } | undefined;
-      if (created?.id) emitConfigUpdated(request, scope.tenantId, "professional_site", created.id);
+      if (created?.id) await emitConfigUpdated(request, scope.tenantId, "professional_site", created.id);
       return reply.code(201).send(envelope(pulsoIrisProfessionalSiteListSchema.parse(result.rows)[0], request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -361,7 +361,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Professional-site relation not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "professional_site", relationId);
+    await emitConfigUpdated(request, scope.tenantId, "professional_site", relationId);
     return envelope(pulsoIrisProfessionalSiteListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -399,7 +399,7 @@ export async function registerConfigRoutes(
         [scope.tenantId, input.professionalId, input.appointmentTypeId, input.status ?? null]
       );
       const created = result.rows[0] as { id?: string } | undefined;
-      if (created?.id) emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", created.id);
+      if (created?.id) await emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", created.id);
       return reply
         .code(201)
         .send(envelope(pulsoIrisProfessionalAppointmentTypeListSchema.parse(result.rows)[0], request.id));
@@ -426,7 +426,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Professional-appointment-type relation not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", relationId);
+    await emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", relationId);
     return envelope(pulsoIrisProfessionalAppointmentTypeListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -475,7 +475,7 @@ export async function registerConfigRoutes(
         operatorId
       });
       if (!applied.idempotent) {
-        emitAudit({
+        await emitAudit({
           tenantId: scope.tenantId,
           actorId: operatorId,
           eventType: "agenda.configuration.imported",
@@ -531,7 +531,7 @@ export async function registerConfigRoutes(
       [scope.tenantId, input.name, input.city ?? null, input.address ?? null, input.phone ?? null, input.status ?? null]
     );
     const created = pulsoIrisSiteListSchema.parse(result.rows)[0];
-    if (created) emitConfigUpdated(request, scope.tenantId, "site", created.id);
+    if (created) await emitConfigUpdated(request, scope.tenantId, "site", created.id);
     return reply.code(201).send(envelope(created, request.id));
   });
 
@@ -569,7 +569,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Site not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "site", siteId);
+    await emitConfigUpdated(request, scope.tenantId, "site", siteId);
     return envelope(pulsoIrisSiteListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -607,7 +607,7 @@ export async function registerConfigRoutes(
         ]
       );
       const created = pulsoIrisProfessionalListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "professional", created.id);
+      if (created) await emitConfigUpdated(request, scope.tenantId, "professional", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -649,7 +649,7 @@ export async function registerConfigRoutes(
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Professional not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "professional", professionalId);
+      await emitConfigUpdated(request, scope.tenantId, "professional", professionalId);
       return envelope(pulsoIrisProfessionalListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -682,7 +682,7 @@ export async function registerConfigRoutes(
       [scope.tenantId, input.name, input.group, input.requiresAuthorization ?? null, input.status ?? null]
     );
     const created = pulsoIrisPayerListSchema.parse(result.rows)[0];
-    if (created) emitConfigUpdated(request, scope.tenantId, "payer", created.id);
+    if (created) await emitConfigUpdated(request, scope.tenantId, "payer", created.id);
     return reply.code(201).send(envelope(created, request.id));
   });
 
@@ -718,7 +718,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Payer not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "payer", payerId);
+    await emitConfigUpdated(request, scope.tenantId, "payer", payerId);
     return envelope(pulsoIrisPayerListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -761,7 +761,7 @@ export async function registerConfigRoutes(
       ]
     );
     const created = pulsoIrisAppointmentTypeListSchema.parse(result.rows)[0];
-    if (created) emitConfigUpdated(request, scope.tenantId, "appointment_type", created.id);
+    if (created) await emitConfigUpdated(request, scope.tenantId, "appointment_type", created.id);
     return reply.code(201).send(envelope(created, request.id));
   });
 
@@ -820,7 +820,7 @@ export async function registerConfigRoutes(
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Appointment type not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "appointment_type", appointmentTypeId);
+    await emitConfigUpdated(request, scope.tenantId, "appointment_type", appointmentTypeId);
     return envelope(pulsoIrisAppointmentTypeListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -909,7 +909,7 @@ export async function registerConfigRoutes(
         ]
       );
       const created = pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "availability_rule", created.id);
+      if (created) await emitConfigUpdated(request, scope.tenantId, "availability_rule", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1011,7 +1011,7 @@ export async function registerConfigRoutes(
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Availability rule not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "availability_rule", ruleId);
+      await emitConfigUpdated(request, scope.tenantId, "availability_rule", ruleId);
       return envelope(pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1073,7 +1073,7 @@ export async function registerConfigRoutes(
         ]
       );
       const created = pulsoIrisAgendaBlockListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "agenda_block", created.id);
+      if (created) await emitConfigUpdated(request, scope.tenantId, "agenda_block", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1147,7 +1147,7 @@ export async function registerConfigRoutes(
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Agenda block not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "agenda_block", blockId);
+      await emitConfigUpdated(request, scope.tenantId, "agenda_block", blockId);
       return envelope(pulsoIrisAgendaBlockListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1184,7 +1184,7 @@ export async function registerConfigRoutes(
         [scope.tenantId, input.holidayDate, input.name, input.status ?? null]
       );
       const created = pulsoIrisHolidayListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "holiday", created.id);
+      if (created) await emitConfigUpdated(request, scope.tenantId, "holiday", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1216,7 +1216,7 @@ export async function registerConfigRoutes(
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Holiday not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "holiday", holidayId);
+      await emitConfigUpdated(request, scope.tenantId, "holiday", holidayId);
       return envelope(pulsoIrisHolidayListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1262,7 +1262,7 @@ export async function registerConfigRoutes(
         [scope.tenantId, input.professionalId, input.payerId, input.status ?? null]
       );
       const created = pulsoIrisPayerExclusionListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "payer_exclusion", created.id);
+      if (created) await emitConfigUpdated(request, scope.tenantId, "payer_exclusion", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1302,7 +1302,7 @@ export async function registerConfigRoutes(
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Payer exclusion not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "payer_exclusion", exclusionId);
+      await emitConfigUpdated(request, scope.tenantId, "payer_exclusion", exclusionId);
       return envelope(pulsoIrisPayerExclusionListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);

@@ -1,5 +1,12 @@
+import type { DatabaseClient } from "@hyperion/database";
 import { describe, expect, it, vi } from "vitest";
-import { createAuditClient, PULSO_AUDIT_EVENTS, readOperatorId } from "./audit-client.js";
+import {
+  createAuditClient,
+  enqueuePulsoAuditEvent,
+  PULSO_AUDIT_EVENTS,
+  PULSO_AUDIT_EVENT_TYPE,
+  readOperatorId
+} from "./audit-client.js";
 
 describe("audit-client", () => {
   it("exposes the exact PULSO event catalog", () => {
@@ -30,16 +37,14 @@ describe("audit-client", () => {
     expect(readOperatorId({})).toBeUndefined();
   });
 
-  it("emits fire-and-forget events with source metadata", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: true });
+  it("enqueues durable audit events into the PULSO outbox", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
     const emit = createAuditClient({
-      auditServiceUrl: "http://audit.local",
-      workloadToken: "secret",
-      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
-      fetchImpl: fetchImpl as unknown as typeof fetch
+      db: { query } as never,
+      logger: { warn: vi.fn() }
     });
 
-    emit({
+    await emit({
       tenantId: "00000000-0000-4000-8000-000000000001",
       actorId: "op-1",
       eventType: "appointment.registered",
@@ -47,28 +52,38 @@ describe("audit-client", () => {
       entityId: "00000000-0000-4000-8000-000000000002"
     });
 
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
-    const [url, init] = fetchImpl.mock.calls[0]!;
-    expect(url).toBe("http://audit.local/v1/audit/events");
-    expect(init.headers.authorization).toBe("Bearer secret");
-    expect(init.headers["x-hyperion-caller"]).toBe("pulso-iris-service");
-    expect(JSON.parse(String(init.body)).metadata.source).toBe("pulso-iris-service");
+    expect(query).toHaveBeenCalledOnce();
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("insert into pulso_iris.outbox_events");
+    expect(sql).toContain("on conflict (tenant_id, dedupe_key)");
+    expect(params[0]).toBe("00000000-0000-4000-8000-000000000001");
+    expect(params[1]).toBe(PULSO_AUDIT_EVENT_TYPE);
+    expect(params[2]).toBe("appointment");
+    expect(params[3]).toBe("00000000-0000-4000-8000-000000000002");
+    expect(JSON.parse(String(params[5])).metadata.source).toBe("pulso-iris-service");
   });
 
-  it("skips emission when token or url is missing", () => {
-    const fetchImpl = vi.fn();
+  it("skips emission when the database client is missing", async () => {
     const warn = vi.fn();
-    const emit = createAuditClient({
-      logger: { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
-      fetchImpl: fetchImpl as unknown as typeof fetch
-    });
+    const emit = createAuditClient({ logger: { warn } });
 
-    emit({
+    await emit({
       eventType: "config.updated",
-      entityType: "holiday"
+      entityType: "holiday",
+      tenantId: "00000000-0000-4000-8000-000000000001"
     });
 
-    expect(fetchImpl).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("accepts an explicit transaction executor", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    await enqueuePulsoAuditEvent({ query } as never, {
+      tenantId: "00000000-0000-4000-8000-000000000001",
+      eventType: "appointment.cancelled",
+      entityType: "appointment",
+      entityId: "00000000-0000-4000-8000-000000000003"
+    });
+    expect(query).toHaveBeenCalledOnce();
   });
 });

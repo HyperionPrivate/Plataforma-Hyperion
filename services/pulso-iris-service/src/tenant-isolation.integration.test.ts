@@ -50,7 +50,7 @@ describeIntegration("pulso-iris tenant isolation", () => {
       serviceName: "pulso-iris-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) => {
-        const emitAudit = (event: EmitAuditEventInput) => {
+        const emitAudit = async (event: EmitAuditEventInput) => {
           emittedEvents.push(event);
         };
         await registerConfigRoutes(serviceApp, context, emitAudit);
@@ -558,7 +558,7 @@ describeIntegration("pulso-iris tenant isolation", () => {
       [tenantA]
     );
 
-    const completed = await runSimulatorTick(client as never, (event) => {
+    const completed = await runSimulatorTick(client as never, async (event) => {
       events.push({ eventType: event.eventType, actorId: event.actorId });
     });
     expect(completed).toBeGreaterThanOrEqual(1);

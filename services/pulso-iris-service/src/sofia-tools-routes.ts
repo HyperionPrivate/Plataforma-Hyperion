@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AgendaProviderError } from "./agenda-provider.js";
 import type { AuditEmitter } from "./audit-client.js";
+import { createChannelThreadClient, type ChannelThreadClient } from "./channel-thread-client.js";
 import { InternalAgendaProvider } from "./internal-agenda-provider.js";
 import { listSlotAlternatives } from "./availability-engine.js";
 import { readTenantId } from "./shared.js";
@@ -95,7 +96,11 @@ type Database = NonNullable<ServiceContext["db"]>;
 export async function registerSofiaToolRoutes(
   app: FastifyInstance,
   context: ServiceContext,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  channelThreads: ChannelThreadClient = createChannelThreadClient({
+    channelServiceUrl: process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089",
+    credential: readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN") ?? ""
+  })
 ): Promise<void> {
   const sofiaToken = readInternalCredential(process.env, "SOFIA_TO_PULSO_TOKEN");
   app.post("/internal/v1/tenants/:tenantId/pulso-iris/sofia/tools/:toolName", async (request, reply) => {
@@ -122,8 +127,8 @@ export async function registerSofiaToolRoutes(
     }
 
     try {
-      const result = await executeTool(context.db, tenantId, toolName, parsed.data as never, emitAudit);
-      emitAudit({
+      const result = await executeTool(context.db, tenantId, toolName, parsed.data as never, emitAudit, channelThreads);
+      await emitAudit({
         tenantId,
         actorId: "agent:SOFIA",
         eventType: "agent.tool.executed",
@@ -152,7 +157,8 @@ async function executeTool(
   tenantId: string,
   toolName: ToolName,
   input: never,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  channelThreads: ChannelThreadClient
 ): Promise<unknown> {
   switch (toolName) {
     case "get_catalog":
@@ -162,7 +168,8 @@ async function executeTool(
         db,
         tenantId,
         input as z.infer<(typeof toolSchemas)["identify_patient_by_phone"]>,
-        emitAudit
+        emitAudit,
+        channelThreads
       );
     case "update_patient_name":
       return updatePatientName(db, tenantId, input as z.infer<(typeof toolSchemas)["update_patient_name"]>);
@@ -231,17 +238,20 @@ async function identifyPatient(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["identify_patient_by_phone"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  channelThreads: ChannelThreadClient
 ) {
-  return db.transaction(async (tx) => {
-    const binding = await tx.query<{ id: string; patientId?: string; conversationId?: string }>(
-      `select id, patient_id as "patientId", conversation_id as "conversationId"
-       from channel_runtime.thread_bindings where tenant_id = $1 and id = $2 for update`,
-      [tenantId, input.threadBindingId]
-    );
-    if (!binding.rows[0])
+  let binding: { id: string; patientId: string | null; conversationId: string | null };
+  try {
+    binding = await channelThreads.getThread(tenantId, input.threadBindingId);
+  } catch (error) {
+    if (error instanceof Error && error.message === "thread_binding_not_found") {
       throw new ToolError(422, "thread_binding_not_found", "Channel thread does not belong to tenant");
+    }
+    throw error;
+  }
 
+  const result = await db.transaction(async (tx) => {
     const patientResult = await tx.query<{ id: string; fullName?: string }>(
       `insert into pulso_iris.administrative_patients
          (tenant_id, status, preferred_channel, phone_e164_hash, phone_masked, metadata)
@@ -253,7 +263,7 @@ async function identifyPatient(
     );
     const patient = patientResult.rows[0]!;
 
-    let conversationId = binding.rows[0].conversationId;
+    let conversationId = binding.conversationId ?? undefined;
     if (conversationId) {
       const active = await tx.query<{ id: string }>(
         `select id from pulso_iris.conversations
@@ -294,21 +304,8 @@ async function identifyPatient(
           )
         ).rows[0]!;
 
-    await tx.query(
-      `update channel_runtime.thread_bindings
-       set patient_id = $3, conversation_id = $4, last_inbound_at = now(), updated_at = now()
-       where tenant_id = $1 and id = $2`,
-      [tenantId, input.threadBindingId, patient.id, conversationId]
-    );
-    await tx.query(
-      `update channel_runtime.inbound_events
-       set thread_binding_id = $3, message_id = $4, updated_at = now()
-       where tenant_id = $1 and external_message_id = $2 and provider = 'whatsapp_web_test'`,
-      [tenantId, input.externalMessageId, input.threadBindingId, existingMessage.id]
-    );
-
     if (insertedMessage.rows[0]) {
-      emitAudit({
+      await emitAudit({
         tenantId,
         actorId: "agent:SOFIA",
         eventType: "channel.message.received",
@@ -325,6 +322,22 @@ async function identifyPatient(
       idempotent: !insertedMessage.rows[0]
     };
   });
+
+  try {
+    await channelThreads.bindThread(tenantId, input.threadBindingId, {
+      patientId: result.patientId,
+      conversationId: result.conversationId,
+      externalMessageId: input.externalMessageId,
+      messageId: result.messageId
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "thread_binding_not_found") {
+      throw new ToolError(422, "thread_binding_not_found", "Channel thread does not belong to tenant");
+    }
+    throw error;
+  }
+
+  return result;
 }
 
 async function updatePatientName(
@@ -425,9 +438,9 @@ async function createHold(
       actorId: "agent:SOFIA",
       holdDurationMinutes: settings.holdDurationMinutes
     });
-    emitExpiredHoldAudits(result.expiredHolds, emitAudit);
+    await emitExpiredHoldAudits(result.expiredHolds, emitAudit);
     if (!result.idempotent) {
-      emitAudit({
+      await emitAudit({
         tenantId,
         actorId: "agent:SOFIA",
         eventType: "appointment.hold.created",
@@ -471,7 +484,7 @@ async function bookAppointment(
     actorId: "agent:SOFIA"
   });
   if (!result.idempotent) {
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: "agent:SOFIA",
       eventType: "appointment.registered",
@@ -479,7 +492,7 @@ async function bookAppointment(
       entityId: result.appointment.id,
       metadata: { mode: "internal", origin: "sofia_wa" }
     });
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: "agent:SOFIA",
       eventType: "appointment.verified",
@@ -541,7 +554,7 @@ async function cancelAppointment(
     return false;
   });
   if (!result) {
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: "agent:SOFIA",
       eventType: "appointment.cancelled",
@@ -603,9 +616,9 @@ async function rescheduleAppointment(
     actorId: "agent:SOFIA",
     holdDurationMinutes: settings.holdDurationMinutes
   });
-  emitExpiredHoldAudits(reservation.expiredHolds, emitAudit);
+  await emitExpiredHoldAudits(reservation.expiredHolds, emitAudit);
   if (!reservation.idempotent) {
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: "agent:SOFIA",
       eventType: "appointment.hold.created",
@@ -676,7 +689,7 @@ async function rescheduleAppointment(
   }
 
   if (!outcome.idempotent) {
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: "agent:SOFIA",
       eventType: "appointment.registered",
@@ -684,7 +697,7 @@ async function rescheduleAppointment(
       entityId: outcome.replacementId,
       metadata: { mode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
     });
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: "agent:SOFIA",
       eventType: "appointment.verified",
@@ -692,7 +705,7 @@ async function rescheduleAppointment(
       entityId: outcome.replacementId,
       metadata: { verificationMode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
     });
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: "agent:SOFIA",
       eventType: "appointment.rescheduled",
@@ -741,7 +754,7 @@ async function createUrgentHandoff(
     return { ...created.rows[0]!, idempotent: false };
   });
   if (!handoff.idempotent) {
-    emitAudit({
+    await emitAudit({
       tenantId,
       actorId: "agent:SOFIA",
       eventType: "handoff.assigned",
@@ -800,9 +813,12 @@ function parseExplicitConfirmation(body: string): ConfirmationAction | undefined
   return "book";
 }
 
-function emitExpiredHoldAudits(expiredHolds: Array<{ id: string; tenantId: string }>, emitAudit: AuditEmitter): void {
+async function emitExpiredHoldAudits(
+  expiredHolds: Array<{ id: string; tenantId: string }>,
+  emitAudit: AuditEmitter
+): Promise<void> {
   for (const hold of expiredHolds) {
-    emitAudit({
+    await emitAudit({
       tenantId: hold.tenantId,
       actorId: "system:hold-expiration",
       eventType: "appointment.hold.expired",

@@ -105,7 +105,7 @@ const ACTIVE_BOOKING_STATUSES = new Set(["offered", "registered", "verified", "c
 export async function registerOperationsRoutes(
   app: FastifyInstance,
   context: ServiceContext,
-  emitAudit: AuditEmitter = () => undefined
+  emitAudit: AuditEmitter = async () => undefined
 ): Promise<void> {
   const base = "/v1/tenants/:tenantId/pulso-iris";
 
@@ -366,7 +366,7 @@ export async function registerOperationsRoutes(
         [scope.tenantId, appointment.id, input.conversationId ?? null, `register:${appointment.id}`]
       );
 
-      emitAudit({
+      await emitAudit({
         tenantId: scope.tenantId,
         actorId: operatorId,
         eventType: "appointment.registered",
@@ -568,7 +568,7 @@ export async function registerOperationsRoutes(
     }
 
     if (input.status === "cancelled") {
-      emitAudit({
+      await emitAudit({
         tenantId: scope.tenantId,
         actorId: operatorId,
         eventType: "appointment.cancelled",
@@ -576,7 +576,7 @@ export async function registerOperationsRoutes(
         entityId: appointmentId
       });
     } else if (input.status === "rescheduled" || Boolean(input.scheduledAt)) {
-      emitAudit({
+      await emitAudit({
         tenantId: scope.tenantId,
         actorId: operatorId,
         eventType: "appointment.rescheduled",
@@ -654,7 +654,7 @@ export async function registerOperationsRoutes(
     }
 
     if (input.status === "assigned") {
-      emitAudit({
+      await emitAudit({
         tenantId: scope.tenantId,
         actorId: readOperatorId(request.headers as Record<string, unknown>),
         eventType: "handoff.assigned",

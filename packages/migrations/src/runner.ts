@@ -277,6 +277,8 @@ async function upgradeCompatibleDraftChecksum(
               or not (
                 (source_service = 'sofia-automation' and event_type = 'sofia.audit.event.record.v1')
                 or (source_service = 'lumen-service' and event_type = 'lumen.audit.event.record.v1')
+                or (source_service = 'pulso-iris-service' and event_type = 'pulso.audit.event.record.v1')
+                or (source_service = 'whatsapp-channel-service' and event_type = 'channel.audit.event.record.v1')
                 or (source_service = 'legacy-unknown' and event_type = 'legacy.audit.event.record.v1')
               )
         )

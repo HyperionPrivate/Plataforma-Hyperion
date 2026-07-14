@@ -28,6 +28,16 @@ export const AUDIT_EVENT_CONSUMERS = [
     connectionName: "audit-lumen-event-record"
   },
   {
+    ...AUDIT_EVENT_CONTRACTS.pulso,
+    durableName: "audit_pulso_event_record_v1",
+    connectionName: "audit-pulso-event-record"
+  },
+  {
+    ...AUDIT_EVENT_CONTRACTS.channel,
+    durableName: "audit_channel_event_record_v1",
+    connectionName: "audit-channel-event-record"
+  },
+  {
     eventType: LEGACY_AUDIT_EVENT_CONTRACT.eventType,
     sourceService: LEGACY_AUDIT_EVENT_CONTRACT.sourceService,
     durableName: "audit_event_record_v1",

@@ -39,7 +39,10 @@ import { startChannelInboundJetStreamConsumer } from "./channel-inbound-jetstrea
 import { registerConfigRoutes } from "./config-routes.js";
 import { registerPulsoEventPositionRoute } from "./event-position-routes.js";
 import { registerOperationsRoutes } from "./operations-routes.js";
+import { PostgresPulsoAuditOutbox } from "./pulso-audit-outbox.js";
 import { PostgresPulsoOutbox } from "./pulso-outbox.js";
+import { registerChannelDeliveryRoutes } from "./channel-delivery-routes.js";
+import { registerSofiaOwnerRoutes } from "./sofia-owner-routes.js";
 import { registerSofiaToolRoutes } from "./sofia-tools-routes.js";
 import { readTenantId } from "./shared.js";
 
@@ -48,6 +51,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_PULSO_TOKEN");
   const sofiaToken = readInternalCredential(process.env, "PULSO_TO_SOFIA_TOKEN");
   const sofiaToPulsoToken = readInternalCredential(process.env, "SOFIA_TO_PULSO_TOKEN");
+  const channelToPulsoToken = readInternalCredential(process.env, "CHANNEL_TO_PULSO_TOKEN");
   const pulsoToChannelToken = readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN");
   const auditToken = readInternalCredential(process.env, "PULSO_TO_AUDIT_TOKEN");
   const allowLegacyChannelInboundV1 = readChannelInboundV1Compatibility(process.env);
@@ -68,8 +72,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   }
 
   const emitAudit = createAuditClient({
-    auditServiceUrl: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
-    workloadToken: auditToken,
+    db: context.db,
     logger: context.logger
   });
 
@@ -87,6 +90,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   await registerAvailabilityRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
   await registerSofiaToolRoutes(app, context, emitAudit);
+  registerSofiaOwnerRoutes(app, context, sofiaToPulsoToken);
+  registerChannelDeliveryRoutes(app, context, channelToPulsoToken);
   registerPulsoEventPositionRoute(app, context, sofiaToPulsoToken);
   if (isHttpDurableEventIngressEnabled(durableOutbox.transport)) {
     await registerChannelInboundEventRoutesWithCompatibility(app, context, {
@@ -153,6 +158,54 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         });
       }
       dispatcher.start();
+    }
+  }
+
+  if (context.db && (durableOutbox.transport === "jetstream" || auditToken)) {
+    const auditWorkerId = `pulso-audit-outbox-${randomUUID()}`;
+    const auditOutbox = new PostgresPulsoAuditOutbox(
+      context.db,
+      auditWorkerId,
+      process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086"
+    );
+    if (durableOutbox.enabled) {
+      const auditDispatcher =
+        durableOutbox.transport === "jetstream"
+          ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+              workerId: auditWorkerId,
+              servers: durableOutbox.natsUrl,
+              ...durableOutbox.authentication,
+              connectionName: auditWorkerId,
+              subjectPrefix: "hyperion.events",
+              expectedStream: "HYPERION_EVENTS",
+              claim: (limit) => auditOutbox.claim(limit),
+              complete: (eventId) => auditOutbox.complete(eventId),
+              fail: (eventId, errorCode) => auditOutbox.fail(eventId, errorCode),
+              batchSize: 10,
+              intervalMs: 750,
+              connectTimeoutMs: 5_000,
+              publishTimeoutMs: 5_000
+            })
+          : new HttpOutboxDispatcher<Record<string, unknown>>({
+              workerId: auditWorkerId,
+              internalToken: auditToken!,
+              fetch: createWorkloadFetch("pulso-iris-service", auditToken!),
+              claim: (limit) => auditOutbox.claim(limit),
+              complete: (eventId) => auditOutbox.complete(eventId),
+              fail: (eventId, errorCode) => auditOutbox.fail(eventId, errorCode),
+              batchSize: 10,
+              intervalMs: 750,
+              timeoutMs: 5_000
+            });
+      app.addHook("onClose", async () => auditDispatcher.stop());
+      if (auditDispatcher instanceof JetStreamOutboxDispatcher) {
+        await auditDispatcher.initialize();
+        context.registerReadinessCheck?.({
+          name: "jetstream_pulso_audit_publisher",
+          check: () => auditDispatcher.checkReadiness()
+        });
+      }
+      auditDispatcher.start();
     }
   }
 

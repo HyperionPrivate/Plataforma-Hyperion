@@ -2,8 +2,8 @@ import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerRoutes } from "./app.js";
 
-const TEST_TOKEN = "test-channel-to-audit-token";
-const CALLER = "whatsapp-channel-service";
+const TEST_TOKEN = "test-sofia-to-audit-token";
+const CALLER = "agent-service";
 
 describe("audit-service without internal token configured", () => {
   let app: ServiceHandle["app"];
@@ -42,7 +42,7 @@ describe("audit-service with internal token configured", () => {
 
   beforeAll(async () => {
     delete process.env.DATABASE_URL;
-    process.env.CHANNEL_TO_AUDIT_TOKEN = TEST_TOKEN;
+    process.env.SOFIA_TO_AUDIT_TOKEN = TEST_TOKEN;
     const handle = await createService({
       serviceName: "audit-service",
       databaseRequired: true,
@@ -53,7 +53,7 @@ describe("audit-service with internal token configured", () => {
 
   afterAll(async () => {
     await app.close();
-    delete process.env.CHANNEL_TO_AUDIT_TOKEN;
+    delete process.env.SOFIA_TO_AUDIT_TOKEN;
   });
 
   it("rejects writes without a bearer token", async () => {

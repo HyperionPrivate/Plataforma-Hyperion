@@ -149,6 +149,18 @@ $$;`
     expect(migration).not.toContain("create index if not exists ix_audit_inbox_source_received");
   });
 
+  it("adds durable PULSO/Channel audit outbox dedupe and expands the inbox contract", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/041-pulso-channel-audit-outbox.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("uq_pulso_outbox_dedupe");
+    expect(migration).toContain("uq_channel_outbox_dedupe");
+    expect(migration).toContain("pulso.audit.event.record.v1");
+    expect(migration).toContain("channel.audit.event.record.v1");
+    expect(migration).toContain("pulso-iris-service");
+    expect(migration).toContain("whatsapp-channel-service");
+  });
+
   it("contracts and indexes Audit provenance in bounded follow-up phases", async () => {
     const contractPath = fileURLToPath(new URL("../sql/027-audit-source-provenance-contract.sql", import.meta.url));
     const indexPath = fileURLToPath(new URL("../sql/028-audit-source-provenance-index.sql", import.meta.url));

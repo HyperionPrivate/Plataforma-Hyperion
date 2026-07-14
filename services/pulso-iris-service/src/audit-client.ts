@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type { AuditEventInput } from "@hyperion/contracts";
-import { createInternalAuthorizationHeaders } from "@hyperion/service-runtime";
+import type { DatabaseExecutor } from "@hyperion/database";
 
 export const PULSO_AUDIT_EVENTS = [
   "agenda.settings.updated",
@@ -33,66 +34,94 @@ export interface EmitAuditEventInput {
   metadata?: Record<string, unknown>;
 }
 
-export type AuditEmitter = (input: EmitAuditEventInput) => void;
+export type AuditEmitter = (input: EmitAuditEventInput, executor?: DatabaseExecutor) => Promise<void>;
+
+export const PULSO_AUDIT_EVENT_TYPE = "pulso.audit.event.record.v1" as const;
 
 interface AuditLogger {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }
 
 const SOURCE = "pulso-iris-service";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function createAuditClient(options: {
-  auditServiceUrl?: string;
-  workloadToken?: string;
+  db?: DatabaseExecutor;
   logger: AuditLogger;
-  fetchImpl?: typeof fetch;
 }): AuditEmitter {
-  const auditServiceUrl = options.auditServiceUrl?.replace(/\/$/, "");
-  const token = options.workloadToken?.trim();
-  const fetchImpl = options.fetchImpl ?? fetch;
   let warnedMissingConfig = false;
 
-  return (input) => {
-    if (!auditServiceUrl || !token) {
+  return async (input, executor) => {
+    const client = executor ?? options.db;
+    if (!client) {
       if (!warnedMissingConfig) {
         warnedMissingConfig = true;
-        options.logger.warn("audit emission disabled: AUDIT_SERVICE_URL or PULSO_TO_AUDIT_TOKEN missing");
+        options.logger.warn("audit emission disabled: database client missing");
       }
       return;
     }
 
-    const payload: AuditEventInput = {
-      tenantId: input.tenantId,
-      actorId: input.actorId,
-      eventType: input.eventType,
-      entityType: input.entityType,
-      entityId: input.entityId,
-      metadata: {
-        source: SOURCE,
-        ...(input.metadata ?? {})
-      }
-    };
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2000);
-
-    void fetchImpl(`${auditServiceUrl}/v1/audit/events`, {
-      method: "POST",
-      headers: {
-        ...createInternalAuthorizationHeaders(SOURCE, token),
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    })
-      .catch((error) => {
-        options.logger.warn("failed to emit audit event", {
-          eventType: input.eventType,
-          error: error instanceof Error ? error.message : String(error)
-        });
-      })
-      .finally(() => clearTimeout(timer));
+    try {
+      await enqueuePulsoAuditEvent(client, input);
+    } catch (error) {
+      options.logger.warn("failed to enqueue audit event", {
+        eventType: input.eventType,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
   };
+}
+
+export async function enqueuePulsoAuditEvent(
+  db: DatabaseExecutor,
+  input: EmitAuditEventInput
+): Promise<void> {
+  if (!input.tenantId || !UUID_PATTERN.test(input.tenantId)) {
+    throw new Error("Pulso audit events require a tenantId UUID");
+  }
+
+  const aggregateId =
+    input.entityId && UUID_PATTERN.test(input.entityId) ? input.entityId : randomUUID();
+  const dedupeSuffix =
+    typeof input.metadata?.auditDedupeSuffix === "string" && input.metadata.auditDedupeSuffix.trim()
+      ? input.metadata.auditDedupeSuffix.trim()
+      : "v1";
+  const dedupeKey = `${input.entityType}:${input.entityId ?? aggregateId}:${input.eventType}:${dedupeSuffix}`.slice(
+    0,
+    240
+  );
+
+  const metadata = { ...(input.metadata ?? {}) };
+  delete metadata.auditDedupeSuffix;
+
+  const payload: AuditEventInput = {
+    tenantId: input.tenantId,
+    actorId: input.actorId,
+    eventType: input.eventType,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    metadata: {
+      source: SOURCE,
+      ...metadata
+    }
+  };
+
+  await db.query(
+    `insert into pulso_iris.outbox_events (
+       tenant_id, event_type, event_version, aggregate_type, aggregate_id,
+       dedupe_key, payload, occurred_at
+     ) values ($1, $2, 1, $3, $4::uuid, $5, $6::jsonb, now())
+     on conflict (tenant_id, dedupe_key) where dedupe_key is not null do nothing`,
+    [
+      input.tenantId,
+      PULSO_AUDIT_EVENT_TYPE,
+      input.entityType.slice(0, 80),
+      aggregateId,
+      dedupeKey,
+      JSON.stringify(payload)
+    ]
+  );
 }
 
 export function readOperatorId(headers: Record<string, unknown> | undefined): string | undefined {

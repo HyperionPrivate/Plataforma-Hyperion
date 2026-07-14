@@ -133,7 +133,7 @@ export async function runSimulatorTick(
       );
 
       if (updated.rows[0]) {
-        emitAudit({
+        await emitAudit({
           tenantId: action.tenantId,
           actorId: "simulator",
           eventType: "appointment.verified",

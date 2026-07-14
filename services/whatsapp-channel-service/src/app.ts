@@ -17,13 +17,15 @@ import {
 import QRCode from "qrcode";
 import { z } from "zod";
 import { BaileysWhatsAppWebTestProvider } from "./baileys-provider.js";
-import { ChannelAuditEmitter } from "./audit-emitter.js";
+import { PostgresChannelAuditOutbox } from "./channel-audit-outbox.js";
 import { PostgresChannelOutbox } from "./channel-outbox.js";
 import { PostgresChannelRepository } from "./channel-repository.js";
 import { WhatsAppChannelService } from "./channel-service.js";
 import { registerChannelEventPositionRoute } from "./event-position-routes.js";
+import { registerThreadBindRoutes } from "./thread-bind-routes.js";
 import { readWhatsAppProviderConfig } from "./provider-config.js";
 import { WhatsAppProviderDisabledError } from "./types.js";
+import { createPulsoDeliveryClient } from "./pulso-delivery-client.js";
 
 const tenantParamsSchema = z.object({ tenantId: tenantIdSchema });
 const eventParamsSchema = tenantParamsSchema.extend({ eventId: z.string().uuid() });
@@ -64,25 +66,18 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     sofiaCredential: readInternalCredential(process.env, "SOFIA_TO_CHANNEL_TOKEN")
   };
   if (context.db) {
-    const auditEmitter = new ChannelAuditEmitter({
-      auditUrl: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
-      credential: channelToAuditToken,
-      authorizationHeaders: (credential) => createInternalAuthorizationHeaders("whatsapp-channel-service", credential),
-      warn: (eventType) => context.logger.warn("whatsapp audit emission failed", { eventType })
-    });
-    // Registered before Channel.stop(): Fastify closes hooks in LIFO order, so
-    // Channel first closes all producers and only then do we drain audit calls.
-    app.addHook("onClose", async () => auditEmitter.stop());
     const provider = new BaileysWhatsAppWebTestProvider(readWhatsAppProviderConfig(), undefined, (reason, metadata) =>
       context.logger.info("whatsapp channel diagnostic", { reason, ...metadata })
     );
-    const repository = new PostgresChannelRepository(context.db);
-    const channel = new WhatsAppChannelService(
-      provider,
-      repository,
-      500,
-      (event) => auditEmitter.emit(event),
-      (errorCode) => context.logger.warn("whatsapp runtime operation deferred", { errorCode })
+    const repository = new PostgresChannelRepository(
+      context.db,
+      createPulsoDeliveryClient({
+        pulsoIrisUrl: process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088",
+        credential: channelToPulsoToken ?? ""
+      })
+    );
+    const channel = new WhatsAppChannelService(provider, repository, 500, (errorCode) =>
+      context.logger.warn("whatsapp runtime operation deferred", { errorCode })
     );
     dependencies.channel = channel;
     try {
@@ -141,9 +136,58 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         dispatcher.start();
       }
     }
+
+    if (durableOutbox.transport === "jetstream" || channelToAuditToken) {
+      const auditWorkerId = `channel-audit-outbox-${randomUUID()}`;
+      const auditOutbox = new PostgresChannelAuditOutbox(
+        context.db,
+        auditWorkerId,
+        process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086"
+      );
+      if (durableOutbox.enabled) {
+        const auditDispatcher =
+          durableOutbox.transport === "jetstream"
+            ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+                workerId: auditWorkerId,
+                servers: durableOutbox.natsUrl,
+                ...durableOutbox.authentication,
+                connectionName: auditWorkerId,
+                subjectPrefix: "hyperion.events",
+                expectedStream: "HYPERION_EVENTS",
+                claim: (limit) => auditOutbox.claim(limit),
+                complete: (eventId) => auditOutbox.complete(eventId),
+                fail: (eventId, errorCode) => auditOutbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                connectTimeoutMs: 5_000,
+                publishTimeoutMs: 5_000
+              })
+            : new HttpOutboxDispatcher<Record<string, unknown>>({
+                workerId: auditWorkerId,
+                internalToken: channelToAuditToken!,
+                fetch: createWorkloadFetch("whatsapp-channel-service", channelToAuditToken!),
+                claim: (limit) => auditOutbox.claim(limit),
+                complete: (eventId) => auditOutbox.complete(eventId),
+                fail: (eventId, errorCode) => auditOutbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                timeoutMs: 5_000
+              });
+        app.addHook("onClose", async () => auditDispatcher.stop());
+        if (auditDispatcher instanceof JetStreamOutboxDispatcher) {
+          await auditDispatcher.initialize();
+          context.registerReadinessCheck?.({
+            name: "jetstream_channel_audit_publisher",
+            check: () => auditDispatcher.checkReadiness()
+          });
+        }
+        auditDispatcher.start();
+      }
+    }
   }
   registerChannelRoutes(app, dependencies, context);
   registerChannelEventPositionRoute(app, context, dependencies.pulsoCredential);
+  registerThreadBindRoutes(app, context, dependencies.pulsoCredential);
 };
 
 type DurableOutboxConfiguration =
@@ -384,6 +428,12 @@ function credentialsForChannelRoute(
     return { "integration-service": dependencies.integrationCredential };
   }
   if (routeUrl === "/internal/v1/tenants/:tenantId/channel-inbound/:eventId/stream-position") {
+    return { "pulso-iris-service": dependencies.pulsoCredential };
+  }
+  if (
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/threads/:threadBindingId" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/threads/:threadBindingId/bind"
+  ) {
     return { "pulso-iris-service": dependencies.pulsoCredential };
   }
   return {};

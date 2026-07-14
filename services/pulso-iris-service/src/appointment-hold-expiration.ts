@@ -15,7 +15,7 @@ export async function expireAppointmentHolds(db: Database, emitAudit: AuditEmitt
   );
 
   for (const hold of expired.rows) {
-    emitAudit({
+    await emitAudit({
       tenantId: hold.tenantId,
       actorId: "system",
       eventType: "appointment.hold.expired",

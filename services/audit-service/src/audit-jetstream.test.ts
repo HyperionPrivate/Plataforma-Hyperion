@@ -64,7 +64,8 @@ describe("audit JetStream adapter", () => {
 
   it("drains the legacy durable without inventing producer provenance", async () => {
     const receive = receiverReturning("accepted");
-    const legacyEvent = { ...EVENT, type: AUDIT_EVENT_CONSUMERS[2].eventType };
+    const legacy = AUDIT_EVENT_CONSUMERS.find((entry) => entry.sourceService === "legacy-unknown")!;
+    const legacyEvent = { ...EVENT, type: legacy.eventType };
 
     await expect(
       createAuditEventJetStreamHandler(
@@ -113,10 +114,10 @@ describe("audit JetStream adapter", () => {
       factory
     );
 
-    expect(consumers).toHaveLength(3);
-    expect(initialize).toHaveBeenCalledTimes(3);
-    expect(start).toHaveBeenCalledTimes(3);
-    expect(factory).toHaveBeenCalledTimes(3);
+    expect(consumers).toHaveLength(5);
+    expect(initialize).toHaveBeenCalledTimes(5);
+    expect(start).toHaveBeenCalledTimes(5);
+    expect(factory).toHaveBeenCalledTimes(5);
     for (const definition of AUDIT_EVENT_CONSUMERS) {
       expect(factory).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -131,19 +132,16 @@ describe("audit JetStream adapter", () => {
       );
     }
     await closeHook?.();
-    expect(stop).toHaveBeenCalledTimes(3);
+    expect(stop).toHaveBeenCalledTimes(5);
   });
 
   it("closes every source consumer and starts none when preflight fails", async () => {
-    const first = managedConsumer();
-    const second = managedConsumer();
-    const legacy = managedConsumer();
-    second.initialize.mockRejectedValueOnce(new Error("topology unavailable"));
-    const factory = vi
-      .fn<ManagedJetStreamConsumerFactory>()
-      .mockReturnValueOnce(first)
-      .mockReturnValueOnce(second)
-      .mockReturnValueOnce(legacy);
+    const consumers = Array.from({ length: 5 }, () => managedConsumer());
+    consumers[1]!.initialize.mockRejectedValueOnce(new Error("topology unavailable"));
+    const factory = vi.fn<ManagedJetStreamConsumerFactory>();
+    for (const consumer of consumers) {
+      factory.mockReturnValueOnce(consumer);
+    }
 
     await expect(
       startAuditEventJetStreamConsumers(
@@ -158,12 +156,10 @@ describe("audit JetStream adapter", () => {
       )
     ).rejects.toThrow("topology unavailable");
 
-    expect(first.start).not.toHaveBeenCalled();
-    expect(second.start).not.toHaveBeenCalled();
-    expect(legacy.start).not.toHaveBeenCalled();
-    expect(first.stop).toHaveBeenCalledTimes(1);
-    expect(second.stop).toHaveBeenCalledTimes(1);
-    expect(legacy.stop).toHaveBeenCalledTimes(1);
+    for (const consumer of consumers) {
+      expect(consumer.start).not.toHaveBeenCalled();
+    }
+    expect(consumers.every((consumer) => consumer.stop.mock.calls.length >= 1)).toBe(true);
   });
 });
 

@@ -90,7 +90,10 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
       }
       const caller = readInternalCaller(request.headers)!;
-      const expectedSource = caller === "agent-service" ? "sofia-automation" : "lumen-service";
+      const expectedSource = expectedAuditSourceForCaller(caller);
+      if (!expectedSource) {
+        return reply.code(403).send(envelope({ error: "Caller is not an authorized audit producer" }, request.id));
+      }
 
       if (!context.db) {
         return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
@@ -133,8 +136,6 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 
 function readDirectWriteCredentials(env: NodeJS.ProcessEnv): InternalCredentialMap {
   return {
-    "whatsapp-channel-service": readInternalCredential(env, "CHANNEL_TO_AUDIT_TOKEN"),
-    "pulso-iris-service": readInternalCredential(env, "PULSO_TO_AUDIT_TOKEN"),
     "agent-service": readInternalCredential(env, "SOFIA_TO_AUDIT_TOKEN")
   };
 }
@@ -142,6 +143,25 @@ function readDirectWriteCredentials(env: NodeJS.ProcessEnv): InternalCredentialM
 function readDurableEventCredentials(env: NodeJS.ProcessEnv): InternalCredentialMap {
   return {
     "agent-service": readInternalCredential(env, "SOFIA_TO_AUDIT_TOKEN"),
-    "lumen-service": readInternalCredential(env, "LUMEN_TO_AUDIT_TOKEN")
+    "lumen-service": readInternalCredential(env, "LUMEN_TO_AUDIT_TOKEN"),
+    "pulso-iris-service": readInternalCredential(env, "PULSO_TO_AUDIT_TOKEN"),
+    "whatsapp-channel-service": readInternalCredential(env, "CHANNEL_TO_AUDIT_TOKEN")
   };
+}
+
+function expectedAuditSourceForCaller(
+  caller: string
+): "sofia-automation" | "lumen-service" | "pulso-iris-service" | "whatsapp-channel-service" | undefined {
+  switch (caller) {
+    case "agent-service":
+      return "sofia-automation";
+    case "lumen-service":
+      return "lumen-service";
+    case "pulso-iris-service":
+      return "pulso-iris-service";
+    case "whatsapp-channel-service":
+      return "whatsapp-channel-service";
+    default:
+      return undefined;
+  }
 }

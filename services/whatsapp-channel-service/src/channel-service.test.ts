@@ -83,7 +83,7 @@ describe("WhatsAppChannelService", () => {
       const provider = new FakeProvider();
       repository.claimedOutbound.push(outboundMessage("hung-provider-send"));
       provider.sendText = vi.fn(() => new Promise<{ providerMessageId: string; sentAt: Date }>(() => undefined));
-      const service = new WhatsAppChannelService(provider, repository, 60_000, undefined, undefined, 5_000, 25);
+    const service = new WhatsAppChannelService(provider, repository, 60_000, undefined, 5_000, 25);
 
       const drain = service.drainOutbound();
       await vi.waitFor(() => expect(provider.sendText).toHaveBeenCalledTimes(1));
@@ -159,8 +159,7 @@ describe("WhatsAppChannelService", () => {
   it("retries only known pre-send failures and reconciles an uncertain provider outcome", async () => {
     const repository = new MemoryRepository();
     const provider = new FakeProvider();
-    const emitAudit = vi.fn();
-    const service = new WhatsAppChannelService(provider, repository, 60_000, emitAudit);
+    const service = new WhatsAppChannelService(provider, repository, 60_000);
     repository.claimedOutbound.push(outboundMessage("ok"), outboundMessage("retry"), outboundMessage("uncertain"));
     provider.sendText = vi
       .fn()
@@ -173,9 +172,6 @@ describe("WhatsAppChannelService", () => {
     expect(repository.sent).toEqual(["ok"]);
     expect(repository.failed).toEqual([{ id: "retry", code: "provider_not_ready" }]);
     expect(repository.uncertain).toEqual(["uncertain"]);
-    expect(emitAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: "channel.message.sent", entityId: "00000000-0000-4000-8000-000000000003" })
-    );
   });
 
   it("retries session restoration after a transient repository failure", async () => {
@@ -184,7 +180,7 @@ describe("WhatsAppChannelService", () => {
     const provider = new FakeProvider();
     const runtimeError = vi.fn();
     repository.restoreFailures = 1;
-    const service = new WhatsAppChannelService(provider, repository, 60_000, undefined, runtimeError, 25);
+    const service = new WhatsAppChannelService(provider, repository, 60_000, runtimeError, 25);
 
     await service.start();
     expect(provider.restoreCalls).toBe(0);

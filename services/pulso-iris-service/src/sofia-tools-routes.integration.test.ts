@@ -38,7 +38,59 @@ describeIntegration("SOFIA internal agenda tools", () => {
       serviceName: "pulso-iris-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) => {
-        await registerSofiaToolRoutes(serviceApp, context, (event) => events.push(event));
+        await registerSofiaToolRoutes(
+          serviceApp,
+          context,
+          async (event) => {
+            events.push(event);
+          },
+          {
+            async getThread(lookupTenantId, threadBindingId) {
+              const result = await client.query<{
+                id: string;
+                patientId: string | null;
+                conversationId: string | null;
+                status: string;
+              }>(
+                `select id, patient_id as "patientId", conversation_id as "conversationId", status
+                   from channel_runtime.thread_bindings
+                  where tenant_id = $1 and id = $2`,
+                [lookupTenantId, threadBindingId]
+              );
+              const row = result.rows[0];
+              if (!row) throw Object.assign(new Error("thread_binding_not_found"), { statusCode: 404 });
+              return row;
+            },
+            async bindThread(lookupTenantId, threadBindingId, input) {
+              await client.query("begin");
+              try {
+                const binding = await client.query(
+                  `select id from channel_runtime.thread_bindings where tenant_id = $1 and id = $2 for update`,
+                  [lookupTenantId, threadBindingId]
+                );
+                if (!binding.rows[0]) {
+                  throw Object.assign(new Error("thread_binding_not_found"), { statusCode: 404 });
+                }
+                await client.query(
+                  `update channel_runtime.thread_bindings
+                   set patient_id = $3, conversation_id = $4, last_inbound_at = now(), updated_at = now()
+                   where tenant_id = $1 and id = $2`,
+                  [lookupTenantId, threadBindingId, input.patientId, input.conversationId]
+                );
+                await client.query(
+                  `update channel_runtime.inbound_events
+                   set thread_binding_id = $3, message_id = $4, updated_at = now()
+                   where tenant_id = $1 and external_message_id = $2 and provider = 'whatsapp_web_test'`,
+                  [lookupTenantId, input.externalMessageId, threadBindingId, input.messageId]
+                );
+                await client.query("commit");
+              } catch (error) {
+                await client.query("rollback");
+                throw error;
+              }
+            }
+          }
+        );
       }
     });
     app = service.app;

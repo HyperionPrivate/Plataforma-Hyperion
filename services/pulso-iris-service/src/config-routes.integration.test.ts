@@ -40,7 +40,9 @@ describeIntegration("pulso-iris configurable agenda", () => {
       serviceName: "pulso-iris-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) => {
-        await registerConfigRoutes(serviceApp, context, (event) => events.push(event));
+        await registerConfigRoutes(serviceApp, context, async (event) => {
+          events.push(event);
+        });
       }
     });
     app = service.app;

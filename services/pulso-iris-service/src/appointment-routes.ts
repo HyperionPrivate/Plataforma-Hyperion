@@ -109,7 +109,7 @@ const HOLD_COLUMNS = `
 export async function registerAppointmentRoutes(
   app: FastifyInstance,
   context: ServiceContext,
-  emitAudit: AuditEmitter = () => undefined
+  emitAudit: AuditEmitter = async () => undefined
 ): Promise<void> {
   const base = "/v1/tenants/:tenantId/pulso-iris";
 
@@ -157,8 +157,8 @@ export async function registerAppointmentRoutes(
         actorId: readOperatorId(request.headers as Record<string, unknown>),
         holdDurationMinutes: settings.holdDurationMinutes
       });
-      emitExpiredHolds(emitAudit, result.expiredHolds);
-      if (!result.idempotent) emitHoldCreated(emitAudit, result.hold, request);
+      await emitExpiredHolds(emitAudit, result.expiredHolds);
+      if (!result.idempotent) await emitHoldCreated(emitAudit, result.hold, request);
       return reply
         .code(result.idempotent ? 200 : 201)
         .send(envelope(pulsoIrisAppointmentHoldSchema.parse(result.hold), request.id));
@@ -263,10 +263,10 @@ export async function registerAppointmentRoutes(
       if (!(await validateBookableRequest(scope.db, scope.tenantId, holdInput, settings, request, reply))) return;
       try {
         const reserved = await provider.reserve(holdInput);
-        emitExpiredHolds(emitAudit, reserved.expiredHolds);
+        await emitExpiredHolds(emitAudit, reserved.expiredHolds);
         holdId = reserved.hold.id;
         holdWasCreated = !reserved.idempotent;
-        if (holdWasCreated) emitHoldCreated(emitAudit, reserved.hold, request);
+        if (holdWasCreated) await emitHoldCreated(emitAudit, reserved.hold, request);
       } catch (error) {
         return handleReservationError(error, scope.db, scope.tenantId, holdInput, settings, request, reply);
       }
@@ -294,7 +294,7 @@ export async function registerAppointmentRoutes(
       if (!appointment) throw new Error("Appointment was not persisted");
 
       if (!result.idempotent) {
-        emitAudit({
+        await emitAudit({
           tenantId: scope.tenantId,
           actorId: operatorId,
           eventType:
@@ -303,7 +303,7 @@ export async function registerAppointmentRoutes(
           entityId: appointment.id,
           metadata: { mode: settings.mode }
         });
-        emitAudit({
+        await emitAudit({
           tenantId: scope.tenantId,
           actorId: operatorId,
           eventType: "appointment.registered",
@@ -448,7 +448,7 @@ export async function registerAppointmentRoutes(
       if (!appointment) {
         return reply.code(409).send(envelope({ error: "Appointment cannot be manually verified" }, request.id));
       }
-      emitAudit({
+      await emitAudit({
         tenantId: scope.tenantId,
         actorId: operatorId,
         eventType: "appointment.manually_verified",
@@ -456,7 +456,7 @@ export async function registerAppointmentRoutes(
         entityId: appointmentId,
         metadata: { verificationMode: "manual_external" }
       });
-      emitAudit({
+      await emitAudit({
         tenantId: scope.tenantId,
         actorId: operatorId,
         eventType: "appointment.verified",
@@ -490,7 +490,7 @@ export async function registerAppointmentRoutes(
     );
     const appointment = pulsoIrisAppointmentListSchema.parse(result.rows)[0];
     if (!appointment) return reply.code(409).send(envelope({ error: "Appointment cannot be rejected" }, request.id));
-    emitAudit({
+    await emitAudit({
       tenantId: scope.tenantId,
       actorId: operatorId,
       eventType: "appointment.external_rejected",
@@ -513,7 +513,7 @@ export async function registerAppointmentRoutes(
       const provider = new InternalAgendaProvider(scope.db);
       await provider.cancel({ tenantId: scope.tenantId, appointmentId, actorId: operatorId, reason: input.reason });
       const appointment = await findAppointment(scope.db, scope.tenantId, appointmentId);
-      emitAudit({
+      await emitAudit({
         tenantId: scope.tenantId,
         actorId: operatorId,
         eventType: "appointment.cancelled",
@@ -598,9 +598,9 @@ export async function registerAppointmentRoutes(
           actorId: operatorId,
           holdDurationMinutes: settings.holdDurationMinutes
         });
-        emitExpiredHolds(emitAudit, reserved.expiredHolds);
+        await emitExpiredHolds(emitAudit, reserved.expiredHolds);
         holdId = reserved.hold.id;
-        if (!reserved.idempotent) emitHoldCreated(emitAudit, reserved.hold, request);
+        if (!reserved.idempotent) await emitHoldCreated(emitAudit, reserved.hold, request);
       } catch (error) {
         return handleReservationError(error, scope.db, scope.tenantId, input, settings, request, reply);
       }
@@ -675,7 +675,7 @@ export async function registerAppointmentRoutes(
       });
       const fullReplacement = await findAppointment(scope.db, scope.tenantId, replacement.appointment.id);
       if (!replacement.idempotent) {
-        emitAudit({
+        await emitAudit({
           tenantId: scope.tenantId,
           actorId: operatorId,
           eventType:
@@ -684,7 +684,7 @@ export async function registerAppointmentRoutes(
           entityId: replacement.appointment.id,
           metadata: { mode: settings.mode, rescheduledFrom: appointmentId }
         });
-        emitAudit({
+        await emitAudit({
           tenantId: scope.tenantId,
           actorId: operatorId,
           eventType: "appointment.registered",
@@ -693,7 +693,7 @@ export async function registerAppointmentRoutes(
           metadata: { mode: settings.mode, rescheduledFrom: appointmentId }
         });
       }
-      emitAudit({
+      await emitAudit({
         tenantId: scope.tenantId,
         actorId: operatorId,
         eventType: "appointment.rescheduled",
@@ -939,8 +939,8 @@ function requireCoordinator(request: FastifyRequest, reply: FastifyReply): strin
   return undefined;
 }
 
-function emitHoldCreated(emitAudit: AuditEmitter, hold: AgendaHold, request: FastifyRequest): void {
-  emitAudit({
+async function emitHoldCreated(emitAudit: AuditEmitter, hold: AgendaHold, request: FastifyRequest): Promise<void> {
+  await emitAudit({
     tenantId: hold.tenantId,
     actorId: readOperatorId(request.headers as Record<string, unknown>),
     eventType: "appointment.hold.created",
@@ -950,9 +950,9 @@ function emitHoldCreated(emitAudit: AuditEmitter, hold: AgendaHold, request: Fas
   });
 }
 
-function emitExpiredHolds(emitAudit: AuditEmitter, holds: Array<{ id: string; tenantId: string }>): void {
+async function emitExpiredHolds(emitAudit: AuditEmitter, holds: Array<{ id: string; tenantId: string }>): Promise<void> {
   for (const hold of holds) {
-    emitAudit({
+    await emitAudit({
       tenantId: hold.tenantId,
       actorId: "system",
       eventType: "appointment.hold.expired",
