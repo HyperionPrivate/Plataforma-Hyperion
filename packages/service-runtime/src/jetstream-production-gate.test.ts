@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertJetStreamProductionGate } from "./jetstream-production-gate.js";
+import { assertJetStreamProductionGate, shouldEnforceJetStreamProductionGate } from "./jetstream-production-gate.js";
 
 const haBase = {
   NODE_ENV: "production",
@@ -22,6 +22,46 @@ describe("JetStream production gate", () => {
         NATS_URL: "nats://nats:4222"
       })
     ).not.toThrow();
+  });
+
+  it("allows Compose/CI JetStream pilots that set NODE_ENV=production with example secrets", () => {
+    expect(
+      shouldEnforceJetStreamProductionGate({
+        NODE_ENV: "production",
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        HYPERION_ALLOW_EXAMPLE_SECRETS: "true"
+      })
+    ).toBe(false);
+
+    expect(() =>
+      assertJetStreamProductionGate({
+        NODE_ENV: "production",
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        HYPERION_ALLOW_EXAMPLE_SECRETS: "true",
+        NATS_URL: "nats://nats:4222"
+      })
+    ).not.toThrow();
+
+    expect(() =>
+      assertJetStreamProductionGate({
+        NODE_ENV: "production",
+        CI: "true",
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://nats:4222"
+      })
+    ).not.toThrow();
+  });
+
+  it("still enforces when HYPERION_ENVIRONMENT marks real production", () => {
+    expect(() =>
+      assertJetStreamProductionGate({
+        NODE_ENV: "production",
+        HYPERION_ENVIRONMENT: "production",
+        HYPERION_ALLOW_EXAMPLE_SECRETS: "true",
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://nats:4222"
+      })
+    ).toThrow(/Single-node JetStream remains blocked/);
   });
 
   it("refuses jetstream in production without the HA enablement flag", () => {

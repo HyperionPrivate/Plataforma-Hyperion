@@ -1,16 +1,18 @@
 /**
- * Fail-closed gate: single-node JetStream stays blocked in production.
+ * Fail-closed gate: single-node JetStream stays blocked in real production.
  * Do not fake HA — PRODUCTION_JETSTREAM_ENABLED alone is insufficient.
+ *
+ * Compose hardcodes NODE_ENV=production for every workload. CI and local
+ * JetStream rehearsals that load `.env.example` may set
+ * HYPERION_ALLOW_EXAMPLE_SECRETS=true (or CI=true). Those are pilots, not
+ * production cutover. HYPERION_ENVIRONMENT=production|staging always enforces.
  */
 
 export function assertJetStreamProductionGate(environment: NodeJS.ProcessEnv = process.env): void {
   const transport = (environment.DURABLE_EVENT_TRANSPORT ?? "http").trim().toLowerCase();
   if (transport !== "jetstream") return;
 
-  const hyperionEnv = (environment.HYPERION_ENVIRONMENT ?? "").trim().toLowerCase();
-  const nodeEnv = (environment.NODE_ENV ?? "development").trim().toLowerCase();
-  const isProduction = hyperionEnv === "production" || nodeEnv === "production";
-  if (!isProduction) return;
+  if (!shouldEnforceJetStreamProductionGate(environment)) return;
 
   const enabled = environment.PRODUCTION_JETSTREAM_ENABLED?.trim() === "true";
   if (!enabled) {
@@ -59,4 +61,22 @@ export function assertJetStreamProductionGate(environment: NodeJS.ProcessEnv = p
       "Production JetStream requires JETSTREAM_REDRIVE_RUNBOOK_URL pointing to an audited redrive procedure."
     );
   }
+}
+
+export function shouldEnforceJetStreamProductionGate(environment: NodeJS.ProcessEnv = process.env): boolean {
+  const hyperionEnv = (environment.HYPERION_ENVIRONMENT ?? "").trim().toLowerCase();
+  const nodeEnv = (environment.NODE_ENV ?? "development").trim().toLowerCase();
+
+  if (hyperionEnv === "production" || hyperionEnv === "staging") {
+    return true;
+  }
+
+  if (nodeEnv !== "production" && nodeEnv !== "staging") {
+    return false;
+  }
+
+  // Compose sets NODE_ENV=production for pilots; allow explicit CI / example-secret rehearsals.
+  if (environment.CI === "true") return false;
+  if (environment.HYPERION_ALLOW_EXAMPLE_SECRETS === "true") return false;
+  return true;
 }
