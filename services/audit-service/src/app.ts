@@ -28,7 +28,14 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     }
   }
 
-  app.get("/v1/audit/events", async (request) => {
+  app.get("/v1/audit/events", async (request, reply) => {
+    const authError = validateInternalAuthorization(request.headers, {
+      "api-gateway": readInternalCredential(process.env, "GATEWAY_TO_AUDIT_TOKEN")
+    });
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
+
     if (!context.db) {
       return envelope([], request.id);
     }

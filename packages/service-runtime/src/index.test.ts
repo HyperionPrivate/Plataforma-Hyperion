@@ -19,6 +19,8 @@ afterEach(async () => {
   delete process.env.NODE_ENV;
   delete process.env.TRUST_PROXY;
   delete process.env.SHUTDOWN_TIMEOUT_MS;
+  delete process.env.HYPERION_ALLOW_EXAMPLE_SECRETS;
+  delete process.env.HYPERION_ENVIRONMENT;
 });
 
 describe("service runtime", () => {
@@ -212,6 +214,7 @@ describe("service runtime", () => {
 
   it("requires an explicit database identity in production", async () => {
     process.env.NODE_ENV = "production";
+    process.env.HYPERION_ALLOW_EXAMPLE_SECRETS = "true";
     process.env.DATABASE_URL = "postgres://runtime-test";
     let databaseCreated = false;
     let routesRegistered = false;
@@ -234,8 +237,24 @@ describe("service runtime", () => {
     expect(routesRegistered).toBe(false);
   });
 
+  it("refuses .env.example placeholder secrets in production", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.POSTGRES_PASSWORD = "replace-with-real-secret";
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    delete process.env.HYPERION_ALLOW_EXAMPLE_SECRETS;
+    delete process.env.CI;
+
+    await expect(
+      createService({
+        serviceName: "tenant-service",
+        databaseRequired: false
+      })
+    ).rejects.toThrow(/placeholder secrets/);
+  });
+
   it("binds the configured database identity to the service context", async () => {
     process.env.NODE_ENV = "production";
+    process.env.HYPERION_ALLOW_EXAMPLE_SECRETS = "true";
     process.env.DATABASE_URL = "postgres://runtime-test";
     process.env.EXPECTED_DATABASE_ROLE = "hyperion_audit";
     let databaseCreated = false;

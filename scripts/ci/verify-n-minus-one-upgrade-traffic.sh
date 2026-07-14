@@ -270,39 +270,40 @@ for _attempt in {1..120}; do
         select
           coalesce((select status from source), 'missing'),
           coalesce((select processed_at is not null from source), false)::text,
-          coalesce((select event_type from channel_event), 'missing'),
-          coalesce((select event_version::text from channel_event), '0'),
-          coalesce((select status from channel_event), 'missing'),
-          coalesce((select published_at is not null from channel_event), false)::text,
-          coalesce((select stream_id = source.thread_binding_id and stream_sequence > 0
+          coalesce((select channel_event.event_type from channel_event), 'missing'),
+          coalesce((select channel_event.event_version::text from channel_event), '0'),
+          coalesce((select channel_event.status from channel_event), 'missing'),
+          coalesce((select channel_event.published_at is not null from channel_event), false)::text,
+          coalesce((select channel_event.stream_id = source.thread_binding_id
+                          and channel_event.stream_sequence > 0
                       from channel_event cross join source), false)::text,
-          coalesce((select processed_at is not null
-                      and event_type = channel_event.event_type
-                      and event_version = channel_event.event_version
-                      and stream_id = channel_event.stream_id
-                      and stream_sequence = channel_event.stream_sequence
+          coalesce((select pulso_inbox.processed_at is not null
+                      and pulso_inbox.event_type = channel_event.event_type
+                      and pulso_inbox.event_version = channel_event.event_version
+                      and pulso_inbox.stream_id = channel_event.stream_id
+                      and pulso_inbox.stream_sequence = channel_event.stream_sequence
                       from pulso_inbox cross join channel_event), false)::text,
-          coalesce((select event_type from pulso_event), 'missing'),
-          coalesce((select event_version::text from pulso_event), '0'),
-          coalesce((select status from pulso_event), 'missing'),
-          coalesce((select published_at is not null
-                      and stream_id is not null and stream_sequence > 0
-                      and source_stream_id = channel_event.stream_id
-                      and source_stream_sequence = channel_event.stream_sequence
+          coalesce((select pulso_event.event_type from pulso_event), 'missing'),
+          coalesce((select pulso_event.event_version::text from pulso_event), '0'),
+          coalesce((select pulso_event.status from pulso_event), 'missing'),
+          coalesce((select pulso_event.published_at is not null
+                      and pulso_event.stream_id is not null and pulso_event.stream_sequence > 0
+                      and pulso_event.source_stream_id = channel_event.stream_id
+                      and pulso_event.source_stream_sequence = channel_event.stream_sequence
                       from pulso_event cross join channel_event), false)::text,
-          coalesce((select processed_at is not null
-                      and event_type = '$expected_agent_type'
-                      and event_version = $expected_agent_version
-                      and stream_id = pulso_event.stream_id
-                      and stream_sequence = pulso_event.stream_sequence
-                      and source_stream_id = pulso_event.source_stream_id
-                      and source_stream_sequence = pulso_event.source_stream_sequence
+          coalesce((select agent_inbox.processed_at is not null
+                      and agent_inbox.event_type = '$expected_agent_type'
+                      and agent_inbox.event_version = $expected_agent_version
+                      and agent_inbox.stream_id = pulso_event.stream_id
+                      and agent_inbox.stream_sequence = pulso_event.stream_sequence
+                      and agent_inbox.source_stream_id = pulso_event.source_stream_id
+                      and agent_inbox.source_stream_sequence = pulso_event.source_stream_sequence
                       from agent_inbox cross join pulso_event), false)::text,
-          coalesce((select status from job), 'missing'),
-          coalesce((select completed_at is not null
-                      and ordering_source = '$expected_job_ordering'
-                      and stream_id = pulso_event.stream_id
-                      and stream_sequence = pulso_event.stream_sequence
+          coalesce((select job.status from job), 'missing'),
+          coalesce((select job.completed_at is not null
+                      and job.ordering_source = '$expected_job_ordering'
+                      and job.stream_id = pulso_event.stream_id
+                      and job.stream_sequence = pulso_event.stream_sequence
                       from job cross join pulso_event), false)::text,
           coalesce((select exists (
                     select 1 from agent_runtime.executions execution

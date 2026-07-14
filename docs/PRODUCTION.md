@@ -22,6 +22,13 @@ registros no se presentan como reales ni deben entrar en los flujos operativos d
   seguros y no se reutiliza en otro vínculo, en PostgreSQL, en NATS ni con proveedores.
 - Los tokens por vínculo son una barrera transicional. Un entorno empresarial debe añadir identidad de workload
   gestionada, mTLS y rotación externa sin retirar la autorización específica por productor/ruta.
+- **A-02 (mitigado, no eliminado):** el gateway emite `x-hyperion-operator-assertion` (HMAC-SHA256 con
+  `GATEWAY_OPERATOR_ASSERTION_KEY`) junto a `x-operator-id` / `x-operator-role`. Identity exige que la
+  aserción coincida con esos headers cuando la clave está configurada, de modo que un token de arista
+  estático solo no basta para fabricar rol admin. Riesgo residual: quien robe **ambos**
+  `GATEWAY_TO_IDENTITY_TOKEN` y `GATEWAY_OPERATOR_ASSERTION_KEY` aún puede forjar claims hasta mTLS /
+  identidad de workload. Sin la clave de aserción, el fallback histórico (headers de rol) permanece
+  y debe tratarse como inaceptable en producción.
 - Las contraseñas `*_DATABASE_PASSWORD` son distintas entre sí, tienen al menos 24 caracteres URI no
   reservados y nunca se reutilizan como contraseña administrativa.
 

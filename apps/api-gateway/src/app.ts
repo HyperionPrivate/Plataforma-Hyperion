@@ -17,6 +17,8 @@ import {
 } from "@hyperion/contracts";
 import {
   createInternalAuthorizationHeaders,
+  createOperatorAssertion,
+  OPERATOR_ASSERTION_HEADER,
   readInternalCredential,
   type RouteRegistrar
 } from "@hyperion/service-runtime";
@@ -52,7 +54,16 @@ let healthCache: { expiresAt: number; payload: PlatformHealth } | undefined;
 
 export function createGatewayRoutes(overrides?: {
   resolveSession?: SessionResolver;
-  gatewayCredentials?: { identity?: string; integration?: string; pulsoIris?: string; lumen?: string };
+  gatewayCredentials?: {
+    identity?: string;
+    integration?: string;
+    pulsoIris?: string;
+    lumen?: string;
+    tenant?: string;
+    audit?: string;
+    knowledge?: string;
+    sofia?: string;
+  };
 }): RouteRegistrar {
   return async (app) => {
     const urls = readServiceUrls();
@@ -65,7 +76,12 @@ export function createGatewayRoutes(overrides?: {
         readInternalCredential(process.env, "GATEWAY_TO_INTEGRATION_TOKEN"),
       pulsoIris:
         overrides?.gatewayCredentials?.pulsoIris ?? readInternalCredential(process.env, "GATEWAY_TO_PULSO_TOKEN"),
-      lumen: overrides?.gatewayCredentials?.lumen ?? readInternalCredential(process.env, "GATEWAY_TO_LUMEN_TOKEN")
+      lumen: overrides?.gatewayCredentials?.lumen ?? readInternalCredential(process.env, "GATEWAY_TO_LUMEN_TOKEN"),
+      tenant: overrides?.gatewayCredentials?.tenant ?? readInternalCredential(process.env, "GATEWAY_TO_TENANT_TOKEN"),
+      audit: overrides?.gatewayCredentials?.audit ?? readInternalCredential(process.env, "GATEWAY_TO_AUDIT_TOKEN"),
+      knowledge:
+        overrides?.gatewayCredentials?.knowledge ?? readInternalCredential(process.env, "GATEWAY_TO_KNOWLEDGE_TOKEN"),
+      sofia: overrides?.gatewayCredentials?.sofia ?? readInternalCredential(process.env, "GATEWAY_TO_SOFIA_TOKEN")
     };
 
     // Authenticate before Fastify parses potentially large LUMEN audio payloads.
@@ -204,8 +220,14 @@ export function createGatewayRoutes(overrides?: {
 
     app.get("/v1/tenants", async (request, reply) => {
       try {
+        if (!gatewayCredentials.tenant) {
+          return reply.code(503).send(envelope({ error: "Gateway tenant edge credential is not configured" }, request.id));
+        }
         const response = await fetch(buildUpstreamUrl(urls.tenant, request), {
-          headers: { "x-request-id": request.id },
+          headers: {
+            "x-request-id": request.id,
+            ...createInternalAuthorizationHeaders("api-gateway", gatewayCredentials.tenant)
+          },
           signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
         });
         const payload = (await response.json()) as { data?: unknown };
@@ -603,6 +625,17 @@ async function proxyJson(
     if (request.session) {
       headers["x-operator-id"] = request.session.operator.id;
       headers["x-operator-role"] = request.session.operator.role;
+      const assertionKey = readInternalCredential(process.env, "GATEWAY_OPERATOR_ASSERTION_KEY");
+      if (assertionKey) {
+        headers[OPERATOR_ASSERTION_HEADER] = createOperatorAssertion(
+          {
+            operatorId: request.session.operator.id,
+            role: request.session.operator.role,
+            expiresAtUnix: Math.floor(Date.now() / 1000) + 60
+          },
+          assertionKey
+        );
+      }
     }
     if (body !== undefined) {
       headers["content-type"] = "application/json";

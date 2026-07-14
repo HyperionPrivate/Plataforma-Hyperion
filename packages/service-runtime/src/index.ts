@@ -20,6 +20,12 @@ export {
   type InternalCredentialMap,
   type InternalRequestHeaders
 } from "./internal-auth.js";
+export {
+  OPERATOR_ASSERTION_HEADER,
+  createOperatorAssertion,
+  verifyOperatorAssertion,
+  type OperatorAssertionClaims
+} from "./operator-assertion.js";
 export { assertJetStreamProductionGate } from "./jetstream-production-gate.js";
 export {
   assertNoPlaceholderSecrets,

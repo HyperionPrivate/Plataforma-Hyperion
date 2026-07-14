@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import process from "node:process";
 
 const originalFetch = globalThis.fetch.bind(globalThis);
 const internalHosts = new Set([

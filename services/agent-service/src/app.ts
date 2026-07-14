@@ -10,6 +10,7 @@ import {
 import {
   createInternalAuthorizationHeaders,
   readInternalCredential,
+  validateInternalAuthorization,
   type RouteRegistrar
 } from "@hyperion/service-runtime";
 import { PostgresAgentOutbox } from "./agent-outbox.js";
@@ -70,7 +71,13 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     });
   }
 
-  app.get("/v1/products", async (request) => {
+  app.get("/v1/products", async (request, reply) => {
+    const authError = validateInternalAuthorization(request.headers, {
+      "api-gateway": readInternalCredential(process.env, "GATEWAY_TO_SOFIA_TOKEN")
+    });
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
     if (!context.db) return envelope([], request.id);
     const result = await context.db.query(`
       select id, code, name, status, owner_service, created_at, updated_at
@@ -79,7 +86,13 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     return envelope(result.rows, request.id);
   });
 
-  app.get("/v1/agents", async (request) => {
+  app.get("/v1/agents", async (request, reply) => {
+    const authError = validateInternalAuthorization(request.headers, {
+      "api-gateway": readInternalCredential(process.env, "GATEWAY_TO_SOFIA_TOKEN")
+    });
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
     if (!context.db) return envelope([], request.id);
     const result = await context.db.query(`
       select id, tenant_id, product_id, code, name, channel, status, created_at, updated_at
