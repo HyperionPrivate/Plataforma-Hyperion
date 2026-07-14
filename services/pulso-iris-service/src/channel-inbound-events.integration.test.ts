@@ -26,6 +26,7 @@ describeIntegration("durable Channel -> PULSO persistence", () => {
       await db.query("delete from pulso_iris.inbox_events where tenant_id = $1", [tenantId]);
       await db.query("delete from pulso_iris.channel_threads where tenant_id = $1", [tenantId]);
       await db.query("delete from channel_runtime.outbox_event_positions where tenant_id = $1", [tenantId]);
+      await db.query("delete from channel_runtime.outbox_events where tenant_id = $1", [tenantId]);
       await db.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
@@ -85,15 +86,40 @@ describeIntegration("durable Channel -> PULSO persistence", () => {
     const threadBindingId = randomUUID();
     const firstInboundId = randomUUID();
     const secondInboundId = randomUUID();
+    const firstEventId = randomUUID();
+    const secondEventId = randomUUID();
+    // Migration 038 resolves v1 inbox rows from the exact Channel owner ledger:
+    // outbox_events.id = inbox.event_id and positions.event_id = aggregate_id.
+    await db.query(
+      `insert into channel_runtime.outbox_events (
+         id, tenant_id, event_type, event_version, aggregate_type, aggregate_id,
+         stream_id, stream_sequence, payload, status, occurred_at
+       ) values (
+         $1, $2, 'channel.inbound.received.v1', 1, 'channel_inbound_event', $3,
+         $4, 2, $5::jsonb, 'published', '2026-07-13T16:00:01.000Z'
+       )`,
+      [
+        secondEventId,
+        tenantId,
+        secondInboundId,
+        threadBindingId,
+        JSON.stringify({
+          inboundEventId: secondInboundId,
+          threadBindingId,
+          provider: "whatsapp_web_test",
+          body: "segundo v1"
+        })
+      ]
+    );
     await db.query(
       `insert into channel_runtime.outbox_event_positions (
          tenant_id, event_id, stream_id, stream_sequence
-       ) values ($1, $2, $4, 1), ($1, $3, $4, 2)`,
-      [tenantId, firstInboundId, secondInboundId, threadBindingId]
+       ) values ($1, $2, $3, 2)`,
+      [tenantId, secondInboundId, threadBindingId]
     );
 
     const first: ChannelInboundEvent = {
-      id: randomUUID(),
+      id: firstEventId,
       type: "channel.inbound.received.v2",
       version: 2,
       occurredAt: "2026-07-13T16:00:00.000Z",
@@ -113,7 +139,7 @@ describeIntegration("durable Channel -> PULSO persistence", () => {
       }
     };
     const second: ChannelInboundEvent = {
-      id: randomUUID(),
+      id: secondEventId,
       type: "channel.inbound.received.v1",
       version: 1,
       occurredAt: "2026-07-13T16:00:01.000Z",
