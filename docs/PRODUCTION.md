@@ -77,7 +77,10 @@ nodo: una replica, DLQ con la misma retencion y sin alerta/redrive operativos. *
 hasta desplegar cluster con replicas, TLS interno, limites de capacidad, monitorizacion y una prueba documentada de
 recuperacion. El runtime refuse `DURABLE_EVENT_TRANSPORT=jetstream` cuando
 `HYPERION_ENVIRONMENT=production` o `NODE_ENV=production` salvo que existan a la vez
-`PRODUCTION_JETSTREAM_ENABLED=true`, `JETSTREAM_REPLICAS>=3` y `NATS_URL` con esquema `tls:`.
+`PRODUCTION_JETSTREAM_ENABLED=true`, `JETSTREAM_REPLICAS>=3`, `NATS_URL` con esquema `tls:`,
+límites positivos `JETSTREAM_MAX_BYTES` / `JETSTREAM_MAX_MSGS`, `JETSTREAM_MONITOR_URL` HTTPS y
+`JETSTREAM_REDRIVE_RUNBOOK_URL` (HTTPS o ruta `docs/…`). Levantar varios contenedores sin clustering
+real **no** satisface el gate.
 Un solo nodo sigue bloqueado: no hay atajo que simule HA.
 Cuando se evalua en un ambiente aislado, los seis `NATS_*_PASSWORD` deben ser distintos y nunca
 reutilizar credenciales HTTP `*_TO_*_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea los durables
