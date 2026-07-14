@@ -67,6 +67,6 @@ describe("lumen-service", () => {
       headers: { authorization: `Bearer ${GATEWAY_TOKEN}`, "x-hyperion-caller": "agent-service" }
     });
 
-    expect(response.statusCode).toBe(401);
+    expect(response.statusCode).toBe(403);
   });
 });

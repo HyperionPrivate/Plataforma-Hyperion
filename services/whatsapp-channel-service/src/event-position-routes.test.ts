@@ -38,7 +38,7 @@ describe("Channel event position owner route", () => {
       headers: { authorization: `Bearer ${TOKEN}`, "x-hyperion-caller": "pulso-iris-service" }
     });
 
-    expect(unauthorized.statusCode).toBe(401);
+    expect(unauthorized.statusCode).toBe(403);
     expect(authorized.statusCode).toBe(503);
     expect(authorized.json().data).toEqual({ error: "DATABASE_URL is required" });
   });
