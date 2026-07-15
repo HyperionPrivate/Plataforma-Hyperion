@@ -18,6 +18,9 @@ _DEFAULT = {
         "from_number": "+573110899830",
         "channel": "voz",
         "provider": "elevenlabs_sip_trunk",
+        "liwa_flow_id": "1782399915832",
+        "liwa_handoff_tag": "RENOVACION_VIP",
+        "crm_funnel": "Renovación",
     },
     "flujo_b": {
         "name": "PULSO Reactivación (Flujo B)",
@@ -27,6 +30,10 @@ _DEFAULT = {
         "from_number": "+573110899801",
         "channel": "voz",
         "provider": "elevenlabs_sip_trunk",
+        # Vacío: usa LIWA_FLOW_ID_B o cae al flujo Renovaciones hasta crear plantilla Reactivación.
+        "liwa_flow_id": "",
+        "liwa_handoff_tag": "REACTIVACION_VIP",
+        "crm_funnel": "Reactivación",
     },
     "whatsapp": {
         "provider": "liwa",

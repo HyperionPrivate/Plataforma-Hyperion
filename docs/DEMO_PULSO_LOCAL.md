@@ -13,10 +13,13 @@ API: `POST /ops/e2e/renovacion` (`skip_voice=true` por defecto en UI para no gas
 **Puente post-llamada (producto real):**
 
 1. Llamada termina → ElevenLabs webhook `POST /ops/webhooks/elevenlabs/post-call`  
-   (o simular: Laboratorio → **Simular post-llamada → WA** / `POST /ops/calls/complete`)
-2. Tipificación / intención (`interesado`, `renovar`, …)
-3. Si continúa → envío automático flujo WhatsApp LIWA
-4. CRM avanza a `interesado` → `documento`
+   (o simular: Laboratorio → **Simular post-llamada → WA** / `POST /ops/calls/complete` con `flow=A|B`)
+2. Tipificación / intención (`interesado`, `renovar`, `reactivar`, …)
+3. Si continúa → envío automático flujo WhatsApp LIWA del perfil A o B
+4. CRM avanza a `interesado` → `documento` (funnel Renovación o Reactivación)
+
+**Flujo B · Reactivación:** agente `agent_1401…`, tag `REACTIVACION_VIP`, E2E `POST /ops/e2e/reactivacion`.  
+Si `LIWA_FLOW_ID_B` está vacío, el WA de B usa temporalmente el flujo Renovaciones hasta provisionar plantilla propia.
 
 Orden de ejecución interno E2E:
 

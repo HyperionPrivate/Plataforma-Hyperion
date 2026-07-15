@@ -58,6 +58,10 @@ export default function LaboratorioPage() {
   const [postIntent, setPostIntent] = useState("interesado");
 
   useEffect(() => {
+    setAgencyTag(flow === "B" ? "REACTIVACION_VIP" : "RENOVACION_VIP");
+  }, [flow]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -245,12 +249,13 @@ export default function LaboratorioPage() {
         phone,
         first_name: name,
         intent: postIntent,
+        flow,
       });
       setLastResult(JSON.stringify(res, null, 2));
       toast.success(
         res.whatsapp_sent
-          ? "Post-llamada → WhatsApp enviado"
-          : `Post-llamada: ${res.intent} (sin WA)`,
+          ? `Post-llamada ${res.flow ?? flow} → WhatsApp`
+          : `Post-llamada ${res.flow ?? flow}: ${res.intent} (sin WA)`,
         { description: res.wants_whatsapp ? "Intención continuar" : "Sin seguimiento WA" },
       );
     } catch (err) {
@@ -268,13 +273,14 @@ export default function LaboratorioPage() {
       const res = await runE2ERenovacion({
         phone,
         first_name: name,
+        flow,
         skip_voice: skipVoiceE2E,
         skip_whatsapp: false,
         flow_id: waFlowId,
         agency_tag: agencyTag || undefined,
       });
       setLastResult(JSON.stringify(res, null, 2));
-      toast.success("E2E renovación OK", { description: phone });
+      toast.success(`E2E Flujo ${res.flow ?? flow} OK`, { description: phone });
     } catch (err) {
       toast.error("Falló E2E", {
         description: err instanceof Error ? err.message : "Error",
@@ -371,7 +377,8 @@ export default function LaboratorioPage() {
                 onChange={(e) => setPostIntent(e.target.value)}
               >
                 <option value="interesado">interesado → envía WA</option>
-                <option value="renovar">renovar → envía WA</option>
+                <option value="renovar">renovar → envía WA (A)</option>
+                <option value="reactivar">reactivar → envía WA (B)</option>
                 <option value="no_interes">no_interes → sin WA</option>
                 <option value="voicemail">voicemail → sin WA</option>
                 <option value="unknown">unknown → sin WA</option>
@@ -398,7 +405,7 @@ export default function LaboratorioPage() {
               E2E sin llamada de voz
             </label>
             <Button onClick={onE2E} disabled={busy}>
-              E2E renovación (WA→doc→handoff→CRM)
+              E2E Flujo {flow} (voz→WA→doc→handoff→CRM)
             </Button>
           </div>
         </ChartCard>

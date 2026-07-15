@@ -11,10 +11,11 @@ from uuid import uuid4
 from pilot_core import ops_store
 from pilot_core.modules.crm.service import crm_service
 from pilot_core.modules.liwa_whatsapp import liwa_whatsapp_service
+from pilot_core.modules.product_flow import resolve_product_flow
 from pilot_core.modules.whatsapp_mock import whatsapp_mock_service
 from pilot_core.settings import get_settings
 
-# Intenciones que disparan seguimiento WA (orden de matrícula / flujo renovación).
+# Intenciones que disparan seguimiento WA (A renovación / B reactivación).
 _CONTINUE = frozenset(
     {
         "interesado",
@@ -34,6 +35,11 @@ _CONTINUE = frozenset(
         "enviar_documento",
         "doc_solicitado",
         "success_interested",
+        "reactivar",
+        "reactivacion",
+        "quiere_reactivar",
+        "retomar",
+        "retoma_estudios",
     }
 )
 
@@ -59,6 +65,7 @@ _STOP = frozenset(
 
 _SUMMARY_CONTINUE = re.compile(
     r"\b(interesad[oa]|quiere renovar|desea renovar|acept[oa]|continuar|"
+    r"reactivar|reactivaci[oó]n|retomar|retoma|quiere reactivar|"
     r"enviar (el )?documento|orden de matr[ií]cula|cupo preaprobado)\b",
     re.I,
 )
@@ -85,6 +92,8 @@ def normalize_intent(raw: str | None) -> str:
         "not_interested": "no_interes",
         "machine": "voicemail",
         "answering_machine": "voicemail",
+        "reactivation": "reactivar",
+        "reactivar_credito": "reactivar",
     }
     return aliases.get(s, s)
 
@@ -116,6 +125,7 @@ def infer_intent_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
         "disposition",
         "tipificacion",
         "quiere_renovar",
+        "quiere_reactivar",
         "follow_up_whatsapp",
     ):
         block = collected.get(key)
@@ -133,7 +143,6 @@ def infer_intent_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
     call_ok = str(analysis.get("call_successful") or "").lower()
     if call_ok in {"failure", "failed", "unsuccessful"}:
         return "failed", "call_successful"
-    # success alone ≠ interés; no auto-WA
     return "unknown", "default"
 
 
@@ -207,6 +216,7 @@ class PostCallService:
         phone: str | None = None,
         first_name: str = "Asociado",
         intent: str | None = None,
+        flow: str | None = None,
         skip_whatsapp: bool = False,
         conversation_id: str | None = None,
         dispatch_id: str | None = None,
@@ -224,8 +234,10 @@ class PostCallService:
         phone_n = (phone or extract_phone_from_payload(payload) or "").strip()
         name = first_name if first_name != "Asociado" else extract_name_from_payload(payload)
         conv_id = conversation_id or extract_conversation_id(payload)
+        resolved_flow = flow
+        data = _as_dict(payload.get("data"))
+        agent_id = str(data["agent_id"]) if data.get("agent_id") else None
 
-        # Resolver teléfono desde dispatch reciente si el webhook no lo trae.
         if not phone_n and conv_id:
             for d in ops_store.list_dispatches(50):
                 if str(d.get("conversation_id") or "") == conv_id:
@@ -235,6 +247,8 @@ class PostCallService:
                         name = str(lead["first_name"])
                     if not dispatch_id:
                         dispatch_id = str(d.get("id") or "") or None
+                    if not resolved_flow and d.get("flow"):
+                        resolved_flow = str(d.get("flow"))
                     break
         if not phone_n:
             for d in ops_store.list_dispatches(10):
@@ -245,7 +259,11 @@ class PostCallService:
                         name = str(lead["first_name"])
                     if not dispatch_id:
                         dispatch_id = str(d.get("id") or "") or None
+                    if not resolved_flow and d.get("flow"):
+                        resolved_flow = str(d.get("flow"))
                     break
+
+        product = resolve_product_flow(resolved_flow, agent_id=agent_id, payload=payload)
 
         if conv_id:
             prior = ops_store.get_post_call_by_conversation(conv_id)
@@ -255,6 +273,7 @@ class PostCallService:
                     "idempotent": True,
                     "intent": prior.get("intent"),
                     "whatsapp_sent": prior.get("whatsapp_sent"),
+                    "flow": prior.get("flow"),
                     "result": prior,
                 }
 
@@ -266,6 +285,15 @@ class PostCallService:
             "phone": phone_n or None,
             "first_name": name,
             "conversation_id": conv_id,
+            "flow": product["flow"],
+            "product": {
+                "name": product["name"],
+                "segment": product["segment"],
+                "crm_funnel": product["crm_funnel"],
+                "liwa_flow_id": product["liwa_flow_id"],
+                "liwa_handoff_tag": product["liwa_handoff_tag"],
+                "liwa_flow_fallback_to_a": product["liwa_flow_fallback_to_a"],
+            },
             "intent": inferred,
             "intent_source": infer_source,
             "wants_whatsapp": wants_wa,
@@ -275,10 +303,14 @@ class PostCallService:
             "dispatch_id": dispatch_id,
         }
 
-        # CRM tipificación
         try:
-            crm = self._update_crm(phone=phone_n, name=name, intent=inferred, wants_wa=wants_wa)
-            result["crm"] = crm
+            result["crm"] = self._update_crm(
+                phone=phone_n,
+                name=name,
+                intent=inferred,
+                wants_wa=wants_wa,
+                funnel=str(product["crm_funnel"]),
+            )
         except Exception:  # noqa: BLE001
             result["crm"] = {"ok": False, "error": "crm_update_failed"}
 
@@ -289,14 +321,14 @@ class PostCallService:
                     phone=phone_n,
                     first_name=name,
                     kind="flow",
-                    flow_id=None,
-                    text="Seguimiento post-llamada renovación",
+                    flow_id=str(product["liwa_flow_id"] or "") or None,
+                    text=str(product["wa_followup_text"]),
                 )
             else:
                 wa = whatsapp_mock_service.send_text(
                     phone=phone_n,
-                    text="[post-call] Flujo renovación — envíe su orden de matrícula.",
-                    template="renovacion_post_call",
+                    text=f"[post-call][{product['flow']}] {product['wa_followup_text']}",
+                    template=f"{product['continue_label']}_post_call",
                 )
             result["whatsapp"] = wa
             result["whatsapp_sent"] = bool(wa.get("ok"))
@@ -317,12 +349,19 @@ class PostCallService:
         ops_store.insert_post_call(result)
         return result
 
-    def _update_crm(self, *, phone: str, name: str, intent: str, wants_wa: bool) -> dict[str, Any]:
-        lead = crm_service.create_lead(name=name, funnel="Renovación", phone=phone or None)
+    def _update_crm(
+        self,
+        *,
+        phone: str,
+        name: str,
+        intent: str,
+        wants_wa: bool,
+        funnel: str = "Renovación",
+    ) -> dict[str, Any]:
+        lead = crm_service.create_lead(name=name, funnel=funnel, phone=phone or None)
         lead_id = str(lead.get("id") or "")
         if not lead_id:
             return lead
-        # pendiente → contactado
         lead = crm_service.move(lead_id=lead_id, to_column="contactado")
         if wants_wa:
             lead = crm_service.move(lead_id=lead_id, to_column="interesado", tipificacion=intent)
@@ -346,6 +385,7 @@ class PostCallService:
             "intent": post_call.get("intent"),
             "whatsapp_sent": post_call.get("whatsapp_sent"),
             "post_call_id": post_call.get("id"),
+            "flow": post_call.get("flow"),
         }
         d["status"] = "completed"
         ops_store.upsert_dispatch(d)

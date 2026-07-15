@@ -60,6 +60,9 @@ async def place_sip_outbound(
                 "nombre": first_name,
                 "first_name": first_name,
                 "phone": to_number,
+                "flujo": str(flow).upper(),
+                "product_flow": str(flow).upper(),
+                "segmento": "Reactivacion" if str(flow).upper() == "B" else "Renovacion",
             }
         },
     }

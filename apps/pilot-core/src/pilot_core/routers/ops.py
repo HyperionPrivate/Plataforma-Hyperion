@@ -304,12 +304,17 @@ async def create_handoff(
     ops_store.upsert_conversation_thread(thread)
     liwa_meta: dict[str, Any] = {"synced": False}
     settings = get_settings()
+    from pilot_core.modules.product_flow import resolve_product_flow
+
+    flow_guess = "B" if "reactiva" in (body.segment or "").lower() else "A"
+    product = resolve_product_flow(flow_guess)
+    agency_tag = body.agency_tag or str(product["liwa_handoff_tag"])
     if body.phone and settings.liwa_live_enabled():
         liwa_meta = await liwa_whatsapp_service.handoff_to_agency(
             phone=body.phone,
             first_name=body.name.split()[0] if body.name else "Asociado",
             motivo=body.motivo,
-            tag_name=body.agency_tag,
+            tag_name=agency_tag,
         )
         liwa_meta["synced"] = bool(liwa_meta.get("ok"))
     entry = {
@@ -376,8 +381,9 @@ class CallCompleteBody(BaseModel):
     first_name: str = Field(default="Asociado", max_length=80)
     intent: str = Field(
         default="interesado",
-        description="Tipificación: interesado|renovar|no_interes|voicemail|...",
+        description="Tipificación: interesado|renovar|reactivar|no_interes|voicemail|...",
     )
+    flow: str = Field(default="A", pattern="^[AB]$")
     skip_whatsapp: bool = False
     conversation_id: str | None = None
     dispatch_id: str | None = None
@@ -388,11 +394,12 @@ async def complete_call(
     body: CallCompleteBody,
     _ctx: AuthContext = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Post-llamada: tipifica intención y, si continúa, envía flujo WhatsApp."""
+    """Post-llamada: tipifica intención y, si continúa, envía flujo WhatsApp (A/B)."""
     return await post_call_service.process(
         phone=body.phone,
         first_name=body.first_name,
         intent=body.intent,
+        flow=body.flow,
         skip_whatsapp=body.skip_whatsapp,
         conversation_id=body.conversation_id,
         dispatch_id=body.dispatch_id,
@@ -765,8 +772,10 @@ async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[st
             "provider": "liwa" if s.liwa_live_enabled() else "liwa_mock",
             "base_url": (s.liwa_base_url or "").rstrip("/"),
             "default_flow_id": s.liwa_default_flow_id or "",
+            "flow_id_b": s.liwa_flow_id_b or "",
             "default_kind": "flow",
             "handoff_tag": s.liwa_handoff_tag or "",
+            "handoff_tag_b": s.liwa_handoff_tag_b or "",
         },
         "documents": {
             "storage_backend": s.documents_storage_backend or "filesystem",
@@ -856,23 +865,26 @@ async def auth_status(_ctx: AuthContext = Depends(require_auth)) -> dict[str, An
     }
 
 
-class E2ERenovacionBody(BaseModel):
+class E2ECampaignBody(BaseModel):
     phone: str = Field(min_length=8, max_length=20)
     first_name: str = Field(default="Prueba", max_length=80)
+    flow: str = Field(default="A", pattern="^[AB]$")
     skip_voice: bool = False
     skip_whatsapp: bool = False
     flow_id: str | None = None
     agency_tag: str | None = None
 
 
-@router.post("/e2e/renovacion")
-async def e2e_renovacion(
-    body: E2ERenovacionBody,
-    ctx: AuthContext = Depends(require_auth),
+async def _e2e_campaign(
+    body: E2ECampaignBody,
+    ctx: AuthContext,
 ) -> dict[str, Any]:
-    """Demo path: voz → WA flujo → documento → handoff → CRM tip."""
+    """Demo path: voz -> WA flujo -> documento -> handoff -> CRM (Flujo A o B)."""
+    from pilot_core.modules.product_flow import resolve_product_flow
+
     steps: dict[str, Any] = {}
     settings = get_settings()
+    product = resolve_product_flow(body.flow)
 
     decision = compliance_service.evaluate(phone=body.phone, channel="voz")
     steps["compliance"] = compliance_service.as_dict(decision)
@@ -883,51 +895,53 @@ async def e2e_renovacion(
         steps["voice"] = await orchestration_service.attempt_call(
             phone=body.phone,
             first_name=body.first_name,
-            flow="A",
+            flow=product["flow"],
             tenant_id=ctx.tenant_id,
         )
     else:
         steps["voice"] = {"skipped": True}
 
+    wa_flow_id = body.flow_id or product["liwa_flow_id"]
     if not body.skip_whatsapp:
         if settings.liwa_live_enabled():
             steps["whatsapp"] = await liwa_whatsapp_service.send(
                 phone=body.phone,
                 first_name=body.first_name,
                 kind="flow",
-                flow_id=body.flow_id,
-                text="E2E renovacion PULSO",
+                flow_id=wa_flow_id,
+                text=f"E2E {product['segment']} PULSO",
             )
         else:
             steps["whatsapp"] = whatsapp_mock_service.send_text(
-                phone=body.phone, text="E2E renovacion mock"
+                phone=body.phone, text=f"E2E {product['segment']} mock"
             )
     else:
         steps["whatsapp"] = {"skipped": True}
 
-    # Minimal PDF bytes for storage demo
     pdf_bytes = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
     steps["document"] = documents_service.register(
-        filename="orden_matricula_e2e.pdf",
+        filename=f"orden_matricula_e2e_{product['flow'].lower()}.pdf",
         content_type="application/pdf",
         size_bytes=len(pdf_bytes),
         contact_phone=body.phone,
-        kind="orden_matricula",
+        kind=str(product["document_kind"]),
         content=pdf_bytes,
     )
 
     handoff_body = CreateHandoffBody(
         name=body.first_name,
-        segment="Renovacion",
-        motivo="E2E renovacion — doc validado",
+        segment=str(product["segment"]),
+        motivo=f"E2E {product['name']} — doc validado",
         priority="alta",
         phone=body.phone,
-        agency_tag=body.agency_tag,
+        agency_tag=body.agency_tag or str(product["liwa_handoff_tag"]),
     )
     steps["handoff"] = await create_handoff(handoff_body, ctx)
 
     try:
-        lead = crm_service.create_lead(name=body.first_name, funnel="Renovación", phone=body.phone)
+        lead = crm_service.create_lead(
+            name=body.first_name, funnel=str(product["crm_funnel"]), phone=body.phone
+        )
         lead_id = str(lead.get("id") or "")
         if lead_id:
             steps["crm"] = crm_service.move(
@@ -941,8 +955,42 @@ async def e2e_renovacion(
     return {
         "ok": True,
         "phone": body.phone,
+        "flow": product["flow"],
+        "product": {
+            "name": product["name"],
+            "segment": product["segment"],
+            "liwa_flow_id": product["liwa_flow_id"],
+            "liwa_handoff_tag": product["liwa_handoff_tag"],
+            "liwa_flow_fallback_to_a": product["liwa_flow_fallback_to_a"],
+        },
         "steps": steps,
     }
+
+
+@router.post("/e2e/renovacion")
+async def e2e_renovacion(
+    body: E2ECampaignBody,
+    ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    payload = body.model_copy(update={"flow": "A"})
+    return await _e2e_campaign(payload, ctx)
+
+
+@router.post("/e2e/reactivacion")
+async def e2e_reactivacion(
+    body: E2ECampaignBody,
+    ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    payload = body.model_copy(update={"flow": "B"})
+    return await _e2e_campaign(payload, ctx)
+
+
+@router.post("/e2e/campaign")
+async def e2e_campaign(
+    body: E2ECampaignBody,
+    ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    return await _e2e_campaign(body, ctx)
 
 
 class BatchAttemptBody(BaseModel):

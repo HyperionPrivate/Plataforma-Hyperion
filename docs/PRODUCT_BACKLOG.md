@@ -17,6 +17,7 @@ Architecture foundation is in place. Product work should land as separate PRs:
 13. **ops UI** — PII masking en GET `/ops` + toggle Configuración → Privacidad; falta OIDC/roles prod
 14. ~~**E2E renovación**~~ — `POST /ops/e2e/renovacion` + botón Laboratorio (voz opcional → WA flow → doc → handoff → CRM)
 15. ~~**post-call → WhatsApp**~~ — `POST /ops/calls/complete` + webhook ElevenLabs `/ops/webhooks/elevenlabs/post-call` (intención continuar → flujo LIWA)
+16. ~~**Flujo B Reactivación**~~ — mismo puente A/B (`product_flow`), E2E `/ops/e2e/reactivacion`, tag `REACTIVACION_VIP` (plantilla LIWA B opcional vía `LIWA_FLOW_ID_B`)
 
 Loop asesor: opt-out SQLite · mensajes inbox · release claim · handoff shape + Atender · flags `voz_enabled`/`whatsapp_enabled` · WhatsApp LIWA live opcional.
 

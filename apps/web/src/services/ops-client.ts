@@ -115,6 +115,7 @@ export async function completeCall(input: {
   phone: string;
   first_name?: string;
   intent?: string;
+  flow?: "A" | "B";
   skip_whatsapp?: boolean;
   conversation_id?: string;
   dispatch_id?: string;
@@ -122,10 +123,12 @@ export async function completeCall(input: {
   return postJson<{
     ok: boolean;
     intent: string;
+    flow?: string;
     wants_whatsapp: boolean;
     whatsapp_sent: boolean;
     whatsapp?: Record<string, unknown>;
     crm?: Record<string, unknown>;
+    product?: Record<string, unknown>;
   }>("/ops/calls/complete", input);
 }
 
@@ -246,6 +249,27 @@ export async function listDocuments() {
 export async function runE2ERenovacion(input: {
   phone: string;
   first_name?: string;
+  flow?: "A" | "B";
+  skip_voice?: boolean;
+  skip_whatsapp?: boolean;
+  flow_id?: string;
+  agency_tag?: string;
+}) {
+  const flow = input.flow ?? "A";
+  const path = flow === "B" ? "/ops/e2e/reactivacion" : "/ops/e2e/renovacion";
+  return postJson<{
+    ok: boolean;
+    phone: string;
+    flow?: string;
+    product?: Record<string, unknown>;
+    steps: Record<string, unknown>;
+  }>(path, input);
+}
+
+export async function runE2ECampaign(input: {
+  phone: string;
+  first_name?: string;
+  flow?: "A" | "B";
   skip_voice?: boolean;
   skip_whatsapp?: boolean;
   flow_id?: string;
@@ -254,8 +278,10 @@ export async function runE2ERenovacion(input: {
   return postJson<{
     ok: boolean;
     phone: string;
+    flow?: string;
+    product?: Record<string, unknown>;
     steps: Record<string, unknown>;
-  }>("/ops/e2e/renovacion", input);
+  }>("/ops/e2e/campaign", input);
 }
 
 export async function fetchAuthStatus() {

@@ -18,9 +18,12 @@ class Settings(PlatformSettings):
     liwa_mode: str = "mock"  # mock | real
     liwa_base_url: str = "https://chat.liwa.co/api"
     liwa_api_token: str = ""
-    # Flujo LIWA con plantilla WA (outbound fuera de ventana 24h). Renovaciones por defecto.
+    # Flujo LIWA con plantilla WA (outbound fuera de ventana 24h).
+    # A = Renovaciones; B = Reactivaciones (vacío = usa el de A hasta provisionar plantilla propia).
     liwa_default_flow_id: str = "1782399915832"
+    liwa_flow_id_b: str = ""
     liwa_handoff_tag: str = "RENOVACION_VIP"
+    liwa_handoff_tag_b: str = "REACTIVACION_VIP"
     # Documentos
     documents_storage_backend: str = "filesystem"  # mock | filesystem | minio
     documents_local_root: str = ".local-secrets-tmp/documents"
