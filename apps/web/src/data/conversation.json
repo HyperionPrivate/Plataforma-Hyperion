@@ -1,0 +1,159 @@
+{
+  "activeCount": 24,
+  "conversations": [
+    {
+      "id": "cv1",
+      "name": "María Fernanda López",
+      "topic": "Renovación",
+      "snippet": "Adjunto la orden de matrícula",
+      "channel": "whatsapp",
+      "sentiment": "positive",
+      "time": "11:42 a. m.",
+      "unread": 1,
+      "tags": ["Interesado", "Documento recibido"],
+      "botActive": true,
+      "messages": [
+        {
+          "id": "m1",
+          "role": "bot",
+          "text": "¡Hola María Fernanda! Le saludamos de COOPFUTURO. Tiene un cupo preaprobado para renovar su crédito educativo.",
+          "at": "11:35"
+        },
+        {
+          "id": "m2",
+          "role": "user",
+          "text": "Sí, me interesa renovar este semestre.",
+          "at": "11:36"
+        },
+        {
+          "id": "m3",
+          "role": "bot",
+          "text": "Perfecto. Para continuar solo necesitamos su orden de matrícula en PDF.",
+          "at": "11:37"
+        },
+        {
+          "id": "m4",
+          "role": "user",
+          "text": "Adjunto el documento.",
+          "at": "11:40",
+          "attachment": { "name": "orden_matricula.pdf", "size": "1.2 MB", "validated": true }
+        }
+      ],
+      "expediente": {
+        "cedula": "1.098.765.432",
+        "universidad": "UNAB",
+        "programa": "Psicología",
+        "semestre": 8,
+        "cuotasPagadas": 5,
+        "cuotasTotal": 6,
+        "estadoCrm": "Documento recibido",
+        "score": 87,
+        "scoreLabel": "Alto"
+      },
+      "aiSummary": {
+        "text": "La asociada quiere renovar. Entregó orden de matrícula validada. Lista para handoff a asesor.",
+        "intencion": "Renovar",
+        "etapa": "Documentos",
+        "sentimiento": "Positivo"
+      }
+    },
+    {
+      "id": "cv2",
+      "name": "Juan David Morales",
+      "topic": "Información de crédito",
+      "snippet": "¿Cuáles son los requisitos?",
+      "channel": "whatsapp",
+      "sentiment": "neutral",
+      "time": "11:30 a. m.",
+      "unread": 0,
+      "tags": ["Nuevo"],
+      "botActive": true,
+      "messages": [
+        {
+          "id": "j1",
+          "role": "bot",
+          "text": "Hola Juan David, soy el asistente de COOPFUTURO. ¿En qué podemos ayudarle hoy?",
+          "at": "11:28"
+        },
+        {
+          "id": "j2",
+          "role": "user",
+          "text": "¿Cuáles son los requisitos para un crédito nuevo?",
+          "at": "11:29"
+        },
+        {
+          "id": "j3",
+          "role": "bot",
+          "text": "Para crédito nuevo necesitamos cédula, orden de matrícula y soportes de ingresos. ¿Quiere que le detalle el proceso?",
+          "at": "11:30"
+        }
+      ],
+      "expediente": {
+        "cedula": "1.023.456.789",
+        "universidad": "UIS",
+        "programa": "Ingeniería Industrial",
+        "semestre": 1,
+        "cuotasPagadas": 0,
+        "cuotasTotal": 8,
+        "estadoCrm": "Pendiente de contacto",
+        "score": 54,
+        "scoreLabel": "Medio"
+      },
+      "aiSummary": {
+        "text": "Prospecto nuevo preguntando requisitos. Aún no envió documentos.",
+        "intencion": "Informarse",
+        "etapa": "Descubrimiento",
+        "sentimiento": "Neutral"
+      }
+    },
+    {
+      "id": "cv3",
+      "name": "Santiago Pérez",
+      "topic": "Reactivación",
+      "snippet": "Ya no estoy estudiando",
+      "channel": "voz",
+      "sentiment": "negative",
+      "time": "11:15 a. m.",
+      "unread": 2,
+      "tags": ["Perfilado"],
+      "botActive": true,
+      "messages": [
+        {
+          "id": "s1",
+          "role": "bot",
+          "text": "Buenos días Santiago, le contactamos de COOPFUTURO por su historial de crédito educativo.",
+          "at": "11:10"
+        },
+        {
+          "id": "s2",
+          "role": "user",
+          "text": "Ya no estoy estudiando, no me interesa por ahora.",
+          "at": "11:12"
+        },
+        {
+          "id": "s3",
+          "role": "bot",
+          "text": "Entendido. Si retoma estudios tenemos opciones de reactivación. ¿Prefiere hablar con un asesor?",
+          "at": "11:14"
+        }
+      ],
+      "expediente": {
+        "cedula": "1.087.654.321",
+        "universidad": "UPB",
+        "programa": "Administración",
+        "semestre": 4,
+        "cuotasPagadas": 2,
+        "cuotasTotal": 6,
+        "estadoCrm": "Contactado",
+        "score": 31,
+        "scoreLabel": "Bajo"
+      },
+      "aiSummary": {
+        "text": "Indica que no estudia actualmente. Baja propensión; candidato a nutrir o handoff suave.",
+        "intencion": "No renovar",
+        "etapa": "Objeción",
+        "sentimiento": "Negativo"
+      }
+    }
+  ]
+}

@@ -25,7 +25,7 @@ Thumbs.db
 
 # Docker / local data
 *.log
-data/
+/data/
 postgres-data/
 
 # Build
