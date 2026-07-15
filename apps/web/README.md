@@ -18,8 +18,10 @@ Abre [http://localhost:3000](http://localhost:3000) → redirige a `/dashboard`.
 NEXT_PUBLIC_API_MODE=mock
 ```
 
-`mock` (default): datos de `src/data/*.json` (copiados desde `/examples`).  
+`mock` (default): datos de `src/data/*.json`.  
 `live`: stubs en `src/services/live` — conectar endpoints reales después.
+
+Contrato por módulo / qué alimenta cada gráfica: **[MODULES.md](./MODULES.md)**.
 
 ## Rutas
 
