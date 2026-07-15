@@ -14,8 +14,9 @@ _DEFAULT = {
         "name": "PULSO Renovación (Flujo A)",
         "segment": "Renovacion",
         "agent_id": "agent_8301kwgmehx0eh9r0rr1rbt3ttj3",
-        "phone_number_id": "phnum_0201kwgmeny9ez1996k8rqgz2d5z",
-        "from_number": "+573110899830",
+        # NextVoice SIP (voipcentral) — Telyaco IDs had signaling without RTP audio.
+        "phone_number_id": "phnum_0001kxk88197exs8dpam295z4rmb",
+        "from_number": "+573120500621",
         "channel": "voz",
         "provider": "elevenlabs_sip_trunk",
         "liwa_flow_id": "1782399915832",
@@ -26,8 +27,8 @@ _DEFAULT = {
         "name": "PULSO Reactivación (Flujo B)",
         "segment": "Reactivacion",
         "agent_id": "agent_1401kwgmek4ff5hrkk6q27gvz7nd",
-        "phone_number_id": "phnum_9301kwgmepyseqgb3ay8z48qz88d",
-        "from_number": "+573110899801",
+        "phone_number_id": "phnum_0001kxk8j7t1ea6b4g8damnvkm0w",
+        "from_number": "+573120500501",
         "channel": "voz",
         "provider": "elevenlabs_sip_trunk",
         # Vacío: usa LIWA_FLOW_ID_B o cae al flujo Renovaciones hasta crear plantilla Reactivación.

@@ -11,7 +11,7 @@ class Settings(PlatformSettings):
     auth_disabled: bool = True
     # Dialer HTTP (microservicio externo). Vacío = intentar ElevenLabs SIP directo.
     dialer_base_url: str = ""
-    dialer_default_phone_number_id: str = "phnum_0201kwgmeny9ez1996k8rqgz2d5z"
+    dialer_default_phone_number_id: str = "phnum_0001kxk88197exs8dpam295z4rmb"
     # ElevenLabs — outbound SIP trunk directo (PULSO).
     elevenlabs_api_key: str = ""
     # LIWA WhatsApp — real solo con token en env (nunca en git).
@@ -33,6 +33,18 @@ class Settings(PlatformSettings):
     minio_bucket: str = "coopfuturo-docs"
     # ElevenLabs post-call webhook (HMAC). Vacío = solo aceptar si AUTH_DISABLED en dev.
     elevenlabs_webhook_secret: str = ""
+    # Poller de respaldo: al colgar consulta la conversación y dispara WA si el webhook falla.
+    post_call_poller_enabled: bool = True
+    post_call_poll_interval_sec: float = 5.0
+    post_call_poll_max_wait_sec: int = 1200
+    post_call_content_grace_sec: int = 45
+    post_call_sweep_interval_sec: float = 20.0
+    # WhatsApp post-llamada:
+    #   False (por defecto) = modo revisión: marca al lead interesado y deja el WA
+    #     PENDIENTE para envío manual controlado (no dispara el flujo a ciegas).
+    #   True = automático: dispara el flujo LIWA al colgar (usar solo cuando el flujo
+    #     tenga plantilla WhatsApp aprobada, para que Meta lo entregue de verdad).
+    post_call_whatsapp_auto_send: bool = False
     # Core financiero Coopfuturo (opcional)
     core_base_url: str = ""
     core_api_token: str = ""

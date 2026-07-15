@@ -200,7 +200,13 @@ class LiwaWhatsAppService:
         first_name: str = "Asociado",
         text: str | None = None,
     ) -> dict[str, Any]:
-        """Dispara un flujo LIWA (debe contener plantilla WA para outbound frío)."""
+        """Dispara un flujo LIWA (debe contener plantilla WA para outbound frío).
+
+        Importante: ``POST /contacts`` con ``actions.send_flow`` solo dispara el
+        flujo cuando el contacto es nuevo. Si ya existe, LIWA responde
+        ``success=true, contact_created=false`` y **no** envía el WA. Por eso
+        siempre hacemos ``POST /contacts/{id}/send/{flow_id}`` después.
+        """
         fid = (flow_id or get_settings().liwa_default_flow_id or "").strip()
         if not fid:
             return {
@@ -210,63 +216,39 @@ class LiwaWhatsAppService:
                 "message": {"error": "liwa_flow_id_missing"},
             }
 
-        # Prefer create+action send_flow (abre contacto y dispara en un paso).
-        create_body: dict[str, Any] = {
-            "phone": phone,
-            "first_name": first_name,
-            "actions": [{"action": "send_flow", "flow_id": int(fid) if fid.isdigit() else fid}],
-        }
+        created = await self.ensure_contact(phone=phone, first_name=first_name)
+        contact_id = created.get("contact_id")
+        if not contact_id:
+            entry = {
+                "id": f"wa_{uuid4().hex[:10]}",
+                "channel": "whatsapp",
+                "mode": self.mode,
+                "kind": "flow",
+                "status": "failed",
+                "to": phone,
+                "text": (text or "")[:500],
+                "flow_id": fid,
+                "provider": "liwa",
+                "error": "contact_create_failed",
+                "provider_response": created,
+            }
+            _audit(phone=phone, first_name=first_name, entry=entry)
+            return {
+                "ok": False,
+                "mock_commercial": False,
+                "message": entry,
+                "error": "liwa_contact_create_failed",
+            }
+
         async with httpx.AsyncClient(timeout=45.0) as client:
             resp = await client.post(
-                f"{_base_url()}/contacts",
+                f"{_base_url()}/contacts/{contact_id}/send/{fid}",
                 headers=_headers(),
-                json=create_body,
             )
         try:
             data = resp.json()
         except Exception:
             data = {"raw": resp.text[:800]}
-
-        contact_id = _extract_contact_id(data)
-        if not contact_id and isinstance(data, dict):
-            nested = data.get("data")
-            if isinstance(nested, dict):
-                contact_id = _extract_contact_id(nested)
-
-        # Fallback: ensure contact then POST /send/{flow_id}
-        if not contact_id or not resp.is_success:
-            created = await self.ensure_contact(phone=phone, first_name=first_name)
-            contact_id = created.get("contact_id")
-            if not contact_id:
-                entry = {
-                    "id": f"wa_{uuid4().hex[:10]}",
-                    "channel": "whatsapp",
-                    "mode": self.mode,
-                    "kind": "flow",
-                    "status": "failed",
-                    "to": phone,
-                    "text": (text or "")[:500],
-                    "flow_id": fid,
-                    "provider": "liwa",
-                    "error": "contact_create_failed",
-                    "provider_response": {"create": data, "ensure": created},
-                }
-                _audit(phone=phone, first_name=first_name, entry=entry)
-                return {
-                    "ok": False,
-                    "mock_commercial": False,
-                    "message": entry,
-                    "error": "liwa_contact_create_failed",
-                }
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.post(
-                    f"{_base_url()}/contacts/{contact_id}/send/{fid}",
-                    headers=_headers(),
-                )
-            try:
-                data = resp.json()
-            except Exception:
-                data = {"raw": resp.text[:800]}
 
         ok = resp.is_success and bool(data.get("success", True) if isinstance(data, dict) else True)
         entry = cast(
@@ -281,9 +263,12 @@ class LiwaWhatsAppService:
                 "text": (text or "")[:500],
                 "flow_id": fid,
                 "provider": "liwa",
-                "contact_id": str(contact_id) if contact_id else None,
+                "contact_id": str(contact_id),
                 "http_status": resp.status_code,
-                "provider_response": data,
+                "provider_response": {
+                    "ensure_contact": created,
+                    "send_flow": data,
+                },
             },
         )
         _audit(phone=phone, first_name=first_name, entry=entry)
