@@ -125,3 +125,26 @@ def test_client_id_alone_does_not_elevate_to_service(auth_client) -> None:
     body = r.json()
     assert body["token_type"] == "user"
     assert body["tenant"] == "t1"
+
+
+def test_user_token_with_service_role_is_stripped(auth_client) -> None:
+    client, private_pem = auth_client
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "sub": "u1",
+            "iss": "https://issuer.test",
+            "aud": "coopfuturo",
+            "iat": now,
+            "exp": now + timedelta(minutes=5),
+            "tenant_id": "t1",
+            "token_type": "user",
+            "roles": ["service", "analyst"],
+        },
+        private_pem,
+        algorithm="RS256",
+        headers={"kid": "k1"},
+    )
+    r = client.get("/secure", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json()["token_type"] == "user"

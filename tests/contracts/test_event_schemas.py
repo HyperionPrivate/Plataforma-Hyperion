@@ -128,7 +128,10 @@ def test_commercial_schemas_exist() -> None:
 
 @pytest.mark.parametrize("path", sorted(OPENAPI.glob("*.yaml")))
 def test_openapi_documents_are_valid(path: Path) -> None:
+    from openapi_spec_validator import validate
+
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    validate(doc)
     assert doc.get("openapi", "").startswith("3.")
     assert "info" in doc and "title" in doc["info"] and "version" in doc["info"]
     assert "paths" in doc and isinstance(doc["paths"], dict) and doc["paths"]
@@ -139,7 +142,6 @@ def test_openapi_documents_are_valid(path: Path) -> None:
     assert "error_code" in err.get("properties", {})
     assert "error_code" in err.get("required", [])
     assert "error" not in err.get("properties", {}), "runtime uses error_code, not error"
-    # Every operation should declare responses
     for path_item in doc["paths"].values():
         for method, op in path_item.items():
             if method.startswith("x-") or not isinstance(op, dict):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from platform_kit.db import create_engine, create_session_factory
 from platform_kit.events.consumer import EventWorker
+from platform_kit.events.handlers import architecture_effect
 from platform_kit.events.redis_streams import RedisStreamsTransport
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -28,6 +29,7 @@ async def startup(settings: Settings) -> None:
             transport=transport,
             settings=settings,
             consumer_name=f"{settings.service_name}-worker",
+            effect=architecture_effect,
         )
         worker.start()
 

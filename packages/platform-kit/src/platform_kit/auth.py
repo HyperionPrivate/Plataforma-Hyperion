@@ -156,6 +156,10 @@ async def require_auth(
     scopes = _scopes_from_claims(claims)
     client_id = str(claims["client_id"]) if claims.get("client_id") else None
 
+    # User tokens must not keep an effective "service" role (would bypass allowlist/scopes).
+    if token_type != "service" and "service" in roles:
+        roles = frozenset(r for r in roles if r != "service")
+
     if token_type == "service":
         if "service" not in roles and "admin" not in roles:
             raise PlatformError(
@@ -198,8 +202,29 @@ def require_roles(*needed: str):
     async def _dep(ctx: AuthContext = Depends(require_auth)) -> AuthContext:
         if "admin" in ctx.roles:
             return ctx
+        if "service" in needed and ctx.token_type != "service":
+            raise PlatformError(
+                "forbidden",
+                "service endpoints require a service token (token_type=service)",
+                status_code=403,
+            )
         if not set(needed) & set(ctx.roles):
             raise PlatformError("forbidden", "Insufficient role", status_code=403)
+        return ctx
+
+    return _dep
+
+
+def require_roles_and_scopes(*needed_roles: str, scopes: tuple[str, ...] = ()):
+    """Compose role + scope checks for technical/service routes."""
+
+    async def _dep(ctx: AuthContext = Depends(require_roles(*needed_roles))) -> AuthContext:
+        if not scopes:
+            return ctx
+        if "*" in ctx.scopes or "admin" in ctx.roles:
+            return ctx
+        if not set(scopes) & set(ctx.scopes):
+            raise PlatformError("forbidden", "Insufficient scope", status_code=403)
         return ctx
 
     return _dep

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from platform_kit.auth import AuthContext, require_auth, require_roles
+from platform_kit.auth import AuthContext, require_auth, require_roles, require_roles_and_scopes
 from platform_kit.correlation import get_correlation_id, new_correlation_id
 from platform_kit.db import TechnicalProbe, session_scope
 from platform_kit.errors import PlatformError
 from platform_kit.events.consumer import consume_batch, relay_outbox
 from platform_kit.events.envelope import build_synthetic_ping
+from platform_kit.events.handlers import architecture_effect
 from platform_kit.events.outbox_inbox import enqueue_outbox
 from pydantic import BaseModel
 
@@ -23,7 +24,9 @@ class PingBody(BaseModel):
 @router.post("/synthetic-event")
 async def synthetic_event(
     body: PingBody,
-    ctx: AuthContext = Depends(require_roles("service", "admin")),
+    ctx: AuthContext = Depends(
+        require_roles_and_scopes("service", "admin", scopes=("tech:write",))
+    ),
 ) -> dict[str, object]:
     """Enqueue synthetic ping via outbox, then relay after commit."""
     if runtime.session_factory is None or runtime.transport is None:
@@ -52,7 +55,9 @@ async def synthetic_event(
 
 @router.post("/relay-outbox")
 async def relay_outbox_endpoint(
-    ctx: AuthContext = Depends(require_roles("service", "admin")),
+    ctx: AuthContext = Depends(
+        require_roles_and_scopes("service", "admin", scopes=("tech:write",))
+    ),
 ) -> dict[str, object]:
     if runtime.session_factory is None or runtime.transport is None:
         raise PlatformError("not_ready", "Runtime not started", status_code=503)
@@ -68,7 +73,9 @@ async def relay_outbox_endpoint(
 
 @router.post("/consume-once")
 async def consume_once(
-    ctx: AuthContext = Depends(require_roles("service", "admin")),
+    ctx: AuthContext = Depends(
+        require_roles_and_scopes("service", "admin", scopes=("tech:write",))
+    ),
 ) -> dict[str, object]:
     if runtime.session_factory is None or runtime.transport is None:
         raise PlatformError("not_ready", "Runtime not started", status_code=503)
@@ -80,6 +87,7 @@ async def consume_once(
         consumer_name=f"{settings.service_name}-1",
         count=10,
         block_ms=200,
+        effect=architecture_effect,
     )
     return {
         "applied": stats.applied,
@@ -95,7 +103,9 @@ async def consume_once(
 @router.post("/probe")
 async def write_probe(
     body: PingBody,
-    ctx: AuthContext = Depends(require_roles("admin", "service")),
+    ctx: AuthContext = Depends(
+        require_roles_and_scopes("admin", "service", scopes=("tech:write",))
+    ),
 ) -> dict[str, str]:
     if runtime.session_factory is None:
         raise PlatformError("not_ready", "Runtime not started", status_code=503)

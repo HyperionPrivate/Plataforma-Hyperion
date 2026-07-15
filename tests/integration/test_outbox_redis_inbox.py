@@ -7,6 +7,7 @@ import redis.asyncio as redis
 from platform_kit.db import Base, create_engine, create_session_factory, session_scope
 from platform_kit.events.consumer import consume_batch, relay_outbox
 from platform_kit.events.envelope import build_synthetic_ping
+from platform_kit.events.handlers import architecture_effect
 from platform_kit.events.outbox_inbox import enqueue_outbox, process_inbox_once
 from platform_kit.events.redis_streams import RedisStreamsTransport
 from platform_kit.settings import PlatformSettings
@@ -78,6 +79,7 @@ async def test_outbox_commit_then_relay_then_inbox_ack() -> None:
         consumer_name="pilot-core-it",
         count=5,
         block_ms=500,
+        effect=architecture_effect,
     )
     assert stats.applied == 1
     assert stats.failed == 0

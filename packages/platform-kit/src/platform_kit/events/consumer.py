@@ -113,10 +113,12 @@ async def consume_batch(
             continue
 
         try:
+            if effect is None:
+                raise RuntimeError("consume_batch requires an effect handler")
             async with session_scope(factory) as session:
+                # Effect first — failures leave the message pending (no inbox / no ACK).
+                await effect(session, msg.envelope)
                 applied = await process_inbox_once(session, msg.envelope)
-                if effect is not None and applied:
-                    await effect(session, msg.envelope)
             await transport.ack(group, msg.message_id)
             if hasattr(transport, "clear_delivery_attempts"):
                 await transport.clear_delivery_attempts(msg.message_id)  # type: ignore[attr-defined]
@@ -168,6 +170,7 @@ class EventWorker:
     transport: EventTransport
     settings: PlatformSettings
     consumer_name: str
+    effect: EffectHandler
     _stop: asyncio.Event = field(default_factory=asyncio.Event)
     _task: asyncio.Task[None] | None = None
 
@@ -198,6 +201,7 @@ class EventWorker:
                     consumer_name=self.consumer_name,
                     count=self.settings.worker_batch_size,
                     block_ms=int(min(poll, 1.0) * 1000),
+                    effect=self.effect,
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("event_worker_iteration_failed")
