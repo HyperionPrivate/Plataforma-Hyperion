@@ -1,6 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,31 +10,45 @@ import { useConversations } from "@/hooks/use-pulso";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Search, Bot, CheckCircle2, Send } from "lucide-react";
+import {
+  claimConversation,
+  createHandoff,
+  releaseConversation,
+  sendConversationMessage,
+} from "@/services/ops-client";
 
 type Msg = {
   id: string;
   role: string;
   text: string;
   at?: string;
+  source?: string;
   attachment?: { name: string; size: string; validated?: boolean };
 };
 
 export default function ConversacionesPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { data, isLoading, isError, refetch } = useConversations();
   const list = useMemo(() => data?.conversations ?? [], [data?.conversations]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [botActive, setBotActive] = useState(true);
   const [draft, setDraft] = useState("");
-  const [extraMessages, setExtraMessages] = useState<Record<string, Msg[]>>({});
+  const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
 
   useEffect(() => {
+    const fromUrl = searchParams.get("id");
+    if (fromUrl) {
+      setSelectedId(fromUrl);
+      return;
+    }
     if (!selectedId && list[0]?.id) setSelectedId(list[0].id);
-  }, [list, selectedId]);
+  }, [list, selectedId, searchParams]);
 
   const selected = useMemo(
     () => list.find((c) => c.id === selectedId) ?? list[0],
-    [list, selectedId]
+    [list, selectedId],
   );
 
   useEffect(() => {
@@ -45,9 +60,8 @@ export default function ConversacionesPage() {
 
   const messages = useMemo(() => {
     if (!selected) return [];
-    const base = (selected.messages ?? []) as Msg[];
-    return [...base, ...(extraMessages[selected.id] ?? [])];
-  }, [selected, extraMessages]);
+    return (selected.messages ?? []) as Msg[];
+  }, [selected]);
 
   const filteredList = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -56,27 +70,75 @@ export default function ConversacionesPage() {
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.topic.toLowerCase().includes(q) ||
-        c.snippet.toLowerCase().includes(q)
+        c.snippet.toLowerCase().includes(q),
     );
   }, [list, query]);
 
   const exp = selected?.expediente;
   const ai = selected?.aiSummary;
 
-  function sendMessage() {
-    if (!selected || botActive || !draft.trim()) return;
-    const msg: Msg = {
-      id: `local-${Date.now()}`,
-      role: "bot",
-      text: draft.trim(),
-      at: new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }),
-    };
-    setExtraMessages((prev) => ({
-      ...prev,
-      [selected.id]: [...(prev[selected.id] ?? []), msg],
-    }));
-    setDraft("");
-    toast.success("Mensaje enviado (mock)");
+  async function sendMessage() {
+    if (!selected || botActive || !draft.trim() || busy) return;
+    setBusy(true);
+    try {
+      await sendConversationMessage({
+        conversation_id: selected.id,
+        text: draft.trim(),
+        role: "advisor",
+      });
+      setDraft("");
+      toast.success("Mensaje enviado");
+      await refetch();
+    } catch (err) {
+      toast.error("No se pudo enviar", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleControl() {
+    if (!selected?.id || busy) return;
+    setBusy(true);
+    try {
+      if (botActive) {
+        await claimConversation({ conversation_id: selected.id });
+        setBotActive(false);
+        toast.success("Tomaste el control de la conversación");
+      } else {
+        await releaseConversation({ conversation_id: selected.id });
+        setBotActive(true);
+        toast.message("Control devuelto al bot");
+      }
+      await refetch();
+    } catch (err) {
+      toast.error("No se pudo cambiar el control", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function transferToHandoff() {
+    if (!selected || busy) return;
+    setBusy(true);
+    try {
+      const res = await createHandoff({
+        name: selected.name,
+        segment: selected.topic || "Renovacion",
+        motivo: "Transferido desde Conversaciones",
+      });
+      toast.success("En cola de handoff", { description: String(res.id) });
+      router.push("/handoff");
+    } catch (err) {
+      toast.error("No se pudo transferir", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (isError) {
@@ -118,10 +180,13 @@ export default function ConversacionesPage() {
               <li key={c.id}>
                 <button
                   type="button"
-                  onClick={() => setSelectedId(c.id)}
+                  onClick={() => {
+                    setSelectedId(c.id);
+                    router.replace(`/conversaciones?id=${c.id}`);
+                  }}
                   className={cn(
                     "mb-1 w-full cursor-pointer rounded-lg border border-transparent p-2.5 text-left hover:bg-[var(--surface-2)]",
-                    c.id === selected?.id && "border-[var(--accent)]/40 bg-[var(--accent-dim)]"
+                    c.id === selected?.id && "border-[var(--accent)]/40 bg-[var(--accent-dim)]",
                   )}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -144,7 +209,7 @@ export default function ConversacionesPage() {
                         "mt-1 size-2 shrink-0 rounded-full",
                         c.sentiment === "positive" && "bg-[var(--success)]",
                         c.sentiment === "neutral" && "bg-[var(--warning)]",
-                        c.sentiment === "negative" && "bg-[var(--danger)]"
+                        c.sentiment === "negative" && "bg-[var(--danger)]",
                       )}
                     />
                   </div>
@@ -171,6 +236,9 @@ export default function ConversacionesPage() {
                     {t}
                   </Badge>
                 ))}
+                {selected?.claimedBy ? (
+                  <Badge tone="warning">Asesor: {selected.claimedBy}</Badge>
+                ) : null}
               </div>
             </div>
           </div>
@@ -185,13 +253,13 @@ export default function ConversacionesPage() {
                     "max-w-[80%] rounded-2xl px-3 py-2 text-sm",
                     m.role === "user"
                       ? "bg-[var(--accent)] text-[#0A0F0D]"
-                      : "bg-[var(--surface-2)] text-[var(--text)]"
+                      : "bg-[var(--surface-2)] text-[var(--text)]",
                   )}
                 >
                   {m.role === "bot" && (
                     <span className="mb-1 flex items-center gap-1 text-[10px] text-[var(--muted)]">
                       <Bot className="size-3" strokeWidth={1.75} />{" "}
-                      {botActive || m.id.startsWith("local-") ? "Asesor / Asistente" : "Asistente"}
+                      {!botActive || m.source === "advisor" ? "Asesor" : "Asistente"}
                     </span>
                   )}
                   <p>{m.text}</p>
@@ -213,31 +281,15 @@ export default function ConversacionesPage() {
           <div className="border-t border-[var(--border)] p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="text-sm text-[var(--muted)]">
-                {botActive ? "Bot activo — Tomar control para escribir" : "Asesor al mando — puedes escribir"}
+                {botActive
+                  ? "Bot activo — Tomar control para escribir"
+                  : "Asesor al mando — puedes escribir"}
               </p>
               <Button
                 size="sm"
                 variant={botActive ? "default" : "secondary"}
-                onClick={async () => {
-                  if (botActive) {
-                    try {
-                      if (selected?.id) {
-                        const { claimConversation } = await import("@/services/ops-client");
-                        await claimConversation({ conversation_id: selected.id });
-                      }
-                      setBotActive(false);
-                      toast.success("Tomaste el control de la conversación");
-                      await refetch();
-                    } catch (err) {
-                      toast.error("No se pudo reclamar", {
-                        description: err instanceof Error ? err.message : "Error",
-                      });
-                    }
-                  } else {
-                    setBotActive(true);
-                    toast.message("Control devuelto al bot");
-                  }
-                }}
+                disabled={busy}
+                onClick={toggleControl}
               >
                 {botActive ? "Tomar control" : "Devolver al bot"}
               </Button>
@@ -246,21 +298,21 @@ export default function ConversacionesPage() {
               <input
                 className={cn(
                   "h-10 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]",
-                  botActive && "cursor-not-allowed opacity-50"
+                  botActive && "cursor-not-allowed opacity-50",
                 )}
                 placeholder={botActive ? "Tomar control para escribir…" : "Escribe un mensaje…"}
-                disabled={botActive}
+                disabled={botActive || busy}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") sendMessage();
+                  if (e.key === "Enter") void sendMessage();
                 }}
                 aria-label="Mensaje al asociado"
               />
               <Button
                 size="icon"
-                disabled={botActive || !draft.trim()}
-                onClick={sendMessage}
+                disabled={botActive || !draft.trim() || busy}
+                onClick={() => void sendMessage()}
                 aria-label="Enviar mensaje"
               >
                 <Send className="size-4" strokeWidth={1.75} />
@@ -308,15 +360,12 @@ export default function ConversacionesPage() {
               </dl>
             )}
             <div className="mt-4">
-              <p className="mb-1 text-center text-xs text-[var(--muted)]">Score de propensión a renovar</p>
+              <p className="mb-1 text-center text-xs text-[var(--muted)]">
+                Score de propensión a renovar
+              </p>
               <GaugeChart value={exp?.score ?? 0} label={exp?.scoreLabel} />
             </div>
-            <Button
-              className="mt-2 w-full"
-              onClick={() =>
-                toast.success(`Transferido a cola de handoff: ${selected?.name ?? ""}`)
-              }
-            >
+            <Button className="mt-2 w-full" disabled={busy} onClick={() => void transferToHandoff()}>
               Transferir a asesor
             </Button>
           </div>

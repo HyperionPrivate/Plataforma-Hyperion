@@ -1,4 +1,4 @@
-"""Ops product API — shapes aligned with apps/web MODULES.md (piloto PULSO)."""
+"""Ops product API - shapes aligned with apps/web MODULES.md (piloto PULSO)."""
 
 from __future__ import annotations
 
@@ -51,6 +51,7 @@ def _hydrate_runtime_from_store() -> None:
     if isinstance(channels, dict) and channels.get("ventana_8_20") is False:
         compliance_service.window_start = time(0, 0)
         compliance_service.window_end = time(23, 59)
+    compliance_service.hydrate()
 
 
 _hydrate_runtime_from_store()
@@ -88,6 +89,20 @@ async def ops_campaigns(_ctx: AuthContext = Depends(require_auth)) -> dict[str, 
     extra = ops_store.list_campaigns()
     if extra:
         data = {**data, "campaigns": [*extra, *data.get("campaigns", [])]}
+    # Overlay day chips from real dispatches when activity exists.
+    dispatches = ops_store.list_dispatches(200)
+    if dispatches:
+        voice = sum(
+            1 for d in dispatches if "whatsapp" not in str(d.get("mode", ""))
+        )
+        wa = sum(1 for d in dispatches if "whatsapp" in str(d.get("mode", "")))
+        chips = dict(data.get("dayChips") or {})
+        chips["llamadasHoy"] = voice
+        chips["whatsappHoy"] = wa
+        chips["reintentos"] = sum(
+            1 for d in dispatches if d.get("status") in {"failed", "queued_mock"}
+        )
+        data = {**data, "dayChips": chips}
     return data
 
 
@@ -101,20 +116,42 @@ async def ops_handoff(_ctx: AuthContext = Depends(require_auth)) -> dict[str, An
     data = _load("handoff.json")
     extra = ops_store.list_handoffs(20)
     if extra:
-        queue = [
-            {
-                "conversationId": h["id"],
-                "priority": h.get("priority", "alta"),
-                "name": h.get("name", "Lead"),
-                "segment": h.get("segment", "Renovacion"),
-                "motivo": h.get("motivo", "Calificado por laboratorio"),
-                "expedientePct": h.get("expedientePct", 80),
-                "aiSummary": h.get("aiSummary", "Handoff creado desde API"),
-                "info": h.get("info", ""),
-            }
-            for h in extra
-        ]
+        queue = []
+        for h in extra:
+            info = h.get("info")
+            if not isinstance(info, dict):
+                info = {
+                    "universidad": "-",
+                    "programa": "-",
+                    "canal": "whatsapp" if h.get("phone") else "voz",
+                    "phone": h.get("phone") or (info if isinstance(info, str) else ""),
+                }
+            queue.append(
+                {
+                    "id": h.get("id"),
+                    "conversationId": h.get("conversationId") or h.get("id"),
+                    "priority": h.get("priority", "alta"),
+                    "name": h.get("name", "Lead"),
+                    "segment": h.get("segment", "Renovacion"),
+                    "motivo": h.get("motivo", "Calificado por laboratorio"),
+                    "expedientePct": h.get("expedientePct", 80),
+                    "tiempoCola": h.get("tiempoCola", "0h 05m"),
+                    "asesor": h.get("asesor"),
+                    "aiSummary": h.get("aiSummary", "Handoff creado desde API"),
+                    "info": info,
+                }
+            )
         data = {**data, "queue": [*queue, *data.get("queue", [])]}
+    # Overlay KPI cola with merged queue length.
+    if ops_store.list_handoffs(1):
+        queue_len = len(data.get("queue") or [])
+        kpis = []
+        for k in data.get("kpis") or []:
+            if k.get("id") == "cola":
+                kpis.append({**k, "value": queue_len})
+            else:
+                kpis.append(k)
+        data = {**data, "kpis": kpis}
     return data
 
 
@@ -203,24 +240,75 @@ async def create_handoff(
     body: CreateHandoffBody,
     _ctx: AuthContext = Depends(require_auth),
 ) -> dict[str, Any]:
+    hid = f"h_{uuid4().hex[:10]}"
+    cid = f"cv_{uuid4().hex[:10]}"
+    thread = {
+        "id": cid,
+        "name": body.name,
+        "topic": body.segment,
+        "snippet": body.motivo,
+        "sentiment": "neutral",
+        "tags": ["Handoff", body.segment],
+        "botActive": True,
+        "botPaused": False,
+        "messages": [
+            {
+                "id": f"m_{uuid4().hex[:8]}",
+                "role": "bot",
+                "text": f"Transferencia a asesor: {body.motivo}",
+                "at": "ahora",
+            }
+        ],
+        "expediente": {
+            "cedula": "-",
+            "universidad": "-",
+            "programa": "-",
+            "semestre": "-",
+            "cuotasPagadas": 0,
+            "cuotasTotal": 1,
+            "estadoCrm": "Handoff",
+            "score": 70,
+            "scoreLabel": "Media",
+        },
+        "aiSummary": {
+            "text": body.motivo,
+            "intencion": "handoff",
+            "etapa": "asesor",
+            "sentimiento": "neutral",
+        },
+    }
+    ops_store.upsert_conversation_thread(thread)
     entry = {
-        "id": f"h_{uuid4().hex[:10]}",
+        "id": hid,
+        "conversationId": cid,
         "name": body.name,
         "segment": body.segment,
         "motivo": body.motivo,
         "priority": body.priority,
         "phone": body.phone,
         "expedientePct": 85,
+        "tiempoCola": "0h 01m",
+        "asesor": None,
         "aiSummary": "Creado desde laboratorio/API",
-        "info": body.phone or "",
+        "info": {
+            "universidad": "-",
+            "programa": "-",
+            "canal": "whatsapp" if body.phone else "voz",
+            "phone": body.phone or "",
+        },
     }
     return ops_store.insert_handoff(entry)
 
 
 @router.post("/compliance/opt-out")
 async def opt_out(body: OptOutBody, _ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
-    compliance_service.suppress(body.phone)
-    return {"ok": True, "phone": body.phone, "suppressed": True}
+    return {"ok": True, **compliance_service.suppress(body.phone)}
+
+
+@router.get("/compliance/opt-outs")
+async def list_opt_outs(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    phones = compliance_service.list_suppressed()
+    return {"items": phones, "total": len(phones)}
 
 
 class DispatchCallBody(BaseModel):
@@ -370,18 +458,79 @@ async def claim_conversation(
     return ops_store.upsert_conversation_claim(claim)
 
 
+class ConversationReleaseBody(BaseModel):
+    conversation_id: str
+
+
+@router.post("/conversations/release")
+async def release_conversation(
+    body: ConversationReleaseBody, _ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    removed = ops_store.delete_conversation_claim(body.conversation_id)
+    return {"ok": True, "released": removed, "conversation_id": body.conversation_id}
+
+
+class ConversationMessageBody(BaseModel):
+    conversation_id: str
+    text: str = Field(min_length=1, max_length=2000)
+    role: str = Field(default="advisor", pattern="^(advisor|bot|user)$")
+
+
+@router.post("/conversations/messages")
+async def post_conversation_message(
+    body: ConversationMessageBody, _ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    claims = {c["id"]: c for c in ops_store.list_conversation_claims()}
+    if body.conversation_id not in claims and body.role == "advisor":
+        raise PlatformError(
+            "conversation_not_claimed",
+            "Claim the conversation before sending advisor messages",
+            status_code=409,
+        )
+    msg = {
+        "id": f"m_{uuid4().hex[:10]}",
+        "role": "bot" if body.role == "advisor" else body.role,
+        "text": body.text,
+        "at": "ahora",
+        "source": body.role,
+    }
+    saved = ops_store.append_conversation_message(body.conversation_id, msg)
+    return {"ok": True, "message": saved}
+
+
 @router.get("/conversations")
 async def ops_conversations(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
     data = _load("conversation.json")
     claims = {c["id"]: c for c in ops_store.list_conversation_claims()}
-    convs = []
-    for c in data.get("conversations") or []:
-        claim = claims.get(c.get("id"))
-        if claim:
-            convs.append({**c, "claimedBy": claim.get("advisor"), "botPaused": True})
+    by_id: dict[str, Any] = {c["id"]: dict(c) for c in (data.get("conversations") or [])}
+    for t in ops_store.list_conversation_threads():
+        tid = t.get("id")
+        if not tid:
+            continue
+        if tid in by_id:
+            by_id[tid] = {**by_id[tid], **t, "messages": by_id[tid].get("messages") or []}
         else:
-            convs.append(c)
-    return {**data, "conversations": convs}
+            by_id[tid] = t
+
+    convs = []
+    for cid, c in by_id.items():
+        extra_msgs = ops_store.list_conversation_messages(cid)
+        base_msgs = list(c.get("messages") or [])
+        if extra_msgs:
+            base_msgs = [*base_msgs, *extra_msgs]
+        claim = claims.get(cid)
+        row = {**c, "messages": base_msgs}
+        if claim:
+            row["claimedBy"] = claim.get("advisor")
+            row["botPaused"] = True
+            row["botActive"] = False
+        convs.append(row)
+
+    return {
+        **data,
+        "conversations": convs,
+        "activeCount": len(convs),
+    }
 
 
 class DocumentBody(BaseModel):
@@ -438,7 +587,8 @@ async def get_report(
         "cumplimiento": {
             "id": "cumplimiento",
             "title": "Cumplimiento",
-            "opt_outs_note": "Lista en memoria del proceso compliance_service",
+            "opt_outs": compliance_service.list_suppressed(),
+            "opt_outs_total": len(compliance_service.list_suppressed()),
             "dispatches": ops_store.list_dispatches(50),
             "window": "08:00-20:00 COT",
         },

@@ -18,10 +18,11 @@ Stack esperado:
 9. **Nueva campaña** en http://localhost:3000/campanas
 10. Opt-out de un número y verifica que el dispatch queda bloqueado
 11. CRM http://localhost:3000/crm → **Avanzar** mueve el lead de columna
-12. Conversaciones → **Tomar control** persiste claim en API
-13. **Reportes** → export CSV/JSON desde `/ops/reports/{id}`
-14. **Configuración** → Dialer URL / agent IDs / ventana 8–20 → Guardar (SQLite)
-15. Dashboard muestra contadores demo desde el store (`ops`)
+12. Conversaciones → **Tomar control** / enviar mensaje / **Devolver al bot** (persistido)
+13. **Transferir a asesor** o Laboratorio → handoff → **Atender** abre la conversación claimed
+14. **Reportes** → export CSV/JSON desde `/ops/reports/{id}`
+15. **Configuración** → Dialer URL / agent IDs / ventana 8–20 / ver opt-outs → Guardar
+16. Dashboard muestra contadores demo desde el store (`ops`)
 
 ## Arranque rápido (Windows)
 

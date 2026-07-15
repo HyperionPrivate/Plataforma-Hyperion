@@ -31,6 +31,7 @@ export function useSegmentation() {
 
 /** Stable empty seed — inline `= []` creates a new array every render and loops setState. */
 const EMPTY_SEED: LiveEvent[] = [];
+const isLiveApi = (process.env.NEXT_PUBLIC_API_MODE ?? "mock") === "live";
 
 export function useLiveFeed(seed: LiveEvent[] = EMPTY_SEED) {
   const [events, setEvents] = useState<LiveEvent[]>(() => seed);
@@ -44,6 +45,8 @@ export function useLiveFeed(seed: LiveEvent[] = EMPTY_SEED) {
   }, [seed, seedKey]);
 
   useEffect(() => {
+    // En live, el feed viene del store (dashboard.liveEvents); no inventar eventos.
+    if (isLiveApi) return;
     const id = setInterval(() => {
       setEvents((prev) => [createLiveEvent() as LiveEvent, ...prev].slice(0, 12));
     }, 4000);

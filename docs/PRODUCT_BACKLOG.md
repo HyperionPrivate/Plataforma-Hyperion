@@ -14,7 +14,9 @@ Architecture foundation is in place. Product work should land as separate PRs:
 10. **core adapter** — after Coopfuturo core API confirmed (stub `/ops/core/associate/{id}`)
 11. **OIDC production wiring** — issuer/audience/JWKS from IdP
 12. ~~**analytics projections**~~ — overlay dashboard + reportes JSON/CSV (piloto local OK)
-13. **ops UI** — roles + PII masking — UI cableada a `/ops`; falta OIDC/roles prod
+13. **ops UI** — roles + PII masking — UI cableada a `/ops` (inbox claim/release/messages, handoff Atender, opt-out persistente); falta OIDC/roles prod
 14. **E2E renovación VIP-II** — synthetic contacts only (demo local documentada en `DEMO_PULSO_LOCAL.md`)
+
+Loop asesor local (sin LIWA): opt-out SQLite · mensajes inbox · release claim · handoff shape + Atender · flags `voz_enabled`/`whatsapp_enabled`.
 
 Owners: confirm via `docs/OWNERSHIP_REQUEST.md` before CODEOWNERS enforce.

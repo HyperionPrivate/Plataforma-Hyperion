@@ -142,6 +142,28 @@ export async function claimConversation(input: {
   return postJson<Record<string, unknown>>("/ops/conversations/claim", input);
 }
 
+export async function releaseConversation(input: { conversation_id: string }) {
+  return postJson<{ ok: boolean; released: boolean }>(
+    "/ops/conversations/release",
+    input,
+  );
+}
+
+export async function sendConversationMessage(input: {
+  conversation_id: string;
+  text: string;
+  role?: "advisor" | "bot" | "user";
+}) {
+  return postJson<{ ok: boolean; message: Record<string, unknown> }>(
+    "/ops/conversations/messages",
+    input,
+  );
+}
+
+export async function listOptOuts() {
+  return getJson<{ items: string[]; total: number }>("/ops/compliance/opt-outs");
+}
+
 export async function registerDocument(input: {
   filename: string;
   content_type?: string;

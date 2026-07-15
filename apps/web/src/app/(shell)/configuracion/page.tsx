@@ -302,10 +302,32 @@ export default function ConfiguracionPage() {
                 </button>
               </li>
             ))}
+            <li className="flex items-center justify-between text-sm">
+              <span>Lista de exclusión (opt-out)</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const { listOptOuts } = await import("@/services/ops-client");
+                    const res = await listOptOuts();
+                    toast.message(`${res.total} números en exclusión`, {
+                      description: res.items.slice(0, 5).join(", ") || "vacía",
+                    });
+                  } catch (err) {
+                    toast.error("No se pudo cargar opt-outs", {
+                      description: err instanceof Error ? err.message : "Error",
+                    });
+                  }
+                }}
+              >
+                Ver lista
+              </Button>
+            </li>
           </ul>
           <p className="mt-4 text-xs text-[var(--muted)]">
-            Desactivar la ventana permite orquestar fuera de 8–20 (solo demo local). Opt-out desde
-            Laboratorio.
+            Desactivar la ventana permite orquestar fuera de 8–20 (solo demo local). Opt-outs
+            persisten en SQLite.
           </p>
         </ChartCard>
       )}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { useHandoff } from "@/hooks/use-pulso";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Filter, RefreshCw, X } from "lucide-react";
+import { claimConversation } from "@/services/ops-client";
 
 const priorityTone = {
   inmediata: "danger" as const,
@@ -20,14 +21,36 @@ const priorityTone = {
 };
 
 export default function HandoffPage() {
+  const router = useRouter();
   const { data, isLoading, isError, refetch } = useHandoff();
   const [expanded, setExpanded] = useState<string | null>("h1");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [attending, setAttending] = useState<string | null>(null);
   const [priorityFilter, setPriorityFilter] = useState<string[]>([
     "inmediata",
     "alta",
     "media",
   ]);
+
+  async function onAttend(row: {
+    id: string;
+    name: string;
+    conversationId?: string;
+  }) {
+    const cid = row.conversationId || row.id;
+    setAttending(row.id);
+    try {
+      await claimConversation({ conversation_id: cid });
+      toast.success(`Atendiendo a ${row.name}`);
+      router.push(`/conversaciones?id=${encodeURIComponent(cid)}`);
+    } catch (err) {
+      toast.error("No se pudo atender", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setAttending(null);
+    }
+  }
 
   const queue = useMemo(() => {
     return (data?.queue ?? []).filter((row) => priorityFilter.includes(row.priority));
@@ -144,18 +167,19 @@ export default function HandoffPage() {
                       />
                     </svg>
                   </div>
-                  <Link
-                    href="/conversaciones"
+                  <button
+                    type="button"
+                    disabled={attending === row.id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      toast.success(`Atendiendo a ${row.name}`);
+                      void onAttend(row);
                     }}
                     className={cn(
-                      "rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-[#0A0F0D] hover:brightness-110"
+                      "rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-[#0A0F0D] hover:brightness-110 disabled:opacity-60",
                     )}
                   >
-                    Atender
-                  </Link>
+                    {attending === row.id ? "…" : "Atender"}
+                  </button>
                 </button>
                 {expanded === row.id && row.aiSummary && (
                   <div className="border-t border-[var(--border)] px-3 py-3 text-sm">

@@ -74,7 +74,24 @@ def init_db() -> None:
                   value TEXT NOT NULL,
                   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS opt_outs (
+                  phone TEXT PRIMARY KEY,
+                  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS conversation_threads (
+                  id TEXT PRIMARY KEY,
+                  payload TEXT NOT NULL,
+                  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS conversation_messages (
+                  id TEXT PRIMARY KEY,
+                  conversation_id TEXT NOT NULL,
+                  payload TEXT NOT NULL,
+                  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
+                CREATE INDEX IF NOT EXISTS idx_messages_conv
+                  ON conversation_messages(conversation_id, created_at);
                 """
             )
             conn.commit()
@@ -286,6 +303,123 @@ def list_conversation_claims() -> list[dict[str, Any]]:
         try:
             rows = conn.execute(
                 "SELECT payload FROM conversation_claims ORDER BY created_at DESC"
+            ).fetchall()
+            return [json.loads(r["payload"]) for r in rows]
+        finally:
+            conn.close()
+
+
+def delete_conversation_claim(conversation_id: str) -> bool:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            cur = conn.execute(
+                "DELETE FROM conversation_claims WHERE id=?", (conversation_id,)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def add_opt_out(phone: str) -> dict[str, Any]:
+    init_db()
+    phone = phone.strip()
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO opt_outs(phone) VALUES(?)", (phone,)
+            )
+            conn.commit()
+            return {"phone": phone, "suppressed": True}
+        finally:
+            conn.close()
+
+
+def list_opt_outs() -> list[str]:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT phone FROM opt_outs ORDER BY created_at DESC"
+            ).fetchall()
+            return [str(r["phone"]) for r in rows]
+        finally:
+            conn.close()
+
+
+def upsert_conversation_thread(thread: dict[str, Any]) -> dict[str, Any]:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO conversation_threads(id, payload) VALUES(?, ?)",
+                (thread["id"], json.dumps(thread, ensure_ascii=False)),
+            )
+            conn.commit()
+            return thread
+        finally:
+            conn.close()
+
+
+def list_conversation_threads() -> list[dict[str, Any]]:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT payload FROM conversation_threads ORDER BY created_at DESC"
+            ).fetchall()
+            return [json.loads(r["payload"]) for r in rows]
+        finally:
+            conn.close()
+
+
+def append_conversation_message(
+    conversation_id: str, message: dict[str, Any]
+) -> dict[str, Any]:
+    init_db()
+    if "id" not in message:
+        message["id"] = f"m_{uuid4().hex[:10]}"
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO conversation_messages(id, conversation_id, payload)
+                VALUES(?, ?, ?)
+                """,
+                (
+                    message["id"],
+                    conversation_id,
+                    json.dumps(message, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+            return message
+        finally:
+            conn.close()
+
+
+def list_conversation_messages(
+    conversation_id: str, limit: int = 200
+) -> list[dict[str, Any]]:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT payload FROM conversation_messages
+                WHERE conversation_id=?
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (conversation_id, limit),
             ).fetchall()
             return [json.loads(r["payload"]) for r in rows]
         finally:
