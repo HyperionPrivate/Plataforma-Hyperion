@@ -119,9 +119,7 @@ def list_campaigns() -> list[dict[str, Any]]:
     with _LOCK:
         conn = _connect()
         try:
-            rows = conn.execute(
-                "SELECT payload FROM campaigns ORDER BY created_at DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT payload FROM campaigns ORDER BY created_at DESC").fetchall()
             return [json.loads(r["payload"]) for r in rows]
         finally:
             conn.close()
@@ -314,9 +312,7 @@ def delete_conversation_claim(conversation_id: str) -> bool:
     with _LOCK:
         conn = _connect()
         try:
-            cur = conn.execute(
-                "DELETE FROM conversation_claims WHERE id=?", (conversation_id,)
-            )
+            cur = conn.execute("DELETE FROM conversation_claims WHERE id=?", (conversation_id,))
             conn.commit()
             return cur.rowcount > 0
         finally:
@@ -329,9 +325,7 @@ def add_opt_out(phone: str) -> dict[str, Any]:
     with _LOCK:
         conn = _connect()
         try:
-            conn.execute(
-                "INSERT OR REPLACE INTO opt_outs(phone) VALUES(?)", (phone,)
-            )
+            conn.execute("INSERT OR REPLACE INTO opt_outs(phone) VALUES(?)", (phone,))
             conn.commit()
             return {"phone": phone, "suppressed": True}
         finally:
@@ -343,9 +337,7 @@ def list_opt_outs() -> list[str]:
     with _LOCK:
         conn = _connect()
         try:
-            rows = conn.execute(
-                "SELECT phone FROM opt_outs ORDER BY created_at DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT phone FROM opt_outs ORDER BY created_at DESC").fetchall()
             return [str(r["phone"]) for r in rows]
         finally:
             conn.close()
@@ -379,9 +371,7 @@ def list_conversation_threads() -> list[dict[str, Any]]:
             conn.close()
 
 
-def append_conversation_message(
-    conversation_id: str, message: dict[str, Any]
-) -> dict[str, Any]:
+def append_conversation_message(conversation_id: str, message: dict[str, Any]) -> dict[str, Any]:
     init_db()
     if "id" not in message:
         message["id"] = f"m_{uuid4().hex[:10]}"
@@ -405,9 +395,7 @@ def append_conversation_message(
             conn.close()
 
 
-def list_conversation_messages(
-    conversation_id: str, limit: int = 200
-) -> list[dict[str, Any]]:
+def list_conversation_messages(conversation_id: str, limit: int = 200) -> list[dict[str, Any]]:
     init_db()
     with _LOCK:
         conn = _connect()
@@ -441,9 +429,7 @@ def counts() -> dict[str, int]:
                 "conversation_claims",
                 "documents",
             ):
-                out[table] = int(
-                    conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
-                )
+                out[table] = int(conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])
             return out
         finally:
             conn.close()
@@ -499,9 +485,7 @@ def get_setting(key: str, default: Any = None) -> Any:
     with _LOCK:
         conn = _connect()
         try:
-            row = conn.execute(
-                "SELECT value FROM settings_kv WHERE key=?", (key,)
-            ).fetchone()
+            row = conn.execute("SELECT value FROM settings_kv WHERE key=?", (key,)).fetchone()
             if not row:
                 return default
             return json.loads(row["value"])

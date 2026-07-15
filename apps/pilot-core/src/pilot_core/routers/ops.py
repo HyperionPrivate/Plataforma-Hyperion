@@ -15,8 +15,8 @@ from platform_kit.errors import PlatformError
 from pydantic import BaseModel, Field
 
 from pilot_core import ops_store
-from pilot_core.modules.analytics.service import analytics_service
 from pilot_core.modules.agent_config.service import agent_config_service
+from pilot_core.modules.analytics.service import analytics_service
 from pilot_core.modules.campaigns.service import campaigns_service
 from pilot_core.modules.compliance.service import compliance_service
 from pilot_core.modules.contacts.service import contacts_service
@@ -99,9 +99,7 @@ async def ops_campaigns(_ctx: AuthContext = Depends(require_auth)) -> dict[str, 
     # Overlay day chips from real dispatches when activity exists.
     dispatches = ops_store.list_dispatches(200)
     if dispatches:
-        voice = sum(
-            1 for d in dispatches if "whatsapp" not in str(d.get("mode", ""))
-        )
+        voice = sum(1 for d in dispatches if "whatsapp" not in str(d.get("mode", "")))
         wa = sum(1 for d in dispatches if "whatsapp" in str(d.get("mode", "")))
         chips = dict(data.get("dayChips") or {})
         chips["llamadasHoy"] = voice
@@ -360,9 +358,7 @@ async def dispatch_call(
     settings = get_settings()
     dialer_url = (getattr(settings, "dialer_base_url", None) or "").rstrip("/")
     phone_id = (
-        body.agent_phone_number_id
-        or getattr(settings, "dialer_default_phone_number_id", "")
-        or ""
+        body.agent_phone_number_id or getattr(settings, "dialer_default_phone_number_id", "") or ""
     )
 
     payload = {
@@ -612,9 +608,7 @@ async def list_documents(_ctx: AuthContext = Depends(require_auth)) -> dict[str,
 
 
 @router.get("/reports/{report_id}")
-async def get_report(
-    report_id: str, _ctx: AuthContext = Depends(require_auth)
-) -> dict[str, Any]:
+async def get_report(report_id: str, _ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
     c = ops_store.counts()
     dashboard = analytics_service.overlay_dashboard(_load("dashboard.json"))
     payloads = {
@@ -663,9 +657,7 @@ async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[st
         },
         "dialer": {
             "base_url": getattr(get_settings(), "dialer_base_url", "") or "",
-            "default_phone_number_id": getattr(
-                get_settings(), "dialer_default_phone_number_id", ""
-            )
+            "default_phone_number_id": getattr(get_settings(), "dialer_default_phone_number_id", "")
             or "",
         },
         "ui": {"pii_masking": True},

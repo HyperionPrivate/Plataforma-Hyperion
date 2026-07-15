@@ -16,7 +16,11 @@ class AnalyticsService:
     def overlay_dashboard(self, base: dict[str, Any]) -> dict[str, Any]:
         c = ops_store.counts()
         dispatches = ops_store.list_dispatches(100)
-        voice = sum(1 for d in dispatches if d.get("mode") in {"mock", "live"} and "whatsapp" not in str(d.get("mode")))
+        voice = sum(
+            1
+            for d in dispatches
+            if d.get("mode") in {"mock", "live"} and "whatsapp" not in str(d.get("mode"))
+        )
         wa = sum(1 for d in dispatches if "whatsapp" in str(d.get("mode")))
         ops = list(base.get("ops") or [])
         # Replace first ops counters with live-ish values when we have activity.

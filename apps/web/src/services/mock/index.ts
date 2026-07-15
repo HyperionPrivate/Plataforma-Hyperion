@@ -3,6 +3,12 @@ import campaigns from "@/data/campaigns.json";
 import conversation from "@/data/conversation.json";
 import crm from "@/data/crm.json";
 import handoff from "@/data/handoff.json";
+import type {
+  ConversationsPayload,
+  CrmPayload,
+  HandoffPayload,
+  SegmentationPayload,
+} from "../live";
 
 const delay = (ms = 280) => new Promise((r) => setTimeout(r, ms));
 
@@ -16,22 +22,22 @@ export async function getCampaigns() {
   return campaigns;
 }
 
-export async function getConversations() {
+export async function getConversations(): Promise<ConversationsPayload> {
   await delay();
-  return conversation;
+  return conversation as ConversationsPayload;
 }
 
-export async function getCrm() {
+export async function getCrm(): Promise<CrmPayload> {
   await delay();
-  return crm;
+  return crm as CrmPayload;
 }
 
-export async function getHandoff() {
+export async function getHandoff(): Promise<HandoffPayload> {
   await delay();
-  return handoff;
+  return handoff as HandoffPayload;
 }
 
-export async function getSegmentation() {
+export async function getSegmentation(): Promise<SegmentationPayload> {
   await delay();
   return {
     points: [],

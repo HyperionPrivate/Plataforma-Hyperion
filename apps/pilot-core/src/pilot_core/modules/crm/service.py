@@ -120,9 +120,7 @@ class CrmService:
                                 "allowed_next": _TRANSITIONS.get(c["id"], []),
                             }
                         )
-                new_cols.append(
-                    {**c, "cards": cards, "count": max(c.get("count", 0), len(cards))}
-                )
+                new_cols.append({**c, "cards": cards, "count": max(c.get("count", 0), len(cards))})
             funnel["columns"] = new_cols
             if tip_counts:
                 funnel["tipificaciones"] = [
