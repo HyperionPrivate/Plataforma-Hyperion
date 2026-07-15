@@ -24,6 +24,13 @@ from pilot_core.modules.core_adapter.service import core_adapter_service
 from pilot_core.modules.crm.service import crm_service
 from pilot_core.modules.documents_service import documents_service
 from pilot_core.modules.orchestration.service import orchestration_service
+from pilot_core.modules.pii import (
+    mask_contact,
+    mask_conversation,
+    mask_crm_card,
+    mask_handoff_row,
+    pii_masking_enabled,
+)
 from pilot_core.modules.segmentation.service import segmentation_service
 from pilot_core.modules.whatsapp_mock import whatsapp_mock_service
 from pilot_core.settings import get_settings
@@ -108,7 +115,13 @@ async def ops_campaigns(_ctx: AuthContext = Depends(require_auth)) -> dict[str, 
 
 @router.get("/crm")
 async def ops_crm(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
-    return crm_service.snapshot()
+    data = crm_service.snapshot()
+    if pii_masking_enabled():
+        funnels = data.get("funnels") or {}
+        for funnel in funnels.values():
+            for col in funnel.get("columns") or []:
+                col["cards"] = [mask_crm_card(c) for c in (col.get("cards") or [])]
+    return data
 
 
 @router.get("/handoff")
@@ -152,6 +165,11 @@ async def ops_handoff(_ctx: AuthContext = Depends(require_auth)) -> dict[str, An
             else:
                 kpis.append(k)
         data = {**data, "kpis": kpis}
+    if pii_masking_enabled():
+        data = {
+            **data,
+            "queue": [mask_handoff_row(r) for r in (data.get("queue") or [])],
+        }
     return data
 
 
@@ -191,7 +209,13 @@ async def import_contacts(
 
 @router.get("/contacts")
 async def list_contacts(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
-    return contacts_service.list_contacts()
+    data = contacts_service.list_contacts()
+    if pii_masking_enabled() and isinstance(data, dict):
+        items = data.get("items") or data.get("contacts") or []
+        key = "items" if "items" in data else "contacts" if "contacts" in data else None
+        if key:
+            data = {**data, key: [mask_contact(c) for c in items]}
+    return data
 
 
 @router.post("/campaigns")
@@ -441,6 +465,19 @@ async def crm_move(body: CrmMoveBody, _ctx: AuthContext = Depends(require_auth))
     return lead
 
 
+class CrmCreateBody(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    funnel: str = "Renovación"
+    phone: str | None = None
+
+
+@router.post("/crm/leads")
+async def crm_create_lead(
+    body: CrmCreateBody, _ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    return crm_service.create_lead(name=body.name, funnel=body.funnel, phone=body.phone)
+
+
 class ConversationClaimBody(BaseModel):
     conversation_id: str
     advisor: str = "Admin Coopfuturo"
@@ -526,10 +563,14 @@ async def ops_conversations(_ctx: AuthContext = Depends(require_auth)) -> dict[s
             row["botActive"] = False
         convs.append(row)
 
+    if pii_masking_enabled():
+        convs = [mask_conversation(c) for c in convs]
+
     return {
         **data,
         "conversations": convs,
         "activeCount": len(convs),
+        "pii_masked": pii_masking_enabled(),
     }
 
 
@@ -556,7 +597,18 @@ async def register_document(
 
 @router.get("/documents")
 async def list_documents(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
-    return documents_service.list()
+    data = documents_service.list()
+    if pii_masking_enabled():
+        from pilot_core.modules.pii import mask_phone
+
+        items = []
+        for d in data.get("items") or []:
+            row = dict(d)
+            if row.get("contact_phone"):
+                row["contact_phone"] = mask_phone(row.get("contact_phone"))
+            items.append(row)
+        data = {**data, "items": items}
+    return data
 
 
 @router.get("/reports/{report_id}")
@@ -616,15 +668,20 @@ async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[st
             )
             or "",
         },
+        "ui": {"pii_masking": True},
         "agent_config": agent_config_service.get(),
     }
-    return {**defaults, **stored, "agent_config": agent_config_service.get()}
+    merged = {**defaults, **stored, "agent_config": agent_config_service.get()}
+    ui = merged.get("ui") if isinstance(merged.get("ui"), dict) else {}
+    merged["ui"] = {**defaults["ui"], **ui}
+    return merged
 
 
 class SettingsBody(BaseModel):
     channels: dict[str, Any] | None = None
     dialer: dict[str, Any] | None = None
     agent_config: dict[str, Any] | None = None
+    ui: dict[str, Any] | None = None
 
 
 @router.put("/settings")
@@ -652,6 +709,11 @@ async def put_settings(
             )
     if body.agent_config is not None:
         agent_config_service.save(body.agent_config)
+    if body.ui is not None:
+        prev = ops_store.get_setting("ui") or {}
+        if not isinstance(prev, dict):
+            prev = {}
+        ops_store.set_setting("ui", {**prev, **body.ui})
     return await get_settings_api(_ctx)
 
 

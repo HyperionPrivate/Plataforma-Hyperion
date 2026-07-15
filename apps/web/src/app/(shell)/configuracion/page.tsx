@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { fetchSettings, saveSettings } from "@/services/ops-client";
 
-const TABS = ["Canales", "Dialer", "Agentes", "Cumplimiento"];
+const TABS = ["Canales", "Dialer", "Agentes", "Cumplimiento", "Privacidad"];
 
 type Channels = {
   voz_enabled: boolean;
@@ -49,6 +49,7 @@ export default function ConfiguracionPage() {
   });
   const [flujoA, setFlujoA] = useState<AgentFlow>({});
   const [flujoB, setFlujoB] = useState<AgentFlow>({});
+  const [piiMasking, setPiiMasking] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +76,9 @@ export default function ConfiguracionPage() {
         if (ac.flujo_b && typeof ac.flujo_b === "object") {
           setFlujoB(ac.flujo_b as AgentFlow);
         }
+        if (s.ui && typeof s.ui.pii_masking === "boolean") {
+          setPiiMasking(s.ui.pii_masking);
+        }
       } catch (err) {
         toast.error("No se pudo cargar configuración", {
           description: err instanceof Error ? err.message : "¿API en :8201?",
@@ -98,6 +102,7 @@ export default function ConfiguracionPage() {
           flujo_a: flujoA,
           flujo_b: flujoB,
         },
+        ui: { pii_masking: piiMasking },
       });
       toast.success("Configuración guardada en SQLite");
     } catch (err) {
@@ -329,6 +334,39 @@ export default function ConfiguracionPage() {
             Desactivar la ventana permite orquestar fuera de 8–20 (solo demo local). Opt-outs
             persisten en SQLite.
           </p>
+        </ChartCard>
+      )}
+
+      {tab === "Privacidad" && !loading && (
+        <ChartCard title="Enmascarado de PII">
+          <ul className="space-y-4">
+            <li className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm">Enmascarar PII en lecturas Ops</p>
+                <p className="text-xs text-[var(--muted)]">
+                  Teléfonos, cédulas y nombres en GET /ops (CRM, handoff, conversaciones,
+                  contactos). Laboratorio sigue usando valores crudos para pruebas.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={piiMasking}
+                onClick={() => setPiiMasking((v) => !v)}
+                className={cn(
+                  "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+                  piiMasking ? "bg-[var(--accent)]" : "bg-white/15",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-0.5 size-5 rounded-full bg-white transition-transform",
+                    piiMasking ? "left-5" : "left-0.5",
+                  )}
+                />
+              </button>
+            </li>
+          </ul>
         </ChartCard>
       )}
     </div>

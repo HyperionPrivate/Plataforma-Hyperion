@@ -21,8 +21,9 @@ Stack esperado:
 12. Conversaciones → **Tomar control** / enviar mensaje / **Devolver al bot** (persistido)
 13. **Transferir a asesor** o Laboratorio → handoff → **Atender** abre la conversación claimed
 14. **Reportes** → export CSV/JSON desde `/ops/reports/{id}`
-15. **Configuración** → Dialer URL / agent IDs / ventana 8–20 / ver opt-outs → Guardar
-16. Dashboard muestra contadores demo desde el store (`ops`)
+15. **Configuración** → Dialer URL / agent IDs / ventana 8–20 / **Privacidad PII** / ver opt-outs → Guardar
+16. CRM → **Avanzar** respeta transiciones; **No interés** exige tipificación; nombres/teléfonos enmascarados si PII on
+17. Dashboard muestra contadores demo desde el store (`ops`)
 
 ## Arranque rápido (Windows)
 

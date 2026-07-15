@@ -194,6 +194,7 @@ export async function fetchSettings() {
     channels: Record<string, boolean>;
     dialer: { base_url?: string; default_phone_number_id?: string };
     agent_config: Record<string, unknown>;
+    ui?: { pii_masking?: boolean };
   }>("/ops/settings");
 }
 
@@ -201,6 +202,7 @@ export async function saveSettings(input: {
   channels?: Record<string, boolean | unknown>;
   dialer?: { base_url?: string; default_phone_number_id?: string };
   agent_config?: Record<string, unknown>;
+  ui?: { pii_masking?: boolean };
 }) {
   return putJson<Record<string, unknown>>("/ops/settings", input);
 }
