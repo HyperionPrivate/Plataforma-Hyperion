@@ -1,0 +1,38 @@
+# Contabo overlay — use with docker-compose.dev.yml
+# Example:
+#   docker compose -f docker-compose.dev.yml -f docker-compose.contabo.yml --env-file .env.contabo up -d --build
+#
+# Publishes Traefik on :9088 (80/443/8080 occupied by other stacks on the VM).
+# Dialer Contabo existente: host gateway :8080
+
+name: pulso
+
+services:
+  traefik:
+    ports:
+      - "0.0.0.0:${TRAEFIK_HTTP_PORT:-9088}:80"
+
+  pilot-core:
+    environment:
+      DIALER_BASE_URL: ${DIALER_BASE_URL:-http://host.docker.internal:8080}
+      DIALER_DEFAULT_PHONE_NUMBER_ID: ${DIALER_DEFAULT_PHONE_NUMBER_ID:-}
+      LIWA_MODE: ${LIWA_MODE:-mock}
+      LIWA_BASE_URL: ${LIWA_BASE_URL:-https://chat.liwa.co/api}
+      LIWA_API_TOKEN: ${LIWA_API_TOKEN:-}
+      LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1782399915832}
+      LIWA_FLOW_ID_B: ${LIWA_FLOW_ID_B:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_WEBHOOK_SECRET: ${ELEVENLABS_WEBHOOK_SECRET:-}
+      AUTH_DISABLED: ${AUTH_DISABLED:-true}
+      APP_ENV: ${APP_ENV:-staging}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  web:
+    build:
+      args:
+        NEXT_PUBLIC_API_MODE: live
+        NEXT_PUBLIC_PILOT_CORE_URL: ${PUBLIC_PILOT_CORE_URL:-http://127.0.0.1:9088/pilot-core}
+    environment:
+      NEXT_PUBLIC_API_MODE: live
+      NEXT_PUBLIC_PILOT_CORE_URL: ${PUBLIC_PILOT_CORE_URL:-http://127.0.0.1:9088/pilot-core}
