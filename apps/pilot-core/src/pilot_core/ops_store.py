@@ -182,9 +182,7 @@ def _recover_stale_post_call_claims(conn: sqlite3.Connection, *, max_age_sec: in
         created_raw = str(row["created_at"] or "")
         try:
             # SQLite CURRENT_TIMESTAMP is UTC ``YYYY-MM-DD HH:MM:SS``
-            created = datetime.strptime(created_raw, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=UTC
-            )
+            created = datetime.strptime(created_raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
         except ValueError:
             created = cutoff  # treat unparseable as stale
         if created <= cutoff:
@@ -386,12 +384,8 @@ def claim_post_call_conversation(
                             tzinfo=UTC
                         )
                     except ValueError:
-                        created = datetime.now(tz=UTC) - timedelta(
-                            seconds=stale_after_sec + 1
-                        )
-                    age_ok = datetime.now(tz=UTC) - created > timedelta(
-                        seconds=stale_after_sec
-                    )
+                        created = datetime.now(tz=UTC) - timedelta(seconds=stale_after_sec + 1)
+                    age_ok = datetime.now(tz=UTC) - created > timedelta(seconds=stale_after_sec)
                     if age_ok:
                         conn.execute("DELETE FROM post_calls WHERE id=?", (existing["id"],))
                         conn.commit()
