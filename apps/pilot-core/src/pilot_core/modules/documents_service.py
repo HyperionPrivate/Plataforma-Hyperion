@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
 
 from pilot_core import ops_store
-from pilot_core.modules.object_storage import get_object_storage
+from pilot_core.modules.object_storage import get_object_storage, sanitize_storage_key
 from pilot_core.settings import get_settings
 
 _ALLOWED = {".pdf", ".jpg", ".jpeg", ".png"}
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_filename(filename: str) -> str:
+    # Drop any directory components from user-controlled names.
+    base = PurePosixPath(str(filename).replace("\\", "/")).name
+    cleaned = _SAFE_NAME.sub("_", base).strip("._")[:180]
+    return cleaned or "documento.bin"
+
+
+def _safe_kind(kind: str) -> str:
+    cleaned = _SAFE_NAME.sub("_", str(kind or "doc")).strip("._")[:64]
+    return cleaned or "doc"
 
 
 class DocumentsService:
@@ -28,7 +43,8 @@ class DocumentsService:
         kind: str = "orden_matricula",
         content: bytes | None = None,
     ) -> dict[str, Any]:
-        lower = filename.lower()
+        safe_name = _safe_filename(filename)
+        lower = safe_name.lower()
         ext = "." + lower.rsplit(".", 1)[-1] if "." in lower else ""
         errors: list[str] = []
         if ext not in _ALLOWED:
@@ -45,7 +61,7 @@ class DocumentsService:
         storage_meta: dict[str, Any] = {"storage": backend if content else "metadata_only"}
         storage_key = None
         if content is not None and not errors:
-            key = f"{kind}/{uuid4().hex[:12]}_{filename}"
+            key = sanitize_storage_key(f"{_safe_kind(kind)}/{uuid4().hex[:12]}_{safe_name}")
             put = get_object_storage().put(key, content, content_type)
             storage_key = put.get("key")
             storage_meta = {
@@ -57,11 +73,11 @@ class DocumentsService:
 
         doc = {
             "id": f"doc_{uuid4().hex[:10]}",
-            "filename": filename,
+            "filename": safe_name,
             "content_type": content_type,
             "size_bytes": effective_size,
             "contact_phone": contact_phone,
-            "kind": kind,
+            "kind": _safe_kind(kind),
             "status": "rejected" if errors else "validated",
             "errors": errors,
             "retention_days": 90,

@@ -15,7 +15,8 @@ _API = "https://api.elevenlabs.io/v1/convai/sip-trunk/outbound-call"
 def resolve_flow(flow: str = "A") -> dict[str, str]:
     cfg = agent_config_service.get()
     key = "flujo_a" if str(flow).upper() != "B" else "flujo_b"
-    block = cfg.get(key) if isinstance(cfg.get(key), dict) else {}
+    raw_block = cfg.get(key)
+    block: dict[str, Any] = raw_block if isinstance(raw_block, dict) else {}
     settings = get_settings()
     agent_id = str(block.get("agent_id") or "")
     phone_id = str(
@@ -69,23 +70,22 @@ async def place_sip_outbound(
             headers={"xi-api-key": api_key, "Content-Type": "application/json"},
         )
         try:
-            data = resp.json()
+            raw = resp.json()
         except Exception:
-            data = {"raw": resp.text[:800]}
-            conv_id = None
-            if isinstance(data, dict):
-                nested = data.get("data") if isinstance(data.get("data"), dict) else {}
-                conv_id = (
-                    data.get("conversation_id")
-                    or data.get("conversationId")
-                    or nested.get("conversation_id")
-                )
-            return {
-                "ok": resp.is_success
-                and bool(data.get("success", True) if isinstance(data, dict) else resp.is_success),
-                "http_status": resp.status_code,
-                "provider": "elevenlabs_sip_trunk",
-                "resolved": resolved,
-                "conversation_id": conv_id,
-                "response": data,
-            }
+            raw = {"raw": resp.text[:800]}
+        data: dict[str, Any] = raw if isinstance(raw, dict) else {"raw": raw}
+        nested_raw = data.get("data")
+        nested: dict[str, Any] = nested_raw if isinstance(nested_raw, dict) else {}
+        conv_id = (
+            data.get("conversation_id")
+            or data.get("conversationId")
+            or nested.get("conversation_id")
+        )
+        return {
+            "ok": resp.is_success and bool(data.get("success", True)),
+            "http_status": resp.status_code,
+            "provider": "elevenlabs_sip_trunk",
+            "resolved": resolved,
+            "conversation_id": conv_id,
+            "response": data,
+        }

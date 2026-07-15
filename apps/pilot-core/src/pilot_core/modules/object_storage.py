@@ -2,10 +2,27 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Protocol
 
 from pilot_core.settings import get_settings
+
+_SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def sanitize_storage_key(key: str) -> str:
+    """Normalize object keys: no path traversal, only safe path segments."""
+    parts: list[str] = []
+    for raw in str(key).replace("\\", "/").split("/"):
+        if not raw or raw in {".", ".."}:
+            continue
+        cleaned = _SAFE_SEGMENT.sub("_", raw).strip("._")[:180]
+        if cleaned:
+            parts.append(cleaned)
+    if not parts:
+        return "unnamed.bin"
+    return "/".join(parts)
 
 
 class ObjectStorage(Protocol):
@@ -19,25 +36,34 @@ class MockObjectStorage:
         self._store: dict[str, bytes] = {}
 
     def put(self, key: str, data: bytes, content_type: str) -> dict[str, Any]:
-        self._store[key] = data
-        return {"key": key, "size": len(data), "content_type": content_type, "backend": "mock"}
+        safe = sanitize_storage_key(key)
+        self._store[safe] = data
+        return {"key": safe, "size": len(data), "content_type": content_type, "backend": "mock"}
 
     def get(self, key: str) -> bytes | None:
-        return self._store.get(key)
+        return self._store.get(sanitize_storage_key(key))
 
 
 class FilesystemObjectStorage:
     def __init__(self, root: str) -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
+    def _resolve(self, key: str) -> Path:
+        safe = sanitize_storage_key(key)
+        path = (self.root / safe).resolve()
+        try:
+            path.relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError("path_escape") from exc
+        return path
+
     def put(self, key: str, data: bytes, content_type: str) -> dict[str, Any]:
-        safe = key.replace("..", "_").lstrip("/\\")
-        path = self.root / safe
+        path = self._resolve(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         return {
-            "key": safe,
+            "key": sanitize_storage_key(key),
             "size": len(data),
             "content_type": content_type,
             "backend": "filesystem",
@@ -45,8 +71,7 @@ class FilesystemObjectStorage:
         }
 
     def get(self, key: str) -> bytes | None:
-        safe = key.replace("..", "_").lstrip("/\\")
-        path = self.root / safe
+        path = self._resolve(key)
         if not path.is_file():
             return None
         return path.read_bytes()
@@ -75,14 +100,15 @@ class MinioObjectStorage:
             self._client.create_bucket(Bucket=self.bucket)
 
     def put(self, key: str, data: bytes, content_type: str) -> dict[str, Any]:
+        safe = sanitize_storage_key(key)
         self._client.put_object(
             Bucket=self.bucket,
-            Key=key,
+            Key=safe,
             Body=data,
             ContentType=content_type,
         )
         return {
-            "key": key,
+            "key": safe,
             "size": len(data),
             "content_type": content_type,
             "backend": "minio",
@@ -91,7 +117,7 @@ class MinioObjectStorage:
 
     def get(self, key: str) -> bytes | None:
         try:
-            obj = self._client.get_object(Bucket=self.bucket, Key=key)
+            obj = self._client.get_object(Bucket=self.bucket, Key=sanitize_storage_key(key))
             return obj["Body"].read()
         except Exception:
             return None

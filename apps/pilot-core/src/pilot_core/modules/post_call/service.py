@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 import re
 from typing import Any
 from uuid import uuid4
@@ -93,9 +93,11 @@ def intent_wants_whatsapp(intent: str) -> bool:
     n = normalize_intent(intent)
     if n in _STOP:
         return False
-    if n in _CONTINUE:
-        return True
-    return False
+    return n in _CONTINUE
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def infer_intent_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
@@ -104,24 +106,23 @@ def infer_intent_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
         raw = payload.get("intent") or payload.get("disposition") or payload.get("tipificacion")
         return normalize_intent(str(raw)), "explicit"
 
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    analysis = data.get("analysis") if isinstance(data.get("analysis"), dict) else {}
-    collected = analysis.get("data_collection_results") or {}
-    if isinstance(collected, dict):
-        for key in (
-            "intencion",
-            "intent",
-            "interesado",
-            "disposition",
-            "tipificacion",
-            "quiere_renovar",
-            "follow_up_whatsapp",
-        ):
-            block = collected.get(key)
-            if isinstance(block, dict) and block.get("value") is not None:
-                return normalize_intent(str(block["value"])), f"data_collection:{key}"
-            if isinstance(block, str) and block.strip():
-                return normalize_intent(block), f"data_collection:{key}"
+    data = _as_dict(payload.get("data")) if "data" in payload else payload
+    analysis = _as_dict(data.get("analysis"))
+    collected = _as_dict(analysis.get("data_collection_results"))
+    for key in (
+        "intencion",
+        "intent",
+        "interesado",
+        "disposition",
+        "tipificacion",
+        "quiere_renovar",
+        "follow_up_whatsapp",
+    ):
+        block = collected.get(key)
+        if isinstance(block, dict) and block.get("value") is not None:
+            return normalize_intent(str(block["value"])), f"data_collection:{key}"
+        if isinstance(block, str) and block.strip():
+            return normalize_intent(block), f"data_collection:{key}"
 
     summary = str(analysis.get("transcript_summary") or "")
     if summary and _SUMMARY_STOP.search(summary):
@@ -141,17 +142,16 @@ def extract_phone_from_payload(payload: dict[str, Any]) -> str | None:
         v = payload.get(key)
         if v:
             return str(v).strip()
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    data = _as_dict(payload.get("data"))
+    meta = _as_dict(data.get("metadata"))
     for key in ("phone", "to_number", "called_number", "external_number"):
         v = meta.get(key) or data.get(key)
         if v:
             return str(v).strip()
-    init = data.get("conversation_initiation_client_data")
-    if isinstance(init, dict):
-        dyn = init.get("dynamic_variables") or {}
-        if isinstance(dyn, dict) and dyn.get("phone"):
-            return str(dyn["phone"]).strip()
+    init = _as_dict(data.get("conversation_initiation_client_data"))
+    dyn = _as_dict(init.get("dynamic_variables"))
+    if dyn.get("phone"):
+        return str(dyn["phone"]).strip()
     return None
 
 
@@ -160,21 +160,19 @@ def extract_name_from_payload(payload: dict[str, Any]) -> str:
         v = payload.get(key)
         if v:
             return str(v).strip()
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    init = data.get("conversation_initiation_client_data")
-    if isinstance(init, dict):
-        dyn = init.get("dynamic_variables") or {}
-        if isinstance(dyn, dict):
-            for key in ("nombre", "first_name", "name"):
-                if dyn.get(key):
-                    return str(dyn[key]).strip()
+    data = _as_dict(payload.get("data"))
+    init = _as_dict(data.get("conversation_initiation_client_data"))
+    dyn = _as_dict(init.get("dynamic_variables"))
+    for key in ("nombre", "first_name", "name"):
+        if dyn.get(key):
+            return str(dyn[key]).strip()
     return "Asociado"
 
 
 def extract_conversation_id(payload: dict[str, Any]) -> str | None:
     if payload.get("conversation_id"):
         return str(payload["conversation_id"])
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    data = _as_dict(payload.get("data"))
     if data.get("conversation_id"):
         return str(data["conversation_id"])
     return None
@@ -184,16 +182,14 @@ def verify_elevenlabs_signature(*, body: bytes, signature_header: str | None, se
     """Validate ElevenLabs `elevenlabs-signature: t=...,v0=...` HMAC-SHA256."""
     if not secret or not signature_header:
         return False
-    parts = dict(
-        p.split("=", 1) for p in signature_header.split(",") if "=" in p
-    )
+    parts = dict(p.split("=", 1) for p in signature_header.split(",") if "=" in p)
     ts = parts.get("t")
     v0 = parts.get("v0")
     if not ts or not v0:
         return False
     expected = hmac.new(
         secret.encode("utf-8"),
-        f"{ts}.".encode("utf-8") + body,
+        f"{ts}.".encode() + body,
         hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(expected, v0)
@@ -233,7 +229,7 @@ class PostCallService:
         if not phone_n and conv_id:
             for d in ops_store.list_dispatches(50):
                 if str(d.get("conversation_id") or "") == conv_id:
-                    lead = d.get("lead") if isinstance(d.get("lead"), dict) else {}
+                    lead = _as_dict(d.get("lead"))
                     phone_n = str(lead.get("phone") or "").strip()
                     if name == "Asociado" and lead.get("first_name"):
                         name = str(lead["first_name"])
@@ -242,7 +238,7 @@ class PostCallService:
                     break
         if not phone_n:
             for d in ops_store.list_dispatches(10):
-                lead = d.get("lead") if isinstance(d.get("lead"), dict) else {}
+                lead = _as_dict(d.get("lead"))
                 if lead.get("phone") and d.get("status") in {"sent", "queued_mock"}:
                     phone_n = str(lead["phone"]).strip()
                     if name == "Asociado" and lead.get("first_name"):
@@ -283,8 +279,8 @@ class PostCallService:
         try:
             crm = self._update_crm(phone=phone_n, name=name, intent=inferred, wants_wa=wants_wa)
             result["crm"] = crm
-        except Exception as exc:  # noqa: BLE001
-            result["crm"] = {"ok": False, "error": str(exc)}
+        except Exception:  # noqa: BLE001
+            result["crm"] = {"ok": False, "error": "crm_update_failed"}
 
         if wants_wa and not skip_whatsapp and phone_n:
             settings = get_settings()
@@ -321,9 +317,7 @@ class PostCallService:
         ops_store.insert_post_call(result)
         return result
 
-    def _update_crm(
-        self, *, phone: str, name: str, intent: str, wants_wa: bool
-    ) -> dict[str, Any]:
+    def _update_crm(self, *, phone: str, name: str, intent: str, wants_wa: bool) -> dict[str, Any]:
         lead = crm_service.create_lead(name=name, funnel="Renovación", phone=phone or None)
         lead_id = str(lead.get("id") or "")
         if not lead_id:
@@ -331,9 +325,7 @@ class PostCallService:
         # pendiente → contactado
         lead = crm_service.move(lead_id=lead_id, to_column="contactado")
         if wants_wa:
-            lead = crm_service.move(
-                lead_id=lead_id, to_column="interesado", tipificacion=intent
-            )
+            lead = crm_service.move(lead_id=lead_id, to_column="interesado", tipificacion=intent)
             lead = crm_service.move(
                 lead_id=lead_id, to_column="documento", tipificacion="doc_solicitado"
             )
@@ -360,7 +352,7 @@ class PostCallService:
 
     def _patch_latest_dispatch_for_phone(self, phone: str, post_call: dict[str, Any]) -> None:
         for d in ops_store.list_dispatches(30):
-            lead = d.get("lead") if isinstance(d.get("lead"), dict) else {}
+            lead = _as_dict(d.get("lead"))
             if str(lead.get("phone") or d.get("phone") or "") == phone:
                 self._patch_dispatch(str(d["id"]), post_call)
                 post_call["dispatch_id"] = d["id"]

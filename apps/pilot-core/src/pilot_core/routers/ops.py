@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import httpx
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from platform_kit.auth import AuthContext, require_auth
 from platform_kit.errors import PlatformError
@@ -23,6 +22,7 @@ from pilot_core.modules.contacts.service import contacts_service
 from pilot_core.modules.core_adapter.service import core_adapter_service
 from pilot_core.modules.crm.service import crm_service
 from pilot_core.modules.documents_service import documents_service
+from pilot_core.modules.liwa_whatsapp import liwa_whatsapp_service
 from pilot_core.modules.orchestration.service import orchestration_service
 from pilot_core.modules.pii import (
     mask_contact,
@@ -33,7 +33,6 @@ from pilot_core.modules.pii import (
 )
 from pilot_core.modules.post_call.service import post_call_service, verify_elevenlabs_signature
 from pilot_core.modules.segmentation.service import segmentation_service
-from pilot_core.modules.liwa_whatsapp import liwa_whatsapp_service
 from pilot_core.modules.whatsapp_mock import whatsapp_mock_service
 from pilot_core.settings import get_settings
 
@@ -410,7 +409,9 @@ async def elevenlabs_post_call_webhook(request: Request) -> dict[str, Any]:
     sig = request.headers.get("elevenlabs-signature")
     if secret:
         if not verify_elevenlabs_signature(body=raw, signature_header=sig, secret=secret):
-            raise PlatformError("webhook_signature", "Invalid ElevenLabs signature", status_code=401)
+            raise PlatformError(
+                "webhook_signature", "Invalid ElevenLabs signature", status_code=401
+            )
     elif not settings.auth_disabled:
         raise PlatformError(
             "webhook_misconfigured",
@@ -421,7 +422,7 @@ async def elevenlabs_post_call_webhook(request: Request) -> dict[str, Any]:
     try:
         payload = json.loads(raw.decode("utf-8") or "{}")
     except Exception as exc:
-        raise PlatformError("invalid_json", str(exc), status_code=400) from exc
+        raise PlatformError("invalid_json", "Invalid JSON body", status_code=400) from exc
 
     event_type = str(payload.get("type") or "")
     if event_type and event_type not in {"post_call_transcription", "post_call_audio"}:
@@ -528,7 +529,13 @@ async def crm_move(body: CrmMoveBody, _ctx: AuthContext = Depends(require_auth))
             lead_id=body.lead_id, to_column=body.to_column, tipificacion=body.tipificacion
         )
     except ValueError as exc:
-        raise PlatformError("crm_transition_blocked", str(exc), status_code=400) from exc
+        # Controlled CRM messages only — never raw stack traces.
+        msg = str(exc)
+        if not msg.startswith(
+            ("transition_not_allowed:", "tipificacion_required:", "lead_not_found:")
+        ):
+            msg = "crm_transition_blocked"
+        raise PlatformError("crm_transition_blocked", msg, status_code=400) from exc
     if body.funnel:
         lead["funnel"] = body.funnel
         ops_store.upsert_crm_lead(lead)
@@ -832,7 +839,9 @@ async def core_lookup(
 async def auth_status(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
     """OIDC readiness probe for ops UI / deploy checks."""
     s = get_settings()
-    configured = bool(s.oidc_issuer and s.oidc_audience and (s.oidc_jwks_url or s.oidc_jwks_static_json))
+    configured = bool(
+        s.oidc_issuer and s.oidc_audience and (s.oidc_jwks_url or s.oidc_jwks_static_json)
+    )
     return {
         "ok": True,
         "app_env": s.app_env,
@@ -841,7 +850,9 @@ async def auth_status(_ctx: AuthContext = Depends(require_auth)) -> dict[str, An
         "oidc_issuer": s.oidc_issuer or None,
         "oidc_audience": s.oidc_audience or None,
         "jwks": "static" if s.oidc_jwks_static_json else ("url" if s.oidc_jwks_url else None),
-        "ready_for_production_auth": configured and not s.auth_disabled and s.app_env in ("staging", "production"),
+        "ready_for_production_auth": configured
+        and not s.auth_disabled
+        and s.app_env in ("staging", "production"),
     }
 
 
@@ -916,9 +927,7 @@ async def e2e_renovacion(
     steps["handoff"] = await create_handoff(handoff_body, ctx)
 
     try:
-        lead = crm_service.create_lead(
-            name=body.first_name, funnel="Renovación", phone=body.phone
-        )
+        lead = crm_service.create_lead(name=body.first_name, funnel="Renovación", phone=body.phone)
         lead_id = str(lead.get("id") or "")
         if lead_id:
             steps["crm"] = crm_service.move(
@@ -926,8 +935,8 @@ async def e2e_renovacion(
             )
         else:
             steps["crm"] = lead
-    except Exception as exc:  # noqa: BLE001
-        steps["crm"] = {"ok": False, "error": str(exc)}
+    except Exception:  # noqa: BLE001
+        steps["crm"] = {"ok": False, "error": "crm_update_failed"}
 
     return {
         "ok": True,

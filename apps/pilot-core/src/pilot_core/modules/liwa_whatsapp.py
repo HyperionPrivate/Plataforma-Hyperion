@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import httpx
@@ -168,20 +168,23 @@ class LiwaWhatsAppService:
             data = {"raw": resp.text[:800]}
 
         status = "sent" if resp.is_success else "failed"
-        entry = {
-            "id": f"wa_{uuid4().hex[:10]}",
-            "channel": "whatsapp",
-            "mode": self.mode,
-            "kind": "text",
-            "status": status,
-            "to": phone,
-            "text": text[:500],
-            "template": template,
-            "provider": "liwa",
-            "contact_id": contact_id,
-            "http_status": resp.status_code,
-            "provider_response": data,
-        }
+        entry = cast(
+            dict[str, Any],
+            {
+                "id": f"wa_{uuid4().hex[:10]}",
+                "channel": "whatsapp",
+                "mode": self.mode,
+                "kind": "text",
+                "status": status,
+                "to": phone,
+                "text": text[:500],
+                "template": template,
+                "provider": "liwa",
+                "contact_id": contact_id,
+                "http_status": resp.status_code,
+                "provider_response": data,
+            },
+        )
         _audit(phone=phone, first_name=first_name, entry=entry)
         return {
             "ok": resp.is_success,
@@ -265,23 +268,24 @@ class LiwaWhatsAppService:
             except Exception:
                 data = {"raw": resp.text[:800]}
 
-        ok = resp.is_success and bool(
-            data.get("success", True) if isinstance(data, dict) else True
+        ok = resp.is_success and bool(data.get("success", True) if isinstance(data, dict) else True)
+        entry = cast(
+            dict[str, Any],
+            {
+                "id": f"wa_{uuid4().hex[:10]}",
+                "channel": "whatsapp",
+                "mode": self.mode,
+                "kind": "flow",
+                "status": "sent" if ok else "failed",
+                "to": phone,
+                "text": (text or "")[:500],
+                "flow_id": fid,
+                "provider": "liwa",
+                "contact_id": str(contact_id) if contact_id else None,
+                "http_status": resp.status_code,
+                "provider_response": data,
+            },
         )
-        entry = {
-            "id": f"wa_{uuid4().hex[:10]}",
-            "channel": "whatsapp",
-            "mode": self.mode,
-            "kind": "flow",
-            "status": "sent" if ok else "failed",
-            "to": phone,
-            "text": (text or "")[:500],
-            "flow_id": fid,
-            "provider": "liwa",
-            "contact_id": str(contact_id) if contact_id else None,
-            "http_status": resp.status_code,
-            "provider_response": data,
-        }
         _audit(phone=phone, first_name=first_name, entry=entry)
         return {
             "ok": ok,
