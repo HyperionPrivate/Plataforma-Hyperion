@@ -353,7 +353,8 @@ representativa.
 En cada PR, CI construye todas las imágenes y resuelve de forma fail-closed el contrato del SHA base desde
 `infra/compatibility-policy.json`. Si la base ya contiene el descriptor usa sus capacidades `current_v2`,
 `deterministic_v2` y `owner_api_v2`; la única excepción bootstrap está ligada al SHA histórico exacto y declara
-por separado Channel pre-outbox, audio efímero y acceso SOFÍA → PULSO por SQL heredado. Una base legacy deja un
+por separado Channel pre-outbox, audio efímero, acceso SOFÍA → PULSO y validación de delivery Channel → PULSO por
+SQL heredado. Una base legacy deja un
 inbound pre-outbox pendiente con el binario N-1 detenido; la migración/backfill lo convierte en v1, current lo
 drena con compatibilidad temporal, cierra esa ventana y prueba un inbound v2. Una base current conserva el escritor
 y los contratos v2 sin abrir una ventana legacy.
@@ -388,12 +389,21 @@ escrituras de tabla completa, columnas DML adicionales, lectura de otras tablas,
 autoriza formas representativas de las sentencias ejercitadas del binario histórico dentro de una transacción sin
 filas.
 
+El Channel de esa misma base tiene una capacidad independiente `legacy_direct_sql_v1`: antes de los workloads se
+abre `USAGE` en `pulso_iris`, `SELECT` sólo sobre
+`messages(id, tenant_id, conversation_id, sender, body, provider, delivery_status, delivered_at, metadata)` y
+`UPDATE` sólo sobre
+`messages(provider, provider_message_id, delivery_status, delivered_at, metadata)`. Esto cubre la validación de la
+fuente y las transiciones históricas de delivery; no concede permisos de tabla completa, otras tablas, secuencias,
+rutinas, ownership, membresías ni grant options. El Channel actual declara `owner_api_v2` y no abre esta ventana.
+
 El paso separado con `if: always()` detiene primero Agent, Prompt Flow, Channel y PULSO, conserva sus contenedores
 para diagnóstico, compara el fingerprint de delivery, cierra cada ventana aplicable de forma idempotente y verifica
 el estado cerrado aunque una apertura haya quedado incompleta. En `channel_runtime` no puede quedar ningún acceso de
 `hyperion_pulso`; en `pulso_iris`, `hyperion_sofia` vuelve exactamente a `USAGE` y a los tres `SELECT` transitorios
-del baseline vigente de la matriz 024, sin escrituras. Como los binarios históricos necesitan esas excepciones, el
-cierre termina también su capacidad operativa: el ensayo certifica un rollback temporal y supervisado, no un estado
+del baseline vigente de la matriz 024, sin escrituras. El cierre elimina además todo acceso de `hyperion_channel` a
+`pulso_iris`. Como los binarios históricos necesitan esas excepciones, el cierre termina también su capacidad
+operativa: el ensayo certifica un rollback temporal y supervisado, no un estado
 N-1 autónomo que pueda mantenerse indefinidamente.
 
 El rehearsal es deliberadamente HTTP: no prueba un mensaje JetStream pendiente creado por N-1 y el overlay sigue

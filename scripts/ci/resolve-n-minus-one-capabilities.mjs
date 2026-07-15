@@ -8,6 +8,10 @@ const CHANNEL_CONTRACTS = new Map([
   ["legacy_pre_outbox_v1", "legacy"],
   ["current_v2", "current"]
 ]);
+const CHANNEL_PULSO_CONTRACTS = new Map([
+  ["legacy_direct_sql_v1", "legacy_sql"],
+  ["owner_api_v2", "owner_api"]
+]);
 const LUMEN_CONTRACTS = new Map([
   ["legacy_ephemeral_v1", "legacy"],
   ["deterministic_v2", "current"]
@@ -33,6 +37,11 @@ export function resolveNMinusOneCapabilities({ expectedSha, actualSha, currentPo
   const channelContract = resolveCapability(CHANNEL_CONTRACTS, capabilities.channelInbound, "channelInbound");
   return {
     channel_contract: channelContract,
+    channel_pulso_contract: resolveCapability(
+      CHANNEL_PULSO_CONTRACTS,
+      capabilities.channelPulsoOwnership,
+      "channelPulsoOwnership"
+    ),
     lumen_contract: resolveCapability(LUMEN_CONTRACTS, capabilities.lumenAudioCleanup, "lumenAudioCleanup"),
     channel_v1_compatibility: channelContract === "current" ? "disabled" : "enabled",
     sofia_pulso_contract: resolveCapability(
@@ -46,7 +55,7 @@ export function resolveNMinusOneCapabilities({ expectedSha, actualSha, currentPo
 export function validatePolicy(value) {
   requireObject(value, "compatibility policy");
   requireExactKeys(value, ["schemaVersion", "self", "legacyBaseOverrides"], "compatibility policy");
-  if (value.schemaVersion !== 2) throw new Error("Unsupported compatibility policy schemaVersion");
+  if (value.schemaVersion !== 3) throw new Error("Unsupported compatibility policy schemaVersion");
   const self = validateCapabilities(value.self, "self");
   requireObject(value.legacyBaseOverrides, "legacyBaseOverrides");
 
@@ -55,13 +64,20 @@ export function validatePolicy(value) {
     if (!SHA_PATTERN.test(sha)) throw new Error("Legacy compatibility override key must be an exact commit SHA");
     legacyBaseOverrides[sha] = validateCapabilities(capabilities, `legacyBaseOverrides.${sha}`);
   }
-  return { schemaVersion: 2, self, legacyBaseOverrides };
+  return { schemaVersion: 3, self, legacyBaseOverrides };
 }
 
 function validateCapabilities(value, label) {
   requireObject(value, label);
-  requireExactKeys(value, ["channelInbound", "lumenAudioCleanup", "sofiaPulsoOwnership"], label);
+  requireExactKeys(
+    value,
+    ["channelInbound", "channelPulsoOwnership", "lumenAudioCleanup", "sofiaPulsoOwnership"],
+    label
+  );
   if (!CHANNEL_CONTRACTS.has(value.channelInbound)) throw new Error(`${label}.channelInbound is unsupported`);
+  if (!CHANNEL_PULSO_CONTRACTS.has(value.channelPulsoOwnership)) {
+    throw new Error(`${label}.channelPulsoOwnership is unsupported`);
+  }
   if (!LUMEN_CONTRACTS.has(value.lumenAudioCleanup)) {
     throw new Error(`${label}.lumenAudioCleanup is unsupported`);
   }
@@ -70,6 +86,7 @@ function validateCapabilities(value, label) {
   }
   return {
     channelInbound: value.channelInbound,
+    channelPulsoOwnership: value.channelPulsoOwnership,
     lumenAudioCleanup: value.lumenAudioCleanup,
     sofiaPulsoOwnership: value.sofiaPulsoOwnership
   };

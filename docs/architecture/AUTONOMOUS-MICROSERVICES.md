@@ -79,8 +79,9 @@ forma concurrente después de separar expansión, backfill y contrato. El fence 
 writers Channel N-1 durante el backfill histórico 023. La migración 021 también se ejecuta en fases autocommit
 recuperables y crea sus índices de forma concurrente. CI resuelve de forma fail-closed las capacidades del SHA base
 mediante `infra/compatibility-policy.json`: usa el descriptor de la propia base cuando existe y sólo admite una
-excepción bootstrap asociada al SHA histórico exacto. Channel/outbox, limpieza LUMEN y propiedad SOFÍA → PULSO son
-capacidades independientes; `owner_api_v2` no se infiere de la presencia del outbox. Una base `legacy` deja un
+excepción bootstrap asociada al SHA histórico exacto. Channel/outbox, limpieza LUMEN, propiedad SOFÍA → PULSO y
+validación de delivery Channel → PULSO son capacidades independientes; `owner_api_v2` no se infiere de la presencia
+del outbox. Una base `legacy` deja un
 inbound pre-outbox pendiente, lo drena tras el upgrade con compatibilidad temporal y después prueba el flujo v2
 actual; una base `current` preserva directamente su escritor y sus contratos v2. Al volver a las imágenes base, una
 revisión pre-durable valida su polling original y no se presenta como productora de inbox/outbox inexistentes; una
@@ -106,6 +107,14 @@ restaura su baseline de `USAGE` y `SELECT` PULSO y añade sólo `UPDATE(metadata
 metadata)` y `UPDATE(body)` en `messages`. Un control positivo autoriza formas representativas del camino ejercitado
 por el binario exacto y los probes de deriva rechazan propiedad, membresías, escrituras de tabla, columnas DML o
 tablas de lectura adicionales, secuencias, rutinas y grant options.
+
+El Channel histórico declara de forma independiente `legacy_direct_sql_v1`: su repositorio valida el mensaje y
+proyecta delivery directamente en `pulso_iris.messages`. CI abre sólo `USAGE` del esquema, `SELECT` sobre
+`id, tenant_id, conversation_id, sender, body, provider, delivery_status, delivered_at, metadata` y `UPDATE` sobre
+`provider, provider_message_id, delivery_status, delivered_at, metadata`. Los controles
+positivos ejercitan las formas de enqueue y transición sin filas; los probes de deriva rechazan cualquier objeto,
+columna o facultad adicional. El Channel actual usa la API/evento del propietario y declara `owner_api_v2`.
+
 El cleanup detiene Agent y Prompt Flow —ambos consumen la identidad SOFÍA— además de Channel y PULSO, cierra y
 atestigua cada ventana aplicable, y conserva los contenedores para diagnóstico antes del teardown. La matriz durable
 continúa sin escrituras cruzadas: el acceso actual usa las rutas autenticadas del propietario PULSO.
@@ -121,9 +130,9 @@ posiciones desde los ledgers propietarios, comparan cualquier valor suministrado
 correlación incoherente. Son una excepción temporal explícita: funciones de trigger acotadas leen el ledger Channel
 desde PULSO y el ledger PULSO desde SOFÍA, sin conceder `SELECT` cruzado a los roles. Deben retirarse cuando ninguna
 revisión soportada emita v1. La barrera automática inventaría las rutinas y el SQL literal de runtime/FK, pero no
-interpreta sus cuerpos PL/pgSQL; por eso esta excepción requiere revisión manual mientras exista. Esta excepción
-de adaptadores v1 durables es distinta de la ventana SQL directa y columnar que necesita exclusivamente la base
-histórica pre-durable durante su polling N-1.
+interpreta sus cuerpos PL/pgSQL; por eso esta excepción requiere revisión manual mientras exista. Esta excepción de
+adaptadores v1 durables es distinta de las ventanas SQL directas y columnares que necesita exclusivamente la base
+histórica pre-durable durante su polling y delivery N-1.
 
 Este recorrido N-1 cubre sólo el transporte HTTP; no demuestra mensajes JetStream pendientes entre binarios ni
 cambia su condición de piloto. Tampoco demuestra compatibilidad general de cada operación: exige además un ensayo

@@ -15,6 +15,7 @@ test("resolves the exact pre-descriptor foundation base to legacy contracts", ()
     }),
     {
       channel_contract: "legacy",
+      channel_pulso_contract: "legacy_sql",
       lumen_contract: "legacy",
       channel_v1_compatibility: "enabled",
       sofia_pulso_contract: "legacy_sql"
@@ -32,6 +33,7 @@ test("uses the base revision's own descriptor after the foundation merge", () =>
     }),
     {
       channel_contract: "current",
+      channel_pulso_contract: "owner_api",
       lumen_contract: "current",
       channel_v1_compatibility: "disabled",
       sofia_pulso_contract: "owner_api"
@@ -53,6 +55,7 @@ test("keeps SOFIA ownership independent from a current Channel contract", () => 
     }),
     {
       channel_contract: "current",
+      channel_pulso_contract: "owner_api",
       lumen_contract: "current",
       channel_v1_compatibility: "disabled",
       sofia_pulso_contract: "legacy_sql"
@@ -74,8 +77,31 @@ test("keeps SOFIA owner API independent from a legacy Channel contract", () => {
     }),
     {
       channel_contract: "legacy",
+      channel_pulso_contract: "owner_api",
       lumen_contract: "current",
       channel_v1_compatibility: "enabled",
+      sofia_pulso_contract: "owner_api"
+    }
+  );
+});
+
+test("keeps Channel PULSO ownership independent from inbound compatibility", () => {
+  const mixedPolicy = {
+    ...policy,
+    self: { ...policy.self, channelPulsoOwnership: "legacy_direct_sql_v1" }
+  };
+  assert.deepEqual(
+    resolveNMinusOneCapabilities({
+      expectedSha: CURRENT_SHA,
+      actualSha: CURRENT_SHA,
+      currentPolicy: policy,
+      basePolicy: mixedPolicy
+    }),
+    {
+      channel_contract: "current",
+      channel_pulso_contract: "legacy_sql",
+      lumen_contract: "current",
+      channel_v1_compatibility: "disabled",
       sofia_pulso_contract: "owner_api"
     }
   );
@@ -117,7 +143,11 @@ test("rejects malformed policies, fields and capability values", () => {
     () => validatePolicy({ ...policy, self: { ...policy.self, sofiaPulsoOwnership: "guess" } }),
     /sofiaPulsoOwnership is unsupported/
   );
-  assert.throws(() => validatePolicy({ ...policy, schemaVersion: 1 }), /schemaVersion/);
+  assert.throws(
+    () => validatePolicy({ ...policy, self: { ...policy.self, channelPulsoOwnership: "guess" } }),
+    /channelPulsoOwnership is unsupported/
+  );
+  assert.throws(() => validatePolicy({ ...policy, schemaVersion: 2 }), /schemaVersion/);
 });
 
 test("rejects a checkout that differs from the declared base SHA", () => {

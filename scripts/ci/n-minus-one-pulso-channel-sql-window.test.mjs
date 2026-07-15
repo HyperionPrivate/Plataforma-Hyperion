@@ -7,9 +7,14 @@ import { fileURLToPath } from "node:url";
 const directory = dirname(fileURLToPath(import.meta.url));
 const script = readFileSync(join(directory, "n-minus-one-pulso-channel-sql-window.sh"), "utf8");
 const sofiaScript = readFileSync(join(directory, "n-minus-one-sofia-pulso-sql-window.sh"), "utf8");
+const channelPulsoScript = readFileSync(join(directory, "n-minus-one-channel-pulso-sql-window.sh"), "utf8");
 const stateProbe = readFileSync(join(directory, "verify-n-minus-one-delivery-drain-states.sh"), "utf8");
 const driftProbe = readFileSync(join(directory, "verify-n-minus-one-sql-window-drift.sh"), "utf8");
 const sofiaDriftProbe = readFileSync(join(directory, "verify-n-minus-one-sofia-sql-window-drift.sh"), "utf8");
+const channelPulsoDriftProbe = readFileSync(
+  join(directory, "verify-n-minus-one-channel-pulso-sql-window-drift.sh"),
+  "utf8"
+);
 const workflow = readFileSync(join(directory, "../../.github/workflows/check.yml"), "utf8");
 
 function section(source, startMarker, endMarker) {
@@ -178,6 +183,96 @@ test("legacy SOFIA window reconstructs the durable read baseline and exact write
   assert.match(functionalProbe, /select full_name from pulso_iris\.administrative_patients where false/);
 });
 
+test("legacy Channel window restores only the exact PULSO message lifecycle allow-list", () => {
+  const open = section(channelPulsoScript, 'if [[ $mode == "open" ]]', 'elif [[ $mode == "close" ]]');
+  const close = section(channelPulsoScript, 'elif [[ $mode == "close" ]]', "else");
+  const verifier = section(channelPulsoScript, "do $verify$", 'if [[ $mode == "verify-open" ]]');
+  const functionalProbe = section(
+    channelPulsoScript,
+    "-- Parse, authorize and plan representative historical Channel statements",
+    "rollback;"
+  );
+
+  for (const lifecycle of [open, close]) {
+    assert.match(lifecycle, /pg_advisory_xact_lock/);
+    assert.match(lifecycle, /set local lock_timeout = '5s'/);
+    assert.match(lifecycle, /set local statement_timeout = '30s'/);
+    assert.match(lifecycle, /revoke all privileges on schema pulso_iris from hyperion_channel/);
+    assert.match(lifecycle, /revoke all privileges on all tables in schema pulso_iris from hyperion_channel/);
+    assert.match(lifecycle, /revoke all privileges on all sequences in schema pulso_iris from hyperion_channel/);
+    assert.match(lifecycle, /revoke all privileges on all routines in schema pulso_iris from hyperion_channel/);
+  }
+
+  assert.match(open, /grant usage on schema pulso_iris to hyperion_channel/);
+  const selectGrant = section(open, "grant select (", "grant update (");
+  assert.match(
+    selectGrant,
+    /id, tenant_id, conversation_id, sender, body, provider,[\s\S]*delivery_status, delivered_at, metadata[\s\S]*on table pulso_iris\.messages to hyperion_channel/
+  );
+  assert.doesNotMatch(selectGrant, /provider_message_id/);
+  assert.match(
+    open,
+    /grant update \([\s\S]*provider, provider_message_id, delivery_status, delivered_at, metadata[\s\S]*\)\s*on table pulso_iris\.messages to hyperion_channel/
+  );
+  assert.doesNotMatch(close, /\bgrant\b/i);
+  assert.doesNotMatch(open, /grant (?:select|update)\s+on table/i);
+
+  assert.match(verifier, /has_database_privilege/);
+  assert.match(verifier, /CONNECT-only database access/);
+  assert.match(verifier, /role must not own PULSO objects/);
+  assert.match(verifier, /pg_catalog\.pg_auth_members/);
+  assert.match(verifier, /pg_catalog\.pg_class/);
+  assert.match(verifier, /pg_catalog\.pg_attribute/);
+  assert.match(verifier, /pg_catalog\.pg_type/);
+  assert.match(verifier, /relkind in \('r', 'p', 'v', 'm', 'f'\)/);
+  assert.doesNotMatch(verifier, /information_schema\.(?:tables|columns)/);
+  assert.match(verifier, /has_schema_privilege/);
+  assert.match(verifier, /has_table_privilege/);
+  assert.match(verifier, /has_column_privilege/);
+  assert.match(verifier, /has_sequence_privilege/);
+  assert.match(verifier, /has_function_privilege/);
+  assert.match(verifier, /'SELECT WITH GRANT OPTION'/);
+  assert.match(verifier, /'UPDATE WITH GRANT OPTION'/);
+
+  const expectedColumns = [
+    ["id", "expected_window_open", false],
+    ["tenant_id", "expected_window_open", false],
+    ["conversation_id", "expected_window_open", false],
+    ["sender", "expected_window_open", false],
+    ["body", "expected_window_open", false],
+    ["provider", "expected_window_open", "expected_window_open"],
+    ["provider_message_id", false, "expected_window_open"],
+    ["delivery_status", "expected_window_open", "expected_window_open"],
+    ["delivered_at", "expected_window_open", "expected_window_open"],
+    ["metadata", "expected_window_open", "expected_window_open"]
+  ];
+  for (const [column, canSelect, canUpdate] of expectedColumns) {
+    assert.ok(
+      verifier.includes(`('messages', '${column}', ${canSelect}, ${canUpdate})`),
+      `missing Channel-to-PULSO privilege tuple messages.${column}`
+    );
+  }
+
+  assert.match(functionalProbe, /set local lock_timeout = '5s'/);
+  assert.match(functionalProbe, /set local statement_timeout = '30s'/);
+  assert.match(functionalProbe, /set local role hyperion_channel/);
+  assert.match(functionalProbe, /insert into channel_runtime\.outbound_messages/);
+  assert.match(functionalProbe, /join pulso_iris\.messages/);
+  assert.match(functionalProbe, /where false[\s\S]*on conflict do nothing/);
+  assert.match(functionalProbe, /update pulso_iris\.messages/);
+  for (const column of ["provider", "provider_message_id", "delivery_status", "delivered_at", "metadata"]) {
+    assert.match(functionalProbe, new RegExp(`\\b${column}\\s*=`));
+  }
+  assert.doesNotMatch(functionalProbe, /provider_message_id\s*=\s*provider_message_id/);
+  assert.match(functionalProbe, /update pulso_iris\.messages[\s\S]*and false;/);
+  const selectProbe = section(functionalProbe, "select id, tenant_id", "where false;");
+  assert.match(
+    selectProbe,
+    /select id, tenant_id, conversation_id, sender, body, provider,[\s\S]*delivery_status, delivered_at, metadata[\s\S]*from pulso_iris\.messages/
+  );
+  assert.doesNotMatch(selectProbe, /provider_message_id/);
+});
+
 test("PostgreSQL drift probe rejects every excess privilege and restores a closed window", () => {
   assert.match(driftProbe, /trap cleanup_on_exit EXIT/);
   assert.match(driftProbe, /cleanup_probe_artifacts/);
@@ -225,6 +320,38 @@ test("SOFIA PostgreSQL drift probe rejects write, read, ownership and identity e
   assert.match(sofiaDriftProbe, /window close/);
 });
 
+test("Channel-to-PULSO drift probe rejects privilege, ownership and identity expansion", () => {
+  assert.match(channelPulsoDriftProbe, /trap cleanup_on_exit EXIT/);
+  assert.match(channelPulsoDriftProbe, /grant create on schema pulso_iris to hyperion_channel/i);
+  assert.match(channelPulsoDriftProbe, /grant select on table pulso_iris\.messages to hyperion_channel/i);
+  assert.match(channelPulsoDriftProbe, /grant update on table pulso_iris\.messages to hyperion_channel/i);
+  assert.match(channelPulsoDriftProbe, /grant select \(created_at\) on table pulso_iris\.messages/i);
+  assert.match(channelPulsoDriftProbe, /grant select \(provider_message_id\) on table pulso_iris\.messages/i);
+  assert.match(channelPulsoDriftProbe, /grant update \(body\) on table pulso_iris\.messages/i);
+  assert.match(
+    channelPulsoDriftProbe,
+    /grant update \(delivery_status\) on table pulso_iris\.messages to hyperion_channel with grant option/i
+  );
+  assert.match(channelPulsoDriftProbe, /grant select on table pulso_iris\.sites to hyperion_channel/i);
+  assert.match(channelPulsoDriftProbe, /create materialized view pulso_iris\./i);
+  assert.match(
+    channelPulsoDriftProbe,
+    /grant select on table pulso_iris\.hyperion_n1_channel_sql_window_probe_materialized to hyperion_channel/i
+  );
+  assert.match(channelPulsoDriftProbe, /owner to hyperion_channel/i);
+  assert.match(channelPulsoDriftProbe, /create type pulso_iris\.[^\s]+ as enum/i);
+  assert.match(channelPulsoDriftProbe, /alter type pulso_iris\.[^\s]+ owner to hyperion_channel/i);
+  assert.match(channelPulsoDriftProbe, /grant usage on sequence pulso_iris\./i);
+  assert.match(channelPulsoDriftProbe, /grant execute on function pulso_iris\.[^(]+\(\) to public/i);
+  assert.match(channelPulsoDriftProbe, /grant hyperion_n1_channel_sql_window_probe_role to hyperion_channel/i);
+  assert.match(channelPulsoDriftProbe, /grant hyperion_channel to hyperion_n1_channel_sql_window_probe_role/i);
+  assert.match(channelPulsoDriftProbe, /message SELECT after closure/);
+  assert.match(channelPulsoDriftProbe, /message UPDATE after closure/);
+  assert.match(channelPulsoDriftProbe, /window verify-open/);
+  assert.match(channelPulsoDriftProbe, /window verify-closed/);
+  assert.match(channelPulsoDriftProbe, /window close/);
+});
+
 test("workflow gates N-1 workloads, compares the immutable snapshot and always closes SQL compatibility", () => {
   const jobEnvironment = section(workflow, "n-minus-one-upgrade-rollback:", "steps:");
   const stopped = workflow.indexOf("- name: Stop current workloads while preserving upgraded PostgreSQL");
@@ -236,6 +363,9 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
     "- name: Open bounded PULSO-to-Channel SQL compatibility before N-1 workloads"
   );
   const sofiaWindow = workflow.indexOf("- name: Open bounded SOFIA-to-PULSO SQL compatibility before N-1 workloads");
+  const channelPulsoWindow = workflow.indexOf(
+    "- name: Open bounded Channel-to-PULSO SQL compatibility before N-1 workloads"
+  );
   const nMinusOne = workflow.indexOf("- name: Return to N-1 images against the upgraded schema");
   const currentTraffic = workflow.indexOf(
     "- name: Exercise durable Channel to PULSO to SOFIA traffic on a current-capable N-1 rollback"
@@ -251,7 +381,8 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
       gated < lumenWindow &&
       lumenWindow < channelWindow &&
       channelWindow < sofiaWindow &&
-      sofiaWindow < nMinusOne
+      sofiaWindow < channelPulsoWindow &&
+      channelPulsoWindow < nMinusOne
   );
   assert.ok(nMinusOne < currentTraffic && currentTraffic < cleanup && cleanup < diagnostics && diagnostics < teardown);
 
@@ -284,6 +415,7 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
   assert.match(driftExerciseStep, /up --detach --no-build --wait --wait-timeout 120 postgres/);
   assert.match(driftExerciseStep, /verify-n-minus-one-sql-window-drift\.sh/);
   assert.match(driftExerciseStep, /verify-n-minus-one-sofia-sql-window-drift\.sh/);
+  assert.match(driftExerciseStep, /verify-n-minus-one-channel-pulso-sql-window-drift\.sh/);
   assert.doesNotMatch(
     driftExerciseStep,
     /\b(identity-service|agent-service|pulso-iris-service|whatsapp-channel-service|lumen-service)\b/
@@ -317,7 +449,20 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
   const sofiaWindowStep = section(
     workflow,
     "- name: Open bounded SOFIA-to-PULSO SQL compatibility before N-1 workloads",
+    "- name: Open bounded Channel-to-PULSO SQL compatibility before N-1 workloads"
+  );
+
+  const channelPulsoWindowStep = section(
+    workflow,
+    "- name: Open bounded Channel-to-PULSO SQL compatibility before N-1 workloads",
     "- name: Return to N-1 images against the upgraded schema"
+  );
+  assert.match(channelPulsoWindowStep, /channel_pulso_contract == 'legacy_sql'/);
+  assert.match(channelPulsoWindowStep, /up --detach --no-build --wait --wait-timeout 120 postgres/);
+  assert.ok(channelPulsoWindowStep.indexOf(".sh open") < channelPulsoWindowStep.indexOf(".sh verify-open"));
+  assert.doesNotMatch(
+    channelPulsoWindowStep,
+    /\b(identity-service|agent-service|pulso-iris-service|whatsapp-channel-service|lumen-service)\b/
   );
   assert.match(sofiaWindowStep, /sofia_pulso_contract == 'legacy_sql'/);
   assert.match(sofiaWindowStep, /up --detach --no-build --wait --wait-timeout 120 postgres/);
@@ -370,7 +515,10 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
   assert.match(cleanupStep, /n-minus-one-pulso-channel-sql-window\.sh verify-closed/);
   assert.match(cleanupStep, /n-minus-one-sofia-pulso-sql-window\.sh close/);
   assert.match(cleanupStep, /n-minus-one-sofia-pulso-sql-window\.sh verify-closed/);
+  assert.match(cleanupStep, /n-minus-one-channel-pulso-sql-window\.sh close/);
+  assert.match(cleanupStep, /n-minus-one-channel-pulso-sql-window\.sh verify-closed/);
   assert.match(cleanupStep, /sofia_pulso_contract\s*==\s*"legacy_sql"/);
+  assert.match(cleanupStep, /channel_pulso_contract\s*==\s*"legacy_sql"/);
   assert.match(cleanupStep, /current_compose\[@\].*stop --timeout 75 \|\| current_stop_status=\$\?/s);
   assert.match(cleanupStep, /ps --status running --quiet postgres/);
   assert.match(
@@ -395,10 +543,17 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
   }
   const channelClose = cleanupStep.indexOf("n-minus-one-pulso-channel-sql-window.sh close");
   const sofiaClose = cleanupStep.indexOf("n-minus-one-sofia-pulso-sql-window.sh close");
+  const channelPulsoClose = cleanupStep.indexOf("n-minus-one-channel-pulso-sql-window.sh close");
   const channelClosed = cleanupStep.indexOf("n-minus-one-pulso-channel-sql-window.sh verify-closed");
   const sofiaClosed = cleanupStep.indexOf("n-minus-one-sofia-pulso-sql-window.sh verify-closed");
+  const channelPulsoClosed = cleanupStep.indexOf("n-minus-one-channel-pulso-sql-window.sh verify-closed");
   assert.ok(
-    evidence < channelClose && channelClose < sofiaClose && sofiaClose < channelClosed && channelClosed < sofiaClosed
+    evidence < channelClose &&
+      channelClose < sofiaClose &&
+      sofiaClose < channelPulsoClose &&
+      channelPulsoClose < channelClosed &&
+      channelClosed < sofiaClosed &&
+      sofiaClosed < channelPulsoClosed
   );
   assert.match(cleanupStep, /for status in[\s\S]*exit "\$overall_status"/);
 });

@@ -64,6 +64,11 @@ idempotente. El `POST` directo de delivery permanece autenticado sólo para comp
 cruzado al runtime Channel. De forma análoga, PULSO y Channel escriben sus auditorías en outboxes propios; sólo
 `hyperion_audit` agrega el ledger y su inbox.
 
+El rehearsal del SHA pre-autonomía es la única excepción: su Channel todavía valida y actualiza
+`pulso_iris.messages` por SQL. Antes de arrancar ese binario, CI abre una allow-list temporal por columna para
+`hyperion_channel`; después de detener y cercar Channel la revoca y atestigua que no quede `USAGE`, lectura,
+escritura, ownership, membresía, secuencia ni rutina. Esta ventana no pertenece a la matriz durable.
+
 La matriz durable tampoco concede escrituras PULSO a `hyperion_sofia`. El rehearsal del SHA histórico que aún
 escribía SQL abre antes de iniciar workloads una allow-list temporal por columna en `conversations` y `messages`;
 después detiene Agent y Prompt Flow, reconstruye este baseline de lectura y atestigua que no quede escritura,

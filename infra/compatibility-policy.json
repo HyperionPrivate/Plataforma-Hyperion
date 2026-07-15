@@ -1,13 +1,15 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "self": {
     "channelInbound": "current_v2",
+    "channelPulsoOwnership": "owner_api_v2",
     "lumenAudioCleanup": "deterministic_v2",
     "sofiaPulsoOwnership": "owner_api_v2"
   },
   "legacyBaseOverrides": {
     "f89a42d8a4e3da8936c1848af25fe119cc4e1438": {
       "channelInbound": "legacy_pre_outbox_v1",
+      "channelPulsoOwnership": "legacy_direct_sql_v1",
       "lumenAudioCleanup": "legacy_ephemeral_v1",
       "sofiaPulsoOwnership": "legacy_direct_sql_v1"
     }

@@ -310,6 +310,8 @@ jobs:
           printf '%s\n' "$resolved" >> "$GITHUB_OUTPUT"
           channel_v1_compatibility=$(awk -F= '$1 == "channel_v1_compatibility" { print $2 }' <<<"$resolved")
           [[ $channel_v1_compatibility == "enabled" || $channel_v1_compatibility == "disabled" ]]
+          channel_pulso_contract=$(awk -F= '$1 == "channel_pulso_contract" { print $2 }' <<<"$resolved")
+          [[ $channel_pulso_contract == "owner_api" || $channel_pulso_contract == "legacy_sql" ]]
           sofia_pulso_contract=$(awk -F= '$1 == "sofia_pulso_contract" { print $2 }' <<<"$resolved")
           [[ $sofia_pulso_contract == "owner_api" || $sofia_pulso_contract == "legacy_sql" ]]
           echo "CHANNEL_INBOUND_V1_COMPATIBILITY=$channel_v1_compatibility" >> "$GITHUB_ENV"
@@ -505,6 +507,10 @@ jobs:
             .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml
+          bash scripts/ci/verify-n-minus-one-channel-pulso-sql-window-drift.sh \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
       - name: Verify Channel delivery is drained before N-1 rollback
         id: n1_delivery_drain
         shell: bash
@@ -594,6 +600,24 @@ jobs:
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml
           bash scripts/ci/n-minus-one-sofia-pulso-sql-window.sh verify-open \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+      - name: Open bounded Channel-to-PULSO SQL compatibility before N-1 workloads
+        if: ${{ steps.n1_capabilities.outputs.channel_pulso_contract == 'legacy_sql' }}
+        shell: bash
+        run: |
+          n1_compose=(docker compose --env-file .env.example -p hyperion-compat-n1
+            -f .ci/n-minus-one/infra/docker-compose.yml
+            -f infra/docker-compose.compatibility-ci.yml
+            -f infra/docker-compose.n-minus-one-roles-ci.yml)
+          "${n1_compose[@]}" config --quiet
+          "${n1_compose[@]}" up --detach --no-build --wait --wait-timeout 120 postgres
+          bash scripts/ci/n-minus-one-channel-pulso-sql-window.sh open \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml
+          bash scripts/ci/n-minus-one-channel-pulso-sql-window.sh verify-open \
             .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml
@@ -743,6 +767,16 @@ jobs:
           else
             echo "SOFIA-to-PULSO SQL close skipped for contract: ${sofia_pulso_contract:-unresolved}"
           fi
+          channel_pulso_sql_window_close_status=0
+          channel_pulso_contract='${{ steps.n1_capabilities.outputs.channel_pulso_contract }}'
+          if [[ $channel_pulso_contract == "legacy_sql" ]]; then
+            bash scripts/ci/n-minus-one-channel-pulso-sql-window.sh close \
+              .env.example hyperion-compat-n1 \
+              .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+              infra/docker-compose.n-minus-one-roles-ci.yml || channel_pulso_sql_window_close_status=$?
+          else
+            echo "Channel-to-PULSO SQL close skipped for contract: ${channel_pulso_contract:-unresolved}"
+          fi
           channel_sql_window_closed_probe_status=0
           bash scripts/ci/n-minus-one-pulso-channel-sql-window.sh verify-closed \
             .env.example hyperion-compat-n1 \
@@ -753,15 +787,21 @@ jobs:
             .env.example hyperion-compat-n1 \
             .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
             infra/docker-compose.n-minus-one-roles-ci.yml || sofia_sql_window_closed_probe_status=$?
+          channel_pulso_sql_window_closed_probe_status=0
+          bash scripts/ci/n-minus-one-channel-pulso-sql-window.sh verify-closed \
+            .env.example hyperion-compat-n1 \
+            .ci/n-minus-one/infra/docker-compose.yml infra/docker-compose.compatibility-ci.yml \
+            infra/docker-compose.n-minus-one-roles-ci.yml || channel_pulso_sql_window_closed_probe_status=$?
 
-          printf 'N-1 closure statuses: Agent-stop=%s Prompt-stop=%s Channel-stop=%s PULSO-stop=%s N1-workload-probe=%s N1-workload-fence=%s current-stop=%s current-Postgres-probe=%s current-Postgres-fence=%s N1-Postgres-start=%s delivery-probe=%s delivery-evidence=%s baseline=%s Channel-SQL-close=%s SOFIA-SQL-contract=%s SOFIA-SQL-close=%s Channel-SQL-closed-probe=%s SOFIA-SQL-closed-probe=%s\n' \
+          printf 'N-1 closure statuses: Agent-stop=%s Prompt-stop=%s Channel-stop=%s PULSO-stop=%s N1-workload-probe=%s N1-workload-fence=%s current-stop=%s current-Postgres-probe=%s current-Postgres-fence=%s N1-Postgres-start=%s delivery-probe=%s delivery-evidence=%s baseline=%s PULSO-Channel-SQL-close=%s SOFIA-PULSO-contract=%s SOFIA-PULSO-SQL-close=%s Channel-PULSO-contract=%s Channel-PULSO-SQL-close=%s PULSO-Channel-SQL-closed-probe=%s SOFIA-PULSO-SQL-closed-probe=%s Channel-PULSO-SQL-closed-probe=%s\n' \
             "$agent_stop_status" "$prompt_flow_stop_status" "$channel_stop_status" \
             "$pulso_stop_status" "$n1_workload_probe_status" "$n1_workload_fence_status" \
             "$current_stop_status" "$current_postgres_probe_status" "$current_postgres_fence_status" \
             "$n1_postgres_start_status" "$delivery_probe_status" "$delivery_evidence_status" \
             "$delivery_baseline_outcome" "$channel_sql_window_close_status" "$sofia_pulso_contract" \
-            "$sofia_sql_window_close_status" \
-            "$channel_sql_window_closed_probe_status" "$sofia_sql_window_closed_probe_status"
+            "$sofia_sql_window_close_status" "$channel_pulso_contract" \
+            "$channel_pulso_sql_window_close_status" "$channel_sql_window_closed_probe_status" \
+            "$sofia_sql_window_closed_probe_status" "$channel_pulso_sql_window_closed_probe_status"
 
           overall_status=0
           for status in \
@@ -770,8 +810,9 @@ jobs:
             "$current_stop_status" "$current_postgres_probe_status" \
             "$current_postgres_fence_status" "$n1_postgres_start_status" \
             "$delivery_evidence_status" "$channel_sql_window_close_status" \
-            "$sofia_sql_window_close_status" "$channel_sql_window_closed_probe_status" \
-            "$sofia_sql_window_closed_probe_status"; do
+            "$sofia_sql_window_close_status" "$channel_pulso_sql_window_close_status" \
+            "$channel_sql_window_closed_probe_status" "$sofia_sql_window_closed_probe_status" \
+            "$channel_pulso_sql_window_closed_probe_status"; do
             if [[ $overall_status -eq 0 && $status -ne 0 ]]; then
               overall_status=$status
             fi
