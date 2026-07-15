@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/core.outcome.recorded.json",
+  "title": "CoreOutcomeRecordedV1",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
+  "allOf": [
+    {
+      "$ref": "./_envelope.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": {
+          "const": "core.outcome.recorded"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "contact_id",
+            "core_status"
+          ],
+          "properties": {
+            "contact_id": {
+              "type": "string"
+            },
+            "core_status": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

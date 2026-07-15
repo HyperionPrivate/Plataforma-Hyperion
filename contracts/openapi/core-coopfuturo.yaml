@@ -1,0 +1,11 @@
+openapi: 3.1.0
+info:
+  title: Coopfuturo Core Financial Adapter
+  version: 0.1.0
+  description: External financial core remains source of truth. MOCK until API confirmed.
+paths:
+  /outcomes:
+    post:
+      operationId: recordOutcome
+      responses:
+        "202": { description: Accepted }

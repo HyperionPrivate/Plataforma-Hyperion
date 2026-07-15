@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/contact.suppressed.json",
+  "title": "ContactSuppressedV1",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
+  "allOf": [
+    {
+      "$ref": "./_envelope.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": {
+          "const": "contact.suppressed"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "contact_id",
+            "reason"
+          ],
+          "properties": {
+            "contact_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

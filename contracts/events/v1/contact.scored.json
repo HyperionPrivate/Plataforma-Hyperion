@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/contact.scored.json",
+  "title": "ContactScoredV1",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
+  "allOf": [
+    {
+      "$ref": "./_envelope.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": {
+          "const": "contact.scored"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "contact_id",
+            "score",
+            "score_version",
+            "reason_codes",
+            "segment_code"
+          ],
+          "properties": {
+            "contact_id": {
+              "type": "string"
+            },
+            "score": {
+              "type": "number"
+            },
+            "score_version": {
+              "type": "string"
+            },
+            "reason_codes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "segment_code": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

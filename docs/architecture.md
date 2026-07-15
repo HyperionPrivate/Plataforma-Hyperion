@@ -1,48 +1,69 @@
-# Arquitectura Coopfuturo
+# Arquitectura Coopfuturo (índice)
 
-Monorepo de **microservicios autónomos** para el piloto PULSO (voz + WhatsApp + CRM + compliance).
+> **Alcance actual:** fundación arquitectónica únicamente. **No hay features comerciales de producto implementadas todavía** — scaffold, contratos, mocks y health checks.
 
-## Topología
+Estrategia: **modular primero, extracción por evidencia** ([ADR-001](adr/ADR-001-modular-architecture.md)).
+
+## Unidades desplegables (4)
 
 ```text
-Cliente
-   │
-   ▼
-Traefik (gateway fino)
-   │
-   ├── /orchestrator  → orchestrator  → Dialer externo (único)
-   ├── /crm           → crm
-   ├── /compliance    → compliance
-   ├── /whatsapp      → whatsapp
-   ├── /identity      → identity
-   ├── /documents     → documents
-   ├── /handoff       → handoff
-   ├── /segmentation  → segmentation
-   ├── /agent-config  → agent-config
-   └── /analytics     → analytics
+Cliente / UI
+    │
+    ▼
+Traefik (edge) ── OIDC/JWT (futuro)
+    │
+    ├── /pilot-core      → apps/pilot-core
+    │         └── orchestration ──HTTP──► Dialer externo (único caller)
+    ├── /whatsapp        → apps/whatsapp-adapter  (LIWA/WABA — mock)
+    ├── /documents       → apps/documents         (+ MinIO/S3)
+    └── /handoff         → apps/handoff-liwa
 
-Postgres: db_<servicio> por servicio
-Redis: bus de eventos (futuro)
+Redis Streams (bus) ← outbox/inbox por unidad
+Postgres: db_pilot_core | db_whatsapp | db_documents | db_handoff
+          (roles app_*; no POSTGRES_USER en apps)
 ```
 
-## Reglas
+## Documentación
 
-1. Autonomía: imagen, env, DB y deploy propios.
-2. Sin shared kernel Python; solo `contracts/` versionados.
-3. Orchestrator = sagas; CRM = funnel_state; canales = adaptadores.
-4. Solo orchestrator llama al Dialer.
-5. Propagar `X-Correlation-ID` / `correlation_id`.
+### Diagramas C4 y flujos
 
-## Prioridad
+- [Contexto](architecture/c4-context.md)
+- [Contenedores](architecture/c4-containers.md)
+- [Componentes pilot-core](architecture/c4-pilot-core-components.md)
+- [Flujos HTTP](architecture/http-flow.md)
+- [Flujos de eventos](architecture/event-flow.md)
+- [Trust boundaries](architecture/trust-boundaries.md)
 
-- **Core:** orchestrator, crm, compliance, whatsapp, identity
-- **Satélite:** documents, handoff, segmentation, agent-config, analytics
+### Guías y catálogo
 
-## Referencias
+- [Data ownership](architecture/data-ownership.md)
+- [Catálogo de servicios](architecture/service-catalog.md)
+- [Guía de módulos](architecture/module-guide.md)
+- [Guía de unidades](architecture/unit-guide.md)
+- [Desarrollo local](architecture/local-dev.md)
+- [Política de versionado](architecture/versioning-policy.md)
 
-- [Ownership](service-ownership.md)
+### ADRs
+
+- [Índice ADR](adr/README.md) (001–015)
+
+### Runbooks
+
+- [Arranque](runbooks/startup.md)
+- [Migraciones](runbooks/migrations.md)
+- [Eventos fallidos](runbooks/failed-events.md)
+- [Rotación de secretos](runbooks/secret-rotation.md)
+- [Backup / restore](runbooks/backup-restore.md)
+
+## Documentos relacionados (legacy / complemento)
+
+- [Matriz ownership (histórica)](data-ownership-matrix.md)
+- [Registro eventos](event-registry.md)
 - [Anti-patrones](anti-patterns.md)
-- [ADR-001 Dialer](ADR-001-dialer-boundary.md)
-- [ADR-002 Autonomía](ADR-002-autonomous-services.md)
-- [ADR-003 Sagas](ADR-003-orchestrator-sagas.md)
-- [ADR-004 Canales](ADR-004-channel-adapters.md)
+- [Bloqueos externos](EXTERNAL_BLOCKERS.md)
+- [Ownership personas TBD](OWNERSHIP_REQUEST.md)
+- [SECURITY](../SECURITY.md)
+
+## Stubs legacy
+
+`services/*` se mantienen hasta reemplazo verificado en `apps/*`. No usar para features nuevas.

@@ -1,0 +1,83 @@
+# NOTE: pin actions by full commit SHA in production hardening follow-ups.
+# Architecture foundation CI — blocks merge on failure.
+
+name: architecture-ci
+
+on:
+  push:
+    branches: [main, feat/**]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.14"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bootstrap
+        run: |
+          uv sync --group dev
+          uv pip install -e packages/platform-kit -e apps/pilot-core -e apps/whatsapp-adapter -e apps/documents -e apps/handoff-liwa
+      - name: Format check
+        run: uv run ruff format --check packages apps tests
+      - name: Lint
+        run: uv run ruff check packages apps tests
+      - name: Tests
+        run: uv run pytest -m "not integration" --cov=platform_kit --cov-report=term-missing
+      - name: Contracts
+        run: uv run pytest tests/contracts -q
+      - name: Compose config
+        run: docker compose -f docker-compose.dev.yml config --quiet
+      - name: Compose test config
+        run: docker compose -f docker-compose.test.yml config --quiet
+      - name: pip-audit
+        run: uv run pip-audit --progress-spinner off
+        continue-on-error: true
+
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - uses: github/codeql-action/analyze@v3
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: docker compose -f docker-compose.dev.yml build
+      - name: Trivy pilot-core
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: coopfuturo-pilot-core
+          format: table
+          exit-code: "0"
+          severity: CRITICAL,HIGH
+      - name: SBOM hint
+        run: echo "SBOM generation via trivy image --format cyclonedx in follow-up release job"

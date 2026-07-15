@@ -2,55 +2,43 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coopfuturo.local/contracts/events/v1/_envelope.json",
   "title": "EventEnvelopeV1",
-  "description": "Envelope obligatorio para todos los eventos del bus. correlation_id debe alinearse con el header HTTP X-Correlation-ID cuando el flujo es síncrono.",
+  "description": "Envelope obligatorio. event_id NO sustituye business_idempotency_key. correlation_id alinea con X-Correlation-ID.",
   "type": "object",
   "required": [
     "event_id",
     "event_type",
+    "schema_version",
     "occurred_at",
     "producer",
+    "tenant_id",
     "correlation_id",
+    "business_idempotency_key",
+    "data_classification",
     "payload"
   ],
   "properties": {
     "event_id": {
       "type": "string",
       "format": "uuid",
-      "description": "Identificador único del evento (idempotencia)."
+      "description": "ID único del mensaje (transporte/dedup técnico)."
     },
-    "event_type": {
+    "event_type": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "const": "v1" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "producer": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "correlation_id": { "type": "string", "minLength": 1 },
+    "causation_id": { "type": ["string", "null"] },
+    "business_idempotency_key": {
       "type": "string",
       "minLength": 1,
-      "description": "Nombre canónico del evento, p.ej. contact.imported"
+      "description": "Clave de idempotencia de negocio; distinta de event_id."
     },
-    "occurred_at": {
+    "data_classification": {
       "type": "string",
-      "format": "date-time",
-      "description": "Timestamp UTC ISO-8601 del hecho de negocio."
+      "enum": ["public", "internal", "confidential", "restricted_pii"]
     },
-    "producer": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Nombre del microservicio emisor."
-    },
-    "correlation_id": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Traza de punta a punta del flujo (saga / request)."
-    },
-    "causation_id": {
-      "type": "string",
-      "description": "event_id o request_id que causó este evento (opcional)."
-    },
-    "schema_version": {
-      "type": "string",
-      "const": "v1",
-      "default": "v1"
-    },
-    "payload": {
-      "type": "object",
-      "description": "Cuerpo específico del event_type."
-    }
+    "payload": { "type": "object" }
   },
   "additionalProperties": false
 }

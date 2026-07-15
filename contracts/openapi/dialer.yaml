@@ -1,0 +1,49 @@
+openapi: 3.1.0
+info:
+  title: Dialer Client Interface (external)
+  version: 0.1.0
+  description: |
+    Contract stub for external Dialer. Implementation lives outside this monorepo.
+    Only pilot-core.orchestration may call it. MOCK available in platform_kit.mocks.
+paths:
+  /api/demo/call:
+    post:
+      operationId: dispatchCall
+      summary: Dispatch outbound call (external)
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to_number, agent_id]
+              properties:
+                to_number: { type: string }
+                agent_id: { type: string }
+                dynamic_variables:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        "202":
+          description: Accepted
+  /webhooks/call-completed:
+    post:
+      operationId: callCompletedWebhook
+      summary: Provider webhook into pilot-core
+      parameters:
+        - in: header
+          name: X-Webhook-Signature
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-Webhook-Timestamp
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Queued

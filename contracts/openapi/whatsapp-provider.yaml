@@ -1,0 +1,18 @@
+openapi: 3.1.0
+info:
+  title: WhatsApp Provider Interface
+  version: 0.1.0
+  description: Provider interface for LIWA/WABA. Real adapter blocked until credential rotation. Use MOCK.
+paths:
+  /messages:
+    post:
+      operationId: sendMessage
+      summary: Send WhatsApp message
+      responses:
+        "202": { description: Accepted }
+  /webhooks/inbound:
+    post:
+      operationId: inboundWebhook
+      summary: Inbound WhatsApp webhook
+      responses:
+        "200": { description: OK }

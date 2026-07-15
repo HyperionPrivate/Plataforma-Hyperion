@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/document.validated.json",
+  "title": "DocumentValidatedV1",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
+  "allOf": [
+    {
+      "$ref": "./_envelope.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": {
+          "const": "document.validated"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "document_id",
+            "result"
+          ],
+          "properties": {
+            "document_id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

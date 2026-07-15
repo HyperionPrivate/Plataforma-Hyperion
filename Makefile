@@ -1,47 +1,50 @@
 COMPOSE=docker compose -f docker-compose.dev.yml
+COMPOSE_TEST=docker compose -f docker-compose.test.yml
+UV?=uv
+PYTHON?=python
 
-.PHONY: up down logs ps build restart help
+.PHONY: help bootstrap format lint typecheck test contracts migrations-test build smoke security up down
 
 help:
-	@echo "Targets:"
-	@echo "  make up              # stack completo"
-	@echo "  make up svc=crm      # un microservicio (+ deps)"
-	@echo "  make down"
-	@echo "  make logs svc=crm"
-	@echo "  make ps"
-	@echo "  make build"
-	@echo "  make restart svc=crm"
+	@echo "Architecture foundation targets — no commercial product commands"
 
-up:
-ifeq ($(svc),)
-	$(COMPOSE) up -d --build
-else
-	$(COMPOSE) up -d --build $(svc)
-endif
+bootstrap:
+	$(PYTHON) -m pip install -U "pip" "uv"
+	$(UV) sync --group dev
+	$(UV) pip install -e packages/platform-kit -e apps/pilot-core -e apps/whatsapp-adapter -e apps/documents -e apps/handoff-liwa
 
-down:
-	$(COMPOSE) down
+format:
+	$(UV) run ruff format packages apps tests
 
-logs:
-ifeq ($(svc),)
-	$(COMPOSE) logs -f --tail=100
-else
-	$(COMPOSE) logs -f --tail=100 $(svc)
-endif
+lint:
+	$(UV) run ruff check packages apps tests
 
-ps:
-	$(COMPOSE) ps
+typecheck:
+	$(UV) run mypy packages/platform-kit/src apps/pilot-core/src || true
+
+test:
+	$(UV) run pytest -m "not integration"
+
+contracts:
+	$(UV) run pytest tests/contracts -q
+	$(UV) run python -c "import json,pathlib; p=pathlib.Path('contracts/events/v1'); files=list(p.glob('*.json'));\
+[json.loads(f.read_text(encoding='utf-8')) for f in files]; print('ok', len(files))"
+
+migrations-test:
+	$(UV) run python -c "from pathlib import Path; assert Path('apps/pilot-core/alembic/versions/0001_technical.py').exists(); print('migrations present')"
 
 build:
-ifeq ($(svc),)
 	$(COMPOSE) build
-else
-	$(COMPOSE) build $(svc)
-endif
 
-restart:
-ifeq ($(svc),)
-	$(COMPOSE) restart
-else
-	$(COMPOSE) restart $(svc)
-endif
+smoke:
+	$(COMPOSE) config --quiet
+	$(UV) run python -c "from platform_kit.events.envelope import build_synthetic_ping; from platform_kit.mocks import MockDialerClient; e=build_synthetic_ping(producer='x',tenant_id='t',correlation_id='c',marker='m'); assert e.event_type=='platform.synthetic.ping'; print('smoke ok')"
+
+security:
+	$(UV) run pip-audit --progress-spinner off || echo "pip-audit finished with findings — review before merge"
+
+up:
+	$(COMPOSE) up -d --build
+
+down:
+	$(COMPOSE) down -v

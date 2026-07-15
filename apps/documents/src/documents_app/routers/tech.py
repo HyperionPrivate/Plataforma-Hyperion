@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+from platform_kit.auth import AuthContext, require_auth, require_roles
+from platform_kit.correlation import get_correlation_id, new_correlation_id
+from platform_kit.db import TechnicalProbe, session_scope
+from platform_kit.errors import PlatformError
+from platform_kit.events.envelope import build_synthetic_ping
+from platform_kit.events.outbox_inbox import (
+    enqueue_outbox,
+    process_inbox_once,
+    publish_pending_outbox,
+)
+from pydantic import BaseModel
+
+from documents_app import runtime
+from documents_app.settings import get_settings
+
+router = APIRouter(prefix="/_tech", tags=["technical"])
+
+
+class PingBody(BaseModel):
+    marker: str = "architecture"
+
+
+@router.post("/synthetic-event")
+async def synthetic_event(
+    body: PingBody,
+    ctx: AuthContext = Depends(require_roles("service", "admin")),
+) -> dict[str, object]:
+    """Architecture-only endpoint: enqueue synthetic ping via outbox."""
+    if runtime.session_factory is None or runtime.transport is None:
+        raise PlatformError("not_ready", "Runtime not started", status_code=503)
+    settings = get_settings()
+    cid = get_correlation_id() or new_correlation_id()
+    envelope = build_synthetic_ping(
+        producer=settings.service_name,
+        tenant_id=ctx.tenant_id,
+        correlation_id=cid,
+        marker=body.marker,
+    )
+    async with session_scope(runtime.session_factory) as session:
+        await enqueue_outbox(session, envelope)
+        published = await publish_pending_outbox(session, runtime.transport)
+    return {
+        "mock_commercial": False,
+        "event_id": envelope.event_id,
+        "published": published,
+        "correlation_id": cid,
+        "event_type": envelope.event_type,
+    }
+
+
+@router.post("/consume-once")
+async def consume_once(
+    ctx: AuthContext = Depends(require_roles("service", "admin")),
+) -> dict[str, object]:
+    if runtime.session_factory is None or runtime.transport is None:
+        raise PlatformError("not_ready", "Runtime not started", status_code=503)
+    settings = get_settings()
+    messages = await runtime.transport.read_group(
+        group=settings.redis_consumer_group,
+        consumer=f"{settings.service_name}-1",
+        count=10,
+        block_ms=200,
+    )
+    applied = 0
+    duplicates = 0
+    async with session_scope(runtime.session_factory) as session:
+        for message_id, envelope in messages:
+            ok = await process_inbox_once(session, envelope)
+            if ok:
+                applied += 1
+            else:
+                duplicates += 1
+            await runtime.transport.ack(settings.redis_consumer_group, message_id)
+    return {"applied": applied, "duplicates": duplicates, "tenant": ctx.tenant_id}
+
+
+@router.post("/probe")
+async def write_probe(
+    body: PingBody,
+    ctx: AuthContext = Depends(require_roles("admin", "service")),
+) -> dict[str, str]:
+    if runtime.session_factory is None:
+        raise PlatformError("not_ready", "Runtime not started", status_code=503)
+    async with session_scope(runtime.session_factory) as session:
+        row = TechnicalProbe(marker=f"{body.marker}:{ctx.tenant_id}")
+        session.add(row)
+        await session.flush()
+        return {"id": row.id, "marker": row.marker}
+
+
+@router.get("/secure-ping")
+async def secure_ping(ctx: AuthContext = Depends(require_auth)) -> dict[str, object]:
+    return {"subject": ctx.subject, "tenant_id": ctx.tenant_id, "roles": sorted(ctx.roles)}
+
+
+@router.get("/admin-only")
+async def admin_only(ctx: AuthContext = Depends(require_roles("admin"))) -> dict[str, str]:
+    return {"ok": "true", "subject": ctx.subject}

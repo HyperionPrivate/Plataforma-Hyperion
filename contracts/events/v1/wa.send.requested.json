@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/wa.send.requested.json",
+  "title": "WaSendRequestedV1",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
+  "allOf": [
+    {
+      "$ref": "./_envelope.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": {
+          "const": "wa.send.requested"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "contact_id",
+            "template_id",
+            "wa_thread_id"
+          ],
+          "properties": {
+            "contact_id": {
+              "type": "string"
+            },
+            "template_id": {
+              "type": "string"
+            },
+            "wa_thread_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

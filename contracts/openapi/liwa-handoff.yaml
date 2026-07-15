@@ -1,0 +1,11 @@
+openapi: 3.1.0
+info:
+  title: LIWA Handoff Interface
+  version: 0.1.0
+  description: Handoff to advisors via LIWA. MOCK until rotated credentials + official docs.
+paths:
+  /cases:
+    post:
+      operationId: createHandoffCase
+      responses:
+        "201": { description: Created }

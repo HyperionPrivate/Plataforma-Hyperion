@@ -1,41 +1,47 @@
-# Contribuir
+# Contribuir — Coopfuturo / PULSO
 
-## Ownership
+## Antes de codear
 
-Cada microservicio tiene un dueño (ver `docs/service-ownership.md`).  
-Trabaja en tu carpeta `services/<name>/` sin tocar el código de otros servicios.
+1. Lee [BRANCH_POLICY](docs/BRANCH_POLICY.md), [ADR-005](docs/ADR-005-modular-first.md) y [anti-patterns](docs/anti-patterns.md).
+2. Trabaja en rama `feat|fix|chore|security/...` — **nunca commits en `main`**.
+3. Confirma owners en [OWNERSHIP_REQUEST](docs/OWNERSHIP_REQUEST.md) si tocas CODEOWNERS.
 
-## Reglas de autonomía
+## Dónde implementar
 
-1. No importes módulos de otro servicio.
-2. No leas/escribas la base de datos de otro servicio.
-3. No llames al Dialer salvo desde `orchestrator`.
-4. Contratos compartidos solo vía `contracts/` (schemas versionados).
-5. Cambios incompatibles en eventos → nueva versión (`v2`) + entrada en `contracts/CHANGELOG.md`.
+| Trabajo nuevo | Ubicación |
+|---|---|
+| Dominio piloto (contactos, CRM, compliance, voz orchestration, …) | `apps/pilot-core/` |
+| WhatsApp / LIWA | `apps/whatsapp-adapter/` |
+| Documentos | `apps/documents/` |
+| Handoff | `apps/handoff-liwa/` |
+| Contratos | `contracts/` |
+| Stubs legacy | `services/` — solo mantenimiento; no features nuevas |
 
-## Añadir un microservicio
+## Comandos
 
-1. Copia el esqueleto de un servicio existente.
-2. Asigna puerto, database y ruta Traefik.
-3. Añade `CREATE DATABASE` en `infra/postgres/init-databases.sql`.
-4. Regístralo en `docker-compose.dev.yml` y en `docs/service-ownership.md`.
-5. Documenta eventos que publica/consume en su `README.md`.
+```powershell
+make bootstrap
+make format
+make lint
+make typecheck
+make test
+make contracts
+make build
+make smoke
+make security
+make e2e
+```
 
-## Rutas stub
+## Reglas
 
-Los stubs responden `501` en endpoints de negocio y `200` en `/health` y `/health/ready`.  
-Implementa lógica real detrás de esas rutas sin cambiar el contrato público sin versionar.
+1. Sin secretos reales ni PII de producción en Git, logs o fixtures.
+2. Solo orchestration (en pilot-core) habla con el Dialer.
+3. Credencial LIWA histórica expuesta = comprometida; no reutilizar.
+4. Integraciones sin credencial: interfaz + adaptador **mock** etiquetado + bloqueo documentado.
+5. Políticas legales (horarios, RNE, habeas data) = configurables; validación jurídica externa.
+6. Breaking change de eventos → `v2` + `contracts/CHANGELOG.md` + `CHANGELOG.md`.
+7. PRs pequeños por fase; CI debe quedar verde.
 
-## Correlation ID
+## Path filters (CI)
 
-Propaga el header `X-Correlation-ID` en HTTP y el campo `correlation_id` en eventos (`contracts/events/v1/_envelope.json`).
-
-## CI (nota)
-
-Cuando exista CI, usar **path filters** por servicio (`services/crm/**`, etc.) para que cada equipo valide solo su imagen. Este scaffold no incluye pipelines cloud.
-
-## Branches sugeridas
-
-- `feat/<servicio>-<descripcion>`
-- `fix/<servicio>-<descripcion>`
-- `docs/...` para contratos y ADRs
+Cuando exista CI, validar preferentemente la unidad tocada (`apps/pilot-core/**`, etc.).

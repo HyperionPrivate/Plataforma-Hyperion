@@ -2,26 +2,34 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coopfuturo.local/contracts/events/v1/call.requested.json",
   "title": "CallRequestedV1",
-  "description": "Orchestrator solicita una llamada saliente al Dialer (único emisor permitido hacia voz).",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
   "allOf": [
-    { "$ref": "./_envelope.json" },
+    {
+      "$ref": "./_envelope.json"
+    },
     {
       "type": "object",
       "properties": {
-        "event_type": { "const": "call.requested" },
+        "event_type": {
+          "const": "call.requested"
+        },
         "payload": {
           "type": "object",
-          "required": ["contact_id", "segment", "phone_e164", "agent_id"],
+          "required": [
+            "attempt_id",
+            "agent_id",
+            "phone_e164_hash"
+          ],
           "properties": {
-            "contact_id": { "type": "string" },
-            "segment": {
-              "type": "string",
-              "enum": ["renovacion", "reactivacion", "nuevo", "microcredito"]
+            "attempt_id": {
+              "type": "string"
             },
-            "phone_e164": { "type": "string", "pattern": "^\\+[1-9]\\d{7,14}$" },
-            "agent_id": { "type": "string" },
-            "campaign_ref": { "type": "string" },
-            "dynamic_variables": { "type": "object", "additionalProperties": { "type": "string" } }
+            "agent_id": {
+              "type": "string"
+            },
+            "phone_e164_hash": {
+              "type": "string"
+            }
           },
           "additionalProperties": false
         }
