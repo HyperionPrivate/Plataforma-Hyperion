@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const script = readFileSync(join(directory, "verify-n-minus-one-lumen-audio.sh"), "utf8");
+const providerBlocker = readFileSync(join(directory, "lumen-provider-network-block.mjs"), "utf8");
+const legacyOverlay = readFileSync(join(directory, "../../infra/docker-compose.n-minus-one-roles-ci.yml"), "utf8");
+const currentOverlay = readFileSync(join(directory, "../../infra/docker-compose.lumen-crash-ci.yml"), "utf8");
 
 function section(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -51,4 +54,30 @@ test("legacy LUMEN path does not require the current assertion credentials", () 
   assert.match(currentBranch, /missing current LUMEN gateway credential/);
   assert.match(currentBranch, /missing current LUMEN operator assertion/);
   assert.doesNotMatch(probe.slice(0, probe.indexOf(currentBranch)), /throw new Error\("missing current LUMEN/);
+});
+
+test("legacy and current LUMEN probes share the attempt-scoped provider blocker", () => {
+  for (const overlay of [legacyOverlay, currentOverlay]) {
+    assert.match(overlay, /NODE_OPTIONS: --import=\/app\/ci\/lumen-provider-network-block\.mjs/);
+    assert.match(
+      overlay,
+      /scripts\/ci\/lumen-provider-network-block\.mjs:\/app\/ci\/lumen-provider-network-block\.mjs:ro/
+    );
+  }
+  assert.doesNotMatch(legacyOverlay, /data:text\/javascript;base64/);
+  assert.match(providerBlocker, /entry\.name\.startsWith\("request-"\)/);
+  assert.match(providerBlocker, /hasStagedAudio\(requestDirectory\)/);
+  assert.match(providerBlocker, /writeFileSync\(join\(requestDirectory, "\.provider-network-blocked"\), "blocked"/);
+
+  const legacyWriterAttestation = section(
+    script,
+    "# A reserved database row alone does not prove",
+    'if [[ $contract == "current" ]]'
+  );
+  assert.match(legacyWriterAttestation, /file\.name === "\.provider-network-blocked"/);
+  assert.match(legacyWriterAttestation, /file\.name\.startsWith\("audio\."\)/);
+  assert.match(legacyWriterAttestation, /let requestAudioFound = false/);
+  assert.match(legacyWriterAttestation, /let requestMarker = false/);
+  assert.match(legacyWriterAttestation, /if \(requestMarker && requestAudioFound\)/);
+  assert.match(legacyWriterAttestation, /process\.exit\(attemptMarker && audioFound \? 0 : 1\)/);
 });

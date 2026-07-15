@@ -371,15 +371,22 @@ for _attempt in {1..60}; do
         if (!entry.isDirectory() || !entry.name.startsWith("request-")) continue;
         const requestDirectory = `${root}/${entry.name}`;
         const files = await readdir(requestDirectory, { withFileTypes: true }).catch(() => []);
+        let requestAudioFound = false;
+        let requestMarker = false;
         for (const file of files) {
           if (!file.isFile()) continue;
           if (file.name === ".provider-network-blocked") {
-            attemptMarker = (await stat(`${requestDirectory}/${file.name}`)).isFile();
+            requestMarker = (await stat(`${requestDirectory}/${file.name}`)).isFile();
             continue;
           }
           if (!file.name.startsWith("audio.")) continue;
           const metadata = await stat(`${requestDirectory}/${file.name}`);
-          if (metadata.size > 44) audioFound = true;
+          if (metadata.size > 44) requestAudioFound = true;
+        }
+        if (requestMarker && requestAudioFound) {
+          attemptMarker = true;
+          audioFound = true;
+          break;
         }
       }
     }
