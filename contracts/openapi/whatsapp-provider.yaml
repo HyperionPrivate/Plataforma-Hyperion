@@ -1,0 +1,109 @@
+openapi: 3.1.0
+info:
+  title: WhatsApp Provider Interface
+  version: 0.1.0
+  description: >
+    Provider interface for LIWA/WABA. Real adapter blocked until credential rotation.
+    Use MOCK in architecture foundation.
+servers:
+  - url: https://wa-provider.example.local
+security:
+  - bearerAuth: []
+paths:
+  /messages:
+    post:
+      operationId: sendMessage
+      summary: Send WhatsApp message
+      tags: [messages]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendMessageAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /webhooks/inbound:
+    post:
+      operationId: inboundWebhook
+      summary: Inbound WhatsApp webhook
+      tags: [webhooks]
+      security: []
+      parameters:
+        - name: X-Timestamp
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-Signature
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InboundWebhook"
+      responses:
+        "200":
+          description: OK
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    SendMessageRequest:
+      type: object
+      required: [to_phone_e164, template_id]
+      properties:
+        to_phone_e164: { type: string, example: "+573001112233" }
+        template_id: { type: string }
+        wa_thread_id: { type: ["string", "null"] }
+        variables:
+          type: object
+          additionalProperties: { type: string }
+    SendMessageAccepted:
+      type: object
+      required: [provider_message_id, status]
+      properties:
+        provider_message_id: { type: string }
+        status: { type: string, enum: [queued, accepted] }
+    InboundWebhook:
+      type: object
+      required: [message_id, from_phone_e164, body]
+      properties:
+        message_id: { type: string }
+        from_phone_e164: { type: string }
+        body: { type: string }
+        wa_thread_id: { type: string }
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code: { type: string }
+        message: { type: string }
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+

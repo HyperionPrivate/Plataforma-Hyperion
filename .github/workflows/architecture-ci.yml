@@ -1,0 +1,246 @@
+# Architecture foundation CI — blocks merge on failure.
+
+name: architecture-ci
+
+on:
+  push:
+    branches: [main, feat/**]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+  pull-requests: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.14"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bootstrap
+        run: |
+          uv sync --frozen --group dev
+          uv pip install -e packages/platform-kit -e apps/pilot-core -e apps/whatsapp-adapter -e apps/documents -e apps/handoff-liwa
+      - name: Format check
+        run: uv run ruff format --check packages apps tests
+      - name: Lint
+        run: uv run ruff check packages apps tests
+      - name: Typecheck
+        run: uv run mypy packages/platform-kit/src apps/pilot-core/src apps/whatsapp-adapter/src apps/documents/src apps/handoff-liwa/src
+      - name: Tests
+        run: uv run pytest -m "not integration" --cov=platform_kit --cov-report=term-missing --cov-fail-under=40
+      - name: Contracts
+        run: uv run pytest tests/contracts -q --override-ini addopts= -p no:cov
+      - name: Compose config
+        run: docker compose -f docker-compose.dev.yml config --quiet
+      - name: Compose test config
+        run: docker compose -f docker-compose.test.yml config --quiet
+      - name: pip-audit
+        run: uv run pip-audit --progress-spinner off
+        continue-on-error: true
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.8-alpine
+        env:
+          POSTGRES_USER: coopfuturo_admin
+          POSTGRES_PASSWORD: test_admin_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coopfuturo_admin -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.14"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bootstrap
+        run: |
+          uv sync --frozen --group dev
+          uv pip install -e packages/platform-kit -e apps/pilot-core
+          # Must use the project venv: bare `python` is the runner interpreter without editables.
+          .venv/bin/python -c "import platform_kit, pilot_core; print(platform_kit.__file__); print(pilot_core.__file__)"
+      - name: Init databases
+        env:
+          PGPASSWORD: test_admin_only
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          for db in db_pilot_core db_whatsapp; do
+            psql -h localhost -U coopfuturo_admin -d postgres -c "CREATE DATABASE $db;" || true
+          done
+          psql -h localhost -U coopfuturo_admin -d postgres -c "CREATE USER app_pilot_core WITH PASSWORD 'test_pilot';" || true
+          psql -h localhost -U coopfuturo_admin -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE db_pilot_core TO app_pilot_core;"
+          psql -h localhost -U coopfuturo_admin -d db_pilot_core -c "GRANT ALL ON SCHEMA public TO app_pilot_core;"
+          # Isolation: app_pilot_core must NOT have CONNECT on db_whatsapp
+          psql -h localhost -U coopfuturo_admin -d postgres -c "REVOKE CONNECT ON DATABASE db_whatsapp FROM PUBLIC;"
+          psql -h localhost -U coopfuturo_admin -d postgres -c "REVOKE CONNECT ON DATABASE db_whatsapp FROM app_pilot_core;" || true
+      - name: Alembic upgrade + downgrade
+        env:
+          DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
+        run: |
+          # Invoke venv binaries directly — `uv run` may re-sync and drop editable installs.
+          .venv/bin/python -c "import platform_kit, pilot_core; print(platform_kit.__file__); print(pilot_core.__file__)"
+          .venv/bin/alembic -c apps/pilot-core/alembic.ini upgrade head
+          .venv/bin/alembic -c apps/pilot-core/alembic.ini downgrade base
+          .venv/bin/alembic -c apps/pilot-core/alembic.ini upgrade head
+      - name: Integration tests (outbox/redis + pg isolation)
+        env:
+          DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
+          REDIS_URL: redis://localhost:6379/0
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          PILOT_CORE_DB_USER: app_pilot_core
+          PILOT_CORE_DB_PASSWORD: test_pilot
+        run: .venv/bin/pytest tests/integration -q --override-ini addopts= -p no:cov -m integration
+
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - uses: github/codeql-action/analyze@v3
+        with:
+          upload: never
+          output: results
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif
+          path: results
+          if-no-files-found: warn
+      - name: Fail on CodeQL errors/warnings in SARIF
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          findings = []
+          for path in pathlib.Path("results").rglob("*.sarif"):
+              data = json.loads(path.read_text(encoding="utf-8"))
+              for run in data.get("runs", []):
+                  for r in run.get("results", []):
+                      level = r.get("level", "warning")
+                      rule = r.get("ruleId", "?")
+                      msg = r.get("message", {}).get("text", "")
+                      if level in ("error", "warning"):
+                          findings.append(f"{level}:{rule}:{msg}")
+          if findings:
+              print("CodeQL findings:")
+              print("\n".join(findings[:50]))
+              sys.exit(1)
+          print("No CodeQL error/warning findings")
+          PY
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: docker compose -f docker-compose.dev.yml build
+      - name: Image import + Alembic smoke
+        run: |
+          set -euo pipefail
+          declare -A APP_PKG=(
+            [coopfuturo-pilot-core]=pilot_core
+            [coopfuturo-whatsapp-adapter]=whatsapp_adapter
+            [coopfuturo-documents]=documents_app
+            [coopfuturo-handoff-liwa]=handoff_liwa
+          )
+          for img in "${!APP_PKG[@]}"; do
+            pkg="${APP_PKG[$img]}"
+            echo "==== import smoke $img ($pkg) ===="
+            docker run --rm --entrypoint python "$img" -c \
+              "import platform_kit, ${pkg}; from pathlib import Path; assert Path('/app/alembic/env.py').exists(); print('imports-ok', platform_kit.__file__, ${pkg}.__file__)"
+            echo "==== alembic upgrade $img ===="
+            docker run --rm \
+              -e DATABASE_URL='sqlite+aiosqlite:////tmp/coopfuturo_mig.db' \
+              -e APP_ENV=test \
+              -e AUTH_DISABLED=true \
+              --entrypoint alembic \
+              "$img" upgrade head
+            echo "==== alembic downgrade $img ===="
+            docker run --rm \
+              -e DATABASE_URL='sqlite+aiosqlite:////tmp/coopfuturo_mig.db' \
+              -e APP_ENV=test \
+              -e AUTH_DISABLED=true \
+              --entrypoint alembic \
+              "$img" downgrade base
+          done
+      - name: Trivy scan all app images
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+          images=(
+            coopfuturo-pilot-core
+            coopfuturo-whatsapp-adapter
+            coopfuturo-documents
+            coopfuturo-handoff-liwa
+          )
+          for img in "${images[@]}"; do
+            echo "==== Trivy $img ===="
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD/sbom:/out" \
+              aquasec/trivy:0.58.1 image \
+              --exit-code 1 \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --format table \
+              "$img"
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD/sbom:/out" \
+              aquasec/trivy:0.58.1 image \
+              --format cyclonedx \
+              --output "/out/${img}.cdx.json" \
+              "$img"
+          done
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-sboms
+          path: sbom/*.cdx.json
+      - name: Document security exceptions
+        run: |
+          test -f docs/SECURITY_EXCEPTIONS.md
+          echo "Accepted exceptions (if any) listed in docs/SECURITY_EXCEPTIONS.md"

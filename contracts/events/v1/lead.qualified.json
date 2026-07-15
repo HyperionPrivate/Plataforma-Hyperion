@@ -2,29 +2,39 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coopfuturo.local/contracts/events/v1/lead.qualified.json",
   "title": "LeadQualifiedV1",
-  "description": "Lead listo para handoff humano (expediente mínimo cumplido).",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
   "allOf": [
-    { "$ref": "./_envelope.json" },
+    {
+      "$ref": "./_envelope.json"
+    },
     {
       "type": "object",
       "properties": {
-        "event_type": { "const": "lead.qualified" },
+        "event_type": {
+          "const": "lead.qualified"
+        },
         "payload": {
           "type": "object",
-          "required": ["contact_id", "segment", "funnel_state", "priority"],
+          "required": [
+            "contact_id",
+            "funnel_type",
+            "funnel_state",
+            "priority"
+          ],
           "properties": {
-            "contact_id": { "type": "string" },
-            "segment": {
+            "contact_id": {
+              "type": "string"
+            },
+            "funnel_type": {
               "type": "string",
               "enum": ["renovacion", "reactivacion", "nuevo", "microcredito"]
             },
-            "funnel_state": { "type": "string" },
-            "priority": { "type": "string", "enum": ["immediate", "high", "medium", "low"] },
-            "document_ids": {
-              "type": "array",
-              "items": { "type": "string" }
+            "funnel_state": {
+              "type": "string"
             },
-            "summary": { "type": "string" }
+            "priority": {
+              "type": "string"
+            }
           },
           "additionalProperties": false
         }

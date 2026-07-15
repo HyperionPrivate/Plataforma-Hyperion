@@ -2,27 +2,39 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coopfuturo.local/contracts/events/v1/contact.imported.json",
   "title": "ContactImportedV1",
-  "description": "Contacto cargado desde base externa (Excel/API) listo para scoring o campaña.",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
   "allOf": [
-    { "$ref": "./_envelope.json" },
+    {
+      "$ref": "./_envelope.json"
+    },
     {
       "type": "object",
       "properties": {
-        "event_type": { "const": "contact.imported" },
+        "event_type": {
+          "const": "contact.imported"
+        },
         "payload": {
           "type": "object",
-          "required": ["contact_id", "segment", "phone_e164"],
+          "required": [
+            "contact_id",
+            "funnel_type",
+            "segment_code",
+            "phone_e164_hash"
+          ],
           "properties": {
-            "contact_id": { "type": "string", "minLength": 1 },
-            "segment": {
+            "contact_id": {
+              "type": "string"
+            },
+            "funnel_type": {
               "type": "string",
               "enum": ["renovacion", "reactivacion", "nuevo", "microcredito"]
             },
-            "phone_e164": { "type": "string", "pattern": "^\\+[1-9]\\d{7,14}$" },
-            "national_id_hash": { "type": "string" },
-            "display_name": { "type": "string" },
-            "university": { "type": "string" },
-            "source_batch_id": { "type": "string" }
+            "segment_code": {
+              "type": "string"
+            },
+            "phone_e164_hash": {
+              "type": "string"
+            }
           },
           "additionalProperties": false
         }

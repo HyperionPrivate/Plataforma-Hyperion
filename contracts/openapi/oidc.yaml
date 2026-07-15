@@ -1,0 +1,51 @@
+openapi: 3.1.0
+info:
+  title: OIDC / JWKS expectations
+  version: 0.1.0
+  description: External IdP. Apps validate JWT via issuer, audience, JWKS.
+servers:
+  - url: https://idp.example.local
+paths:
+  /jwks:
+    get:
+      operationId: getJwks
+      security: []
+      responses:
+        "200":
+          description: JWKS document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Jwks"
+  /authorize:
+    get:
+      operationId: authorize
+      security: []
+      responses:
+        "302":
+          description: Redirect
+        "400":
+          $ref: "#/components/responses/BadRequest"
+components:
+  schemas:
+    Jwks:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code: { type: string }
+        message: { type: string }
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

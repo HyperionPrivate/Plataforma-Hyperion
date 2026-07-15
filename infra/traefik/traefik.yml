@@ -1,14 +1,14 @@
-# Dynamic Docker provider; routers definidos por labels en compose.
+# Dynamic Docker provider; routers via compose labels.
 
 api:
-  dashboard: true
-  insecure: true
+  # Dashboard disabled by default (enable only via override, never public).
+  dashboard: false
 
 providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
-    network: coopfuturo_net
+    network: coopfuturo_edge
 
 entryPoints:
   web:
@@ -16,3 +16,5 @@ entryPoints:
 
 log:
   level: INFO
+
+accessLog: {}

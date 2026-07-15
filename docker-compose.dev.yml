@@ -1,51 +1,62 @@
 name: coopfuturo
 
 networks:
-  coopfuturo_net:
-    name: coopfuturo_net
+  coopfuturo_edge:
+    name: coopfuturo_edge
+  coopfuturo_app:
+    name: coopfuturo_app
+  coopfuturo_data:
+    name: coopfuturo_data
+
+x-app-security: &app_security
+  read_only: true
+  tmpfs: ["/tmp"]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
 
 services:
   traefik:
-    image: traefik:v3.3
+    image: traefik:v3.3.3
     ports:
-      - "${TRAEFIK_HTTP_PORT:-8088}:80"
-      - "${TRAEFIK_DASHBOARD_PORT:-8089}:8080"
+      - "127.0.0.1:${TRAEFIK_HTTP_PORT:-8088}:80"
     volumes:
       - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - coopfuturo_net
+    networks: [coopfuturo_edge, coopfuturo_app]
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.8-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-coopfuturo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coopfuturo_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-coopfuturo_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coopfuturo_admin_dev_only}
       POSTGRES_DB: postgres
+      PILOT_CORE_DB_PASSWORD: ${PILOT_CORE_DB_PASSWORD:-CHANGE_ME_pilot_core}
+      WHATSAPP_DB_PASSWORD: ${WHATSAPP_DB_PASSWORD:-CHANGE_ME_whatsapp}
+      DOCUMENTS_DB_PASSWORD: ${DOCUMENTS_DB_PASSWORD:-CHANGE_ME_documents}
+      HANDOFF_DB_PASSWORD: ${HANDOFF_DB_PASSWORD:-CHANGE_ME_handoff}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - ./infra/postgres/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
+      - ./infra/postgres/init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
       - coopfuturo_pgdata:/var/lib/postgresql/data
-    networks:
-      - coopfuturo_net
+    networks: [coopfuturo_data]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-coopfuturo}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-coopfuturo_admin}"]
       interval: 5s
       timeout: 5s
       retries: 10
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.2-alpine
     ports:
-      - "6379:6379"
-    command: ["redis-server", "--appendonly", "yes"]
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     volumes:
       - coopfuturo_redis:/data
-    networks:
-      - coopfuturo_net
+    networks: [coopfuturo_data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -53,237 +64,197 @@ services:
       retries: 10
     restart: unless-stopped
 
-  orchestrator:
-    build: ./services/orchestrator
+  migrate-pilot-core:
+    build:
+      context: .
+      dockerfile: apps/pilot-core/Dockerfile
+    command: ["alembic", "upgrade", "head"]
     environment:
-      SERVICE_NAME: orchestrator
+      DATABASE_URL: postgresql://${PILOT_CORE_DB_USER:-app_pilot_core}:${PILOT_CORE_DB_PASSWORD:-CHANGE_ME_pilot_core}@postgres:5432/db_pilot_core
       APP_ENV: development
-      PORT: "8101"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_orchestrator
+      AUTH_DISABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [coopfuturo_data]
+    restart: "no"
+
+  migrate-whatsapp:
+    build:
+      context: .
+      dockerfile: apps/whatsapp-adapter/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql://${WHATSAPP_DB_USER:-app_whatsapp}:${WHATSAPP_DB_PASSWORD:-CHANGE_ME_whatsapp}@postgres:5432/db_whatsapp
+      APP_ENV: development
+      AUTH_DISABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [coopfuturo_data]
+    restart: "no"
+
+  migrate-documents:
+    build:
+      context: .
+      dockerfile: apps/documents/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql://${DOCUMENTS_DB_USER:-app_documents}:${DOCUMENTS_DB_PASSWORD:-CHANGE_ME_documents}@postgres:5432/db_documents
+      APP_ENV: development
+      AUTH_DISABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [coopfuturo_data]
+    restart: "no"
+
+  migrate-handoff:
+    build:
+      context: .
+      dockerfile: apps/handoff-liwa/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql://${HANDOFF_DB_USER:-app_handoff}:${HANDOFF_DB_PASSWORD:-CHANGE_ME_handoff}@postgres:5432/db_handoff
+      APP_ENV: development
+      AUTH_DISABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [coopfuturo_data]
+    restart: "no"
+
+  pilot-core:
+    <<: *app_security
+    build:
+      context: .
+      dockerfile: apps/pilot-core/Dockerfile
+    environment: &pilot_env
+      SERVICE_NAME: pilot-core
+      APP_ENV: development
+      PORT: "8201"
+      DATABASE_URL: postgresql://${PILOT_CORE_DB_USER:-app_pilot_core}:${PILOT_CORE_DB_PASSWORD:-CHANGE_ME_pilot_core}@postgres:5432/db_pilot_core
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      AUTH_DISABLED: "true"
+      REDIS_CONSUMER_GROUP: pilot-core
       DIALER_BASE_URL: ${DIALER_BASE_URL:-http://host.docker.internal:8080}
-      DIALER_API_TOKEN: ${DIALER_API_TOKEN:-}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate-pilot-core:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     labels:
       - traefik.enable=true
-      - traefik.http.routers.orchestrator.rule=PathPrefix(`/orchestrator`)
-      - traefik.http.routers.orchestrator.entrypoints=web
-      - traefik.http.middlewares.orchestrator-strip.stripprefix.prefixes=/orchestrator
-      - traefik.http.routers.orchestrator.middlewares=orchestrator-strip
-      - traefik.http.services.orchestrator.loadbalancer.server.port=8101
-    networks:
-      - coopfuturo_net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - traefik.docker.network=coopfuturo_app
+      - traefik.http.routers.pilot-core.rule=PathPrefix(`/pilot-core`)
+      - traefik.http.routers.pilot-core.entrypoints=web
+      - traefik.http.middlewares.pilot-core-strip.stripprefix.prefixes=/pilot-core
+      - traefik.http.routers.pilot-core.middlewares=pilot-core-strip
+      - traefik.http.services.pilot-core.loadbalancer.server.port=8201
+    networks: [coopfuturo_app, coopfuturo_data]
+    extra_hosts: ["host.docker.internal:host-gateway"]
     restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
 
-  crm:
-    build: ./services/crm
+  whatsapp-adapter:
+    <<: *app_security
+    build:
+      context: .
+      dockerfile: apps/whatsapp-adapter/Dockerfile
     environment:
-      SERVICE_NAME: crm
+      SERVICE_NAME: whatsapp-adapter
       APP_ENV: development
-      PORT: "8102"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_crm
+      PORT: "8202"
+      DATABASE_URL: postgresql://${WHATSAPP_DB_USER:-app_whatsapp}:${WHATSAPP_DB_PASSWORD:-CHANGE_ME_whatsapp}@postgres:5432/db_whatsapp
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      AUTH_DISABLED: "true"
+      REDIS_CONSUMER_GROUP: whatsapp-adapter
+      LIWA_MODE: mock
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate-whatsapp:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     labels:
       - traefik.enable=true
-      - traefik.http.routers.crm.rule=PathPrefix(`/crm`)
-      - traefik.http.routers.crm.entrypoints=web
-      - traefik.http.middlewares.crm-strip.stripprefix.prefixes=/crm
-      - traefik.http.routers.crm.middlewares=crm-strip
-      - traefik.http.services.crm.loadbalancer.server.port=8102
-    networks:
-      - coopfuturo_net
-    restart: unless-stopped
-
-  compliance:
-    build: ./services/compliance
-    environment:
-      SERVICE_NAME: compliance
-      APP_ENV: development
-      PORT: "8103"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_compliance
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.compliance.rule=PathPrefix(`/compliance`)
-      - traefik.http.routers.compliance.entrypoints=web
-      - traefik.http.middlewares.compliance-strip.stripprefix.prefixes=/compliance
-      - traefik.http.routers.compliance.middlewares=compliance-strip
-      - traefik.http.services.compliance.loadbalancer.server.port=8103
-    networks:
-      - coopfuturo_net
-    restart: unless-stopped
-
-  whatsapp:
-    build: ./services/whatsapp
-    environment:
-      SERVICE_NAME: whatsapp
-      APP_ENV: development
-      PORT: "8104"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_whatsapp
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    labels:
-      - traefik.enable=true
+      - traefik.docker.network=coopfuturo_app
       - traefik.http.routers.whatsapp.rule=PathPrefix(`/whatsapp`)
       - traefik.http.routers.whatsapp.entrypoints=web
       - traefik.http.middlewares.whatsapp-strip.stripprefix.prefixes=/whatsapp
       - traefik.http.routers.whatsapp.middlewares=whatsapp-strip
-      - traefik.http.services.whatsapp.loadbalancer.server.port=8104
-    networks:
-      - coopfuturo_net
+      - traefik.http.services.whatsapp.loadbalancer.server.port=8202
+    networks: [coopfuturo_app, coopfuturo_data]
     restart: unless-stopped
-
-  identity:
-    build: ./services/identity
-    environment:
-      SERVICE_NAME: identity
-      APP_ENV: development
-      PORT: "8105"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_identity
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.identity.rule=PathPrefix(`/identity`)
-      - traefik.http.routers.identity.entrypoints=web
-      - traefik.http.middlewares.identity-strip.stripprefix.prefixes=/identity
-      - traefik.http.routers.identity.middlewares=identity-strip
-      - traefik.http.services.identity.loadbalancer.server.port=8105
-    networks:
-      - coopfuturo_net
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
 
   documents:
-    build: ./services/documents
+    <<: *app_security
+    build:
+      context: .
+      dockerfile: apps/documents/Dockerfile
     environment:
       SERVICE_NAME: documents
       APP_ENV: development
-      PORT: "8106"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_documents
+      PORT: "8203"
+      DATABASE_URL: postgresql://${DOCUMENTS_DB_USER:-app_documents}:${DOCUMENTS_DB_PASSWORD:-CHANGE_ME_documents}@postgres:5432/db_documents
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      AUTH_DISABLED: "true"
+      REDIS_CONSUMER_GROUP: documents
     depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.documents.rule=PathPrefix(`/documents`)
-      - traefik.http.routers.documents.entrypoints=web
-      - traefik.http.middlewares.documents-strip.stripprefix.prefixes=/documents
-      - traefik.http.routers.documents.middlewares=documents-strip
-      - traefik.http.services.documents.loadbalancer.server.port=8106
-    networks:
-      - coopfuturo_net
-    restart: unless-stopped
-
-  handoff:
-    build: ./services/handoff
-    environment:
-      SERVICE_NAME: handoff
-      APP_ENV: development
-      PORT: "8107"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_handoff
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.handoff.rule=PathPrefix(`/handoff`)
-      - traefik.http.routers.handoff.entrypoints=web
-      - traefik.http.middlewares.handoff-strip.stripprefix.prefixes=/handoff
-      - traefik.http.routers.handoff.middlewares=handoff-strip
-      - traefik.http.services.handoff.loadbalancer.server.port=8107
-    networks:
-      - coopfuturo_net
-    restart: unless-stopped
-
-  segmentation:
-    build: ./services/segmentation
-    environment:
-      SERVICE_NAME: segmentation
-      APP_ENV: development
-      PORT: "8108"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_segmentation
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.segmentation.rule=PathPrefix(`/segmentation`)
-      - traefik.http.routers.segmentation.entrypoints=web
-      - traefik.http.middlewares.segmentation-strip.stripprefix.prefixes=/segmentation
-      - traefik.http.routers.segmentation.middlewares=segmentation-strip
-      - traefik.http.services.segmentation.loadbalancer.server.port=8108
-    networks:
-      - coopfuturo_net
-    restart: unless-stopped
-
-  agent-config:
-    build: ./services/agent-config
-    environment:
-      SERVICE_NAME: agent-config
-      APP_ENV: development
-      PORT: "8109"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_agent_config
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.agent-config.rule=PathPrefix(`/agent-config`)
-      - traefik.http.routers.agent-config.entrypoints=web
-      - traefik.http.middlewares.agent-config-strip.stripprefix.prefixes=/agent-config
-      - traefik.http.routers.agent-config.middlewares=agent-config-strip
-      - traefik.http.services.agent-config.loadbalancer.server.port=8109
-    networks:
-      - coopfuturo_net
-    restart: unless-stopped
-
-  analytics:
-    build: ./services/analytics
-    environment:
-      SERVICE_NAME: analytics
-      APP_ENV: development
-      PORT: "8110"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_analytics
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    depends_on:
-      postgres:
-        condition: service_healthy
+      migrate-documents:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     labels:
       - traefik.enable=true
-      - traefik.http.routers.analytics.rule=PathPrefix(`/analytics`)
-      - traefik.http.routers.analytics.entrypoints=web
-      - traefik.http.middlewares.analytics-strip.stripprefix.prefixes=/analytics
-      - traefik.http.routers.analytics.middlewares=analytics-strip
-      - traefik.http.services.analytics.loadbalancer.server.port=8110
-    networks:
-      - coopfuturo_net
+      - traefik.docker.network=coopfuturo_app
+      - traefik.http.routers.documents.rule=PathPrefix(`/documents`)
+      - traefik.http.routers.documents.entrypoints=web
+      - traefik.http.middlewares.documents-strip.stripprefix.prefixes=/documents
+      - traefik.http.routers.documents.middlewares=documents-strip
+      - traefik.http.services.documents.loadbalancer.server.port=8203
+    networks: [coopfuturo_app, coopfuturo_data]
     restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  handoff-liwa:
+    <<: *app_security
+    build:
+      context: .
+      dockerfile: apps/handoff-liwa/Dockerfile
+    environment:
+      SERVICE_NAME: handoff-liwa
+      APP_ENV: development
+      PORT: "8204"
+      DATABASE_URL: postgresql://${HANDOFF_DB_USER:-app_handoff}:${HANDOFF_DB_PASSWORD:-CHANGE_ME_handoff}@postgres:5432/db_handoff
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      AUTH_DISABLED: "true"
+      REDIS_CONSUMER_GROUP: handoff-liwa
+      LIWA_MODE: mock
+    depends_on:
+      migrate-handoff:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coopfuturo_app
+      - traefik.http.routers.handoff.rule=PathPrefix(`/handoff`)
+      - traefik.http.routers.handoff.entrypoints=web
+      - traefik.http.middlewares.handoff-strip.stripprefix.prefixes=/handoff
+      - traefik.http.routers.handoff.middlewares=handoff-strip
+      - traefik.http.services.handoff.loadbalancer.server.port=8204
+    networks: [coopfuturo_app, coopfuturo_data]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
 
 volumes:
   coopfuturo_pgdata:

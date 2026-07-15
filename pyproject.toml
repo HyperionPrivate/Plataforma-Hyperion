@@ -1,0 +1,80 @@
+[project]
+name = "coopfuturo-platform"
+version = "0.2.0"
+description = "PULSO / Hyperion One — architecture foundation"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+
+[dependency-groups]
+dev = [
+  "ruff>=0.11.0",
+  "mypy>=1.15.0",
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.25.0",
+  "pytest-cov>=6.0.0",
+  "httpx>=0.28.0",
+  "jsonschema>=4.23.0",
+  "openapi-spec-validator>=0.7.1",
+  "pip-audit>=2.8.0",
+  "types-jsonschema>=4.23.0",
+  "aiosqlite>=0.21.0",
+  "cryptography>=44.0.0",
+  "PyYAML>=6.0.2",
+  "pre-commit>=4.1.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+platform-kit = { path = "packages/platform-kit", editable = true }
+pilot-core = { path = "apps/pilot-core", editable = true }
+whatsapp-adapter = { path = "apps/whatsapp-adapter", editable = true }
+documents = { path = "apps/documents", editable = true }
+handoff-liwa = { path = "apps/handoff-liwa", editable = true }
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["apps", "packages", "contracts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+mypy_path = "packages/platform-kit/src:apps/pilot-core/src:apps/whatsapp-adapter/src:apps/documents/src:apps/handoff-liwa/src"
+packages = ["platform_kit", "pilot_core", "whatsapp_adapter", "documents_app", "handoff_liwa"]
+exclude = ["services/", "\\.venv/"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "packages/platform-kit", "apps"]
+pythonpath = [
+  "packages/platform-kit/src",
+  "apps/pilot-core/src",
+  "apps/whatsapp-adapter/src",
+  "apps/documents/src",
+  "apps/handoff-liwa/src",
+]
+addopts = "-q --cov=platform_kit --cov-report=term-missing"
+markers = [
+  "integration: requires docker stack / live postgres",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+branch = true
+source = ["packages/platform-kit/src"]
+omit = ["**/alembic/**", "**/tests/**"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 40

@@ -1,0 +1,17 @@
+# CODEOWNERS — placeholders until real identities confirmed (docs/OWNERSHIP_REQUEST.md)
+
+*                                   @TBD-platform
+
+/.github/                           @TBD-platform @TBD-security
+/SECURITY.md                        @TBD-security
+/docs/                              @TBD-platform
+/contracts/                         @TBD-contracts @TBD-platform
+/infra/                             @TBD-platform @TBD-security
+/packages/platform-kit/             @TBD-platform
+
+/apps/pilot-core/                   @TBD-pilot-core
+/apps/whatsapp-adapter/             @TBD-whatsapp
+/apps/documents/                    @TBD-documents
+/apps/handoff-liwa/                 @TBD-handoff
+
+/services/                          @TBD-platform

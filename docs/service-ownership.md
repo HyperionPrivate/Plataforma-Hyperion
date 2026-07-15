@@ -1,27 +1,26 @@
-# Service ownership
+# Service ownership (unidades desplegables + stubs legacy)
 
-Asigna un dueño real por servicio. Mientras tanto queda `TBD`.
+Asigna owners reales vía [OWNERSHIP_REQUEST.md](OWNERSHIP_REQUEST.md).
 
-| Servicio | Carpeta | Puerto | Database | Ruta Traefik | Prioridad | Owner |
-|---|---|---|---|---|---|---|
-| orchestrator | `services/orchestrator` | 8101 | `db_orchestrator` | `/orchestrator` | core | TBD |
-| crm | `services/crm` | 8102 | `db_crm` | `/crm` | core | TBD |
-| compliance | `services/compliance` | 8103 | `db_compliance` | `/compliance` | core | TBD |
-| whatsapp | `services/whatsapp` | 8104 | `db_whatsapp` | `/whatsapp` | core | TBD |
-| identity | `services/identity` | 8105 | `db_identity` | `/identity` | core | TBD |
-| documents | `services/documents` | 8106 | `db_documents` | `/documents` | satélite | TBD |
-| handoff | `services/handoff` | 8107 | `db_handoff` | `/handoff` | satélite | TBD |
-| segmentation | `services/segmentation` | 8108 | `db_segmentation` | `/segmentation` | satélite | TBD |
-| agent-config | `services/agent-config` | 8109 | `db_agent_config` | `/agent-config` | satélite | TBD |
-| analytics | `services/analytics` | 8110 | `db_analytics` | `/analytics` | satélite | TBD |
+## Unidades (`apps/`)
 
-## Infra compartida (no dominio)
+| Unidad | Carpeta | Puerto | Database | Owner |
+|---|---|---|---|---|
+| pilot-core | `apps/pilot-core` | 8201 | `db_pilot_core` | TBD → `@TBD-pilot-core` |
+| whatsapp-adapter | `apps/whatsapp-adapter` | 8202 | `db_whatsapp` | TBD → `@TBD-whatsapp` |
+| documents | `apps/documents` | 8203 | `db_documents` | TBD → `@TBD-documents` |
+| handoff-liwa | `apps/handoff-liwa` | 8204 | `db_handoff` | TBD → `@TBD-handoff` |
 
-| Componente | Owner |
+## Stubs legacy (`services/`) — no features nuevas
+
+| Stub | Puerto | Estado |
+|---|---|---|
+| orchestrator … analytics | 8101–8110 | Conservados hasta reemplazo verificado |
+
+## Externos
+
+| Sistema | Cliente permitido |
 |---|---|
-| Traefik / Compose / Postgres init | Platform / TBD |
-| `contracts/` | Acuerdo de equipo; PRs con revisión cruzada |
-
-## Dialer externo
-
-Repo aparte. No tiene fila aquí. Cliente permitido: solo `orchestrator`.
+| Dialer / ElevenLabs | solo `pilot-core.orchestration` |
+| LIWA | `whatsapp-adapter`, `handoff-liwa` (mock hasta rotación) |
+| Core Coopfuturo | `pilot-core.core_adapter` |

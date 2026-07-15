@@ -1,0 +1,112 @@
+openapi: 3.1.0
+info:
+  title: Dialer Client Interface (external)
+  version: 0.1.0
+  description: |
+    Contract stub for external Dialer. Implementation lives outside this monorepo.
+    Only pilot-core.orchestration may call it. MOCK available in platform_kit.mocks.
+servers:
+  - url: https://dialer.example.local
+security:
+  - bearerAuth: []
+paths:
+  /api/demo/call:
+    post:
+      operationId: dispatchCall
+      summary: Dispatch outbound call (external)
+      tags: [calls]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DispatchCallRequest"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DispatchCallAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /webhooks/call-completed:
+    post:
+      operationId: callCompletedWebhook
+      summary: Provider webhook into pilot-core
+      security: []
+      tags: [webhooks]
+      parameters:
+        - in: header
+          name: X-Webhook-Signature
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-Webhook-Timestamp
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallCompletedWebhook"
+      responses:
+        "200":
+          description: Queued
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    DispatchCallRequest:
+      type: object
+      required: [to_number, agent_id]
+      properties:
+        to_number: { type: string }
+        agent_id: { type: string }
+        dynamic_variables:
+          type: object
+          additionalProperties: { type: string }
+    DispatchCallAccepted:
+      type: object
+      required: [call_id, status]
+      properties:
+        call_id: { type: string }
+        status: { type: string, enum: [queued, accepted] }
+    CallCompletedWebhook:
+      type: object
+      required: [call_id, outcome]
+      properties:
+        call_id: { type: string }
+        outcome: { type: string }
+        duration_seconds: { type: integer }
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code: { type: string }
+        message: { type: string }
+        correlation_id: { type: ["string", "null"] }
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

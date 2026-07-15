@@ -1,0 +1,86 @@
+openapi: 3.1.0
+info:
+  title: Object Storage Interface
+  version: 0.1.0
+  description: S3-compatible object storage. MinIO in local/dev; MOCK in unit tests.
+servers:
+  - url: https://objects.example.local
+security:
+  - bearerAuth: []
+paths:
+  /objects/{key}:
+    put:
+      operationId: putObject
+      tags: [objects]
+      parameters:
+        - in: path
+          name: key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      operationId: getObject
+      tags: [objects]
+      parameters:
+        - in: path
+          name: key
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Object bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ObjectMeta:
+      type: object
+      required: [key, etag]
+      properties:
+        key: { type: string }
+        etag: { type: string }
+        size_bytes: { type: integer }
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code: { type: string }
+        message: { type: string }
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

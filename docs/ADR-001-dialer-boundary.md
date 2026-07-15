@@ -1,5 +1,7 @@
 # ADR-001 — Límite del Dialer
 
+> **Supersedido por:** [adr/ADR-003-external-dialer.md](adr/ADR-003-external-dialer.md). Mantener solo como referencia histórica.
+
 ## Estado
 
 Aceptado — 2026-07-14

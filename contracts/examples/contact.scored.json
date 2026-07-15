@@ -1,0 +1,21 @@
+{
+  "event_id": "00000000-0000-4000-8000-000000000001",
+  "event_type": "contact.scored",
+  "schema_version": "v1",
+  "occurred_at": "2026-07-15T12:00:00Z",
+  "producer": "pilot-core",
+  "tenant_id": "tenant-synth",
+  "correlation_id": "00000000-0000-4000-8000-000000000099",
+  "causation_id": null,
+  "business_idempotency_key": "contact.scored:synth:1",
+  "data_classification": "internal",
+  "payload": {
+    "contact_id": "c-synth-1",
+    "score": 0.82,
+    "score_version": "v1",
+    "reason_codes": [
+      "tenure"
+    ],
+    "segment_code": "vip-ii"
+  }
+}

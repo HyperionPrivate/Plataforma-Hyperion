@@ -1,0 +1,18 @@
+# Lightweight compose for CI config validation / future test stack
+name: coopfuturo-test
+
+services:
+  postgres:
+    image: postgres:16.8-alpine
+    environment:
+      POSTGRES_USER: coopfuturo_admin
+      POSTGRES_PASSWORD: test_admin_only
+      POSTGRES_DB: postgres
+      PILOT_CORE_DB_PASSWORD: test_pilot
+      WHATSAPP_DB_PASSWORD: test_wa
+      DOCUMENTS_DB_PASSWORD: test_docs
+      HANDOFF_DB_PASSWORD: test_ho
+    volumes:
+      - ./infra/postgres/init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
+  redis:
+    image: redis:7.4.2-alpine

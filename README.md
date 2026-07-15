@@ -1,52 +1,48 @@
-# Coopfuturo — monorepo de microservicios autónomos
+# Coopfuturo — architecture foundation (PULSO / Hyperion One)
 
-Scaffold de la plataforma PULSO / Hyperion One para Coopfuturo.  
-**Solo arquitectura y stubs:** sin funnels, WhatsApp real ni lógica de negocio.
+Base técnica **lista para desarrollar el producto**.  
+**No** incluye lógica comercial de campañas, funnels, WhatsApp real, Dialer real, ni handoff funcional.
 
-## Principios
+## Unidades desplegables
 
-- Cada carpeta bajo `services/` es un **microservicio autónomo** (imagen, env, DB, deploy propios).
-- Sin librería runtime compartida. `contracts/` son esquemas versionados (JSON), no un paquete Python.
-- El gateway es **Traefik** (proxy fino), no un BFF con lógica.
-- Solo **orchestrator** habla con el Dialer externo (`C:\Users\pc\Desktop\dialer` u otro host).
-- Comunicación: HTTP o eventos. Prohibido importar código o leer DB de otro servicio.
+| App | Rol técnico |
+|---|---|
+| `apps/pilot-core` | Módulos internos + orchestration interface al Dialer externo |
+| `apps/whatsapp-adapter` | Interfaces + **MOCK** proveedor |
+| `apps/documents` | Interfaces + **MOCK** object storage |
+| `apps/handoff-liwa` | Interfaces + **MOCK** LIWA |
 
-## Servicios
+Kit técnico compartido: `packages/platform-kit` (sin lógica comercial).
 
-| Servicio | Prioridad | Puerto interno | Database |
-|---|---|---|---|
-| orchestrator | core | 8101 | db_orchestrator |
-| crm | core | 8102 | db_crm |
-| compliance | core | 8103 | db_compliance |
-| whatsapp | core | 8104 | db_whatsapp |
-| identity | core | 8105 | db_identity |
-| documents | satélite | 8106 | db_documents |
-| handoff | satélite | 8107 | db_handoff |
-| segmentation | satélite | 8108 | db_segmentation |
-| agent-config | satélite | 8109 | db_agent_config |
-| analytics | satélite | 8110 | db_analytics |
-
-Gateway Traefik: `http://localhost:8088` (dashboard `8089`).
-
-## Arranque local
+## Quick start
 
 ```powershell
+git clone https://github.com/AdministracionHyperion/CoopFuturo_.git
+cd CoopFuturo_
+git checkout feat/architecture-foundation   # o main tras merge
 copy .env.example .env
+make bootstrap
+make test
+make contracts
+make smoke
 make up
-# o un solo servicio:
-make up svc=crm
 ```
 
-Health de ejemplo: `http://localhost:8088/crm/health`
+Health: `http://127.0.0.1:8088/pilot-core/health/live`
+
+## Seguridad
+
+- Ver [SECURITY.md](SECURITY.md)
+- Credencial LIWA histórica expuesta → **rotar fuera del repo** ([EXTERNAL_BLOCKERS](docs/EXTERNAL_BLOCKERS.md))
+- Owners reales pendientes ([OWNERSHIP_REQUEST](docs/OWNERSHIP_REQUEST.md))
 
 ## Documentación
 
-- [Arquitectura](docs/architecture.md)
-- [Ownership](docs/service-ownership.md)
-- [Anti-patrones](docs/anti-patterns.md)
-- [Contribuir](CONTRIBUTING.md)
-- ADRs en `docs/`
+- [Arquitectura](docs/architecture/)
+- [ADRs](docs/adr/)
+- [Runbooks](docs/runbooks/)
+- [Contratos](contracts/)
 
-## Dialer externo
+## Stubs legacy
 
-No se construye aquí. Ver [infra/README.md](infra/README.md) y [ADR-001](docs/ADR-001-dialer-boundary.md).
+`services/*` solo con profile `legacy-stubs`. No features nuevas.
