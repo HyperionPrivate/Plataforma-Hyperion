@@ -1,0 +1,20 @@
+# Traefik for Contabo PULSO stack — isolated from easypanel/coopfuturo labels.
+
+api:
+  dashboard: false
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: pulso_app
+    constraints: "Label(`com.docker.compose.project`,`pulso`)"
+
+entryPoints:
+  web:
+    address: ":80"
+
+log:
+  level: INFO
+
+accessLog: {}
