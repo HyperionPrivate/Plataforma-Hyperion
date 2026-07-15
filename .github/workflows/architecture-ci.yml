@@ -59,7 +59,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U coopfuturo_admin"
+          --health-cmd "pg_isready -U coopfuturo_admin -d postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -101,10 +101,11 @@ jobs:
       - name: Alembic upgrade + downgrade
         env:
           DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
+          UV_NO_SYNC: "1"
         run: |
-          uv run alembic -c apps/pilot-core/alembic.ini upgrade head
-          uv run alembic -c apps/pilot-core/alembic.ini downgrade base
-          uv run alembic -c apps/pilot-core/alembic.ini upgrade head
+          uv run --no-sync alembic -c apps/pilot-core/alembic.ini upgrade head
+          uv run --no-sync alembic -c apps/pilot-core/alembic.ini downgrade base
+          uv run --no-sync alembic -c apps/pilot-core/alembic.ini upgrade head
       - name: Integration tests (outbox/redis + pg isolation)
         env:
           DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
@@ -113,7 +114,8 @@ jobs:
           POSTGRES_PORT: "5432"
           PILOT_CORE_DB_USER: app_pilot_core
           PILOT_CORE_DB_PASSWORD: test_pilot
-        run: uv run pytest tests/integration -q --override-ini addopts= -p no:cov -m integration
+          UV_NO_SYNC: "1"
+        run: uv run --no-sync pytest tests/integration -q --override-ini addopts= -p no:cov -m integration
 
   codeql:
     runs-on: ubuntu-latest

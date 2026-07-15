@@ -1,14 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
-from pilot_core.settings import get_settings
-from platform_kit.db import Base
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
+
+# apps/<unit>/alembic/env.py → repo root is parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_APP_SRC = Path(__file__).resolve().parents[1] / "src"
+_KIT_SRC = _REPO_ROOT / "packages" / "platform-kit" / "src"
+for _p in (_APP_SRC, _KIT_SRC):
+    _s = str(_p)
+    if _s not in sys.path:
+        sys.path.insert(0, _s)
+
+from pilot_core.settings import get_settings  # noqa: E402
+from platform_kit.db import Base  # noqa: E402
 
 config = context.config
 if config.config_file_name is not None:
