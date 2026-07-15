@@ -14,7 +14,7 @@ Architecture foundation is in place. Product work should land as separate PRs:
 10. **core adapter** — after Coopfuturo core API confirmed
 11. **OIDC production wiring** — issuer/audience/JWKS from IdP
 12. **analytics projections** — no PII
-13. **ops UI** — roles + PII masking
+13. **ops UI** — roles + PII masking — **scaffold en `apps/web` (mock)**; conectar API/OIDC después
 14. **E2E renovación VIP-II** — synthetic contacts only
 
 Owners: confirm via `docs/OWNERSHIP_REQUEST.md` before CODEOWNERS enforce.

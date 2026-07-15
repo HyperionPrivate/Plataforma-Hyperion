@@ -256,6 +256,29 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 256M }
 
+  # Ops UI PULSO (Next.js). Catch-all under / excluding API path prefixes.
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_MODE: mock
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coopfuturo_app
+      - traefik.http.routers.web.rule=PathPrefix(`/`) && !PathPrefix(`/pilot-core`) && !PathPrefix(`/whatsapp`) && !PathPrefix(`/documents`) && !PathPrefix(`/handoff`)
+      - traefik.http.routers.web.entrypoints=web
+      - traefik.http.routers.web.priority=1
+      - traefik.http.services.web.loadbalancer.server.port=3000
+    networks: [coopfuturo_app]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
 volumes:
   coopfuturo_pgdata:
   coopfuturo_redis:

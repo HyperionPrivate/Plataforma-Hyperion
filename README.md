@@ -11,8 +11,21 @@ Base técnica **lista para desarrollar el producto**.
 | `apps/whatsapp-adapter` | Interfaces + **MOCK** proveedor |
 | `apps/documents` | Interfaces + **MOCK** object storage |
 | `apps/handoff-liwa` | Interfaces + **MOCK** LIWA |
+| `apps/web` | Ops UI PULSO (Next.js) — **MOCK** datos; sin backend real |
 
 Kit técnico compartido: `packages/platform-kit` (sin lógica comercial).
+
+## Ops UI (frontend)
+
+```powershell
+cd apps/web
+npm install
+npm run dev
+```
+
+http://localhost:3000 — ver [apps/web/ARCHITECTURE.md](apps/web/ARCHITECTURE.md) y [apps/web/README.md](apps/web/README.md).
+
+Con Traefik (compose): `http://127.0.0.1:8088/dashboard` tras `docker compose -f docker-compose.dev.yml up`.
 
 ## Quick start
 

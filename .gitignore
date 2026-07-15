@@ -32,3 +32,10 @@ postgres-data/
 dist/
 build/
 *.whl
+
+# Node / Next.js (apps/web)
+node_modules/
+.next/
+apps/web/.next/
+apps/web/node_modules/
+*.tsbuildinfo
