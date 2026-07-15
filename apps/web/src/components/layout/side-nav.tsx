@@ -11,6 +11,7 @@ import {
   PieChart,
   FileBarChart,
   Settings,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,7 @@ const NAV = [
   { href: "/handoff", label: "Handoff", icon: ArrowLeftRight },
   { href: "/segmentacion", label: "Segmentación", icon: PieChart },
   { href: "/reportes", label: "Reportes", icon: FileBarChart },
+  { href: "/laboratorio", label: "Laboratorio", icon: FlaskConical },
   { href: "/configuracion", label: "Configuración", icon: Settings },
 ];
 

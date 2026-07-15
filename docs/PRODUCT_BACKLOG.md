@@ -2,19 +2,19 @@
 
 Architecture foundation is in place. Product work should land as separate PRs:
 
-1. **contacts importer** — preview/validate/commit, E.164, dedup (pilot-core.contacts)
-2. **compliance gate** — configurable policies, evidence, opt-out (pilot-core.compliance)
-3. **campaigns / enrollment / attempt** — state machine scaffolding
-4. **segmentation scoring** — versioned scores consuming `contact.imported`
-5. **CRM funnels** — renovacion/reactivacion/nuevo/microcredito state machines
-6. **orchestration + Dialer client** — real adapter behind interface (creds external)
+1. ~~**contacts importer**~~ — preview/validate/commit, E.164, dedup (piloto local OK)
+2. ~~**compliance gate**~~ — ventana 8–20 COT, opt-out (piloto local OK)
+3. ~~**campaigns / enrollment / attempt**~~ — create + orchestration + batch (piloto local OK)
+4. ~~**segmentation scoring**~~ — consume contactos importados (piloto local OK)
+5. ~~**CRM funnels**~~ — move columnas vía `/ops/crm/move` (piloto local OK)
+6. **orchestration + Dialer client** — URL configurable; falta contrato OpenAPI dialer productivo + live smoke
 7. **whatsapp-adapter LIWA real** — only after credential rotation + official docs
-8. **documents MinIO + validation** — antivirus interface, retention
-9. **handoff-liwa real** — after LIWA rotation
-10. **core adapter** — after Coopfuturo core API confirmed
+8. **documents MinIO + validation** — metadata/validación mock listos; antivirus + MinIO reales TBD
+9. **handoff-liwa real** — after LIWA rotation (handoff local SQLite OK)
+10. **core adapter** — after Coopfuturo core API confirmed (stub `/ops/core/associate/{id}`)
 11. **OIDC production wiring** — issuer/audience/JWKS from IdP
-12. **analytics projections** — no PII
-13. **ops UI** — roles + PII masking — **scaffold en `apps/web` (mock)**; conectar API/OIDC después
-14. **E2E renovación VIP-II** — synthetic contacts only
+12. ~~**analytics projections**~~ — overlay dashboard + reportes JSON/CSV (piloto local OK)
+13. **ops UI** — roles + PII masking — UI cableada a `/ops`; falta OIDC/roles prod
+14. **E2E renovación VIP-II** — synthetic contacts only (demo local documentada en `DEMO_PULSO_LOCAL.md`)
 
 Owners: confirm via `docs/OWNERSHIP_REQUEST.md` before CODEOWNERS enforce.

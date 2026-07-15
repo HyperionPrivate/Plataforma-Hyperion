@@ -1,94 +1,45 @@
 "use client";
 
-import { useMemo } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { ChartCard } from "@/components/data/chart-card";
 import { Badge } from "@/components/ui/badge";
 import { ScatterChart, ConversionHeatmap, type ScatterPoint } from "@/components/charts";
+import { useSegmentation } from "@/hooks/use-pulso";
 import { toast } from "sonner";
 
-function buildPoints(): ScatterPoint[] {
-  const points: ScatterPoint[] = [];
-  // Contactar primero: baja propensión, alta urgencia
-  for (let i = 0; i < 10; i++) {
-    points.push({
-      x: 8 + (i * 4) % 38,
-      y: 58 + (i * 3) % 35,
-      z: 40,
-      segment: i % 2 === 0 ? "renovacion" : "reactivacion",
-      name: `P-${i}`,
-    });
-  }
-  // Programar: alta propensión, alta urgencia
-  for (let i = 0; i < 12; i++) {
-    points.push({
-      x: 55 + (i * 3) % 40,
-      y: 55 + (i * 4) % 40,
-      z: 40,
-      segment: i % 3 === 0 ? "reactivacion" : "renovacion",
-    });
-  }
-  // Nutrir: baja propensión, baja urgencia
-  for (let i = 0; i < 9; i++) {
-    points.push({
-      x: 10 + (i * 4) % 35,
-      y: 8 + (i * 5) % 35,
-      z: 40,
-      segment: "reactivacion",
-    });
-  }
-  // Baja prioridad: alta propensión, baja urgencia
-  for (let i = 0; i < 9; i++) {
-    points.push({
-      x: 58 + (i * 4) % 38,
-      y: 10 + (i * 4) % 32,
-      z: 40,
-      segment: "renovacion",
-    });
-  }
-  return points;
-}
-
-const WAVES = [
-  { ola: "Ola 1", registros: 5200, score: 82, cierre: "28 jun 2025", canal: "Voz" },
-  { ola: "Ola 2", registros: 4800, score: 71, cierre: "5 jul 2025", canal: "WhatsApp" },
-  { ola: "Ola 3", registros: 5000, score: 64, cierre: "12 jul 2025", canal: "Voz" },
-];
-
-const RETRIES = [
-  "No contesta → WhatsApp en 2h",
-  "WhatsApp sin leer 24h → llamada",
-  "Máximo 4 intentos · ventana 8:00–20:00",
-];
-
-const HEATMAP = {
-  days: ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"],
-  hours: ["8–10", "10–12", "12–14", "14–16", "16–18", "18–20"],
-  values: [
-    [0.35, 0.55, 0.45, 0.70, 0.85, 0.60],
-    [0.40, 0.62, 0.50, 0.78, 0.88, 0.55],
-    [0.38, 0.58, 0.48, 0.80, 0.82, 0.50],
-    [0.42, 0.65, 0.52, 0.85, 0.90, 0.58],
-    [0.36, 0.50, 0.44, 0.72, 0.75, 0.48],
-    [0.22, 0.30, 0.28, 0.35, 0.32, 0.20],
-    [0.15, 0.22, 0.20, 0.25, 0.22, 0.12],
-  ],
-};
-
 export default function SegmentacionPage() {
-  const points = useMemo(() => buildPoints(), []);
+  const { data, isLoading, isError, refetch } = useSegmentation();
+  const points = (data?.points ?? []) as ScatterPoint[];
+  const waves = data?.waves ?? [];
+  const retries = data?.retries ?? [];
+  const heatmap = data?.heatmap;
   const renovCount = points.filter((p) => p.segment !== "reactivacion").length;
   const reactCount = points.filter((p) => p.segment === "reactivacion").length;
+
+  if (isError) {
+    return (
+      <div className="py-24 text-center">
+        <p className="text-[var(--muted)]">No fue posible cargar segmentación.</p>
+        <Button className="mt-3" onClick={() => refetch()}>
+          Reintentar
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div>
       <PageHeader
-        title="Segmentación con IA — Base 30.000"
-        subtitle="Prioriza contactos por propensión y urgencia de matrícula."
+        title="Segmentación con IA"
+        subtitle={
+          isLoading
+            ? "Cargando scores…"
+            : `Prioriza contactos por propensión y urgencia · ${points.length} puntos`
+        }
         actions={
-          <Button variant="outline" onClick={() => toast.message("Re-entrenamiento simulado")}>
-            Re-entrenar modelo
+          <Button variant="outline" onClick={() => refetch()}>
+            Refrescar scores
           </Button>
         }
       />
@@ -97,12 +48,12 @@ export default function SegmentacionPage() {
         <ChartCard title="Propensión vs Urgencia">
           <ScatterChart data={points} />
           <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
-            <Badge tone="success">Renovación · {renovCount * 456} contactos (ej.)</Badge>
-            <Badge tone="info">Reactivación · {reactCount * 420} contactos (ej.)</Badge>
+            <Badge tone="success">Renovación · {renovCount}</Badge>
+            <Badge tone="info">Reactivación · {reactCount}</Badge>
           </div>
           <p className="mt-2 text-[10px] text-[var(--muted)]">
             Ejes 0–100. Líneas al 50% dividen 4 cuadrantes: Contactar primero · Programar · Nutrir ·
-            Baja prioridad. Verde = Renovación, azul = Reactivación.
+            Baja prioridad.
           </p>
         </ChartCard>
 
@@ -118,7 +69,7 @@ export default function SegmentacionPage() {
               </tr>
             </thead>
             <tbody>
-              {WAVES.map((w) => (
+              {waves.map((w: { ola: string; registros: number; score: number; cierre: string; canal: string }) => (
                 <tr key={w.ola} className="border-b border-[var(--border)]/50">
                   <td className="py-2 font-medium">{w.ola}</td>
                   <td className="py-2 tabular">{w.registros.toLocaleString("es-CO")}</td>
@@ -134,17 +85,21 @@ export default function SegmentacionPage() {
         </ChartCard>
 
         <ChartCard title="Mejor horario por perfil">
-          <ConversionHeatmap
-            days={HEATMAP.days}
-            hours={HEATMAP.hours}
-            values={HEATMAP.values}
-            unitLabel="Tasa de respuesta"
-          />
+          {heatmap?.days?.length ? (
+            <ConversionHeatmap
+              days={heatmap.days}
+              hours={heatmap.hours}
+              values={heatmap.values}
+              unitLabel="Tasa de respuesta"
+            />
+          ) : (
+            <p className="text-sm text-[var(--muted)]">Sin heatmap</p>
+          )}
         </ChartCard>
 
         <ChartCard title="Reintentos inteligentes">
           <ul className="space-y-3">
-            {RETRIES.map((r) => (
+            {retries.map((r: string) => (
               <li
                 key={r}
                 className="rounded-lg border border-[var(--border)] bg-[var(--bg)]/40 px-3 py-2 text-sm"
@@ -156,7 +111,7 @@ export default function SegmentacionPage() {
           <Button
             variant="outline"
             className="mt-4"
-            onClick={() => toast.message("Editor de reglas (mock)")}
+            onClick={() => toast.message("Editor de reglas: siguiente iteración")}
           >
             Editar reglas
           </Button>

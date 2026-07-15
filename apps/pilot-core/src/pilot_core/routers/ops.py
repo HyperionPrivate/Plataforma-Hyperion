@@ -1,0 +1,544 @@
+"""Ops product API — shapes aligned with apps/web MODULES.md (piloto PULSO)."""
+
+from __future__ import annotations
+
+import json
+from datetime import time
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import httpx
+from fastapi import APIRouter, Depends
+from platform_kit.auth import AuthContext, require_auth
+from platform_kit.errors import PlatformError
+from pydantic import BaseModel, Field
+
+from pilot_core import ops_store
+from pilot_core.modules.analytics.service import analytics_service
+from pilot_core.modules.agent_config.service import agent_config_service
+from pilot_core.modules.campaigns.service import campaigns_service
+from pilot_core.modules.compliance.service import compliance_service
+from pilot_core.modules.contacts.service import contacts_service
+from pilot_core.modules.core_adapter.service import core_adapter_service
+from pilot_core.modules.crm.service import crm_service
+from pilot_core.modules.documents_service import documents_service
+from pilot_core.modules.orchestration.service import orchestration_service
+from pilot_core.modules.segmentation.service import segmentation_service
+from pilot_core.modules.whatsapp_mock import whatsapp_mock_service
+from pilot_core.settings import get_settings
+
+router = APIRouter(prefix="/ops", tags=["ops-product"])
+
+_FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "ops"
+ops_store.init_db()
+
+
+def _hydrate_runtime_from_store() -> None:
+    """Apply dialer/channels persisted in SQLite to this process."""
+    dialer = ops_store.get_setting("dialer")
+    if isinstance(dialer, dict):
+        s = get_settings()
+        if "base_url" in dialer:
+            object.__setattr__(s, "dialer_base_url", str(dialer.get("base_url") or ""))
+        if "default_phone_number_id" in dialer:
+            object.__setattr__(
+                s,
+                "dialer_default_phone_number_id",
+                str(dialer.get("default_phone_number_id") or ""),
+            )
+    channels = ops_store.get_setting("channels")
+    if isinstance(channels, dict) and channels.get("ventana_8_20") is False:
+        compliance_service.window_start = time(0, 0)
+        compliance_service.window_end = time(23, 59)
+
+
+_hydrate_runtime_from_store()
+
+
+def _load(name: str) -> dict[str, Any]:
+    path = _FIXTURES / name
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@router.get("/dashboard")
+async def ops_dashboard(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    data = _load("dashboard.json")
+    stored = ops_store.list_dispatches(5)
+    if stored:
+        live = []
+        for d in stored:
+            lead = d.get("lead") or {}
+            live.append(
+                {
+                    "id": d.get("id"),
+                    "channel": "whatsapp" if "whatsapp" in str(d.get("mode")) else "voz",
+                    "personName": lead.get("first_name") or "Lead",
+                    "kind": "Dispatch " + str(d.get("status") or d.get("mode") or "ok"),
+                    "at": "ahora",
+                }
+            )
+        data = {**data, "liveEvents": [*live, *data.get("liveEvents", [])][:12]}
+    return analytics_service.overlay_dashboard(data)
+
+
+@router.get("/campaigns")
+async def ops_campaigns(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    data = _load("campaigns.json")
+    extra = ops_store.list_campaigns()
+    if extra:
+        data = {**data, "campaigns": [*extra, *data.get("campaigns", [])]}
+    return data
+
+
+@router.get("/crm")
+async def ops_crm(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    return crm_service.snapshot()
+
+
+@router.get("/handoff")
+async def ops_handoff(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    data = _load("handoff.json")
+    extra = ops_store.list_handoffs(20)
+    if extra:
+        queue = [
+            {
+                "conversationId": h["id"],
+                "priority": h.get("priority", "alta"),
+                "name": h.get("name", "Lead"),
+                "segment": h.get("segment", "Renovacion"),
+                "motivo": h.get("motivo", "Calificado por laboratorio"),
+                "expedientePct": h.get("expedientePct", 80),
+                "aiSummary": h.get("aiSummary", "Handoff creado desde API"),
+                "info": h.get("info", ""),
+            }
+            for h in extra
+        ]
+        data = {**data, "queue": [*queue, *data.get("queue", [])]}
+    return data
+
+
+class CreateCampaignBody(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    segment: str = Field(default="Renovacion")
+    channels: list[str] = Field(default_factory=lambda: ["voz"])
+    total: int = Field(default=0, ge=0)
+
+
+class ImportContactsBody(BaseModel):
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    commit: bool = False
+
+
+class CreateHandoffBody(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    segment: str = "Renovacion"
+    motivo: str = "Lead calificado"
+    priority: str = "alta"
+    phone: str | None = None
+
+
+class OptOutBody(BaseModel):
+    phone: str = Field(min_length=8, max_length=20)
+
+
+@router.post("/contacts/import")
+async def import_contacts(
+    body: ImportContactsBody,
+    _ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    if body.commit:
+        return contacts_service.commit_valid(body.rows)
+    return contacts_service.preview_rows(body.rows)
+
+
+@router.get("/contacts")
+async def list_contacts(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    return contacts_service.list_contacts()
+
+
+@router.post("/campaigns")
+async def create_campaign(
+    body: CreateCampaignBody,
+    _ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    return campaigns_service.create(
+        name=body.name,
+        segment=body.segment,
+        channels=body.channels,
+        total=body.total,
+    )
+
+
+class AttemptBody(BaseModel):
+    phone: str = Field(min_length=8, max_length=20)
+    first_name: str = Field(default="Asociado", max_length=80)
+    campaign_id: str | None = None
+    flow: str = Field(default="A", pattern="^[AB]$")
+
+
+@router.post("/orchestration/attempt")
+async def orchestration_attempt(
+    body: AttemptBody,
+    ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    result = await orchestration_service.attempt_call(
+        phone=body.phone,
+        first_name=body.first_name,
+        campaign_id=body.campaign_id,
+        flow=body.flow,
+        tenant_id=ctx.tenant_id,
+    )
+    if result.get("blocked"):
+        raise PlatformError(
+            "compliance_blocked",
+            ",".join((result.get("compliance") or {}).get("reasons") or []) or "blocked",
+            status_code=403,
+        )
+    return result
+
+
+@router.post("/handoff")
+async def create_handoff(
+    body: CreateHandoffBody,
+    _ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    entry = {
+        "id": f"h_{uuid4().hex[:10]}",
+        "name": body.name,
+        "segment": body.segment,
+        "motivo": body.motivo,
+        "priority": body.priority,
+        "phone": body.phone,
+        "expedientePct": 85,
+        "aiSummary": "Creado desde laboratorio/API",
+        "info": body.phone or "",
+    }
+    return ops_store.insert_handoff(entry)
+
+
+@router.post("/compliance/opt-out")
+async def opt_out(body: OptOutBody, _ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    compliance_service.suppress(body.phone)
+    return {"ok": True, "phone": body.phone, "suppressed": True}
+
+
+class DispatchCallBody(BaseModel):
+    phone: str = Field(min_length=8, max_length=20, description="E.164 preferred")
+    first_name: str = Field(default="Asociado", max_length=80)
+    campaign_id: str | None = None
+    agent_phone_number_id: str | None = None
+    flow: str = Field(default="A", pattern="^[AB]$")
+
+
+@router.post("/calls/dispatch")
+async def dispatch_call(
+    body: DispatchCallBody,
+    ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    """Compliance gate + Dialer HTTP (mock si no hay DIALER_BASE_URL)."""
+    decision = compliance_service.evaluate(phone=body.phone, channel="voz")
+    if not decision.allowed:
+        raise PlatformError(
+            "compliance_blocked",
+            ",".join(decision.reasons) or "blocked",
+            status_code=403,
+        )
+
+    settings = get_settings()
+    dialer_url = (getattr(settings, "dialer_base_url", None) or "").rstrip("/")
+    phone_id = (
+        body.agent_phone_number_id
+        or getattr(settings, "dialer_default_phone_number_id", "")
+        or ""
+    )
+
+    payload = {
+        "lead": {"phone": body.phone, "first_name": body.first_name},
+        "campaign_id": body.campaign_id,
+        "agent_phone_number_id": phone_id or None,
+        "flow": body.flow,
+        "tenant_id": ctx.tenant_id,
+        "compliance": compliance_service.as_dict(decision),
+    }
+
+    if not dialer_url:
+        entry = {
+            "id": f"mock_{uuid4().hex[:10]}",
+            "mode": "mock",
+            "status": "queued_mock",
+            **payload,
+        }
+        ops_store.insert_dispatch(entry)
+        return {"ok": True, "mock_commercial": True, "dispatch": entry}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{dialer_url}/internal/dialer/calls/dispatch",
+            json={
+                "lead": {"phone": body.phone, "first_name": body.first_name},
+                "agent_phone_number_id": phone_id or None,
+            },
+            headers={"X-Tenant-Id": ctx.tenant_id},
+        )
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"raw": resp.text[:500]}
+        entry = {
+            "id": f"live_{uuid4().hex[:10]}",
+            "mode": "live",
+            "http_status": resp.status_code,
+            "provider_response": data,
+            "status": "sent" if resp.is_success else "failed",
+            **payload,
+        }
+        ops_store.insert_dispatch(entry)
+        return {"ok": resp.is_success, "mock_commercial": False, "dispatch": entry}
+
+
+@router.get("/calls/dispatch")
+async def list_dispatches(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    return {"items": ops_store.list_dispatches(50)}
+
+
+@router.get("/segmentation")
+async def ops_segmentation(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    return segmentation_service.scoreboard()
+
+
+class WhatsAppSendBody(BaseModel):
+    phone: str = Field(min_length=8, max_length=20)
+    text: str = Field(min_length=1, max_length=500)
+    template: str | None = None
+
+
+@router.post("/whatsapp/send")
+async def whatsapp_send(
+    body: WhatsAppSendBody,
+    _ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    decision = compliance_service.evaluate(phone=body.phone, channel="whatsapp")
+    if not decision.allowed:
+        raise PlatformError(
+            "compliance_blocked",
+            ",".join(decision.reasons) or "blocked",
+            status_code=403,
+        )
+    result = whatsapp_mock_service.send_text(
+        phone=body.phone, text=body.text, template=body.template
+    )
+    result["compliance"] = compliance_service.as_dict(decision)
+    return result
+
+
+class CrmMoveBody(BaseModel):
+    lead_id: str
+    to_column: str
+    tipificacion: str | None = None
+    funnel: str | None = None
+
+
+@router.post("/crm/move")
+async def crm_move(body: CrmMoveBody, _ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    try:
+        lead = crm_service.move(
+            lead_id=body.lead_id, to_column=body.to_column, tipificacion=body.tipificacion
+        )
+    except ValueError as exc:
+        raise PlatformError("crm_transition_blocked", str(exc), status_code=400) from exc
+    if body.funnel:
+        lead["funnel"] = body.funnel
+        ops_store.upsert_crm_lead(lead)
+    return lead
+
+
+class ConversationClaimBody(BaseModel):
+    conversation_id: str
+    advisor: str = "Admin Coopfuturo"
+
+
+@router.post("/conversations/claim")
+async def claim_conversation(
+    body: ConversationClaimBody, _ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    claim = {
+        "id": body.conversation_id,
+        "advisor": body.advisor,
+        "status": "human_control",
+    }
+    return ops_store.upsert_conversation_claim(claim)
+
+
+@router.get("/conversations")
+async def ops_conversations(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    data = _load("conversation.json")
+    claims = {c["id"]: c for c in ops_store.list_conversation_claims()}
+    convs = []
+    for c in data.get("conversations") or []:
+        claim = claims.get(c.get("id"))
+        if claim:
+            convs.append({**c, "claimedBy": claim.get("advisor"), "botPaused": True})
+        else:
+            convs.append(c)
+    return {**data, "conversations": convs}
+
+
+class DocumentBody(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = "application/pdf"
+    size_bytes: int = Field(default=0, ge=0)
+    contact_phone: str | None = None
+    kind: str = "orden_matricula"
+
+
+@router.post("/documents")
+async def register_document(
+    body: DocumentBody, _ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    return documents_service.register(
+        filename=body.filename,
+        content_type=body.content_type,
+        size_bytes=body.size_bytes,
+        contact_phone=body.contact_phone,
+        kind=body.kind,
+    )
+
+
+@router.get("/documents")
+async def list_documents(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    return documents_service.list()
+
+
+@router.get("/reports/{report_id}")
+async def get_report(
+    report_id: str, _ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    c = ops_store.counts()
+    dashboard = analytics_service.overlay_dashboard(_load("dashboard.json"))
+    payloads = {
+        "semanal": {
+            "id": "semanal",
+            "title": "Semanal piloto",
+            "kpis": dashboard.get("kpis"),
+            "ops": dashboard.get("ops"),
+            "store": c,
+        },
+        "funnel": {
+            "id": "funnel",
+            "title": "Funnel Renovación",
+            "funnel": dashboard.get("funnelRenovacion"),
+        },
+        "asesores": {
+            "id": "asesores",
+            "title": "Productividad asesores",
+            "handoffs": ops_store.list_handoffs(50),
+            "claims": ops_store.list_conversation_claims(),
+        },
+        "cumplimiento": {
+            "id": "cumplimiento",
+            "title": "Cumplimiento",
+            "opt_outs_note": "Lista en memoria del proceso compliance_service",
+            "dispatches": ops_store.list_dispatches(50),
+            "window": "08:00-20:00 COT",
+        },
+    }
+    if report_id not in payloads:
+        raise PlatformError("report_not_found", report_id, status_code=404)
+    return {"ok": True, "format": "json", "report": payloads[report_id]}
+
+
+@router.get("/settings")
+async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    stored = ops_store.all_settings()
+    defaults = {
+        "channels": {
+            "voz_enabled": True,
+            "whatsapp_enabled": True,
+            "ventana_8_20": True,
+            "grabacion": True,
+            "identificacion": True,
+        },
+        "dialer": {
+            "base_url": getattr(get_settings(), "dialer_base_url", "") or "",
+            "default_phone_number_id": getattr(
+                get_settings(), "dialer_default_phone_number_id", ""
+            )
+            or "",
+        },
+        "agent_config": agent_config_service.get(),
+    }
+    return {**defaults, **stored, "agent_config": agent_config_service.get()}
+
+
+class SettingsBody(BaseModel):
+    channels: dict[str, Any] | None = None
+    dialer: dict[str, Any] | None = None
+    agent_config: dict[str, Any] | None = None
+
+
+@router.put("/settings")
+async def put_settings(
+    body: SettingsBody, _ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    if body.channels is not None:
+        ops_store.set_setting("channels", body.channels)
+        if body.channels.get("ventana_8_20") is False:
+            compliance_service.window_start = time(0, 0)
+            compliance_service.window_end = time(23, 59)
+        elif body.channels.get("ventana_8_20") is True:
+            compliance_service.window_start = time(8, 0)
+            compliance_service.window_end = time(20, 0)
+    if body.dialer is not None:
+        ops_store.set_setting("dialer", body.dialer)
+        s = get_settings()
+        if "base_url" in body.dialer:
+            object.__setattr__(s, "dialer_base_url", str(body.dialer.get("base_url") or ""))
+        if "default_phone_number_id" in body.dialer:
+            object.__setattr__(
+                s,
+                "dialer_default_phone_number_id",
+                str(body.dialer.get("default_phone_number_id") or ""),
+            )
+    if body.agent_config is not None:
+        agent_config_service.save(body.agent_config)
+    return await get_settings_api(_ctx)
+
+
+@router.get("/core/associate/{document_id}")
+async def core_lookup(
+    document_id: str, _ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    return core_adapter_service.lookup_associate(document_id)
+
+
+class BatchAttemptBody(BaseModel):
+    campaign_id: str | None = None
+    flow: str = Field(default="A", pattern="^[AB]$")
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+@router.post("/orchestration/batch")
+async def orchestration_batch(
+    body: BatchAttemptBody, ctx: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    contacts = ops_store.list_contacts(body.limit)
+    results = []
+    for c in contacts:
+        r = await orchestration_service.attempt_call(
+            phone=c["phone"],
+            first_name=c.get("first_name") or "Asociado",
+            campaign_id=body.campaign_id,
+            flow=body.flow,
+            tenant_id=ctx.tenant_id,
+        )
+        results.append({"phone": c["phone"], **r})
+    ok = sum(1 for x in results if x.get("ok"))
+    blocked = sum(1 for x in results if x.get("blocked"))
+    return {
+        "ok": True,
+        "total": len(results),
+        "sent_or_queued": ok,
+        "blocked": blocked,
+        "results": results,
+    }

@@ -1,16 +1,33 @@
-/** Stubs for live API — wire real endpoints later. */
-export async function getDashboard(): Promise<never> {
-  throw new Error("API live no configurada. Use NEXT_PUBLIC_API_MODE=mock");
+/** Live Ops API → pilot-core `/ops/*` (MODULES.md). */
+const base = (process.env.NEXT_PUBLIC_PILOT_CORE_URL ?? "http://127.0.0.1:8201").replace(/\/$/, "");
+
+async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${base}${path}`, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`pilot-core ${path} → HTTP ${res.status}`);
+  }
+  return res.json() as Promise<T>;
 }
-export async function getCampaigns(): Promise<never> {
-  throw new Error("API live no configurada");
+
+export async function getDashboard() {
+  return getJson("/ops/dashboard");
 }
-export async function getConversations(): Promise<never> {
-  throw new Error("API live no configurada");
+export async function getCampaigns() {
+  return getJson("/ops/campaigns");
 }
-export async function getCrm(): Promise<never> {
-  throw new Error("API live no configurada");
+export async function getConversations() {
+  return getJson("/ops/conversations");
 }
-export async function getHandoff(): Promise<never> {
-  throw new Error("API live no configurada");
+export async function getCrm() {
+  return getJson("/ops/crm");
+}
+export async function getHandoff() {
+  return getJson("/ops/handoff");
+}
+
+export async function getSegmentation() {
+  return getJson("/ops/segmentation");
 }

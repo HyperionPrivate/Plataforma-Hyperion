@@ -8,6 +8,7 @@ import { StatCard } from "@/components/data/stat-card";
 import { ChartCard } from "@/components/data/chart-card";
 import { ConversionHeatmap } from "@/components/charts";
 import { useCampaigns } from "@/hooks/use-pulso";
+import { createCampaign } from "@/services/ops-client";
 import { cn, formatNumber } from "@/lib/utils";
 import { Plus, Phone, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +23,30 @@ export default function CampanasPage() {
   const { data, isLoading, isError, refetch } = useCampaigns();
   const [selectedId, setSelectedId] = useState<string>("c1");
   const [retriesOn, setRetriesOn] = useState(true);
+  const [creating, setCreating] = useState(false);
+
+  async function onNuevaCampana() {
+    setCreating(true);
+    try {
+      const created = await createCampaign({
+        name: `Campana demo ${new Date().toLocaleTimeString("es-CO", { hour12: false })}`,
+        segment: "Renovacion",
+        channels: ["voz", "whatsapp"],
+        total: 100,
+      });
+      toast.success("Campaña creada", {
+        description: `${created.id} · ${created.name}`,
+      });
+      await refetch();
+      setSelectedId(created.id);
+    } catch (err) {
+      toast.error("No se pudo crear la campaña", {
+        description: err instanceof Error ? err.message : "Error desconocido",
+      });
+    } finally {
+      setCreating(false);
+    }
+  }
 
   if (isError) {
     return (
@@ -44,15 +69,9 @@ export default function CampanasPage() {
         title="Campañas"
         subtitle="Gestiona y monitorea tus campañas outbound."
         actions={
-          <Button
-            onClick={() =>
-              toast.message("Wizard de campaña (mock)", {
-                description: "Conectaremos el backend después.",
-              })
-            }
-          >
+          <Button onClick={onNuevaCampana} disabled={creating}>
             <Plus className="size-[18px]" strokeWidth={1.75} />
-            Nueva campaña
+            {creating ? "Creando…" : "Nueva campaña"}
           </Button>
         }
       />

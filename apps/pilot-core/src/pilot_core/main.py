@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from platform_kit.fastapi_app import create_app
 
 from pilot_core import __version__, runtime
+from pilot_core.routers.ops import router as ops_router
 from pilot_core.routers.tech import router as tech_router
 from pilot_core.settings import get_settings
 
@@ -26,6 +27,6 @@ app = create_app(
     title="Coopfuturo pilot-core",
     engine_provider=runtime.get_engine,
     redis_ping=runtime.redis_ping,
-    routers=[tech_router],
+    routers=[tech_router, ops_router],
     lifespan=lifespan,
 )

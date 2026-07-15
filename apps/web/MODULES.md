@@ -106,6 +106,8 @@ Preferencias white-label, ventanas, canales. Live: settings service + roles OIDC
 
 ---
 
+Live: `src/services/live/` → `pilot-core` `GET/POST /ops/*` (`NEXT_PUBLIC_API_MODE=live`, `NEXT_PUBLIC_PILOT_CORE_URL`).
+
 ## Arranque
 
 ```powershell
@@ -116,10 +118,26 @@ npm run dev
 
 http://localhost:3000 → `/dashboard`
 
+API producto (misma forma de datos):
+
+```powershell
+# terminal 2 — desde raíz del monorepo
+$env:APP_ENV="development"; $env:AUTH_DISABLED="true"; $env:EVENT_WORKERS_ENABLED="false"
+$env:DATABASE_URL="sqlite+aiosqlite:///./tmp-pilot.db"
+$env:REDIS_URL="redis://127.0.0.1:6379/15"
+$env:PYTHONPATH="packages/platform-kit/src;apps/pilot-core/src"
+.\.venv\Scripts\python.exe -m uvicorn pilot_core.main:app --host 127.0.0.1 --port 8201
+```
+
+- `GET /ops/dashboard|campaigns|conversations|crm|handoff`
+- `POST /ops/campaigns`
+- `POST /ops/calls/dispatch` (mock si no hay `DIALER_BASE_URL`)
+
 Docker/Traefik: servicio `web` en `docker-compose.dev.yml` (path `/` excluyendo APIs).
 
-## Qué NO incluye este PR
+## Qué falta para producto completo
 
 - Auth OIDC / masking PII en API
-- Cableado real `NEXT_PUBLIC_API_MODE=live`
-- Push de lógica comercial en FastAPI
+- Persistencia real (no solo fixtures + memoria)
+- Cableado Dialer/WhatsApp/LIWA productivos
+- Importer VIP-II, compliance, scoring, CRM state machines

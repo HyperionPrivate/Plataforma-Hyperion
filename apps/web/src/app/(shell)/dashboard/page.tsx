@@ -33,7 +33,10 @@ const DEFAULT_FILTERS: Filters = {
 
 export default function DashboardPage() {
   const { data, isLoading, isError, refetch } = useDashboard();
-  const seed = (data?.liveEvents ?? []) as LiveEvent[];
+  const seed = useMemo(
+    () => (data?.liveEvents ?? []) as LiveEvent[],
+    [data?.liveEvents],
+  );
   const live = useLiveFeed(seed);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);

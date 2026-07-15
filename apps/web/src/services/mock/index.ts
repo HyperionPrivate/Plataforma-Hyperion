@@ -31,6 +31,16 @@ export async function getHandoff() {
   return handoff;
 }
 
+export async function getSegmentation() {
+  await delay();
+  return {
+    points: [],
+    waves: [],
+    retries: [],
+    heatmap: { days: [], hours: [], values: [] },
+  };
+}
+
 export function createLiveEvent() {
   const names = ["Laura Gómez", "Carlos Ruiz", "Andrea Díaz", "Julián Mora", "Paola Niño"];
   const kinds = ["Llamada conectada", "Orden recibida", "WhatsApp entregado", "Handoff creado"];

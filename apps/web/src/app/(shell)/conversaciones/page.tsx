@@ -37,8 +37,11 @@ export default function ConversacionesPage() {
   );
 
   useEffect(() => {
-    if (selected) setBotActive(selected.botActive ?? true);
-  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (selected) {
+      const paused = Boolean(selected.botPaused || selected.claimedBy);
+      setBotActive(!paused && (selected.botActive ?? true));
+    }
+  }, [selected?.id, selected?.botPaused, selected?.claimedBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const messages = useMemo(() => {
     if (!selected) return [];
@@ -215,10 +218,21 @@ export default function ConversacionesPage() {
               <Button
                 size="sm"
                 variant={botActive ? "default" : "secondary"}
-                onClick={() => {
+                onClick={async () => {
                   if (botActive) {
-                    setBotActive(false);
-                    toast.success("Tomaste el control de la conversación");
+                    try {
+                      if (selected?.id) {
+                        const { claimConversation } = await import("@/services/ops-client");
+                        await claimConversation({ conversation_id: selected.id });
+                      }
+                      setBotActive(false);
+                      toast.success("Tomaste el control de la conversación");
+                      await refetch();
+                    } catch (err) {
+                      toast.error("No se pudo reclamar", {
+                        description: err instanceof Error ? err.message : "Error",
+                      });
+                    }
                   } else {
                     setBotActive(true);
                     toast.message("Control devuelto al bot");

@@ -1,0 +1,220 @@
+{
+  "funnels": {
+    "Renovación": {
+      "title": "CRM — Funnel Renovación",
+      "columns": [
+        {
+          "id": "pendiente",
+          "label": "Pendiente de contacto",
+          "count": 1588,
+          "cards": [
+            { "id": "r1", "name": "María Fernanda Gómez", "universidad": "U. de los Andes", "score": 87, "channel": "whatsapp", "urgency": "02:15:42" },
+            { "id": "r2", "name": "Carlos Ruiz", "universidad": "UNAB", "score": 72, "channel": "voz", "urgency": "01:05:10" }
+          ]
+        },
+        {
+          "id": "contactado",
+          "label": "Contactado",
+          "count": 3204,
+          "cards": [
+            { "id": "r3", "name": "Andrea Díaz", "universidad": "UIS", "score": 81, "channel": "whatsapp", "urgency": "00:45:00" }
+          ]
+        },
+        {
+          "id": "interesado",
+          "label": "Interesado",
+          "count": 2145,
+          "cards": [
+            { "id": "r4", "name": "Julián Mora", "universidad": "UPB", "score": 90, "channel": "voz", "urgency": "00:20:12" }
+          ]
+        },
+        {
+          "id": "documento",
+          "label": "Documento recibido",
+          "count": 1913,
+          "cards": [
+            { "id": "r5", "name": "Paola Niño", "universidad": "UNAB", "score": 88, "channel": "whatsapp", "urgency": "00:12:33" }
+          ]
+        },
+        {
+          "id": "transferido",
+          "label": "Transferido a asesor",
+          "count": 824,
+          "cards": [
+            { "id": "r6", "name": "Laura Herrera", "universidad": "U. Nacional", "score": 92, "channel": "whatsapp", "urgency": "00:08:01" }
+          ]
+        },
+        {
+          "id": "renovado",
+          "label": "Renovado",
+          "count": 326,
+          "cards": [
+            { "id": "r7", "name": "David Torres", "universidad": "UIS", "score": 95, "channel": "whatsapp", "urgency": "—" }
+          ]
+        }
+      ],
+      "tipificaciones": [
+        { "key": "no_contesta", "label": "No contesta", "count": 412 },
+        { "key": "numero_errado", "label": "Número errado", "count": 96 },
+        { "key": "volver_llamar", "label": "Volver a llamar", "count": 233 },
+        { "key": "opt_out", "label": "Opt-out", "count": 18 }
+      ]
+    },
+    "Reactivación": {
+      "title": "CRM — Funnel Reactivación",
+      "columns": [
+        {
+          "id": "pendiente",
+          "label": "Pendiente de contacto",
+          "count": 4200,
+          "cards": [
+            { "id": "a1", "name": "Santiago Pérez", "universidad": "UPB", "score": 44, "channel": "voz", "urgency": "03:10:00" },
+            { "id": "a2", "name": "Camila Restrepo", "universidad": "EAFIT", "score": 58, "channel": "whatsapp", "urgency": "02:40:11" }
+          ]
+        },
+        {
+          "id": "contactado",
+          "label": "Contactado",
+          "count": 2800,
+          "cards": [
+            { "id": "a3", "name": "Andrés Quintero", "universidad": "U. Javeriana", "score": 61, "channel": "voz", "urgency": "01:22:00" }
+          ]
+        },
+        {
+          "id": "interesado",
+          "label": "Interesado",
+          "count": 1100,
+          "cards": [
+            { "id": "a4", "name": "Natalia Vargas", "universidad": "UNAB", "score": 70, "channel": "whatsapp", "urgency": "00:55:40" }
+          ]
+        },
+        {
+          "id": "documento",
+          "label": "Documento recibido",
+          "count": 640,
+          "cards": [
+            { "id": "a5", "name": "Felipe Ordóñez", "universidad": "UIS", "score": 76, "channel": "whatsapp", "urgency": "00:33:12" }
+          ]
+        },
+        {
+          "id": "transferido",
+          "label": "Transferido a asesor",
+          "count": 410,
+          "cards": [
+            { "id": "a6", "name": "Diana Castillo", "universidad": "UPB", "score": 82, "channel": "voz", "urgency": "00:15:08" }
+          ]
+        },
+        {
+          "id": "reactivado",
+          "label": "Reactivado",
+          "count": 190,
+          "cards": [
+            { "id": "a7", "name": "Mauricio Peña", "universidad": "U. Nacional", "score": 89, "channel": "whatsapp", "urgency": "—" }
+          ]
+        }
+      ],
+      "tipificaciones": [
+        { "key": "no_estudia", "label": "Ya no estudia", "count": 520 },
+        { "key": "no_contesta", "label": "No contesta", "count": 380 },
+        { "key": "volver_llamar", "label": "Volver a llamar", "count": 210 },
+        { "key": "opt_out", "label": "Opt-out", "count": 42 }
+      ]
+    },
+    "Nuevos": {
+      "title": "CRM — Funnel Nuevos",
+      "columns": [
+        {
+          "id": "lead",
+          "label": "Lead inbound",
+          "count": 890,
+          "cards": [
+            { "id": "n1", "name": "Juan David Morales", "universidad": "UIS", "score": 54, "channel": "whatsapp", "urgency": "00:48:00" },
+            { "id": "n2", "name": "Valentina Rojas", "universidad": "UNAB", "score": 63, "channel": "whatsapp", "urgency": "01:12:30" }
+          ]
+        },
+        {
+          "id": "calificado",
+          "label": "Calificado",
+          "count": 420,
+          "cards": [
+            { "id": "n3", "name": "Sebastián Mejía", "universidad": "UPB", "score": 71, "channel": "voz", "urgency": "00:30:00" }
+          ]
+        },
+        {
+          "id": "documento",
+          "label": "Documento recibido",
+          "count": 210,
+          "cards": [
+            { "id": "n4", "name": "Isabella Franco", "universidad": "EAFIT", "score": 78, "channel": "whatsapp", "urgency": "00:18:22" }
+          ]
+        },
+        {
+          "id": "transferido",
+          "label": "Transferido a asesor",
+          "count": 95,
+          "cards": [
+            { "id": "n5", "name": "Tomás Gil", "universidad": "U. de los Andes", "score": 84, "channel": "whatsapp", "urgency": "00:09:45" }
+          ]
+        },
+        {
+          "id": "desembolsado",
+          "label": "Desembolsado",
+          "count": 48,
+          "cards": [
+            { "id": "n6", "name": "Sofía Cárdenas", "universidad": "UIS", "score": 91, "channel": "whatsapp", "urgency": "—" }
+          ]
+        }
+      ],
+      "tipificaciones": [
+        { "key": "info", "label": "Solo información", "count": 140 },
+        { "key": "no_elegible", "label": "No elegible", "count": 67 },
+        { "key": "volver_llamar", "label": "Volver a llamar", "count": 88 },
+        { "key": "opt_out", "label": "Opt-out", "count": 9 }
+      ]
+    },
+    "Microcrédito": {
+      "title": "CRM — Funnel Microcrédito",
+      "columns": [
+        {
+          "id": "solicitud",
+          "label": "Solicitud inbound",
+          "count": 310,
+          "cards": [
+            { "id": "m1", "name": "Pedro Alarcón", "universidad": "—", "score": 66, "channel": "whatsapp", "urgency": "00:25:00" },
+            { "id": "m2", "name": "Lucía Bermúdez", "universidad": "—", "score": 59, "channel": "whatsapp", "urgency": "00:41:18" }
+          ]
+        },
+        {
+          "id": "validacion",
+          "label": "Validación docs",
+          "count": 180,
+          "cards": [
+            { "id": "m3", "name": "Ricardo Suárez", "universidad": "—", "score": 74, "channel": "whatsapp", "urgency": "00:14:50" }
+          ]
+        },
+        {
+          "id": "analisis",
+          "label": "En análisis",
+          "count": 95,
+          "cards": [
+            { "id": "m4", "name": "Elena Parra", "universidad": "—", "score": 80, "channel": "voz", "urgency": "00:07:30" }
+          ]
+        },
+        {
+          "id": "aprobado",
+          "label": "Aprobado",
+          "count": 52,
+          "cards": [
+            { "id": "m5", "name": "Óscar Rincón", "universidad": "—", "score": 86, "channel": "whatsapp", "urgency": "—" }
+          ]
+        }
+      ],
+      "tipificaciones": [
+        { "key": "docs_incompletos", "label": "Docs incompletos", "count": 73 },
+        { "key": "rechazado", "label": "Rechazado scoring", "count": 41 },
+        { "key": "desiste", "label": "Desiste", "count": 28 },
+        { "key": "opt_out", "label": "Opt-out", "count": 5 }
+      ]
+    }
+  }
+}

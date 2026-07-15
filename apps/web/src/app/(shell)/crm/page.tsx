@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useCrm } from "@/hooks/use-pulso";
+import { moveCrmLead } from "@/services/ops-client";
 import { cn } from "@/lib/utils";
 import { Phone, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -12,9 +13,38 @@ import { toast } from "sonner";
 const TABS = ["Renovación", "Reactivación", "Nuevos", "Microcrédito"] as const;
 type Tab = (typeof TABS)[number];
 
+const NEXT: Record<string, string> = {
+  pendiente: "contactado",
+  contactado: "interesado",
+  interesado: "documento",
+  documento: "transferido",
+  transferido: "renovado",
+};
+
 export default function CrmPage() {
   const { data, isLoading, isError, refetch } = useCrm();
   const [tab, setTab] = useState<Tab>("Renovación");
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function advance(cardId: string, columnId: string) {
+    const to = NEXT[columnId];
+    if (!to) {
+      toast.message("Lead ya en etapa final");
+      return;
+    }
+    setBusyId(cardId);
+    try {
+      await moveCrmLead({ lead_id: cardId, to_column: to, funnel: tab });
+      toast.success(`Movido a ${to}`);
+      await refetch();
+    } catch (err) {
+      toast.error("No se pudo mover", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   if (isError) {
     return (
@@ -33,10 +63,7 @@ export default function CrmPage() {
 
   return (
     <div>
-      <PageHeader
-        title={funnel?.title ?? "CRM"}
-        subtitle="Pipeline por estados del piloto"
-      />
+      <PageHeader title={funnel?.title ?? "CRM"} subtitle="Pipeline por estados del piloto" />
 
       <div className="mb-4 flex flex-wrap gap-2">
         {TABS.map((t) => (
@@ -48,7 +75,7 @@ export default function CrmPage() {
               "rounded-full px-3 py-1.5 text-sm transition-colors",
               tab === t
                 ? "bg-[var(--accent-dim)] text-[var(--accent)]"
-                : "bg-[var(--surface)] text-[var(--muted)] hover:text-[var(--text)]"
+                : "bg-[var(--surface)] text-[var(--muted)] hover:text-[var(--text)]",
             )}
           >
             {t}
@@ -57,7 +84,7 @@ export default function CrmPage() {
       </div>
 
       <div className="mb-4 flex flex-wrap gap-2 text-xs">
-        {tipificaciones.map((t) => (
+        {tipificaciones.map((t: { key: string; label: string; count: number }) => (
           <Badge key={t.key} tone="muted">
             {t.label}: {t.count}
           </Badge>
@@ -68,7 +95,7 @@ export default function CrmPage() {
         <div className="h-64 animate-pulse rounded-xl bg-white/5" />
       ) : (
         <div className="flex gap-3 overflow-x-auto pb-4">
-          {columns.map((col) => (
+          {columns.map((col: { id: string; label: string; count: number; cards: Array<{ id: string; name: string; universidad: string; score: number; channel: string; urgency: string }> }) => (
             <div
               key={`${tab}-${col.id}`}
               className="flex w-64 shrink-0 flex-col rounded-xl border border-[var(--border)] bg-[var(--surface)]"
@@ -81,15 +108,9 @@ export default function CrmPage() {
               </div>
               <div className="flex flex-col gap-2 p-2">
                 {col.cards.map((card) => (
-                  <button
+                  <div
                     key={card.id}
-                    type="button"
-                    onClick={() =>
-                      toast.message(card.name, {
-                        description: `Ficha 360 · ${tab} (mock)`,
-                      })
-                    }
-                    className="rounded-lg border border-[var(--border)] bg-[var(--bg)]/50 p-3 text-left transition hover:border-[var(--accent)]/40"
+                    className="rounded-lg border border-[var(--border)] bg-[var(--bg)]/50 p-3 text-left"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
@@ -108,10 +129,21 @@ export default function CrmPage() {
                       )}
                       <span className="tabular text-[var(--warning)]">{card.urgency}</span>
                     </div>
-                  </button>
+                    {NEXT[col.id] ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="mt-2 w-full"
+                        disabled={busyId === card.id}
+                        onClick={() => advance(card.id, col.id)}
+                      >
+                        Avanzar → {NEXT[col.id]}
+                      </Button>
+                    ) : null}
+                  </div>
                 ))}
                 <p className="px-1 text-xs text-[var(--muted)]">
-                  + {(col.count - col.cards.length).toLocaleString("es-CO")} más
+                  + {Math.max(0, col.count - col.cards.length).toLocaleString("es-CO")} más
                 </p>
               </div>
             </div>

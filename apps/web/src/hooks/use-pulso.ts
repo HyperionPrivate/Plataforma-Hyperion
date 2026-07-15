@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, createLiveEvent } from "@/services";
 import type { LiveEvent } from "@/components/domain/live-feed";
 
@@ -25,12 +25,23 @@ export function useHandoff() {
   return useQuery({ queryKey: ["handoff"], queryFn: () => api.getHandoff() });
 }
 
-export function useLiveFeed(seed: LiveEvent[] = []) {
-  const [events, setEvents] = useState<LiveEvent[]>(seed);
+export function useSegmentation() {
+  return useQuery({ queryKey: ["segmentation"], queryFn: () => api.getSegmentation() });
+}
+
+/** Stable empty seed — inline `= []` creates a new array every render and loops setState. */
+const EMPTY_SEED: LiveEvent[] = [];
+
+export function useLiveFeed(seed: LiveEvent[] = EMPTY_SEED) {
+  const [events, setEvents] = useState<LiveEvent[]>(() => seed);
+  const seedKey = seed.map((e) => e.id).join("|");
+  const lastKey = useRef<string>("");
 
   useEffect(() => {
+    if (seedKey === lastKey.current) return;
+    lastKey.current = seedKey;
     setEvents(seed);
-  }, [seed]);
+  }, [seed, seedKey]);
 
   useEffect(() => {
     const id = setInterval(() => {

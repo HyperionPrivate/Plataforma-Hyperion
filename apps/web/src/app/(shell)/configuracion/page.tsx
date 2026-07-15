@@ -1,28 +1,122 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChartCard } from "@/components/data/chart-card";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { fetchSettings, saveSettings } from "@/services/ops-client";
 
-const TABS = ["Canales", "Guiones", "Usuarios y roles", "Cumplimiento"];
+const TABS = ["Canales", "Dialer", "Agentes", "Cumplimiento"];
+
+type Channels = {
+  voz_enabled: boolean;
+  whatsapp_enabled: boolean;
+  ventana_8_20: boolean;
+  grabacion: boolean;
+  identificacion: boolean;
+};
+
+type Dialer = {
+  base_url: string;
+  default_phone_number_id: string;
+};
+
+type AgentFlow = {
+  name?: string;
+  segment?: string;
+  agent_id?: string;
+  phone_number_id?: string;
+  channel?: string;
+};
 
 export default function ConfiguracionPage() {
   const [tab, setTab] = useState("Canales");
-  const [toggles, setToggles] = useState({
-    ventana: true,
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [channels, setChannels] = useState<Channels>({
+    voz_enabled: true,
+    whatsapp_enabled: true,
+    ventana_8_20: true,
     grabacion: true,
     identificacion: true,
   });
+  const [dialer, setDialer] = useState<Dialer>({
+    base_url: "",
+    default_phone_number_id: "",
+  });
+  const [flujoA, setFlujoA] = useState<AgentFlow>({});
+  const [flujoB, setFlujoB] = useState<AgentFlow>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await fetchSettings();
+        if (cancelled) return;
+        if (s.channels) {
+          setChannels((c) => ({
+            ...c,
+            ...s.channels,
+          }));
+        }
+        if (s.dialer) {
+          setDialer({
+            base_url: s.dialer.base_url ?? "",
+            default_phone_number_id: s.dialer.default_phone_number_id ?? "",
+          });
+        }
+        const ac = s.agent_config || {};
+        if (ac.flujo_a && typeof ac.flujo_a === "object") {
+          setFlujoA(ac.flujo_a as AgentFlow);
+        }
+        if (ac.flujo_b && typeof ac.flujo_b === "object") {
+          setFlujoB(ac.flujo_b as AgentFlow);
+        }
+      } catch (err) {
+        toast.error("No se pudo cargar configuración", {
+          description: err instanceof Error ? err.message : "¿API en :8201?",
+        });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function onSave() {
+    setSaving(true);
+    try {
+      await saveSettings({
+        channels,
+        dialer,
+        agent_config: {
+          flujo_a: flujoA,
+          flujo_b: flujoB,
+        },
+      });
+      toast.success("Configuración guardada en SQLite");
+    } catch (err) {
+      toast.error("No se pudo guardar", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div>
-      <PageHeader title="Configuración de la plataforma" subtitle="Canales, guiones y cumplimiento Ley 1581" />
+      <PageHeader
+        title="Configuración de la plataforma"
+        subtitle="Canales, dialer HTTP y agentes — persistido en pilot-core."
+      />
 
-      <div className="mb-6 flex flex-wrap gap-2 border-b border-[var(--border)] pb-3">
+      <div className="mb-6 flex flex-wrap items-center gap-2 border-b border-[var(--border)] pb-3">
         {TABS.map((t) => (
           <button
             key={t}
@@ -30,109 +124,159 @@ export default function ConfiguracionPage() {
             onClick={() => setTab(t)}
             className={cn(
               "rounded-lg px-3 py-1.5 text-sm",
-              tab === t ? "bg-[var(--accent-dim)] text-[var(--accent)]" : "text-[var(--muted)]"
+              tab === t ? "bg-[var(--accent-dim)] text-[var(--accent)]" : "text-[var(--muted)]",
             )}
           >
             {t}
           </button>
         ))}
+        <div className="ml-auto">
+          <Button size="sm" onClick={onSave} disabled={saving || loading}>
+            {saving ? "Guardando…" : "Guardar"}
+          </Button>
+        </div>
       </div>
 
-      {tab === "Canales" && (
-        <div className="grid gap-4 md:grid-cols-3">
-          {[
-            { title: "Línea de voz", lines: ["Troncal conectada", "12 líneas simultáneas", "Estado: Operativa"] },
-            { title: "WhatsApp Business", lines: ["Línea verificada", "Calidad: Alta", "Plantillas aprobadas: 8/10"] },
-            { title: "Motor de voz", lines: ["Latencia promedio: 380 ms", "Voz: Femenina Valentina", "Idioma: es-CO"] },
-          ].map((c) => (
-            <ChartCard key={c.title} title={c.title}>
-              <ul className="space-y-2 text-sm text-[var(--muted)]">
-                {c.lines.map((l) => (
-                  <li key={l} className="flex items-center gap-2">
-                    <span className="size-1.5 rounded-full bg-[var(--accent)]" />
-                    {l}
-                  </li>
-                ))}
-              </ul>
-            </ChartCard>
-          ))}
-        </div>
-      )}
+      {loading ? (
+        <p className="text-sm text-[var(--muted)]">Cargando desde /ops/settings…</p>
+      ) : null}
 
-      {tab === "Guiones" && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <ChartCard
-            title="Guion activo — Renovación v2"
-            toolbar={<Badge tone="success">Activo</Badge>}
-          >
-            <pre className="max-h-64 overflow-auto rounded-lg bg-[var(--bg)] p-3 font-mono text-xs text-[var(--muted)]">
-{`# Personality
-Eres asesora de COOPFUTURO.
-Hablas con {{nombre}} de {{universidad}}.
-
-# Goal
-Anunciar cupo preaprobado y pedir orden de matrícula.`}
-            </pre>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {["{{nombre}}", "{{universidad}}", "{{cupo}}"].map((v) => (
-                <Badge key={v} tone="muted">
-                  {v}
-                </Badge>
+      {tab === "Canales" && !loading && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <ChartCard title="Canales activos">
+            <ul className="space-y-4">
+              {(
+                [
+                  ["voz_enabled", "Línea de voz"],
+                  ["whatsapp_enabled", "WhatsApp (mock hasta LIWA)"],
+                ] as const
+              ).map(([key, label]) => (
+                <li key={key} className="flex items-center justify-between gap-4">
+                  <span className="text-sm">{label}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={channels[key]}
+                    onClick={() => setChannels((c) => ({ ...c, [key]: !c[key] }))}
+                    className={cn(
+                      "relative h-6 w-11 rounded-full transition-colors",
+                      channels[key] ? "bg-[var(--accent)]" : "bg-white/15",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "absolute top-0.5 size-5 rounded-full bg-white transition-transform",
+                        channels[key] ? "left-5" : "left-0.5",
+                      )}
+                    />
+                  </button>
+                </li>
               ))}
-            </div>
-            <Button className="mt-3" size="sm" onClick={() => toast.success("Cambios del guion guardados")}>
-              Guardar cambios
-            </Button>
+            </ul>
+            <p className="mt-4 text-xs text-[var(--muted)]">
+              WhatsApp real bloqueado hasta rotación LIWA. Voz live requiere Dialer URL.
+            </p>
           </ChartCard>
-          <ChartCard title="Historial de versiones">
-            <ul className="space-y-3 text-sm">
-              {["v2 · Hoy 09:42 · Cambios menores", "v1 · Ayer · Aprobación Coopfuturo", "v0 · Borrador inicial"].map(
-                (v) => (
-                  <li key={v} className="border-l-2 border-[var(--accent)] pl-3 text-[var(--muted)]">
-                    {v}
-                  </li>
-                )
-              )}
+          <ChartCard title="Estado">
+            <ul className="space-y-2 text-sm text-[var(--muted)]">
+              <li className="flex items-center gap-2">
+                <span className="size-1.5 rounded-full bg-[var(--accent)]" />
+                Dialer: {dialer.base_url ? "URL configurada" : "vacío → mock"}
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="size-1.5 rounded-full bg-[var(--accent)]" />
+                WhatsApp: modo mock comercial
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="size-1.5 rounded-full bg-[var(--accent)]" />
+                Auth: deshabilitada en development
+              </li>
             </ul>
           </ChartCard>
         </div>
       )}
 
-      {tab === "Usuarios y roles" && (
-        <ChartCard title="Usuarios">
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs text-[var(--muted)]">
-              <tr className="border-b border-[var(--border)]">
-                <th className="py-2">Nombre</th>
-                <th className="py-2">Rol</th>
-                <th className="py-2">Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                ["Admin Coopfuturo", "Administrador", "Activo"],
-                ["Laura Mendoza", "Asesor", "Activo"],
-                ["Carlos Restrepo", "Supervisor", "Activo"],
-              ].map(([n, r, e]) => (
-                <tr key={n} className="border-b border-[var(--border)]/50">
-                  <td className="py-2">{n}</td>
-                  <td className="py-2 text-[var(--muted)]">{r}</td>
-                  <td className="py-2">
-                    <Badge tone="success">{e}</Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {tab === "Dialer" && !loading && (
+        <ChartCard title="Microservicio dialer">
+          <div className="space-y-3 p-1">
+            <label className="block text-sm">
+              Base URL (vacío = orquestación mock)
+              <input
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 font-mono text-sm"
+                placeholder="http://127.0.0.1:8080"
+                value={dialer.base_url}
+                onChange={(e) => setDialer((d) => ({ ...d, base_url: e.target.value }))}
+              />
+            </label>
+            <label className="block text-sm">
+              Phone number ID por defecto
+              <input
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 font-mono text-sm"
+                value={dialer.default_phone_number_id}
+                onChange={(e) =>
+                  setDialer((d) => ({ ...d, default_phone_number_id: e.target.value }))
+                }
+              />
+            </label>
+            <p className="text-xs text-[var(--muted)]">
+              Al guardar, pilot-core hace hot-patch y llama{" "}
+              <code className="text-[var(--accent)]">POST /internal/dialer/calls/dispatch</code> si
+              hay URL.
+            </p>
+          </div>
         </ChartCard>
       )}
 
-      {tab === "Cumplimiento" && (
-        <ChartCard title="Ley 1581 de 2012 — Habeas Data">
+      {tab === "Agentes" && !loading && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {(
+            [
+              ["Flujo A · Renovación", flujoA, setFlujoA],
+              ["Flujo B · Reactivación", flujoB, setFlujoB],
+            ] as const
+          ).map(([title, flow, setFlow]) => (
+            <ChartCard
+              key={title}
+              title={title}
+              toolbar={<Badge tone="muted">{flow.segment || "—"}</Badge>}
+            >
+              <div className="space-y-3">
+                <label className="block text-sm">
+                  Nombre
+                  <input
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                    value={flow.name ?? ""}
+                    onChange={(e) => setFlow({ ...flow, name: e.target.value })}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Agent ID (ElevenLabs)
+                  <input
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 font-mono text-xs"
+                    value={flow.agent_id ?? ""}
+                    onChange={(e) => setFlow({ ...flow, agent_id: e.target.value })}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Phone number ID
+                  <input
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 font-mono text-xs"
+                    value={flow.phone_number_id ?? ""}
+                    onChange={(e) => setFlow({ ...flow, phone_number_id: e.target.value })}
+                  />
+                </label>
+              </div>
+            </ChartCard>
+          ))}
+        </div>
+      )}
+
+      {tab === "Cumplimiento" && !loading && (
+        <ChartCard title="Ley 1581 — Habeas Data">
           <ul className="space-y-4">
             {(
               [
-                ["ventana", "Ventana horaria 8:00–20:00"],
+                ["ventana_8_20", "Ventana horaria 8:00–20:00 COT"],
                 ["grabacion", "Grabación y trazabilidad"],
                 ["identificacion", "Identificación como asistente virtual"],
               ] as const
@@ -142,29 +286,27 @@ Anunciar cupo preaprobado y pedir orden de matrícula.`}
                 <button
                   type="button"
                   role="switch"
-                  aria-checked={toggles[key]}
-                  onClick={() => setToggles((t) => ({ ...t, [key]: !t[key] }))}
+                  aria-checked={channels[key]}
+                  onClick={() => setChannels((c) => ({ ...c, [key]: !c[key] }))}
                   className={cn(
                     "relative h-6 w-11 rounded-full transition-colors",
-                    toggles[key] ? "bg-[var(--accent)]" : "bg-white/15"
+                    channels[key] ? "bg-[var(--accent)]" : "bg-white/15",
                   )}
                 >
                   <span
                     className={cn(
                       "absolute top-0.5 size-5 rounded-full bg-white transition-transform",
-                      toggles[key] ? "left-5" : "left-0.5"
+                      channels[key] ? "left-5" : "left-0.5",
                     )}
                   />
                 </button>
               </li>
             ))}
-            <li className="flex items-center justify-between text-sm">
-              <span>Lista de exclusión</span>
-              <Button variant="outline" size="sm" onClick={() => toast.message("214 números en exclusión")}>
-                214 números
-              </Button>
-            </li>
           </ul>
+          <p className="mt-4 text-xs text-[var(--muted)]">
+            Desactivar la ventana permite orquestar fuera de 8–20 (solo demo local). Opt-out desde
+            Laboratorio.
+          </p>
         </ChartCard>
       )}
     </div>
