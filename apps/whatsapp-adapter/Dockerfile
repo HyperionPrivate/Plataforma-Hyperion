@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12.10-slim-bookworm AS builder
 WORKDIR /build
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 COPY packages/platform-kit /build/packages/platform-kit
 COPY apps/whatsapp-adapter/requirements.txt /build/requirements.txt
 COPY apps/whatsapp-adapter/pyproject.toml /build/pyproject.toml
@@ -10,8 +11,10 @@ RUN pip install --no-cache-dir --prefix=/install /build/packages/platform-kit \
  && pip install --no-cache-dir --prefix=/install --no-deps /build
 
 FROM python:3.12.10-slim-bookworm AS runtime
-RUN useradd --create-home --uid 10001 appuser \
- && apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends curl \
+ && useradd --create-home --uid 10001 appuser \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/src

@@ -18,3 +18,8 @@ Confirmar en este issue/PR:
 | Seguridad | `@TBD-security` |
 
 Tras confirmación, actualizar `.github/CODEOWNERS` y `docs/service-ownership.md`.
+
+## Bloqueo de merge
+
+El PR de foundation **no debe fusionarse** mientras CODEOWNERS contenga `@TBD-*`.
+Asignar revisores reales en GitHub y reemplazar placeholders antes de approve.

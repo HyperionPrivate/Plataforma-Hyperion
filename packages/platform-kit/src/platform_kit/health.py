@@ -40,8 +40,8 @@ def build_health_router(
                     ok = False
                 else:
                     checks["database"]["migrations"] = "ok"
-            except Exception as exc:  # noqa: BLE001
-                checks["database"] = {"ok": False, "error": str(exc)}
+            except Exception:  # noqa: BLE001 — never expose internals
+                checks["database"] = {"ok": False, "error": "database_unavailable"}
                 ok = False
 
         if redis_ping is not None:
@@ -49,15 +49,15 @@ def build_health_router(
                 checks["redis"] = {"ok": await redis_ping()}
                 if not checks["redis"]["ok"]:
                     ok = False
-            except Exception as exc:  # noqa: BLE001
-                checks["redis"] = {"ok": False, "error": str(exc)}
+            except Exception:  # noqa: BLE001
+                checks["redis"] = {"ok": False, "error": "redis_unavailable"}
                 ok = False
 
         if extra_checks is not None:
             try:
                 checks["extra"] = await extra_checks()
-            except Exception as exc:  # noqa: BLE001
-                checks["extra"] = {"ok": False, "error": str(exc)}
+            except Exception:  # noqa: BLE001
+                checks["extra"] = {"ok": False, "error": "extra_check_failed"}
                 ok = False
 
         status = "ready" if ok else "not_ready"

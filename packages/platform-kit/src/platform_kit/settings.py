@@ -29,6 +29,9 @@ class PlatformSettings(BaseSettings):
     redis_stream_key: str = "coopfuturo.events"
     redis_consumer_group: str = "default"
     redis_dlq_stream_key: str = "coopfuturo.events.dlq"
+    redis_stream_maxlen: int = 100_000
+    redis_dlq_maxlen: int = 10_000
+    redis_claim_min_idle_ms: int = 30_000
     event_max_retries: int = 3
     event_backoff_base_seconds: float = 0.5
 
@@ -37,6 +40,7 @@ class PlatformSettings(BaseSettings):
     oidc_audience: str = ""
     oidc_jwks_url: str = ""
     oidc_jwks_static_json: str = ""  # for tests / offline JWKS
+    # Deprecated: shared-secret service auth removed; use service JWT + tenant_id claim.
     service_auth_shared_secret: SecretStr = Field(default=SecretStr(""))
     auth_disabled: bool = False  # forced false when app_env in staging/production
 

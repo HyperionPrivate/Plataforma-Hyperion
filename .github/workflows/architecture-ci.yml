@@ -1,5 +1,4 @@
 # Architecture foundation CI — blocks merge on failure.
-# Pin actions to full commit SHAs in a later hardening PR.
 
 name: architecture-ci
 
@@ -28,16 +27,17 @@ jobs:
           python-version: "3.12"
       - name: Bootstrap
         run: |
-          uv sync --group dev
+          uv sync --frozen --group dev
           uv pip install -e packages/platform-kit -e apps/pilot-core -e apps/whatsapp-adapter -e apps/documents -e apps/handoff-liwa
       - name: Format check
         run: uv run ruff format --check packages apps tests
       - name: Lint
         run: uv run ruff check packages apps tests
+      - name: Typecheck
+        run: uv run mypy packages/platform-kit/src apps/pilot-core/src
       - name: Tests
         run: uv run pytest -m "not integration" --cov=platform_kit --cov-report=term-missing --cov-fail-under=40
       - name: Contracts
-        # Disable root addopts coverage gate — this job only validates schemas.
         run: uv run pytest tests/contracts -q --override-ini addopts= -p no:cov
       - name: Compose config
         run: docker compose -f docker-compose.dev.yml config --quiet
@@ -46,6 +46,68 @@ jobs:
       - name: pip-audit
         run: uv run pip-audit --progress-spinner off
         continue-on-error: true
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.8-alpine
+        env:
+          POSTGRES_USER: coopfuturo_admin
+          POSTGRES_PASSWORD: test_admin_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coopfuturo_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.14"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bootstrap
+        run: |
+          uv sync --frozen --group dev
+          uv pip install -e packages/platform-kit -e apps/pilot-core
+      - name: Init databases
+        env:
+          PGPASSWORD: test_admin_only
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          for db in db_pilot_core; do
+            psql -h localhost -U coopfuturo_admin -d postgres -c "CREATE DATABASE $db;" || true
+          done
+          psql -h localhost -U coopfuturo_admin -d postgres -c "CREATE USER app_pilot_core WITH PASSWORD 'test_pilot';" || true
+          psql -h localhost -U coopfuturo_admin -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE db_pilot_core TO app_pilot_core;"
+          psql -h localhost -U coopfuturo_admin -d db_pilot_core -c "GRANT ALL ON SCHEMA public TO app_pilot_core;"
+      - name: Alembic upgrade + downgrade
+        working-directory: apps/pilot-core
+        env:
+          DATABASE_URL: postgresql://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - name: Outbox Redis inbox integration
+        env:
+          DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
+          REDIS_URL: redis://localhost:6379/0
+        run: uv run pytest tests/integration/test_outbox_redis_inbox.py -q --override-ini addopts= -p no:cov -m integration
 
   codeql:
     runs-on: ubuntu-latest
@@ -60,7 +122,6 @@ jobs:
           languages: python
       - uses: github/codeql-action/analyze@v3
         with:
-          # Repo may not have Code Scanning upload enabled yet; still run analysis.
           upload: never
           output: results
       - name: Upload SARIF artifact
@@ -69,6 +130,26 @@ jobs:
           name: codeql-sarif
           path: results
           if-no-files-found: warn
+      - name: Fail on CodeQL errors/warnings in SARIF
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          findings = []
+          for path in pathlib.Path("results").rglob("*.sarif"):
+              data = json.loads(path.read_text(encoding="utf-8"))
+              for run in data.get("runs", []):
+                  for r in run.get("results", []):
+                      level = r.get("level", "warning")
+                      rule = r.get("ruleId", "?")
+                      msg = r.get("message", {}).get("text", "")
+                      if level in ("error", "warning"):
+                          findings.append(f"{level}:{rule}:{msg}")
+          if findings:
+              print("CodeQL findings:")
+              print("\n".join(findings[:50]))
+              sys.exit(1)
+          print("No CodeQL error/warning findings")
+          PY
 
   gitleaks:
     runs-on: ubuntu-latest
@@ -86,14 +167,41 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build images
         run: docker compose -f docker-compose.dev.yml build
-      - name: Trivy scan pilot-core
+      - name: Trivy scan all app images
         run: |
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:0.58.1 image \
-            --exit-code 0 \
-            --severity CRITICAL,HIGH \
-            --format table \
+          set -euo pipefail
+          mkdir -p sbom
+          images=(
             coopfuturo-pilot-core
-      - name: SBOM hint
-        run: echo "SBOM via trivy cyclonedx in a follow-up release job"
+            coopfuturo-whatsapp-adapter
+            coopfuturo-documents
+            coopfuturo-handoff-liwa
+          )
+          for img in "${images[@]}"; do
+            echo "==== Trivy $img ===="
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD/sbom:/out" \
+              aquasec/trivy:0.58.1 image \
+              --exit-code 1 \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --format table \
+              "$img"
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD/sbom:/out" \
+              aquasec/trivy:0.58.1 image \
+              --format cyclonedx \
+              --output "/out/${img}.cdx.json" \
+              "$img"
+          done
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-sboms
+          path: sbom/*.cdx.json
+      - name: Document security exceptions
+        run: |
+          test -f docs/SECURITY_EXCEPTIONS.md
+          echo "Accepted exceptions (if any) listed in docs/SECURITY_EXCEPTIONS.md"

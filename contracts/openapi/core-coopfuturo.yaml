@@ -1,11 +1,78 @@
 openapi: 3.1.0
 info:
-  title: Coopfuturo Core Financial Adapter
+  title: CoopFuturo Core API (pilot-core)
   version: 0.1.0
-  description: External financial core remains source of truth. MOCK until API confirmed.
+  description: Technical and future commercial HTTP surface for pilot-core.
+servers:
+  - url: https://pilot-core.example.local
+security:
+  - bearerAuth: []
 paths:
-  /outcomes:
-    post:
-      operationId: recordOutcome
+  /health/live:
+    get:
+      operationId: live
+      security: []
       responses:
-        "202": { description: Accepted }
+        "200":
+          description: Alive
+  /health/ready:
+    get:
+      operationId: ready
+      security: []
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
+  /_tech/synthetic-event:
+    post:
+      operationId: syntheticEvent
+      summary: Architecture-only outbox ping
+      tags: [technical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                marker: { type: string }
+      responses:
+        "200":
+          description: Enqueued and relayed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event_id, published]
+                properties:
+                  event_id: { type: string, format: uuid }
+                  published: { type: integer }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string }
+        message: { type: string }
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

@@ -12,6 +12,7 @@
   "payload": {
     "contact_id": "c-synth-1",
     "template_id": "tmpl-mock",
-    "wa_thread_id": "th-1"
+    "wa_thread_id": null,
+    "to_phone_e164": "+573001112233"
   }
 }

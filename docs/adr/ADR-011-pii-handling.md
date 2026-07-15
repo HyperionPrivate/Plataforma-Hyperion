@@ -12,7 +12,7 @@ Coopfuturo procesará datos personales (teléfonos, nombres, documentos). Regula
 
 ## Decisión
 
-1. **Clasificación de datos** en envelope de eventos: `public`, `internal`, `confidential`, `pii` (campo `data_classification` en envelope v1).
+1. **Clasificación de datos** en envelope de eventos: `public`, `internal`, `confidential`, `restricted_pii` (campo `data_classification` en envelope v1).
 
 2. **Minimización:**
    - Eventos cross-unidad transportan IDs opacos y metadatos necesarios; no texto libre de conversaciones ni binarios.

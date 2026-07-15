@@ -32,6 +32,34 @@ async def test_outbox_inbox_idempotent_effect() -> None:
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_inbox_business_key_is_tenant_scoped() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    a = build_synthetic_ping(
+        producer="pilot-core",
+        tenant_id="tenant-a",
+        correlation_id="c1",
+        marker="same-marker",
+    )
+    b = build_synthetic_ping(
+        producer="pilot-core",
+        tenant_id="tenant-b",
+        correlation_id="c2",
+        marker="same-marker",
+    )
+    assert a.business_idempotency_key == b.business_idempotency_key
+
+    async with factory() as session:
+        assert await process_inbox_once(session, a) is True
+        assert await process_inbox_once(session, b) is True
+        await session.commit()
+    await engine.dispose()
+
+
 def test_envelope_requires_business_key_distinct_concept() -> None:
     env = build_synthetic_ping(
         producer="pilot-core",

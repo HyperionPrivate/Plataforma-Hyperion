@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Integer, MetaData, String, Text, select, text
+from sqlalchemy import DateTime, Integer, MetaData, String, Text, UniqueConstraint, select, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -36,6 +36,8 @@ class OutboxEvent(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     event_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    producer: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     business_idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
@@ -48,9 +50,20 @@ class OutboxEvent(Base):
 
 class InboxEvent(Base):
     __tablename__ = "inbox_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "producer",
+            "event_type",
+            "business_idempotency_key",
+            name="uq_inbox_events_tenant_producer_type_bizkey",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     event_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    producer: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     business_idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     processed_at: Mapped[datetime] = mapped_column(

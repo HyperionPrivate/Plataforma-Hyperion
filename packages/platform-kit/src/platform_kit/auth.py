@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import time
 from dataclasses import dataclass
@@ -23,6 +25,7 @@ class AuthContext:
     tenant_id: str
     roles: frozenset[str]
     token_type: str  # user | service
+    scopes: frozenset[str]
 
 
 class JWKSCache:
@@ -83,22 +86,38 @@ def _roles_from_claims(claims: dict[str, Any]) -> frozenset[str]:
     return frozenset(str(r) for r in raw)
 
 
+def _scopes_from_claims(claims: dict[str, Any]) -> frozenset[str]:
+    raw = claims.get("scope") or claims.get("scopes") or []
+    if isinstance(raw, str):
+        return frozenset(s for s in raw.split() if s)
+    return frozenset(str(s) for s in raw)
+
+
+def _tenant_from_claims(claims: dict[str, Any]) -> str:
+    tenant = claims.get("tenant_id")
+    if tenant:
+        return str(tenant)
+    raise PlatformError(
+        "missing_tenant",
+        "tenant_id claim is required; header override is not allowed",
+        status_code=401,
+    )
+
+
+def _token_type_from_claims(claims: dict[str, Any], roles: frozenset[str]) -> str:
+    explicit = str(claims.get("token_type") or claims.get("typ") or "").lower()
+    if explicit in ("service", "user"):
+        return explicit
+    if "service" in roles or claims.get("client_id"):
+        return "service"
+    return "user"
+
+
 async def require_auth(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> AuthContext:
     settings = getattr(request.app.state, "settings", None) or get_platform_settings()
-    # Service-to-service shared secret header
-    svc_secret = request.headers.get("X-Service-Auth")
-    expected = settings.service_auth_shared_secret.get_secret_value()
-    if svc_secret and expected and svc_secret == expected:
-        tenant = request.headers.get(settings.tenant_header, "")
-        if not tenant:
-            raise PlatformError("missing_tenant", "X-Tenant-ID required", status_code=400)
-        tenant_id_ctx.set(tenant)
-        return AuthContext(
-            subject="service", tenant_id=tenant, roles=frozenset({"service"}), token_type="service"
-        )
 
     if settings.auth_disabled and settings.app_env in ("development", "test"):
         tenant = request.headers.get(settings.tenant_header, "tenant-dev")
@@ -108,27 +127,35 @@ async def require_auth(
             tenant_id=tenant,
             roles=frozenset({"admin", "supervisor", "advisor", "analyst", "service"}),
             token_type="user",
+            scopes=frozenset({"*"}),
         )
 
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise PlatformError("unauthorized", "Bearer token required", status_code=401)
 
     claims = decode_and_validate_jwt(credentials.credentials, settings)
-    tenant = str(claims.get("tenant_id") or request.headers.get(settings.tenant_header) or "")
-    if not tenant:
-        raise PlatformError("missing_tenant", "tenant_id claim or header required", status_code=401)
+    tenant = _tenant_from_claims(claims)
     header_tenant = request.headers.get(settings.tenant_header)
     if header_tenant and header_tenant != tenant:
         raise PlatformError(
             "tenant_mismatch", "Tenant header does not match token", status_code=403
         )
 
+    roles = _roles_from_claims(claims)
+    token_type = _token_type_from_claims(claims, roles)
+    scopes = _scopes_from_claims(claims)
+
+    # Service tokens must carry explicit service role or token_type=service
+    if token_type == "service" and "service" not in roles and "admin" not in roles:
+        roles = frozenset(set(roles) | {"service"})
+
     tenant_id_ctx.set(tenant)
     return AuthContext(
         subject=str(claims["sub"]),
         tenant_id=tenant,
-        roles=_roles_from_claims(claims),
-        token_type="user",
+        roles=roles,
+        token_type=token_type,
+        scopes=scopes,
     )
 
 
@@ -143,6 +170,17 @@ def require_roles(*needed: str):
     return _dep
 
 
+def require_scopes(*needed: str):
+    async def _dep(ctx: AuthContext = Depends(require_auth)) -> AuthContext:
+        if "*" in ctx.scopes or "admin" in ctx.roles:
+            return ctx
+        if not set(needed) & set(ctx.scopes):
+            raise PlatformError("forbidden", "Insufficient scope", status_code=403)
+        return ctx
+
+    return _dep
+
+
 def verify_webhook_timestamp(ts_header: str | None, *, max_skew_seconds: int = 300) -> None:
     if not ts_header:
         raise PlatformError("webhook_replay", "Missing timestamp", status_code=401)
@@ -152,3 +190,27 @@ def verify_webhook_timestamp(ts_header: str | None, *, max_skew_seconds: int = 3
         raise PlatformError("webhook_replay", "Invalid timestamp", status_code=401) from exc
     if abs(int(time.time()) - ts) > max_skew_seconds:
         raise PlatformError("webhook_replay", "Timestamp outside allowed skew", status_code=401)
+
+
+def verify_webhook_hmac(
+    *,
+    body: bytes,
+    signature_header: str | None,
+    secret: str,
+    timestamp_header: str | None = None,
+    max_skew_seconds: int = 300,
+) -> None:
+    """HMAC-SHA256 over `{timestamp}.{body}` when timestamp is present, else over body."""
+    if timestamp_header is not None:
+        verify_webhook_timestamp(timestamp_header, max_skew_seconds=max_skew_seconds)
+    if not secret:
+        raise PlatformError(
+            "webhook_misconfigured", "Webhook secret not configured", status_code=500
+        )
+    if not signature_header:
+        raise PlatformError("webhook_signature", "Missing signature", status_code=401)
+    provided = signature_header.removeprefix("sha256=").strip()
+    payload = f"{timestamp_header}.".encode() + body if timestamp_header is not None else body
+    expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(provided, expected):
+        raise PlatformError("webhook_signature", "Invalid signature", status_code=401)

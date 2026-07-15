@@ -5,12 +5,9 @@ from platform_kit.auth import AuthContext, require_auth, require_roles
 from platform_kit.correlation import get_correlation_id, new_correlation_id
 from platform_kit.db import TechnicalProbe, session_scope
 from platform_kit.errors import PlatformError
+from platform_kit.events.consumer import consume_batch, relay_outbox
 from platform_kit.events.envelope import build_synthetic_ping
-from platform_kit.events.outbox_inbox import (
-    enqueue_outbox,
-    process_inbox_once,
-    publish_pending_outbox,
-)
+from platform_kit.events.outbox_inbox import enqueue_outbox
 from pydantic import BaseModel
 
 from pilot_core import runtime
@@ -28,7 +25,7 @@ async def synthetic_event(
     body: PingBody,
     ctx: AuthContext = Depends(require_roles("service", "admin")),
 ) -> dict[str, object]:
-    """Architecture-only endpoint: enqueue synthetic ping via outbox."""
+    """Enqueue synthetic ping via outbox, then relay after commit."""
     if runtime.session_factory is None or runtime.transport is None:
         raise PlatformError("not_ready", "Runtime not started", status_code=503)
     settings = get_settings()
@@ -39,9 +36,11 @@ async def synthetic_event(
         correlation_id=cid,
         marker=body.marker,
     )
+    # 1) business + outbox in one transaction (commit on scope exit)
     async with session_scope(runtime.session_factory) as session:
         await enqueue_outbox(session, envelope)
-        published = await publish_pending_outbox(session, runtime.transport)
+    # 2) independent relay publishes only after commit
+    published = await relay_outbox(runtime.session_factory, runtime.transport)
     return {
         "mock_commercial": False,
         "event_id": envelope.event_id,
@@ -51,6 +50,16 @@ async def synthetic_event(
     }
 
 
+@router.post("/relay-outbox")
+async def relay_outbox_endpoint(
+    ctx: AuthContext = Depends(require_roles("service", "admin")),
+) -> dict[str, object]:
+    if runtime.session_factory is None or runtime.transport is None:
+        raise PlatformError("not_ready", "Runtime not started", status_code=503)
+    published = await relay_outbox(runtime.session_factory, runtime.transport)
+    return {"published": published, "tenant": ctx.tenant_id}
+
+
 @router.post("/consume-once")
 async def consume_once(
     ctx: AuthContext = Depends(require_roles("service", "admin")),
@@ -58,23 +67,22 @@ async def consume_once(
     if runtime.session_factory is None or runtime.transport is None:
         raise PlatformError("not_ready", "Runtime not started", status_code=503)
     settings = get_settings()
-    messages = await runtime.transport.read_group(
-        group=settings.redis_consumer_group,
-        consumer=f"{settings.service_name}-1",
+    stats = await consume_batch(
+        runtime.session_factory,
+        runtime.transport,
+        settings,
+        consumer_name=f"{settings.service_name}-1",
         count=10,
         block_ms=200,
     )
-    applied = 0
-    duplicates = 0
-    async with session_scope(runtime.session_factory) as session:
-        for message_id, envelope in messages:
-            ok = await process_inbox_once(session, envelope)
-            if ok:
-                applied += 1
-            else:
-                duplicates += 1
-            await runtime.transport.ack(settings.redis_consumer_group, message_id)
-    return {"applied": applied, "duplicates": duplicates, "tenant": ctx.tenant_id}
+    return {
+        "applied": stats.applied,
+        "duplicates": stats.duplicates,
+        "dead_lettered": stats.dead_lettered,
+        "reclaimed": stats.reclaimed,
+        "failed": stats.failed,
+        "tenant": ctx.tenant_id,
+    }
 
 
 @router.post("/probe")
@@ -93,7 +101,12 @@ async def write_probe(
 
 @router.get("/secure-ping")
 async def secure_ping(ctx: AuthContext = Depends(require_auth)) -> dict[str, object]:
-    return {"subject": ctx.subject, "tenant_id": ctx.tenant_id, "roles": sorted(ctx.roles)}
+    return {
+        "subject": ctx.subject,
+        "tenant_id": ctx.tenant_id,
+        "roles": sorted(ctx.roles),
+        "token_type": ctx.token_type,
+    }
 
 
 @router.get("/admin-only")

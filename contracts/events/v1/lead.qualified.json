@@ -26,7 +26,8 @@
               "type": "string"
             },
             "funnel_type": {
-              "type": "string"
+              "type": "string",
+              "enum": ["renovacion", "reactivacion", "nuevo", "microcredito"]
             },
             "funnel_state": {
               "type": "string"

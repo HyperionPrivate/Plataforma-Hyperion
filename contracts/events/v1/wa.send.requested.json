@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coopfuturo.local/contracts/events/v1/wa.send.requested.json",
   "title": "WaSendRequestedV1",
-  "description": "Planned product event schema. Handler NOT implemented in architecture foundation.",
+  "description": "Planned product event schema. Handler NOT implemented in architecture foundation. First outbound requires to_phone_e164; subsequent may use wa_thread_id.",
   "allOf": [
     {
       "$ref": "./_envelope.json"
@@ -17,8 +17,7 @@
           "type": "object",
           "required": [
             "contact_id",
-            "template_id",
-            "wa_thread_id"
+            "template_id"
           ],
           "properties": {
             "contact_id": {
@@ -28,10 +27,18 @@
               "type": "string"
             },
             "wa_thread_id": {
-              "type": "string"
+              "type": ["string", "null"]
+            },
+            "to_phone_e164": {
+              "type": ["string", "null"],
+              "description": "Required on first send when wa_thread_id is null"
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "anyOf": [
+            { "required": ["wa_thread_id"] },
+            { "required": ["to_phone_e164"] }
+          ]
         }
       }
     }

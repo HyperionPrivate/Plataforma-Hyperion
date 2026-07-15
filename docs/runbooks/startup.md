@@ -11,28 +11,35 @@ make bootstrap
 make up
 ```
 
+Traefik escucha en `http://127.0.0.1:8088` (ver `TRAEFIK_HTTP_PORT`).
+
 ## Verificación post-arranque
 
 ```powershell
-# Health checks
-curl http://localhost/pilot-core/health
-curl http://localhost/whatsapp/health
-curl http://localhost/documents/health
-curl http://localhost/handoff/health
+# Health checks (live)
+curl http://127.0.0.1:8088/pilot-core/health/live
+curl http://127.0.0.1:8088/whatsapp/health/live
+curl http://127.0.0.1:8088/documents/health/live
+curl http://127.0.0.1:8088/handoff/health/live
+
+# Readiness (DB + Redis + migraciones)
+curl http://127.0.0.1:8088/pilot-core/health/ready
 
 # Smoke imports
 make smoke
 ```
 
-Respuesta esperada: HTTP 200 con `{"status":"ok",...}`.
+Respuesta live esperada: HTTP 200 con `{"status":"alive",...}`.
+Respuesta ready esperada: HTTP 200 con `{"status":"ready",...}` o 503 si DB/Redis caídos.
 
 ## Orden de dependencias
 
-1. **PostgreSQL** — init DBs y roles (`init-databases.sh`)
+1. **PostgreSQL** — init DBs y roles (`init-databases.sh`); usuario admin `coopfuturo_admin`, apps usan `app_*`
 2. **Redis**
 3. **MinIO/S3** (documents)
-4. **Apps** — pilot-core, whatsapp-adapter, documents, handoff-liwa
-5. **Traefik** — enruta cuando apps están healthy
+4. **Migraciones** — servicios `migrate-*`
+5. **Apps** — pilot-core, whatsapp-adapter, documents, handoff-liwa
+6. **Traefik** — enruta cuando apps están healthy
 
 ## Variables obligatorias
 
@@ -66,3 +73,4 @@ Procedimiento TBD por `@TBD-platform`. Ver [ADR-015](../adr/ADR-015-deploy-rollb
 
 - [local-dev.md](../architecture/local-dev.md)
 - [EXTERNAL_BLOCKERS.md](../EXTERNAL_BLOCKERS.md)
+- [SECURITY_EXCEPTIONS.md](../SECURITY_EXCEPTIONS.md)
