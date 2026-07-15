@@ -124,11 +124,27 @@ services:
     networks: [coopfuturo_data]
     restart: "no"
 
+  # Named volumes mount as root; pilot-core runs UID 10001 with cap_drop: ALL
+  # (cannot chown). One-shot init prepares /data without capability drops.
+  pilot-core-data-init:
+    image: busybox:1.37.0
+    user: "0:0"
+    volumes:
+      - pilot_core_data:/data
+    command:
+      [
+        "sh",
+        "-c",
+        "mkdir -p /data/documents && chown -R 10001:10001 /data && chmod -R u+rwX /data",
+      ]
+    restart: "no"
+
   pilot-core:
     <<: *app_security
     build:
       context: .
       dockerfile: apps/pilot-core/Dockerfile
+    user: "10001:10001"
     environment: &pilot_env
       SERVICE_NAME: pilot-core
       APP_ENV: development
@@ -145,6 +161,8 @@ services:
       - pilot_core_data:/data
     depends_on:
       migrate-pilot-core:
+        condition: service_completed_successfully
+      pilot-core-data-init:
         condition: service_completed_successfully
       redis:
         condition: service_healthy

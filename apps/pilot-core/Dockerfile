@@ -32,7 +32,7 @@ COPY apps/pilot-core/alembic.ini ./alembic.ini
 COPY apps/pilot-core/alembic ./alembic
 COPY apps/pilot-core/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
-# Entrypoint runs as root to chown named volumes, then drops to UID 10001.
+USER 10001
 ENTRYPOINT ["/docker-entrypoint.sh"]
 EXPOSE 8201
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \

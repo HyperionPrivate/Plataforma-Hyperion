@@ -310,13 +310,27 @@ async def create_handoff(
     product = resolve_product_flow(flow_guess)
     agency_tag = body.agency_tag or str(product["liwa_handoff_tag"])
     if body.phone and settings.liwa_live_enabled():
-        liwa_meta = await liwa_whatsapp_service.handoff_to_agency(
-            phone=body.phone,
-            first_name=body.name.split()[0] if body.name else "Asociado",
-            motivo=body.motivo,
-            tag_name=agency_tag,
-        )
-        liwa_meta["synced"] = bool(liwa_meta.get("ok"))
+        decision = compliance_service.evaluate(phone=body.phone, channel="whatsapp")
+        liwa_meta["compliance"] = compliance_service.as_dict(decision)
+        if not decision.allowed:
+            liwa_meta.update(
+                {
+                    "ok": False,
+                    "synced": False,
+                    "blocked": True,
+                    "error": "compliance_blocked",
+                    "reasons": decision.reasons,
+                }
+            )
+        else:
+            liwa_meta = await liwa_whatsapp_service.handoff_to_agency(
+                phone=body.phone,
+                first_name=body.name.split()[0] if body.name else "Asociado",
+                motivo=body.motivo,
+                tag_name=agency_tag,
+            )
+            liwa_meta["synced"] = bool(liwa_meta.get("ok"))
+            liwa_meta["compliance"] = compliance_service.as_dict(decision)
     entry = {
         "id": hid,
         "conversationId": cid,

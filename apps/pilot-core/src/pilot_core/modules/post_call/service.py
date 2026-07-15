@@ -398,6 +398,7 @@ class PostCallService:
         elif phone_n:
             self._patch_latest_dispatch_for_phone(phone_n, result)
 
+        result["status"] = "completed"
         ops_store.insert_post_call(result)
         return result
 

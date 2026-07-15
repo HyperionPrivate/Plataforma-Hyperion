@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import sqlite3
+from datetime import UTC
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -142,9 +143,52 @@ def init_db() -> None:
                   WHERE conversation_id IS NOT NULL AND conversation_id != '';
                 """
             )
+            _migrate_normalize_opt_outs(conn)
+            _recover_stale_post_call_claims(conn)
             conn.commit()
         finally:
             conn.close()
+
+
+def _migrate_normalize_opt_outs(conn: sqlite3.Connection) -> None:
+    """Rewrite legacy opt-out rows to canonical E.164 phones."""
+    from pilot_core.phone import normalize_phone
+
+    rows = conn.execute("SELECT phone FROM opt_outs").fetchall()
+    for row in rows:
+        raw = str(row["phone"] or "")
+        canon = normalize_phone(raw) or raw.strip()
+        if not canon or canon == raw:
+            continue
+        conn.execute("DELETE FROM opt_outs WHERE phone=?", (raw,))
+        conn.execute("INSERT OR IGNORE INTO opt_outs(phone) VALUES(?)", (canon,))
+
+
+def _recover_stale_post_call_claims(conn: sqlite3.Connection, *, max_age_sec: int = 300) -> None:
+    """Drop abandoned ``processing`` claims so webhooks can be retried."""
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.now(tz=UTC) - timedelta(seconds=max_age_sec)
+    rows = conn.execute(
+        "SELECT id, payload, created_at FROM post_calls WHERE conversation_id IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"])
+        except json.JSONDecodeError:
+            continue
+        if payload.get("status") != "processing":
+            continue
+        created_raw = str(row["created_at"] or "")
+        try:
+            # SQLite CURRENT_TIMESTAMP is UTC ``YYYY-MM-DD HH:MM:SS``
+            created = datetime.strptime(created_raw, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=UTC
+            )
+        except ValueError:
+            created = cutoff  # treat unparseable as stale
+        if created <= cutoff:
+            conn.execute("DELETE FROM post_calls WHERE id=?", (row["id"],))
 
 
 def upsert_campaign(campaign: dict[str, Any]) -> dict[str, Any]:
@@ -304,13 +348,21 @@ def insert_post_call(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def claim_post_call_conversation(
-    conversation_id: str, placeholder: dict[str, Any]
+    conversation_id: str,
+    placeholder: dict[str, Any],
+    *,
+    stale_after_sec: int = 300,
 ) -> tuple[bool, dict[str, Any] | None]:
     """Atomically claim a conversation_id for post-call processing.
 
     Returns (True, None) if this caller owns the claim, or (False, existing)
     if another post-call already claimed the conversation.
+
+    Stale ``processing`` placeholders older than ``stale_after_sec`` are
+    deleted so a retry can reclaim the conversation.
     """
+    from datetime import datetime, timedelta
+
     init_db()
     if "id" not in placeholder:
         placeholder["id"] = f"pc_{uuid4().hex[:10]}"
@@ -319,14 +371,34 @@ def claim_post_call_conversation(
         try:
             existing = conn.execute(
                 """
-                SELECT payload FROM post_calls
+                SELECT id, payload, created_at FROM post_calls
                 WHERE conversation_id=?
                 ORDER BY created_at DESC LIMIT 1
                 """,
                 (conversation_id,),
             ).fetchone()
             if existing:
-                return False, json.loads(existing["payload"])
+                prior = json.loads(existing["payload"])
+                if prior.get("status") == "processing":
+                    created_raw = str(existing["created_at"] or "")
+                    try:
+                        created = datetime.strptime(created_raw, "%Y-%m-%d %H:%M:%S").replace(
+                            tzinfo=UTC
+                        )
+                    except ValueError:
+                        created = datetime.now(tz=UTC) - timedelta(
+                            seconds=stale_after_sec + 1
+                        )
+                    age_ok = datetime.now(tz=UTC) - created > timedelta(
+                        seconds=stale_after_sec
+                    )
+                    if age_ok:
+                        conn.execute("DELETE FROM post_calls WHERE id=?", (existing["id"],))
+                        conn.commit()
+                    else:
+                        return False, prior
+                else:
+                    return False, prior
             try:
                 conn.execute(
                     """

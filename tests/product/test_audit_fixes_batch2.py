@@ -18,6 +18,8 @@ from pilot_core.phone import normalize_phone
         ("573001234567", "+573001234567"),
         ("+57 300 123 4567", "+573001234567"),
         ("3001234567", "+573001234567"),
+        ("00573001234567", "+573001234567"),
+        ("00 57 300 123 4567", "+573001234567"),
     ],
 )
 def test_normalize_phone(raw: str, expected: str) -> None:
@@ -74,7 +76,7 @@ def test_opt_out_matches_phone_variants(client: TestClient) -> None:
     r = client.post("/ops/compliance/opt-out", json={"phone": "+573001234567"})
     assert r.status_code == 200
 
-    for variant in ("573001234567", "+57 3001234567", "3001234567"):
+    for variant in ("573001234567", "+57 3001234567", "3001234567", "00573001234567"):
         r = client.post(
             "/ops/calls/complete",
             json={"phone": variant, "first_name": "Ana", "intent": "interesado", "flow": "A"},
@@ -83,6 +85,44 @@ def test_opt_out_matches_phone_variants(client: TestClient) -> None:
         body = r.json()
         assert body.get("whatsapp_sent") is False, variant
         assert body.get("whatsapp", {}).get("blocked") is True, variant
+
+
+def test_handoff_respects_opt_out_before_liwa(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pilot_core.settings import get_settings
+
+    get_settings.cache_clear()
+    s = get_settings()
+    monkeypatch.setattr(s, "liwa_mode", "real")
+    monkeypatch.setattr(s, "liwa_api_token", "test-token")
+
+    called = {"handoff": False}
+
+    async def _fake_handoff(**_kwargs: object) -> dict[str, object]:
+        called["handoff"] = True
+        return {"ok": True, "contact_id": "c1"}
+
+    monkeypatch.setattr(
+        "pilot_core.modules.liwa_whatsapp.liwa_whatsapp_service.handoff_to_agency",
+        _fake_handoff,
+    )
+
+    client.post("/ops/compliance/opt-out", json={"phone": "+573008887766"})
+    r = client.post(
+        "/ops/handoff",
+        json={
+            "name": "Ana OptOut",
+            "segment": "Renovacion",
+            "motivo": "test",
+            "phone": "00573008887766",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("liwa", {}).get("blocked") is True
+    assert called["handoff"] is False
+    get_settings.cache_clear()
 
 
 def test_e2e_skips_voice_when_voz_disabled(client: TestClient) -> None:
