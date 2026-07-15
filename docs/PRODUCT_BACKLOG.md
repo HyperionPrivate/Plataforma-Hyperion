@@ -8,16 +8,17 @@ Architecture foundation is in place. Product work should land as separate PRs:
 4. ~~**segmentation scoring**~~ — consume contactos importados (piloto local OK)
 5. ~~**CRM funnels**~~ — move columnas vía `/ops/crm/move` (piloto local OK)
 6. **orchestration + Dialer client** — URL configurable; falta contrato OpenAPI dialer productivo + live smoke
-7. **whatsapp-adapter LIWA real** — only after credential rotation + official docs
-8. **documents MinIO + validation** — metadata/validación mock listos; antivirus + MinIO reales TBD
-9. **handoff-liwa real** — after LIWA rotation (handoff local SQLite OK)
-10. **core adapter** — after Coopfuturo core API confirmed (stub `/ops/core/associate/{id}`)
-11. **OIDC production wiring** — issuer/audience/JWKS from IdP
+7. ~~**WhatsApp LIWA vía Ops**~~ — `kind=flow|text`, flujos LIWA, Laboratorio (fase 2 eventos/webhooks adapter TBD)
+8. ~~**documents filesystem/MinIO**~~ — `POST /ops/documents/upload` + backend filesystem|minio (antivirus real TBD)
+9. ~~**handoff LIWA tag**~~ — `handoff_to_agency` + tag `LIWA_HANDOFF_TAG` / `agency_tag` (grupo Agencias UI LIWA = ops)
+10. ~~**core adapter HTTP**~~ — stub si `CORE_BASE_URL` vacío; live GET si configurado
+11. **OIDC production wiring** — scaffolding + `GET /ops/auth/status`; falta IdP prod + `AUTH_DISABLED=false`
 12. ~~**analytics projections**~~ — overlay dashboard + reportes JSON/CSV (piloto local OK)
 13. **ops UI** — PII masking en GET `/ops` + toggle Configuración → Privacidad; falta OIDC/roles prod
-14. **E2E renovación VIP-II** — synthetic contacts only (demo local documentada en `DEMO_PULSO_LOCAL.md`)
+14. ~~**E2E renovación**~~ — `POST /ops/e2e/renovacion` + botón Laboratorio (voz opcional → WA flow → doc → handoff → CRM)
+15. ~~**post-call → WhatsApp**~~ — `POST /ops/calls/complete` + webhook ElevenLabs `/ops/webhooks/elevenlabs/post-call` (intención continuar → flujo LIWA)
 
-Loop asesor local (sin LIWA): opt-out SQLite · mensajes inbox · release claim · handoff shape + Atender · flags `voz_enabled`/`whatsapp_enabled`.
+Loop asesor: opt-out SQLite · mensajes inbox · release claim · handoff shape + Atender · flags `voz_enabled`/`whatsapp_enabled` · WhatsApp LIWA live opcional.
 
 CRM: transiciones estrictas + tipificación requerida en `no_interes`/`renovado`.
 

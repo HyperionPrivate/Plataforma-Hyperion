@@ -93,6 +93,7 @@ export async function createHandoff(input: {
   segment?: string;
   motivo?: string;
   phone?: string;
+  agency_tag?: string;
 }) {
   return postJson<Record<string, unknown>>("/ops/handoff", input);
 }
@@ -110,20 +111,52 @@ export async function orchestrationAttempt(input: {
   }>("/ops/orchestration/attempt", input);
 }
 
+export async function completeCall(input: {
+  phone: string;
+  first_name?: string;
+  intent?: string;
+  skip_whatsapp?: boolean;
+  conversation_id?: string;
+  dispatch_id?: string;
+}) {
+  return postJson<{
+    ok: boolean;
+    intent: string;
+    wants_whatsapp: boolean;
+    whatsapp_sent: boolean;
+    whatsapp?: Record<string, unknown>;
+    crm?: Record<string, unknown>;
+  }>("/ops/calls/complete", input);
+}
+
+
 export async function optOut(phone: string) {
   return postJson<{ ok: boolean; phone: string }>("/ops/compliance/opt-out", { phone });
 }
 
 export async function sendWhatsApp(input: {
   phone: string;
-  text: string;
+  text?: string;
   template?: string;
+  kind?: "flow" | "text";
+  flow_id?: string;
+  first_name?: string;
 }) {
   return postJson<{
     ok: boolean;
     mock_commercial: boolean;
     message: Record<string, unknown>;
+    compliance?: Record<string, unknown>;
   }>("/ops/whatsapp/send", input);
+}
+
+export async function fetchWhatsAppFlows() {
+  return getJson<{
+    ok?: boolean;
+    items: { id: string; name: string }[];
+    default_flow_id?: string;
+    mode?: string;
+  }>("/ops/whatsapp/flows");
 }
 
 export async function moveCrmLead(input: {
@@ -179,8 +212,60 @@ export async function registerDocument(input: {
   }>("/ops/documents", input);
 }
 
+export async function uploadDocument(input: {
+  file: File;
+  contact_phone?: string;
+  kind?: string;
+}) {
+  const form = new FormData();
+  form.append("file", input.file);
+  if (input.contact_phone) form.append("contact_phone", input.contact_phone);
+  form.append("kind", input.kind ?? "orden_matricula");
+  const res = await fetch(`${base}/ops/documents/upload`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`pilot-core /ops/documents/upload → HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return res.json() as Promise<{
+    id: string;
+    status: string;
+    errors: string[];
+    filename: string;
+    storage?: string;
+  }>;
+}
+
 export async function listDocuments() {
   return getJson<{ items: Record<string, unknown>[]; total: number }>("/ops/documents");
+}
+
+export async function runE2ERenovacion(input: {
+  phone: string;
+  first_name?: string;
+  skip_voice?: boolean;
+  skip_whatsapp?: boolean;
+  flow_id?: string;
+  agency_tag?: string;
+}) {
+  return postJson<{
+    ok: boolean;
+    phone: string;
+    steps: Record<string, unknown>;
+  }>("/ops/e2e/renovacion", input);
+}
+
+export async function fetchAuthStatus() {
+  return getJson<{
+    ok: boolean;
+    app_env: string;
+    auth_disabled: boolean;
+    oidc_configured: boolean;
+    ready_for_production_auth: boolean;
+  }>("/ops/auth/status");
 }
 
 export async function fetchReport(reportId: string) {
@@ -195,6 +280,13 @@ export async function fetchSettings() {
     dialer: { base_url?: string; default_phone_number_id?: string };
     agent_config: Record<string, unknown>;
     ui?: { pii_masking?: boolean };
+    whatsapp?: {
+      mode?: string;
+      provider?: string;
+      base_url?: string;
+      default_flow_id?: string;
+      default_kind?: string;
+    };
   }>("/ops/settings");
 }
 

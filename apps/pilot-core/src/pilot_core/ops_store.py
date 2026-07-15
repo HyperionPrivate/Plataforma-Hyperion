@@ -78,6 +78,13 @@ def init_db() -> None:
                   phone TEXT PRIMARY KEY,
                   created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS post_calls (
+                  id TEXT PRIMARY KEY,
+                  conversation_id TEXT,
+                  phone TEXT,
+                  payload TEXT NOT NULL,
+                  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS conversation_threads (
                   id TEXT PRIMARY KEY,
                   payload TEXT NOT NULL,
@@ -186,6 +193,36 @@ def insert_dispatch(entry: dict[str, Any]) -> dict[str, Any]:
             conn.close()
 
 
+def upsert_dispatch(entry: dict[str, Any]) -> dict[str, Any]:
+    init_db()
+    if "id" not in entry:
+        entry["id"] = f"d_{uuid4().hex[:10]}"
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO dispatches(id, payload) VALUES(?, ?)",
+                (entry["id"], json.dumps(entry, ensure_ascii=False)),
+            )
+            conn.commit()
+            return entry
+        finally:
+            conn.close()
+
+
+def get_dispatch(dispatch_id: str) -> dict[str, Any] | None:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT payload FROM dispatches WHERE id=?", (dispatch_id,)
+            ).fetchone()
+            return json.loads(row["payload"]) if row else None
+        finally:
+            conn.close()
+
+
 def list_dispatches(limit: int = 50) -> list[dict[str, Any]]:
     init_db()
     with _LOCK:
@@ -196,6 +233,49 @@ def list_dispatches(limit: int = 50) -> list[dict[str, Any]]:
                 (limit,),
             ).fetchall()
             return [json.loads(r["payload"]) for r in rows]
+        finally:
+            conn.close()
+
+
+def insert_post_call(entry: dict[str, Any]) -> dict[str, Any]:
+    init_db()
+    if "id" not in entry:
+        entry["id"] = f"pc_{uuid4().hex[:10]}"
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO post_calls(id, conversation_id, phone, payload)
+                VALUES(?, ?, ?, ?)
+                """,
+                (
+                    entry["id"],
+                    entry.get("conversation_id"),
+                    entry.get("phone"),
+                    json.dumps(entry, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+            return entry
+        finally:
+            conn.close()
+
+
+def get_post_call_by_conversation(conversation_id: str) -> dict[str, Any] | None:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT payload FROM post_calls
+                WHERE conversation_id=?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (conversation_id,),
+            ).fetchone()
+            return json.loads(row["payload"]) if row else None
         finally:
             conn.close()
 

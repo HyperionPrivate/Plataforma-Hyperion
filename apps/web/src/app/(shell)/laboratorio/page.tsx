@@ -1,18 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { ChartCard } from "@/components/data/chart-card";
 import {
+  completeCall,
   createHandoff,
+  fetchSettings,
+  fetchWhatsAppFlows,
   importContacts,
   lookupAssociate,
   optOut,
   orchestrationAttempt,
   orchestrationBatch,
-  registerDocument,
+  runE2ERenovacion,
   sendWhatsApp,
+  uploadDocument,
 } from "@/services/ops-client";
 import { toast } from "sonner";
 
@@ -45,6 +49,40 @@ export default function LaboratorioPage() {
   );
   const [busy, setBusy] = useState(false);
   const [lastResult, setLastResult] = useState<string>("");
+  const [waLive, setWaLive] = useState(false);
+  const [waKind, setWaKind] = useState<"flow" | "text">("flow");
+  const [waFlowId, setWaFlowId] = useState("1782399915832");
+  const [waFlows, setWaFlows] = useState<{ id: string; name: string }[]>([]);
+  const [agencyTag, setAgencyTag] = useState("RENOVACION_VIP");
+  const [skipVoiceE2E, setSkipVoiceE2E] = useState(true);
+  const [postIntent, setPostIntent] = useState("interesado");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await fetchSettings();
+        if (cancelled) return;
+        setWaLive(s.whatsapp?.mode === "real");
+        if (s.whatsapp?.default_flow_id) setWaFlowId(s.whatsapp.default_flow_id);
+        if (s.whatsapp?.default_kind === "text") setWaKind("text");
+        try {
+          const flows = await fetchWhatsAppFlows();
+          if (!cancelled && Array.isArray(flows.items)) {
+            setWaFlows(flows.items.map((f) => ({ id: String(f.id), name: f.name })));
+            if (flows.default_flow_id) setWaFlowId(String(flows.default_flow_id));
+          }
+        } catch {
+          /* ignore flows fetch */
+        }
+      } catch {
+        /* API offline — default mock copy */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function onDispatch() {
     setBusy(true);
@@ -83,10 +121,18 @@ export default function LaboratorioPage() {
   async function onWhatsApp() {
     setBusy(true);
     try {
-      const res = await sendWhatsApp({ phone, text: waText });
+      const res = await sendWhatsApp({
+        phone,
+        text: waText,
+        kind: waKind,
+        flow_id: waKind === "flow" ? waFlowId : undefined,
+        first_name: name,
+      });
       setLastResult(JSON.stringify(res, null, 2));
-      toast.success("WhatsApp mock encolado", {
-        description: String(res.message?.id ?? "ok"),
+      const live = !res.mock_commercial;
+      const kindLabel = res.message?.kind === "flow" ? "flujo" : "texto";
+      toast.success(live ? `WhatsApp LIWA (${kindLabel})` : "WhatsApp mock encolado", {
+        description: String(res.message?.id ?? res.message?.status ?? "ok"),
       });
     } catch (err) {
       toast.error("Falló WhatsApp", {
@@ -105,9 +151,13 @@ export default function LaboratorioPage() {
         phone,
         segment: flow === "A" ? "Renovacion" : "Reactivacion",
         motivo: "Calificado en laboratorio",
+        agency_tag: agencyTag || undefined,
       });
       setLastResult(JSON.stringify(res, null, 2));
-      toast.success("Handoff creado", { description: String(res.id) });
+      const liwa = res.liwa as Record<string, unknown> | undefined;
+      toast.success("Handoff creado", {
+        description: liwa?.synced ? `LIWA tag ${String(liwa.tag_name ?? agencyTag)}` : String(res.id),
+      });
     } catch (err) {
       toast.error("Falló handoff", {
         description: err instanceof Error ? err.message : "Error",
@@ -163,24 +213,70 @@ export default function LaboratorioPage() {
     if (!file) return;
     setBusy(true);
     try {
-      const res = await registerDocument({
-        filename: file.name,
-        content_type: file.type || "application/octet-stream",
-        size_bytes: file.size,
+      const res = await uploadDocument({
+        file,
         contact_phone: phone,
         kind: "orden_matricula",
       });
       setDocFileName(file.name);
       setLastResult(JSON.stringify(res, null, 2));
       if (res.status === "validated") {
-        toast.success("Documento validado (mock)", { description: res.id });
+        toast.success("Documento guardado", {
+          description: `${res.id} · ${res.storage ?? "storage"}`,
+        });
       } else {
         toast.error("Documento rechazado", {
           description: (res.errors || []).join(", ") || res.status,
         });
       }
     } catch (err) {
-      toast.error("Falló registro documento", {
+      toast.error("Falló upload documento", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onPostCall() {
+    setBusy(true);
+    try {
+      const res = await completeCall({
+        phone,
+        first_name: name,
+        intent: postIntent,
+      });
+      setLastResult(JSON.stringify(res, null, 2));
+      toast.success(
+        res.whatsapp_sent
+          ? "Post-llamada → WhatsApp enviado"
+          : `Post-llamada: ${res.intent} (sin WA)`,
+        { description: res.wants_whatsapp ? "Intención continuar" : "Sin seguimiento WA" },
+      );
+    } catch (err) {
+      toast.error("Falló post-llamada", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onE2E() {
+    setBusy(true);
+    try {
+      const res = await runE2ERenovacion({
+        phone,
+        first_name: name,
+        skip_voice: skipVoiceE2E,
+        skip_whatsapp: false,
+        flow_id: waFlowId,
+        agency_tag: agencyTag || undefined,
+      });
+      setLastResult(JSON.stringify(res, null, 2));
+      toast.success("E2E renovación OK", { description: phone });
+    } catch (err) {
+      toast.error("Falló E2E", {
         description: err instanceof Error ? err.message : "Error",
       });
     } finally {
@@ -193,7 +289,9 @@ export default function LaboratorioPage() {
     try {
       const res = await lookupAssociate(docId);
       setLastResult(JSON.stringify(res, null, 2));
-      toast.message("Core lookup (mock)", { description: docId });
+      toast.message(res.mock_commercial ? "Core lookup (stub)" : "Core lookup (HTTP)", {
+        description: docId,
+      });
     } catch (err) {
       toast.error("Falló lookup core", {
         description: err instanceof Error ? err.message : "Error",
@@ -207,7 +305,7 @@ export default function LaboratorioPage() {
     <div>
       <PageHeader
         title="Laboratorio"
-        subtitle="Import, voz, batch, documentos, WhatsApp mock, handoff y opt-out contra pilot-core."
+        subtitle="Import, voz, batch, documentos, WhatsApp LIWA, handoff y opt-out contra pilot-core."
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -265,21 +363,99 @@ export default function LaboratorioPage() {
                 Opt-out
               </Button>
             </div>
+            <label className="block text-sm">
+              Intent post-llamada
+              <select
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                value={postIntent}
+                onChange={(e) => setPostIntent(e.target.value)}
+              >
+                <option value="interesado">interesado → envía WA</option>
+                <option value="renovar">renovar → envía WA</option>
+                <option value="no_interes">no_interes → sin WA</option>
+                <option value="voicemail">voicemail → sin WA</option>
+                <option value="unknown">unknown → sin WA</option>
+              </select>
+            </label>
+            <Button variant="secondary" onClick={onPostCall} disabled={busy}>
+              Simular post-llamada → WA
+            </Button>
+            <label className="block text-sm">
+              Tag LIWA handoff
+              <input
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                value={agencyTag}
+                onChange={(e) => setAgencyTag(e.target.value)}
+                placeholder="RENOVACION_VIP"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={skipVoiceE2E}
+                onChange={(e) => setSkipVoiceE2E(e.target.checked)}
+              />
+              E2E sin llamada de voz
+            </label>
+            <Button onClick={onE2E} disabled={busy}>
+              E2E renovación (WA→doc→handoff→CRM)
+            </Button>
           </div>
         </ChartCard>
 
-        <ChartCard title="WhatsApp mock (LIWA pendiente)">
+        <ChartCard title={waLive ? "WhatsApp LIWA (live)" : "WhatsApp mock"}>
           <div className="space-y-3 p-1">
-            <textarea
-              className="min-h-28 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
-              value={waText}
-              onChange={(e) => setWaText(e.target.value)}
-            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant={waKind === "flow" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setWaKind("flow")}
+              >
+                Flujo / plantilla
+              </Button>
+              <Button
+                variant={waKind === "text" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setWaKind("text")}
+              >
+                Texto (24h)
+              </Button>
+            </div>
+            {waKind === "flow" ? (
+              <select
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
+                value={waFlowId}
+                onChange={(e) => setWaFlowId(e.target.value)}
+              >
+                {(waFlows.length
+                  ? waFlows
+                  : [{ id: waFlowId, name: `Flujo ${waFlowId}` }]
+                ).map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <textarea
+                className="min-h-28 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
+                value={waText}
+                onChange={(e) => setWaText(e.target.value)}
+              />
+            )}
             <Button onClick={onWhatsApp} disabled={busy}>
-              Enviar WhatsApp mock
+              {waLive
+                ? waKind === "flow"
+                  ? "Enviar flujo LIWA"
+                  : "Enviar texto LIWA"
+                : "Enviar WhatsApp mock"}
             </Button>
             <p className="text-xs text-[var(--muted)]">
-              No usa credenciales LIWA reales. Modo mock obligatorio hasta rotación.
+              {waLive
+                ? waKind === "flow"
+                  ? "Outbound frío: usa flujo con plantilla Meta (recomendado)."
+                  : "Texto libre solo si el contacto escribió en las últimas 24h."
+                : "Modo mock: define LIWA_MODE=real y LIWA_API_TOKEN en el entorno de la API."}
             </p>
           </div>
         </ChartCard>
@@ -307,10 +483,10 @@ export default function LaboratorioPage() {
           </div>
         </ChartCard>
 
-        <ChartCard title="Documentos · validación mock">
+        <ChartCard title="Documentos · upload real">
           <div className="space-y-3 p-1">
             <p className="text-xs text-[var(--muted)]">
-              PDF/JPG/PNG · máx 10 MB · antivirus mock (nombre con &quot;virus&quot; rechaza). MinIO real pendiente.
+              PDF/JPG/PNG · máx 10 MB · guarda en filesystem (o MinIO si DOCUMENTS_STORAGE_BACKEND=minio).
             </p>
             <input
               type="file"
@@ -319,7 +495,7 @@ export default function LaboratorioPage() {
             />
             <p className="text-xs text-[var(--muted)]">Último: {docFileName}</p>
             <label className="block text-sm">
-              Documento ID (core stub)
+              Documento ID (core)
               <input
                 className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
                 value={docId}
@@ -327,7 +503,7 @@ export default function LaboratorioPage() {
               />
             </label>
             <Button variant="outline" onClick={onCoreLookup} disabled={busy}>
-              Lookup core mock
+              Lookup core
             </Button>
           </div>
         </ChartCard>

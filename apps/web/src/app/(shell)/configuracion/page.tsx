@@ -50,6 +50,7 @@ export default function ConfiguracionPage() {
   const [flujoA, setFlujoA] = useState<AgentFlow>({});
   const [flujoB, setFlujoB] = useState<AgentFlow>({});
   const [piiMasking, setPiiMasking] = useState(true);
+  const [waMode, setWaMode] = useState<"mock" | "real">("mock");
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +80,8 @@ export default function ConfiguracionPage() {
         if (s.ui && typeof s.ui.pii_masking === "boolean") {
           setPiiMasking(s.ui.pii_masking);
         }
+        if (s.whatsapp?.mode === "real") setWaMode("real");
+        else setWaMode("mock");
       } catch (err) {
         toast.error("No se pudo cargar configuración", {
           description: err instanceof Error ? err.message : "¿API en :8201?",
@@ -153,7 +156,10 @@ export default function ConfiguracionPage() {
               {(
                 [
                   ["voz_enabled", "Línea de voz"],
-                  ["whatsapp_enabled", "WhatsApp (mock hasta LIWA)"],
+                  [
+                    "whatsapp_enabled",
+                    waMode === "real" ? "WhatsApp (LIWA live)" : "WhatsApp (mock)",
+                  ],
                 ] as const
               ).map(([key, label]) => (
                 <li key={key} className="flex items-center justify-between gap-4">
@@ -179,18 +185,20 @@ export default function ConfiguracionPage() {
               ))}
             </ul>
             <p className="mt-4 text-xs text-[var(--muted)]">
-              WhatsApp real bloqueado hasta rotación LIWA. Voz live requiere Dialer URL.
+              {waMode === "real"
+                ? "WhatsApp LIWA live activo (LIWA_MODE=real). Voz live vía ElevenLabs SIP o Dialer URL."
+                : "WhatsApp en mock hasta LIWA_MODE=real + LIWA_API_TOKEN. Voz live requiere Dialer/ElevenLabs."}
             </p>
           </ChartCard>
           <ChartCard title="Estado">
             <ul className="space-y-2 text-sm text-[var(--muted)]">
               <li className="flex items-center gap-2">
                 <span className="size-1.5 rounded-full bg-[var(--accent)]" />
-                Dialer: {dialer.base_url ? "URL configurada" : "vacío → mock"}
+                Dialer: {dialer.base_url ? "URL configurada" : "vacío → ElevenLabs SIP / mock"}
               </li>
               <li className="flex items-center gap-2">
                 <span className="size-1.5 rounded-full bg-[var(--accent)]" />
-                WhatsApp: modo mock comercial
+                WhatsApp: {waMode === "real" ? "LIWA live" : "modo mock"}
               </li>
               <li className="flex items-center gap-2">
                 <span className="size-1.5 rounded-full bg-[var(--accent)]" />

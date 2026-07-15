@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from platform_kit.auth import AuthContext, require_auth
 from platform_kit.errors import PlatformError
 from pydantic import BaseModel, Field
@@ -31,7 +31,9 @@ from pilot_core.modules.pii import (
     mask_handoff_row,
     pii_masking_enabled,
 )
+from pilot_core.modules.post_call.service import post_call_service, verify_elevenlabs_signature
 from pilot_core.modules.segmentation.service import segmentation_service
+from pilot_core.modules.liwa_whatsapp import liwa_whatsapp_service
 from pilot_core.modules.whatsapp_mock import whatsapp_mock_service
 from pilot_core.settings import get_settings
 
@@ -189,6 +191,7 @@ class CreateHandoffBody(BaseModel):
     motivo: str = "Lead calificado"
     priority: str = "alta"
     phone: str | None = None
+    agency_tag: str | None = None
 
 
 class OptOutBody(BaseModel):
@@ -300,6 +303,16 @@ async def create_handoff(
         },
     }
     ops_store.upsert_conversation_thread(thread)
+    liwa_meta: dict[str, Any] = {"synced": False}
+    settings = get_settings()
+    if body.phone and settings.liwa_live_enabled():
+        liwa_meta = await liwa_whatsapp_service.handoff_to_agency(
+            phone=body.phone,
+            first_name=body.name.split()[0] if body.name else "Asociado",
+            motivo=body.motivo,
+            tag_name=body.agency_tag,
+        )
+        liwa_meta["synced"] = bool(liwa_meta.get("ok"))
     entry = {
         "id": hid,
         "conversationId": cid,
@@ -312,11 +325,14 @@ async def create_handoff(
         "tiempoCola": "0h 01m",
         "asesor": None,
         "aiSummary": "Creado desde laboratorio/API",
+        "liwa": liwa_meta,
         "info": {
             "universidad": "-",
             "programa": "-",
             "canal": "whatsapp" if body.phone else "voz",
             "phone": body.phone or "",
+            "liwa_tag": liwa_meta.get("tag_name"),
+            "liwa_contact_id": liwa_meta.get("contact_id"),
         },
     }
     return ops_store.insert_handoff(entry)
@@ -347,62 +363,76 @@ async def dispatch_call(
     ctx: AuthContext = Depends(require_auth),
 ) -> dict[str, Any]:
     """Compliance gate + Dialer HTTP (mock si no hay DIALER_BASE_URL)."""
-    decision = compliance_service.evaluate(phone=body.phone, channel="voz")
-    if not decision.allowed:
-        raise PlatformError(
-            "compliance_blocked",
-            ",".join(decision.reasons) or "blocked",
-            status_code=403,
-        )
-
-    settings = get_settings()
-    dialer_url = (getattr(settings, "dialer_base_url", None) or "").rstrip("/")
-    phone_id = (
-        body.agent_phone_number_id or getattr(settings, "dialer_default_phone_number_id", "") or ""
+    return await orchestration_service.attempt_call(
+        phone=body.phone,
+        first_name=body.first_name,
+        campaign_id=body.campaign_id,
+        flow=body.flow,
+        tenant_id=ctx.tenant_id,
     )
 
-    payload = {
-        "lead": {"phone": body.phone, "first_name": body.first_name},
-        "campaign_id": body.campaign_id,
-        "agent_phone_number_id": phone_id or None,
-        "flow": body.flow,
-        "tenant_id": ctx.tenant_id,
-        "compliance": compliance_service.as_dict(decision),
-    }
 
-    if not dialer_url:
-        entry = {
-            "id": f"mock_{uuid4().hex[:10]}",
-            "mode": "mock",
-            "status": "queued_mock",
-            **payload,
-        }
-        ops_store.insert_dispatch(entry)
-        return {"ok": True, "mock_commercial": True, "dispatch": entry}
+class CallCompleteBody(BaseModel):
+    phone: str = Field(min_length=8, max_length=20)
+    first_name: str = Field(default="Asociado", max_length=80)
+    intent: str = Field(
+        default="interesado",
+        description="Tipificación: interesado|renovar|no_interes|voicemail|...",
+    )
+    skip_whatsapp: bool = False
+    conversation_id: str | None = None
+    dispatch_id: str | None = None
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{dialer_url}/internal/dialer/calls/dispatch",
-            json={
-                "lead": {"phone": body.phone, "first_name": body.first_name},
-                "agent_phone_number_id": phone_id or None,
-            },
-            headers={"X-Tenant-Id": ctx.tenant_id},
+
+@router.post("/calls/complete")
+async def complete_call(
+    body: CallCompleteBody,
+    _ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    """Post-llamada: tipifica intención y, si continúa, envía flujo WhatsApp."""
+    return await post_call_service.process(
+        phone=body.phone,
+        first_name=body.first_name,
+        intent=body.intent,
+        skip_whatsapp=body.skip_whatsapp,
+        conversation_id=body.conversation_id,
+        dispatch_id=body.dispatch_id,
+        source="ops",
+    )
+
+
+@router.post("/webhooks/elevenlabs/post-call")
+async def elevenlabs_post_call_webhook(request: Request) -> dict[str, Any]:
+    """Webhook ElevenLabs `post_call_transcription` → tipificación → WA si interesa."""
+    raw = await request.body()
+    settings = get_settings()
+    secret = (settings.elevenlabs_webhook_secret or "").strip()
+    sig = request.headers.get("elevenlabs-signature")
+    if secret:
+        if not verify_elevenlabs_signature(body=raw, signature_header=sig, secret=secret):
+            raise PlatformError("webhook_signature", "Invalid ElevenLabs signature", status_code=401)
+    elif not settings.auth_disabled:
+        raise PlatformError(
+            "webhook_misconfigured",
+            "ELEVENLABS_WEBHOOK_SECRET required when AUTH_DISABLED=false",
+            status_code=500,
         )
-        try:
-            data = resp.json()
-        except Exception:
-            data = {"raw": resp.text[:500]}
-        entry = {
-            "id": f"live_{uuid4().hex[:10]}",
-            "mode": "live",
-            "http_status": resp.status_code,
-            "provider_response": data,
-            "status": "sent" if resp.is_success else "failed",
-            **payload,
-        }
-        ops_store.insert_dispatch(entry)
-        return {"ok": resp.is_success, "mock_commercial": False, "dispatch": entry}
+
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except Exception as exc:
+        raise PlatformError("invalid_json", str(exc), status_code=400) from exc
+
+    event_type = str(payload.get("type") or "")
+    if event_type and event_type not in {"post_call_transcription", "post_call_audio"}:
+        return {"ok": True, "ignored": True, "type": event_type}
+    if event_type == "post_call_audio":
+        return {"ok": True, "ignored": True, "reason": "audio_only"}
+
+    return await post_call_service.process(
+        raw_payload=payload if isinstance(payload, dict) else {},
+        source="elevenlabs_webhook",
+    )
 
 
 @router.get("/calls/dispatch")
@@ -417,8 +447,27 @@ async def ops_segmentation(_ctx: AuthContext = Depends(require_auth)) -> dict[st
 
 class WhatsAppSendBody(BaseModel):
     phone: str = Field(min_length=8, max_length=20)
-    text: str = Field(min_length=1, max_length=500)
+    text: str = Field(default="", max_length=500)
     template: str | None = None
+    # flow = plantilla vía flujo LIWA (recomendado); text = solo ventana 24h
+    kind: str = Field(default="flow", pattern="^(flow|text)$")
+    flow_id: str | None = None
+    first_name: str = Field(default="Asociado", max_length=80)
+
+
+@router.get("/whatsapp/flows")
+async def whatsapp_flows(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    settings = get_settings()
+    if not settings.liwa_live_enabled():
+        return {
+            "ok": True,
+            "mode": "mock",
+            "items": [
+                {"id": settings.liwa_default_flow_id or "mock_reno", "name": "Renovaciones (mock)"}
+            ],
+            "default_flow_id": settings.liwa_default_flow_id,
+        }
+    return await liwa_whatsapp_service.list_flows()
 
 
 @router.post("/whatsapp/send")
@@ -433,9 +482,34 @@ async def whatsapp_send(
             ",".join(decision.reasons) or "blocked",
             status_code=403,
         )
-    result = whatsapp_mock_service.send_text(
-        phone=body.phone, text=body.text, template=body.template
-    )
+    settings = get_settings()
+    if settings.liwa_live_enabled():
+        if body.kind == "text" and not (body.text or "").strip():
+            raise PlatformError("validation_error", "text required for kind=text", status_code=422)
+        result = await liwa_whatsapp_service.send(
+            phone=body.phone,
+            text=body.text or "",
+            first_name=body.first_name,
+            template=body.template,
+            kind=body.kind,
+            flow_id=body.flow_id,
+        )
+        if not result.get("ok"):
+            detail = result.get("error") or "LIWA send failed"
+            msg = result.get("message")
+            if isinstance(msg, dict) and msg.get("error"):
+                detail = str(msg.get("error"))
+            raise PlatformError(
+                "liwa_send_failed",
+                str(detail),
+                status_code=502,
+            )
+    else:
+        result = whatsapp_mock_service.send_text(
+            phone=body.phone,
+            text=body.text or f"[flow:{body.flow_id or settings.liwa_default_flow_id}]",
+            template=body.template,
+        )
     result["compliance"] = compliance_service.as_dict(decision)
     return result
 
@@ -591,6 +665,24 @@ async def register_document(
     )
 
 
+@router.post("/documents/upload")
+async def upload_document(
+    _ctx: AuthContext = Depends(require_auth),
+    file: UploadFile = File(...),
+    contact_phone: str | None = Form(default=None),
+    kind: str = Form(default="orden_matricula"),
+) -> dict[str, Any]:
+    raw = await file.read()
+    return documents_service.register(
+        filename=file.filename or "documento.pdf",
+        content_type=file.content_type or "application/pdf",
+        size_bytes=len(raw),
+        contact_phone=contact_phone,
+        kind=kind,
+        content=raw,
+    )
+
+
 @router.get("/documents")
 async def list_documents(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
     data = documents_service.list()
@@ -648,6 +740,7 @@ async def get_report(report_id: str, _ctx: AuthContext = Depends(require_auth)) 
 async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
     stored = ops_store.all_settings()
     ui_defaults: dict[str, Any] = {"pii_masking": True}
+    s = get_settings()
     defaults: dict[str, Any] = {
         "channels": {
             "voz_enabled": True,
@@ -657,9 +750,24 @@ async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[st
             "identificacion": True,
         },
         "dialer": {
-            "base_url": getattr(get_settings(), "dialer_base_url", "") or "",
-            "default_phone_number_id": getattr(get_settings(), "dialer_default_phone_number_id", "")
-            or "",
+            "base_url": getattr(s, "dialer_base_url", "") or "",
+            "default_phone_number_id": getattr(s, "dialer_default_phone_number_id", "") or "",
+        },
+        "whatsapp": {
+            "mode": "real" if s.liwa_live_enabled() else "mock",
+            "provider": "liwa" if s.liwa_live_enabled() else "liwa_mock",
+            "base_url": (s.liwa_base_url or "").rstrip("/"),
+            "default_flow_id": s.liwa_default_flow_id or "",
+            "default_kind": "flow",
+            "handoff_tag": s.liwa_handoff_tag or "",
+        },
+        "documents": {
+            "storage_backend": s.documents_storage_backend or "filesystem",
+            "local_root": s.documents_local_root or "",
+        },
+        "core": {
+            "mode": "live" if (s.core_base_url or "").strip() else "mock",
+            "base_url": (s.core_base_url or "").rstrip("/"),
         },
         "ui": ui_defaults,
         "agent_config": agent_config_service.get(),
@@ -668,6 +776,8 @@ async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[st
     ui_raw = merged.get("ui")
     ui: dict[str, Any] = ui_raw if isinstance(ui_raw, dict) else {}
     merged["ui"] = {**ui_defaults, **ui}
+    # Always reflect runtime LIWA mode (not overwritten by stale SQLite).
+    merged["whatsapp"] = defaults["whatsapp"]
     return merged
 
 
@@ -715,7 +825,115 @@ async def put_settings(
 async def core_lookup(
     document_id: str, _ctx: AuthContext = Depends(require_auth)
 ) -> dict[str, Any]:
-    return core_adapter_service.lookup_associate(document_id)
+    return await core_adapter_service.lookup_associate(document_id)
+
+
+@router.get("/auth/status")
+async def auth_status(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    """OIDC readiness probe for ops UI / deploy checks."""
+    s = get_settings()
+    configured = bool(s.oidc_issuer and s.oidc_audience and (s.oidc_jwks_url or s.oidc_jwks_static_json))
+    return {
+        "ok": True,
+        "app_env": s.app_env,
+        "auth_disabled": s.auth_disabled,
+        "oidc_configured": configured,
+        "oidc_issuer": s.oidc_issuer or None,
+        "oidc_audience": s.oidc_audience or None,
+        "jwks": "static" if s.oidc_jwks_static_json else ("url" if s.oidc_jwks_url else None),
+        "ready_for_production_auth": configured and not s.auth_disabled and s.app_env in ("staging", "production"),
+    }
+
+
+class E2ERenovacionBody(BaseModel):
+    phone: str = Field(min_length=8, max_length=20)
+    first_name: str = Field(default="Prueba", max_length=80)
+    skip_voice: bool = False
+    skip_whatsapp: bool = False
+    flow_id: str | None = None
+    agency_tag: str | None = None
+
+
+@router.post("/e2e/renovacion")
+async def e2e_renovacion(
+    body: E2ERenovacionBody,
+    ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    """Demo path: voz → WA flujo → documento → handoff → CRM tip."""
+    steps: dict[str, Any] = {}
+    settings = get_settings()
+
+    decision = compliance_service.evaluate(phone=body.phone, channel="voz")
+    steps["compliance"] = compliance_service.as_dict(decision)
+    if not decision.allowed:
+        raise PlatformError("compliance_blocked", ",".join(decision.reasons), status_code=403)
+
+    if not body.skip_voice:
+        steps["voice"] = await orchestration_service.attempt_call(
+            phone=body.phone,
+            first_name=body.first_name,
+            flow="A",
+            tenant_id=ctx.tenant_id,
+        )
+    else:
+        steps["voice"] = {"skipped": True}
+
+    if not body.skip_whatsapp:
+        if settings.liwa_live_enabled():
+            steps["whatsapp"] = await liwa_whatsapp_service.send(
+                phone=body.phone,
+                first_name=body.first_name,
+                kind="flow",
+                flow_id=body.flow_id,
+                text="E2E renovacion PULSO",
+            )
+        else:
+            steps["whatsapp"] = whatsapp_mock_service.send_text(
+                phone=body.phone, text="E2E renovacion mock"
+            )
+    else:
+        steps["whatsapp"] = {"skipped": True}
+
+    # Minimal PDF bytes for storage demo
+    pdf_bytes = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+    steps["document"] = documents_service.register(
+        filename="orden_matricula_e2e.pdf",
+        content_type="application/pdf",
+        size_bytes=len(pdf_bytes),
+        contact_phone=body.phone,
+        kind="orden_matricula",
+        content=pdf_bytes,
+    )
+
+    handoff_body = CreateHandoffBody(
+        name=body.first_name,
+        segment="Renovacion",
+        motivo="E2E renovacion — doc validado",
+        priority="alta",
+        phone=body.phone,
+        agency_tag=body.agency_tag,
+    )
+    steps["handoff"] = await create_handoff(handoff_body, ctx)
+
+    try:
+        lead = crm_service.create_lead(
+            name=body.first_name, funnel="Renovación", phone=body.phone
+        )
+        lead_id = str(lead.get("id") or "")
+        if lead_id:
+            steps["crm"] = crm_service.move(
+                lead_id=lead_id, to_column="contactado", tipificacion=None
+            )
+        else:
+            steps["crm"] = lead
+    except Exception as exc:  # noqa: BLE001
+        steps["crm"] = {"ok": False, "error": str(exc)}
+
+    return {
+        "ok": True,
+        "phone": body.phone,
+        "steps": steps,
+    }
 
 
 class BatchAttemptBody(BaseModel):

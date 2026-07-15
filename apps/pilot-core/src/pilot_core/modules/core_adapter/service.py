@@ -1,29 +1,62 @@
-"""core_adapter — stub until Coopfuturo core API is confirmed."""
+"""core_adapter — HTTP real si CORE_BASE_URL; stub si no."""
 
 from __future__ import annotations
 
 from typing import Any
 
+import httpx
+
+from pilot_core.settings import get_settings
+
 
 class CoreAdapterService:
     name: str = "core_adapter"
-    mode: str = "mock"
 
     def ping(self) -> str:
         return self.name
 
-    def lookup_associate(self, document_id: str) -> dict[str, Any]:
+    @property
+    def mode(self) -> str:
+        return "live" if (get_settings().core_base_url or "").strip() else "mock"
+
+    async def lookup_associate(self, document_id: str) -> dict[str, Any]:
+        settings = get_settings()
+        base = (settings.core_base_url or "").rstrip("/")
+        if not base:
+            return {
+                "ok": True,
+                "mock_commercial": True,
+                "mode": "mock",
+                "document_id": document_id,
+                "associate": {
+                    "name": "Asociado Demo",
+                    "status": "activo",
+                    "product": "credito_educativo",
+                    "cupo_preaprobado": True,
+                },
+                "note": "CORE_BASE_URL vacío — stub local",
+            }
+
+        token = (settings.core_api_token or "").strip()
+        headers = {"Accept": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        path = (settings.core_associate_path or "/associates/{document_id}").replace(
+            "{document_id}", document_id
+        )
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(f"{base}{path}", headers=headers)
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"raw": resp.text[:500]}
         return {
-            "ok": True,
-            "mock_commercial": True,
-            "mode": self.mode,
+            "ok": resp.is_success,
+            "mock_commercial": False,
+            "mode": "live",
             "document_id": document_id,
-            "associate": {
-                "name": "Asociado Demo",
-                "status": "activo",
-                "product": "credito_educativo",
-            },
-            "note": "Pending EXTERNAL_BLOCKERS core API confirmation",
+            "http_status": resp.status_code,
+            "associate": data,
         }
 
 
