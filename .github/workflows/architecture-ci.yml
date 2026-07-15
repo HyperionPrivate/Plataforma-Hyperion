@@ -84,7 +84,8 @@ jobs:
         run: |
           uv sync --frozen --group dev
           uv pip install -e packages/platform-kit -e apps/pilot-core
-          python -c "import platform_kit, pilot_core; print(platform_kit.__file__); print(pilot_core.__file__)"
+          # Must use the project venv: bare `python` is the runner interpreter without editables.
+          .venv/bin/python -c "import platform_kit, pilot_core; print(platform_kit.__file__); print(pilot_core.__file__)"
       - name: Init databases
         env:
           PGPASSWORD: test_admin_only
