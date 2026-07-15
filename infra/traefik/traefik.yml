@@ -1,0 +1,18 @@
+# Dynamic Docker provider; routers definidos por labels en compose.
+
+api:
+  dashboard: true
+  insecure: true
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: coopfuturo_net
+
+entryPoints:
+  web:
+    address: ":80"
+
+log:
+  level: INFO

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/call.completed.json",
+  "title": "CallCompletedV1",
+  "description": "Resultado de una llamada (mapeado desde webhook Dialer / ElevenLabs por orchestrator).",
+  "allOf": [
+    { "$ref": "./_envelope.json" },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": { "const": "call.completed" },
+        "payload": {
+          "type": "object",
+          "required": ["contact_id", "dialer_call_id", "status"],
+          "properties": {
+            "contact_id": { "type": "string" },
+            "dialer_call_id": { "type": "string" },
+            "conversation_id": { "type": "string" },
+            "status": {
+              "type": "string",
+              "enum": ["completed", "failed", "no_answer", "busy", "voicemail", "machine", "unknown"]
+            },
+            "amd_label": { "type": "string" },
+            "duration_seconds": { "type": "number", "minimum": 0 },
+            "funnel_hint": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

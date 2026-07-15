@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/_envelope.json",
+  "title": "EventEnvelopeV1",
+  "description": "Envelope obligatorio para todos los eventos del bus. correlation_id debe alinearse con el header HTTP X-Correlation-ID cuando el flujo es síncrono.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "occurred_at",
+    "producer",
+    "correlation_id",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Identificador único del evento (idempotencia)."
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Nombre canónico del evento, p.ej. contact.imported"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp UTC ISO-8601 del hecho de negocio."
+    },
+    "producer": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Nombre del microservicio emisor."
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Traza de punta a punta del flujo (saga / request)."
+    },
+    "causation_id": {
+      "type": "string",
+      "description": "event_id o request_id que causó este evento (opcional)."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "v1",
+      "default": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Cuerpo específico del event_type."
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/call.requested.json",
+  "title": "CallRequestedV1",
+  "description": "Orchestrator solicita una llamada saliente al Dialer (único emisor permitido hacia voz).",
+  "allOf": [
+    { "$ref": "./_envelope.json" },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": { "const": "call.requested" },
+        "payload": {
+          "type": "object",
+          "required": ["contact_id", "segment", "phone_e164", "agent_id"],
+          "properties": {
+            "contact_id": { "type": "string" },
+            "segment": {
+              "type": "string",
+              "enum": ["renovacion", "reactivacion", "nuevo", "microcredito"]
+            },
+            "phone_e164": { "type": "string", "pattern": "^\\+[1-9]\\d{7,14}$" },
+            "agent_id": { "type": "string" },
+            "campaign_ref": { "type": "string" },
+            "dynamic_variables": { "type": "object", "additionalProperties": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

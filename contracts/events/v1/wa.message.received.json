@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/wa.message.received.json",
+  "title": "WaMessageReceivedV1",
+  "description": "Mensaje entrante de WhatsApp normalizado por el microservicio whatsapp.",
+  "allOf": [
+    { "$ref": "./_envelope.json" },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": { "const": "wa.message.received" },
+        "payload": {
+          "type": "object",
+          "required": ["contact_id", "wa_thread_id", "message_id", "direction"],
+          "properties": {
+            "contact_id": { "type": "string" },
+            "wa_thread_id": { "type": "string" },
+            "message_id": { "type": "string" },
+            "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+            "text": { "type": "string" },
+            "has_media": { "type": "boolean", "default": false },
+            "media_document_id": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

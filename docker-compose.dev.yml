@@ -1,0 +1,290 @@
+name: coopfuturo
+
+networks:
+  coopfuturo_net:
+    name: coopfuturo_net
+
+services:
+  traefik:
+    image: traefik:v3.3
+    ports:
+      - "${TRAEFIK_HTTP_PORT:-8088}:80"
+      - "${TRAEFIK_DASHBOARD_PORT:-8089}:8080"
+    volumes:
+      - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-coopfuturo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coopfuturo_dev}
+      POSTGRES_DB: postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./infra/postgres/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
+      - coopfuturo_pgdata:/var/lib/postgresql/data
+    networks:
+      - coopfuturo_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-coopfuturo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - coopfuturo_redis:/data
+    networks:
+      - coopfuturo_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  orchestrator:
+    build: ./services/orchestrator
+    environment:
+      SERVICE_NAME: orchestrator
+      APP_ENV: development
+      PORT: "8101"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_orchestrator
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DIALER_BASE_URL: ${DIALER_BASE_URL:-http://host.docker.internal:8080}
+      DIALER_API_TOKEN: ${DIALER_API_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.orchestrator.rule=PathPrefix(`/orchestrator`)
+      - traefik.http.routers.orchestrator.entrypoints=web
+      - traefik.http.middlewares.orchestrator-strip.stripprefix.prefixes=/orchestrator
+      - traefik.http.routers.orchestrator.middlewares=orchestrator-strip
+      - traefik.http.services.orchestrator.loadbalancer.server.port=8101
+    networks:
+      - coopfuturo_net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  crm:
+    build: ./services/crm
+    environment:
+      SERVICE_NAME: crm
+      APP_ENV: development
+      PORT: "8102"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_crm
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.crm.rule=PathPrefix(`/crm`)
+      - traefik.http.routers.crm.entrypoints=web
+      - traefik.http.middlewares.crm-strip.stripprefix.prefixes=/crm
+      - traefik.http.routers.crm.middlewares=crm-strip
+      - traefik.http.services.crm.loadbalancer.server.port=8102
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  compliance:
+    build: ./services/compliance
+    environment:
+      SERVICE_NAME: compliance
+      APP_ENV: development
+      PORT: "8103"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_compliance
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.compliance.rule=PathPrefix(`/compliance`)
+      - traefik.http.routers.compliance.entrypoints=web
+      - traefik.http.middlewares.compliance-strip.stripprefix.prefixes=/compliance
+      - traefik.http.routers.compliance.middlewares=compliance-strip
+      - traefik.http.services.compliance.loadbalancer.server.port=8103
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  whatsapp:
+    build: ./services/whatsapp
+    environment:
+      SERVICE_NAME: whatsapp
+      APP_ENV: development
+      PORT: "8104"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_whatsapp
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.whatsapp.rule=PathPrefix(`/whatsapp`)
+      - traefik.http.routers.whatsapp.entrypoints=web
+      - traefik.http.middlewares.whatsapp-strip.stripprefix.prefixes=/whatsapp
+      - traefik.http.routers.whatsapp.middlewares=whatsapp-strip
+      - traefik.http.services.whatsapp.loadbalancer.server.port=8104
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  identity:
+    build: ./services/identity
+    environment:
+      SERVICE_NAME: identity
+      APP_ENV: development
+      PORT: "8105"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_identity
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.identity.rule=PathPrefix(`/identity`)
+      - traefik.http.routers.identity.entrypoints=web
+      - traefik.http.middlewares.identity-strip.stripprefix.prefixes=/identity
+      - traefik.http.routers.identity.middlewares=identity-strip
+      - traefik.http.services.identity.loadbalancer.server.port=8105
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  documents:
+    build: ./services/documents
+    environment:
+      SERVICE_NAME: documents
+      APP_ENV: development
+      PORT: "8106"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_documents
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.documents.rule=PathPrefix(`/documents`)
+      - traefik.http.routers.documents.entrypoints=web
+      - traefik.http.middlewares.documents-strip.stripprefix.prefixes=/documents
+      - traefik.http.routers.documents.middlewares=documents-strip
+      - traefik.http.services.documents.loadbalancer.server.port=8106
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  handoff:
+    build: ./services/handoff
+    environment:
+      SERVICE_NAME: handoff
+      APP_ENV: development
+      PORT: "8107"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_handoff
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.handoff.rule=PathPrefix(`/handoff`)
+      - traefik.http.routers.handoff.entrypoints=web
+      - traefik.http.middlewares.handoff-strip.stripprefix.prefixes=/handoff
+      - traefik.http.routers.handoff.middlewares=handoff-strip
+      - traefik.http.services.handoff.loadbalancer.server.port=8107
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  segmentation:
+    build: ./services/segmentation
+    environment:
+      SERVICE_NAME: segmentation
+      APP_ENV: development
+      PORT: "8108"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_segmentation
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.segmentation.rule=PathPrefix(`/segmentation`)
+      - traefik.http.routers.segmentation.entrypoints=web
+      - traefik.http.middlewares.segmentation-strip.stripprefix.prefixes=/segmentation
+      - traefik.http.routers.segmentation.middlewares=segmentation-strip
+      - traefik.http.services.segmentation.loadbalancer.server.port=8108
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  agent-config:
+    build: ./services/agent-config
+    environment:
+      SERVICE_NAME: agent-config
+      APP_ENV: development
+      PORT: "8109"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_agent_config
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.agent-config.rule=PathPrefix(`/agent-config`)
+      - traefik.http.routers.agent-config.entrypoints=web
+      - traefik.http.middlewares.agent-config-strip.stripprefix.prefixes=/agent-config
+      - traefik.http.routers.agent-config.middlewares=agent-config-strip
+      - traefik.http.services.agent-config.loadbalancer.server.port=8109
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+  analytics:
+    build: ./services/analytics
+    environment:
+      SERVICE_NAME: analytics
+      APP_ENV: development
+      PORT: "8110"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-coopfuturo}:${POSTGRES_PASSWORD:-coopfuturo_dev}@postgres:5432/db_analytics
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.analytics.rule=PathPrefix(`/analytics`)
+      - traefik.http.routers.analytics.entrypoints=web
+      - traefik.http.middlewares.analytics-strip.stripprefix.prefixes=/analytics
+      - traefik.http.routers.analytics.middlewares=analytics-strip
+      - traefik.http.services.analytics.loadbalancer.server.port=8110
+    networks:
+      - coopfuturo_net
+    restart: unless-stopped
+
+volumes:
+  coopfuturo_pgdata:
+  coopfuturo_redis:

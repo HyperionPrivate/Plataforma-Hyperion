@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coopfuturo.local/contracts/events/v1/optout.requested.json",
+  "title": "OptoutRequestedV1",
+  "description": "Solicitud de exclusión de contacto (habeas data). Compliance es el consumidor canónico.",
+  "allOf": [
+    { "$ref": "./_envelope.json" },
+    {
+      "type": "object",
+      "properties": {
+        "event_type": { "const": "optout.requested" },
+        "payload": {
+          "type": "object",
+          "required": ["contact_id", "channel", "reason"],
+          "properties": {
+            "contact_id": { "type": "string" },
+            "phone_e164": { "type": "string", "pattern": "^\\+[1-9]\\d{7,14}$" },
+            "channel": {
+              "type": "string",
+              "enum": ["voice", "whatsapp", "any"]
+            },
+            "reason": { "type": "string" },
+            "requested_at": { "type": "string", "format": "date-time" }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}
