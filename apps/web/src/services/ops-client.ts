@@ -311,6 +311,7 @@ export async function fetchSettings() {
       provider?: string;
       base_url?: string;
       default_flow_id?: string;
+      flow_id_b?: string;
       default_kind?: string;
     };
   }>("/ops/settings");

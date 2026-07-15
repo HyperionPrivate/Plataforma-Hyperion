@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -14,7 +15,11 @@ from pilot_core.modules.crm.service import crm_service
 from pilot_core.modules.liwa_whatsapp import liwa_whatsapp_service
 from pilot_core.modules.product_flow import resolve_product_flow
 from pilot_core.modules.whatsapp_mock import whatsapp_mock_service
+from pilot_core.phone import normalize_phone
 from pilot_core.settings import get_settings
+
+# Max age for ElevenLabs webhook signature timestamp (seconds).
+_WEBHOOK_SIGNATURE_MAX_AGE_SEC = 300
 
 # Intenciones que disparan seguimiento WA (A renovación / B reactivación).
 _CONTINUE = frozenset(
@@ -188,14 +193,32 @@ def extract_conversation_id(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def verify_elevenlabs_signature(*, body: bytes, signature_header: str | None, secret: str) -> bool:
-    """Validate ElevenLabs `elevenlabs-signature: t=...,v0=...` HMAC-SHA256."""
+def verify_elevenlabs_signature(
+    *,
+    body: bytes,
+    signature_header: str | None,
+    secret: str,
+    now: float | None = None,
+    max_age_sec: int = _WEBHOOK_SIGNATURE_MAX_AGE_SEC,
+) -> bool:
+    """Validate ElevenLabs `elevenlabs-signature: t=...,v0=...` HMAC-SHA256.
+
+    Also rejects signatures whose timestamp is older than ``max_age_sec``
+    (replay protection).
+    """
     if not secret or not signature_header:
         return False
     parts = dict(p.split("=", 1) for p in signature_header.split(",") if "=" in p)
     ts = parts.get("t")
     v0 = parts.get("v0")
     if not ts or not v0:
+        return False
+    try:
+        ts_i = int(ts)
+    except ValueError:
+        return False
+    current = time.time() if now is None else now
+    if abs(current - ts_i) > max_age_sec:
         return False
     expected = hmac.new(
         secret.encode("utf-8"),
@@ -232,18 +255,26 @@ class PostCallService:
             inferred = normalize_intent(intent)
             infer_source = "explicit"
 
-        phone_n = (phone or extract_phone_from_payload(payload) or "").strip()
+        phone_n = (
+            normalize_phone(phone or extract_phone_from_payload(payload) or "")
+            or (phone or extract_phone_from_payload(payload) or "").strip()
+        )
         name = first_name if first_name != "Asociado" else extract_name_from_payload(payload)
         conv_id = conversation_id or extract_conversation_id(payload)
         resolved_flow = flow
         data = _as_dict(payload.get("data"))
         agent_id = str(data["agent_id"]) if data.get("agent_id") else None
 
+        # Resolve phone only via conversation_id / explicit dispatch — never the
+        # most recent unrelated dispatch (wrong-lead risk).
         if not phone_n and conv_id:
             for d in ops_store.list_dispatches(50):
                 if str(d.get("conversation_id") or "") == conv_id:
                     lead = _as_dict(d.get("lead"))
-                    phone_n = str(lead.get("phone") or "").strip()
+                    phone_n = (
+                        normalize_phone(str(lead.get("phone") or ""))
+                        or str(lead.get("phone") or "").strip()
+                    )
                     if name == "Asociado" and lead.get("first_name"):
                         name = str(lead["first_name"])
                     if not dispatch_id:
@@ -251,24 +282,34 @@ class PostCallService:
                     if not resolved_flow and d.get("flow"):
                         resolved_flow = str(d.get("flow"))
                     break
-        if not phone_n:
-            for d in ops_store.list_dispatches(10):
-                lead = _as_dict(d.get("lead"))
-                if lead.get("phone") and d.get("status") in {"sent", "queued_mock"}:
-                    phone_n = str(lead["phone"]).strip()
-                    if name == "Asociado" and lead.get("first_name"):
-                        name = str(lead["first_name"])
-                    if not dispatch_id:
-                        dispatch_id = str(d.get("id") or "") or None
-                    if not resolved_flow and d.get("flow"):
-                        resolved_flow = str(d.get("flow"))
-                    break
+        if not phone_n and dispatch_id:
+            matched = ops_store.get_dispatch(dispatch_id)
+            if matched:
+                lead = _as_dict(matched.get("lead"))
+                phone_n = (
+                    normalize_phone(str(lead.get("phone") or matched.get("phone") or ""))
+                    or str(lead.get("phone") or matched.get("phone") or "").strip()
+                )
+                if name == "Asociado" and lead.get("first_name"):
+                    name = str(lead["first_name"])
+                if not resolved_flow and matched.get("flow"):
+                    resolved_flow = str(matched.get("flow"))
 
         product = resolve_product_flow(resolved_flow, agent_id=agent_id, payload=payload)
 
+        claim_id = f"pc_{uuid4().hex[:10]}"
         if conv_id:
-            prior = ops_store.get_post_call_by_conversation(conv_id)
-            if prior:
+            claimed, prior = ops_store.claim_post_call_conversation(
+                conv_id,
+                {
+                    "id": claim_id,
+                    "conversation_id": conv_id,
+                    "phone": phone_n or None,
+                    "source": source,
+                    "status": "processing",
+                },
+            )
+            if not claimed and prior:
                 return {
                     "ok": True,
                     "idempotent": True,
@@ -280,7 +321,7 @@ class PostCallService:
 
         wants_wa = intent_wants_whatsapp(inferred)
         result: dict[str, Any] = {
-            "id": f"pc_{uuid4().hex[:10]}",
+            "id": claim_id,
             "ok": True,
             "source": source,
             "phone": phone_n or None,
@@ -402,9 +443,13 @@ class PostCallService:
         ops_store.upsert_dispatch(d)
 
     def _patch_latest_dispatch_for_phone(self, phone: str, post_call: dict[str, Any]) -> None:
+        phone_n = normalize_phone(phone) or phone
         for d in ops_store.list_dispatches(30):
             lead = _as_dict(d.get("lead"))
-            if str(lead.get("phone") or d.get("phone") or "") == phone:
+            candidate = normalize_phone(str(lead.get("phone") or d.get("phone") or "")) or str(
+                lead.get("phone") or d.get("phone") or ""
+            )
+            if candidate and candidate == phone_n:
                 self._patch_dispatch(str(d["id"]), post_call)
                 post_call["dispatch_id"] = d["id"]
                 return

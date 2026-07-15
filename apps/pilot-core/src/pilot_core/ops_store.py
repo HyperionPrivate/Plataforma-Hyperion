@@ -137,6 +137,9 @@ def init_db() -> None:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
                 CREATE INDEX IF NOT EXISTS idx_messages_conv
                   ON conversation_messages(conversation_id, created_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_post_calls_conversation
+                  ON post_calls(conversation_id)
+                  WHERE conversation_id IS NOT NULL AND conversation_id != '';
                 """
             )
             conn.commit()
@@ -300,6 +303,62 @@ def insert_post_call(entry: dict[str, Any]) -> dict[str, Any]:
             conn.close()
 
 
+def claim_post_call_conversation(
+    conversation_id: str, placeholder: dict[str, Any]
+) -> tuple[bool, dict[str, Any] | None]:
+    """Atomically claim a conversation_id for post-call processing.
+
+    Returns (True, None) if this caller owns the claim, or (False, existing)
+    if another post-call already claimed the conversation.
+    """
+    init_db()
+    if "id" not in placeholder:
+        placeholder["id"] = f"pc_{uuid4().hex[:10]}"
+    with _LOCK:
+        conn = _connect()
+        try:
+            existing = conn.execute(
+                """
+                SELECT payload FROM post_calls
+                WHERE conversation_id=?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (conversation_id,),
+            ).fetchone()
+            if existing:
+                return False, json.loads(existing["payload"])
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO post_calls(id, conversation_id, phone, payload)
+                    VALUES(?, ?, ?, ?)
+                    """,
+                    (
+                        placeholder["id"],
+                        conversation_id,
+                        placeholder.get("phone"),
+                        json.dumps({**placeholder, "status": "processing"}, ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+                return True, None
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                row = conn.execute(
+                    """
+                    SELECT payload FROM post_calls
+                    WHERE conversation_id=?
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (conversation_id,),
+                ).fetchone()
+                if row:
+                    return False, json.loads(row["payload"])
+                return False, None
+        finally:
+            conn.close()
+
+
 def get_post_call_by_conversation(conversation_id: str) -> dict[str, Any] | None:
     init_db()
     with _LOCK:
@@ -438,8 +497,10 @@ def delete_conversation_claim(conversation_id: str) -> bool:
 
 
 def add_opt_out(phone: str) -> dict[str, Any]:
+    from pilot_core.phone import normalize_phone
+
     init_db()
-    phone = phone.strip()
+    phone = normalize_phone(phone) or phone.strip()
     with _LOCK:
         conn = _connect()
         try:
@@ -451,12 +512,23 @@ def add_opt_out(phone: str) -> dict[str, Any]:
 
 
 def list_opt_outs() -> list[str]:
+    from pilot_core.phone import normalize_phone
+
     init_db()
     with _LOCK:
         conn = _connect()
         try:
             rows = conn.execute("SELECT phone FROM opt_outs ORDER BY created_at DESC").fetchall()
-            return [str(r["phone"]) for r in rows]
+            # Normalize on read so legacy mixed formats still match.
+            seen: set[str] = set()
+            out: list[str] = []
+            for r in rows:
+                raw = str(r["phone"])
+                canon = normalize_phone(raw) or raw.strip()
+                if canon and canon not in seen:
+                    seen.add(canon)
+                    out.append(canon)
+            return out
         finally:
             conn.close()
 

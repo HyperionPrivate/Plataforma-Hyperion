@@ -886,10 +886,33 @@ async def _e2e_campaign(
     settings = get_settings()
     product = resolve_product_flow(body.flow)
 
-    decision = compliance_service.evaluate(phone=body.phone, channel="voz")
-    steps["compliance"] = compliance_service.as_dict(decision)
-    if not decision.allowed:
-        raise PlatformError("compliance_blocked", ",".join(decision.reasons), status_code=403)
+    # Evaluate only channels that will actually run (skip_voice must not
+    # 403 when voz is disabled). Always gate WhatsApp when sending WA.
+    channels: list[str] = []
+    if not body.skip_voice:
+        channels.append("voz")
+    if not body.skip_whatsapp:
+        channels.append("whatsapp")
+    if not channels:
+        channels.append("whatsapp")  # still run opt-out / window checks
+
+    blocked: list[str] = []
+    compliance_steps: dict[str, Any] = {}
+    for ch in channels:
+        decision = compliance_service.evaluate(phone=body.phone, channel=ch)
+        compliance_steps[ch] = compliance_service.as_dict(decision)
+        if not decision.allowed:
+            blocked.extend(decision.reasons)
+    # Deduplicate while preserving order
+    blocked_unique: list[str] = []
+    seen_r: set[str] = set()
+    for r in blocked:
+        if r not in seen_r:
+            seen_r.add(r)
+            blocked_unique.append(r)
+    steps["compliance"] = compliance_steps
+    if blocked_unique:
+        raise PlatformError("compliance_blocked", ",".join(blocked_unique), status_code=403)
 
     if not body.skip_voice:
         steps["voice"] = await orchestration_service.attempt_call(
@@ -901,7 +924,12 @@ async def _e2e_campaign(
     else:
         steps["voice"] = {"skipped": True}
 
-    wa_flow_id = body.flow_id or product["liwa_flow_id"]
+    # Do not let Flujo A flow_id override Flujo B product resolution.
+    override_id = (body.flow_id or "").strip() or None
+    default_a = (settings.liwa_default_flow_id or "").strip()
+    if body.flow == "B" and override_id and override_id == default_a:
+        override_id = None
+    wa_flow_id = override_id or product["liwa_flow_id"]
     if not body.skip_whatsapp:
         if settings.liwa_live_enabled():
             steps["whatsapp"] = await liwa_whatsapp_service.send(
@@ -952,14 +980,26 @@ async def _e2e_campaign(
     except Exception:  # noqa: BLE001
         steps["crm"] = {"ok": False, "error": "crm_update_failed"}
 
+    ok = True
+    wa = steps.get("whatsapp") or {}
+    if not body.skip_whatsapp and wa.get("skipped") is not True and wa.get("ok") is False:
+        ok = False
+    ho = steps.get("handoff") or {}
+    liwa = ho.get("liwa") if isinstance(ho, dict) else None
+    if isinstance(liwa, dict) and liwa.get("ok") is False:
+        ok = False
+    crm = steps.get("crm") or {}
+    if isinstance(crm, dict) and crm.get("ok") is False:
+        ok = False
+
     return {
-        "ok": True,
+        "ok": ok,
         "phone": body.phone,
         "flow": product["flow"],
         "product": {
             "name": product["name"],
             "segment": product["segment"],
-            "liwa_flow_id": product["liwa_flow_id"],
+            "liwa_flow_id": wa_flow_id or product["liwa_flow_id"],
             "liwa_handoff_tag": product["liwa_handoff_tag"],
             "liwa_flow_fallback_to_a": product["liwa_flow_fallback_to_a"],
         },

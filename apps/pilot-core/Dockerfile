@@ -18,16 +18,22 @@ RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends curl \
  && useradd --create-home --uid 10001 appuser \
+ && mkdir -p /data/documents \
+ && chown -R 10001:10001 /data \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/src
+    PYTHONPATH=/app/src \
+    PULSO_DATA_DIR=/data
 COPY --from=builder /install /usr/local
 COPY --from=builder /build/src ./src
 COPY apps/pilot-core/alembic.ini ./alembic.ini
 COPY apps/pilot-core/alembic ./alembic
-USER 10001
+COPY apps/pilot-core/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+# Entrypoint runs as root to chown named volumes, then drops to UID 10001.
+ENTRYPOINT ["/docker-entrypoint.sh"]
 EXPOSE 8201
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
   CMD curl -fsS http://127.0.0.1:8201/health/live || exit 1

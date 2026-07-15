@@ -52,6 +52,8 @@ export default function LaboratorioPage() {
   const [waLive, setWaLive] = useState(false);
   const [waKind, setWaKind] = useState<"flow" | "text">("flow");
   const [waFlowId, setWaFlowId] = useState("1782399915832");
+  const [waFlowIdA, setWaFlowIdA] = useState("1782399915832");
+  const [waFlowIdB, setWaFlowIdB] = useState("");
   const [waFlows, setWaFlows] = useState<{ id: string; name: string }[]>([]);
   const [agencyTag, setAgencyTag] = useState("RENOVACION_VIP");
   const [skipVoiceE2E, setSkipVoiceE2E] = useState(true);
@@ -59,7 +61,10 @@ export default function LaboratorioPage() {
 
   useEffect(() => {
     setAgencyTag(flow === "B" ? "REACTIVACION_VIP" : "RENOVACION_VIP");
-  }, [flow]);
+    // Keep WhatsApp flow_id aligned with product flow A/B.
+    const next = flow === "B" ? waFlowIdB || waFlowIdA : waFlowIdA;
+    if (next) setWaFlowId(next);
+  }, [flow, waFlowIdA, waFlowIdB]);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,13 +73,18 @@ export default function LaboratorioPage() {
         const s = await fetchSettings();
         if (cancelled) return;
         setWaLive(s.whatsapp?.mode === "real");
-        if (s.whatsapp?.default_flow_id) setWaFlowId(s.whatsapp.default_flow_id);
+        const flowA = s.whatsapp?.default_flow_id || "1782399915832";
+        const flowB = s.whatsapp?.flow_id_b || "";
+        setWaFlowIdA(flowA);
+        setWaFlowIdB(flowB);
         if (s.whatsapp?.default_kind === "text") setWaKind("text");
         try {
           const flows = await fetchWhatsAppFlows();
           if (!cancelled && Array.isArray(flows.items)) {
             setWaFlows(flows.items.map((f) => ({ id: String(f.id), name: f.name })));
-            if (flows.default_flow_id) setWaFlowId(String(flows.default_flow_id));
+            if (flows.default_flow_id) {
+              setWaFlowIdA(String(flows.default_flow_id));
+            }
           }
         } catch {
           /* ignore flows fetch */
@@ -270,17 +280,23 @@ export default function LaboratorioPage() {
   async function onE2E() {
     setBusy(true);
     try {
+      // Flujo B: omit flow_id so backend uses product B (do not force A's id).
       const res = await runE2ERenovacion({
         phone,
         first_name: name,
         flow,
         skip_voice: skipVoiceE2E,
         skip_whatsapp: false,
-        flow_id: waFlowId,
+        flow_id: flow === "B" ? waFlowIdB || undefined : waFlowId,
         agency_tag: agencyTag || undefined,
       });
       setLastResult(JSON.stringify(res, null, 2));
-      toast.success(`E2E Flujo ${res.flow ?? flow} OK`, { description: phone });
+      const ok = res.ok !== false;
+      if (ok) {
+        toast.success(`E2E Flujo ${res.flow ?? flow} OK`, { description: phone });
+      } else {
+        toast.error(`E2E Flujo ${res.flow ?? flow} con fallos`, { description: phone });
+      }
     } catch (err) {
       toast.error("Falló E2E", {
         description: err instanceof Error ? err.message : "Error",

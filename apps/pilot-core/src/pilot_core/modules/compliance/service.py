@@ -7,6 +7,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from pilot_core import ops_store
+from pilot_core.phone import normalize_phone
 
 # Colombia aproximada UTC-5 (sin depender de tzdata en Windows).
 _CO = timezone(timedelta(hours=-5), name="COT")
@@ -32,10 +33,12 @@ class ComplianceService:
         return self.name
 
     def hydrate(self) -> None:
-        """Load opt-outs from SQLite into memory."""
+        """Load opt-outs from SQLite into memory (normalized phones)."""
         try:
             ops_store.init_db()
-            self.suppressed = set(ops_store.list_opt_outs())
+            self.suppressed = {
+                normalize_phone(p) or p.strip() for p in ops_store.list_opt_outs() if p
+            }
             self._hydrated = True
         except Exception:
             self._hydrated = False
@@ -45,7 +48,7 @@ class ComplianceService:
             self.hydrate()
 
     def suppress(self, phone: str) -> dict[str, Any]:
-        phone = phone.strip()
+        phone = normalize_phone(phone) or phone.strip()
         ops_store.add_opt_out(phone)
         self.suppressed.add(phone)
         self._hydrated = True
@@ -56,7 +59,7 @@ class ComplianceService:
     ) -> PolicyDecision:
         self._ensure_hydrated()
         reasons: list[str] = []
-        phone = phone.strip()
+        phone = normalize_phone(phone) or phone.strip()
         if phone in self.suppressed:
             reasons.append("opt_out_suppressed")
         channels = ops_store.get_setting("channels") or {}
