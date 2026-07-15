@@ -1,0 +1,58 @@
+{
+  "dayChips": {
+    "llamadasHoy": 5214,
+    "whatsappHoy": 3907,
+    "reintentos": 1246,
+    "ventana": "8:00–20:00",
+    "ventanaActiva": true
+  },
+  "campaigns": [
+    {
+      "id": "c1",
+      "name": "Renovación Ola 1",
+      "segment": "Renovación",
+      "channels": ["voz", "whatsapp"],
+      "contacted": 8412,
+      "total": 10000,
+      "conversion": 39,
+      "status": "activa",
+      "ab": { "a": 41, "b": 36, "winner": "A" }
+    },
+    {
+      "id": "c2",
+      "name": "Reactiva Muestra",
+      "segment": "Reactivación",
+      "channels": ["voz"],
+      "contacted": 1000,
+      "total": 1000,
+      "conversion": 22,
+      "status": "completada",
+      "ab": { "a": 24, "b": 20, "winner": "A" }
+    },
+    {
+      "id": "c3",
+      "name": "Microcrédito Inbound",
+      "segment": "Microcrédito",
+      "channels": ["whatsapp"],
+      "contacted": 0,
+      "total": 0,
+      "conversion": 0,
+      "status": "en_curso",
+      "continuous": true
+    }
+  ],
+  "heatmap": {
+    "days": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"],
+    "hours": ["8–10", "10–12", "12–14", "14–16", "16–18", "18–20"],
+    "values": [
+      [0.25, 0.40, 0.55, 0.72, 0.85, 0.60],
+      [0.30, 0.48, 0.62, 0.88, 0.80, 0.52],
+      [0.28, 0.45, 0.70, 0.82, 0.78, 0.48],
+      [0.35, 0.52, 0.68, 0.90, 0.84, 0.55],
+      [0.32, 0.50, 0.65, 0.78, 0.70, 0.42],
+      [0.18, 0.28, 0.35, 0.40, 0.32, 0.22],
+      [0.12, 0.20, 0.25, 0.30, 0.22, 0.15]
+    ],
+    "unitLabel": "Tasa de conversión"
+  }
+}

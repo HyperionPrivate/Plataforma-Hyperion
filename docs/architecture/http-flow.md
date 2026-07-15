@@ -13,7 +13,7 @@ Traefik (edge) ── OIDC/JWT (futuro)
     ├── GET  /pilot-core/health     → pilot-core
     ├── GET  /whatsapp/health       → whatsapp-adapter
     ├── GET  /documents/health      → documents
-    └── GET  /handoff/health        → handoff-liwa
+    └── GET  /handoff-liwa/health    → handoff-liwa
 ```
 
 ## Flujos síncronos planificados

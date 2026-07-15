@@ -14,6 +14,7 @@
 | WhatsApp / LIWA | `apps/whatsapp-adapter/` |
 | Documentos | `apps/documents/` |
 | Handoff | `apps/handoff-liwa/` |
+| Ops UI (PULSO frontend) | `apps/web/` — mock hoy; ver [apps/web/ARCHITECTURE.md](apps/web/ARCHITECTURE.md) |
 | Contratos | `contracts/` |
 | Stubs legacy | `services/` — solo mantenimiento; no features nuevas |
 

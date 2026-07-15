@@ -22,8 +22,14 @@ async def startup(settings: Settings) -> None:
     session_factory = create_session_factory(engine)
     redis = Redis.from_url(settings.redis_url.get_secret_value(), decode_responses=False)
     transport = RedisStreamsTransport(redis, settings)
-    await transport.ensure_group()
-    if settings.event_workers_enabled:
+    try:
+        await transport.ensure_group()
+    except Exception:
+        # Dev/demo: allow Ops API to boot without Redis Streams ready.
+        if settings.app_env not in ("development", "test"):
+            raise
+        transport = None
+    if settings.event_workers_enabled and transport is not None and session_factory is not None:
         worker = EventWorker(
             factory=session_factory,
             transport=transport,

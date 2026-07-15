@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0a0f0d;
+  --surface: #111814;
+  --surface-2: #1a221e;
+  --border: rgba(255, 255, 255, 0.06);
+  --accent: #34d399;
+  --accent-dim: rgba(52, 211, 153, 0.15);
+  --text: #f3f4f6;
+  --muted: #9ca3af;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+  --sidebar-width: 280px;
+  --panel-right-width: 360px;
+  --page-gap: 24px;
+  --page-padding: 32px;
+  --background: var(--bg);
+  --foreground: var(--text);
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-muted: var(--muted);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --font-sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
+}
+
+@media (max-width: 1280px) {
+  :root {
+    --sidebar-width: 240px;
+    --panel-right-width: 320px;
+    --page-gap: 20px;
+    --page-padding: 24px;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --page-gap: 16px;
+    --page-padding: 16px;
+  }
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}

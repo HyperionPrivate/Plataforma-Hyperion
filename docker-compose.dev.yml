@@ -124,11 +124,27 @@ services:
     networks: [coopfuturo_data]
     restart: "no"
 
+  # Named volumes mount as root; pilot-core runs UID 10001 with cap_drop: ALL
+  # (cannot chown). One-shot init prepares /data without capability drops.
+  pilot-core-data-init:
+    image: busybox:1.37.0
+    user: "0:0"
+    volumes:
+      - pilot_core_data:/data
+    command:
+      [
+        "sh",
+        "-c",
+        "mkdir -p /data/documents && chown -R 10001:10001 /data && chmod -R u+rwX /data",
+      ]
+    restart: "no"
+
   pilot-core:
     <<: *app_security
     build:
       context: .
       dockerfile: apps/pilot-core/Dockerfile
+    user: "10001:10001"
     environment: &pilot_env
       SERVICE_NAME: pilot-core
       APP_ENV: development
@@ -138,8 +154,15 @@ services:
       AUTH_DISABLED: "true"
       REDIS_CONSUMER_GROUP: pilot-core
       DIALER_BASE_URL: ${DIALER_BASE_URL:-http://host.docker.internal:8080}
+      PULSO_DATA_DIR: /data
+      DOCUMENTS_STORAGE_BACKEND: filesystem
+      DOCUMENTS_LOCAL_ROOT: /data/documents
+    volumes:
+      - pilot_core_data:/data
     depends_on:
       migrate-pilot-core:
+        condition: service_completed_successfully
+      pilot-core-data-init:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -245,9 +268,9 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=coopfuturo_app
-      - traefik.http.routers.handoff.rule=PathPrefix(`/handoff`)
+      - traefik.http.routers.handoff.rule=PathPrefix(`/handoff-liwa`)
       - traefik.http.routers.handoff.entrypoints=web
-      - traefik.http.middlewares.handoff-strip.stripprefix.prefixes=/handoff
+      - traefik.http.middlewares.handoff-strip.stripprefix.prefixes=/handoff-liwa
       - traefik.http.routers.handoff.middlewares=handoff-strip
       - traefik.http.services.handoff.loadbalancer.server.port=8204
     networks: [coopfuturo_app, coopfuturo_data]
@@ -256,6 +279,34 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 256M }
 
+  # Ops UI PULSO (Next.js). Catch-all under / excluding API path prefixes.
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_MODE: live
+        NEXT_PUBLIC_PILOT_CORE_URL: http://127.0.0.1:${TRAEFIK_HTTP_PORT:-8088}/pilot-core
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_MODE: live
+      NEXT_PUBLIC_PILOT_CORE_URL: http://127.0.0.1:${TRAEFIK_HTTP_PORT:-8088}/pilot-core
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coopfuturo_app
+      - traefik.http.routers.web.rule=PathPrefix(`/`) && !PathPrefix(`/pilot-core`) && !PathPrefix(`/whatsapp`) && !PathPrefix(`/documents`) && !PathPrefix(`/handoff-liwa`)
+      - traefik.http.routers.web.entrypoints=web
+      - traefik.http.routers.web.priority=1
+      - traefik.http.services.web.loadbalancer.server.port=3000
+    networks: [coopfuturo_app]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
 volumes:
   coopfuturo_pgdata:
   coopfuturo_redis:
+  pilot_core_data:

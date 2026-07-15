@@ -1,7 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
+# psql defaults to a DB named like POSTGRES_USER; connect to POSTGRES_DB instead.
+PSQL=(psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "${POSTGRES_DB:-postgres}")
+
+"${PSQL[@]}" <<-EOSQL
 CREATE DATABASE db_pilot_core;
 CREATE DATABASE db_whatsapp;
 CREATE DATABASE db_documents;
@@ -13,7 +16,7 @@ WA_PASS="${WHATSAPP_DB_PASSWORD:-CHANGE_ME_whatsapp}"
 DOC_PASS="${DOCUMENTS_DB_PASSWORD:-CHANGE_ME_documents}"
 HO_PASS="${HANDOFF_DB_PASSWORD:-CHANGE_ME_handoff}"
 
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
+"${PSQL[@]}" <<-EOSQL
 DO \$\$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_pilot_core') THEN
@@ -50,7 +53,7 @@ grant_db db_documents app_documents
 grant_db db_handoff app_handoff
 
 # Explicit: no cross grants
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
+"${PSQL[@]}" <<-EOSQL
 REVOKE ALL ON DATABASE db_whatsapp FROM app_pilot_core;
 REVOKE ALL ON DATABASE db_documents FROM app_pilot_core;
 REVOKE ALL ON DATABASE db_handoff FROM app_pilot_core;

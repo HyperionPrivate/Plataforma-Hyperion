@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+*.md
+.gitignore
+.eslintrc*
+eslint.config.*
+Dockerfile
+.dockerignore
+**/*.test.*
+**/__tests__
