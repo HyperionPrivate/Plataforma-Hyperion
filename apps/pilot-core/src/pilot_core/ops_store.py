@@ -138,13 +138,19 @@ def init_db() -> None:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
                 CREATE INDEX IF NOT EXISTS idx_messages_conv
                   ON conversation_messages(conversation_id, created_at);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_post_calls_conversation
-                  ON post_calls(conversation_id)
-                  WHERE conversation_id IS NOT NULL AND conversation_id != '';
                 """
             )
             _migrate_normalize_opt_outs(conn)
+            _dedupe_post_calls_by_conversation(conn)
             _recover_stale_post_call_claims(conn)
+            # Unique index AFTER dedupe — legacy DBs may already have duplicates.
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_post_calls_conversation
+                  ON post_calls(conversation_id)
+                  WHERE conversation_id IS NOT NULL AND conversation_id != ''
+                """
+            )
             conn.commit()
         finally:
             conn.close()
@@ -162,6 +168,43 @@ def _migrate_normalize_opt_outs(conn: sqlite3.Connection) -> None:
             continue
         conn.execute("DELETE FROM opt_outs WHERE phone=?", (raw,))
         conn.execute("INSERT OR IGNORE INTO opt_outs(phone) VALUES(?)", (canon,))
+
+
+def _dedupe_post_calls_by_conversation(conn: sqlite3.Connection) -> None:
+    """Keep one row per conversation_id before creating the unique index."""
+    dupes = conn.execute(
+        """
+        SELECT conversation_id, COUNT(*) AS c
+        FROM post_calls
+        WHERE conversation_id IS NOT NULL AND conversation_id != ''
+        GROUP BY conversation_id
+        HAVING c > 1
+        """
+    ).fetchall()
+    for group in dupes:
+        cid = str(group["conversation_id"])
+        rows = conn.execute(
+            """
+            SELECT id, payload, created_at FROM post_calls
+            WHERE conversation_id=?
+            ORDER BY created_at DESC
+            """,
+            (cid,),
+        ).fetchall()
+        keep_id: str | None = None
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                continue
+            if payload.get("status") == "completed":
+                keep_id = str(row["id"])
+                break
+        if keep_id is None and rows:
+            keep_id = str(rows[0]["id"])
+        for row in rows:
+            if str(row["id"]) != keep_id:
+                conn.execute("DELETE FROM post_calls WHERE id=?", (row["id"],))
 
 
 def _recover_stale_post_call_claims(conn: sqlite3.Connection, *, max_age_sec: int = 300) -> None:
@@ -377,7 +420,12 @@ def claim_post_call_conversation(
             ).fetchone()
             if existing:
                 prior = json.loads(existing["payload"])
-                if prior.get("status") == "processing":
+                status = str(prior.get("status") or "")
+                # Failed / retryable outcomes can be reclaimed immediately.
+                if status in {"failed", "error"}:
+                    conn.execute("DELETE FROM post_calls WHERE id=?", (existing["id"],))
+                    conn.commit()
+                elif status == "processing":
                     created_raw = str(existing["created_at"] or "")
                     try:
                         created = datetime.strptime(created_raw, "%Y-%m-%d %H:%M:%S").replace(
@@ -421,6 +469,32 @@ def claim_post_call_conversation(
                 if row:
                     return False, json.loads(row["payload"])
                 return False, None
+        finally:
+            conn.close()
+
+
+def release_post_call_claim(post_call_id: str, *, error: str | None = None) -> None:
+    """Mark/delete an in-flight claim so the webhook can retry immediately."""
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT payload FROM post_calls WHERE id=?", (post_call_id,)
+            ).fetchone()
+            if not row:
+                return
+            try:
+                payload = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                conn.execute("DELETE FROM post_calls WHERE id=?", (post_call_id,))
+                conn.commit()
+                return
+            if payload.get("status") != "processing":
+                return
+            # Delete processing row — unique index then allows a fresh claim.
+            conn.execute("DELETE FROM post_calls WHERE id=?", (post_call_id,))
+            conn.commit()
         finally:
             conn.close()
 

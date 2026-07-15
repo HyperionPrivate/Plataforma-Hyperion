@@ -998,6 +998,12 @@ async def _e2e_campaign(
     wa = steps.get("whatsapp") or {}
     if not body.skip_whatsapp and wa.get("skipped") is not True and wa.get("ok") is False:
         ok = False
+    voice = steps.get("voice") or {}
+    if not body.skip_voice and voice.get("skipped") is not True and voice.get("ok") is False:
+        ok = False
+    doc = steps.get("document") or {}
+    if isinstance(doc, dict) and doc.get("ok") is False:
+        ok = False
     ho = steps.get("handoff") or {}
     liwa = ho.get("liwa") if isinstance(ho, dict) else None
     if isinstance(liwa, dict) and liwa.get("ok") is False:

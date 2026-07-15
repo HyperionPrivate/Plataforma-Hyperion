@@ -298,6 +298,7 @@ class PostCallService:
         product = resolve_product_flow(resolved_flow, agent_id=agent_id, payload=payload)
 
         claim_id = f"pc_{uuid4().hex[:10]}"
+        claimed = True
         if conv_id:
             claimed, prior = ops_store.claim_post_call_conversation(
                 conv_id,
@@ -310,14 +311,26 @@ class PostCallService:
                 },
             )
             if not claimed and prior:
-                return {
-                    "ok": True,
-                    "idempotent": True,
-                    "intent": prior.get("intent"),
-                    "whatsapp_sent": prior.get("whatsapp_sent"),
-                    "flow": prior.get("flow"),
-                    "result": prior,
-                }
+                # Only short-circuit true completions; failed claims were reclaimed above.
+                if prior.get("status") == "completed":
+                    return {
+                        "ok": True,
+                        "idempotent": True,
+                        "intent": prior.get("intent"),
+                        "whatsapp_sent": prior.get("whatsapp_sent"),
+                        "flow": prior.get("flow"),
+                        "result": prior,
+                    }
+                if prior.get("status") == "processing":
+                    return {
+                        "ok": False,
+                        "idempotent": True,
+                        "in_flight": True,
+                        "intent": prior.get("intent"),
+                        "whatsapp_sent": prior.get("whatsapp_sent"),
+                        "flow": prior.get("flow"),
+                        "result": prior,
+                    }
 
         wants_wa = intent_wants_whatsapp(inferred)
         result: dict[str, Any] = {
@@ -346,61 +359,93 @@ class PostCallService:
         }
 
         try:
-            result["crm"] = self._update_crm(
-                phone=phone_n,
-                name=name,
-                intent=inferred,
-                wants_wa=wants_wa,
-                funnel=str(product["crm_funnel"]),
-            )
-        except Exception:  # noqa: BLE001
-            result["crm"] = {"ok": False, "error": "crm_update_failed"}
+            try:
+                result["crm"] = self._update_crm(
+                    phone=phone_n,
+                    name=name,
+                    intent=inferred,
+                    wants_wa=wants_wa,
+                    funnel=str(product["crm_funnel"]),
+                )
+            except Exception:  # noqa: BLE001
+                result["crm"] = {"ok": False, "error": "crm_update_failed"}
 
-        if wants_wa and not skip_whatsapp and phone_n:
-            decision = compliance_service.evaluate(phone=phone_n, channel="whatsapp")
-            result["compliance"] = compliance_service.as_dict(decision)
-            if not decision.allowed:
-                result["whatsapp"] = {
-                    "ok": False,
-                    "blocked": True,
-                    "compliance": result["compliance"],
-                }
-                result["whatsapp_sent"] = False
-            else:
-                settings = get_settings()
-                if settings.liwa_live_enabled():
-                    wa = await liwa_whatsapp_service.send(
-                        phone=phone_n,
-                        first_name=name,
-                        kind="flow",
-                        flow_id=str(product["liwa_flow_id"] or "") or None,
-                        text=str(product["wa_followup_text"]),
-                    )
+            if wants_wa and not skip_whatsapp and phone_n:
+                decision = compliance_service.evaluate(phone=phone_n, channel="whatsapp")
+                result["compliance"] = compliance_service.as_dict(decision)
+                if not decision.allowed:
+                    result["whatsapp"] = {
+                        "ok": False,
+                        "blocked": True,
+                        "compliance": result["compliance"],
+                    }
+                    result["whatsapp_sent"] = False
                 else:
-                    wa = whatsapp_mock_service.send_text(
-                        phone=phone_n,
-                        text=f"[post-call][{product['flow']}] {product['wa_followup_text']}",
-                        template=f"{product['continue_label']}_post_call",
-                    )
-                result["whatsapp"] = wa
-                result["whatsapp_sent"] = bool(wa.get("ok"))
-        elif wants_wa and not phone_n:
-            result["whatsapp"] = {"ok": False, "error": "phone_missing"}
-        elif not wants_wa:
-            result["whatsapp"] = {
-                "ok": True,
-                "skipped": True,
-                "reason": f"intent_not_continue:{inferred}",
+                    settings = get_settings()
+                    if settings.liwa_live_enabled():
+                        wa = await liwa_whatsapp_service.send(
+                            phone=phone_n,
+                            first_name=name,
+                            kind="flow",
+                            flow_id=str(product["liwa_flow_id"] or "") or None,
+                            text=str(product["wa_followup_text"]),
+                        )
+                    else:
+                        wa = whatsapp_mock_service.send_text(
+                            phone=phone_n,
+                            text=f"[post-call][{product['flow']}] {product['wa_followup_text']}",
+                            template=f"{product['continue_label']}_post_call",
+                        )
+                    result["whatsapp"] = wa
+                    result["whatsapp_sent"] = bool(wa.get("ok"))
+            elif wants_wa and not phone_n:
+                result["whatsapp"] = {"ok": False, "error": "phone_missing"}
+            elif not wants_wa:
+                result["whatsapp"] = {
+                    "ok": True,
+                    "skipped": True,
+                    "reason": f"intent_not_continue:{inferred}",
+                }
+
+            if dispatch_id:
+                self._patch_dispatch(dispatch_id, result)
+            elif phone_n:
+                self._patch_latest_dispatch_for_phone(phone_n, result)
+
+            # Provider failure → failed (retryable), not completed (terminal).
+            wa = result.get("whatsapp") or {}
+            provider_failed = bool(
+                wants_wa
+                and not skip_whatsapp
+                and phone_n
+                and wa.get("blocked") is not True
+                and wa.get("skipped") is not True
+                and wa.get("ok") is False
+            )
+            if provider_failed:
+                result["ok"] = False
+                result["status"] = "failed"
+                result["error"] = wa.get("error") or "whatsapp_send_failed"
+                ops_store.insert_post_call(result)
+                return result
+
+            result["status"] = "completed"
+            ops_store.insert_post_call(result)
+            return result
+        except Exception as exc:  # noqa: BLE001
+            # Release claim immediately so ElevenLabs / callers can retry.
+            if claimed and conv_id:
+                ops_store.release_post_call_claim(claim_id, error=str(exc))
+            return {
+                "ok": False,
+                "id": claim_id,
+                "status": "failed",
+                "error": "post_call_exception",
+                "detail": str(exc)[:200],
+                "conversation_id": conv_id,
+                "phone": phone_n or None,
+                "whatsapp_sent": False,
             }
-
-        if dispatch_id:
-            self._patch_dispatch(dispatch_id, result)
-        elif phone_n:
-            self._patch_latest_dispatch_for_phone(phone_n, result)
-
-        result["status"] = "completed"
-        ops_store.insert_post_call(result)
-        return result
 
     def _update_crm(
         self,
