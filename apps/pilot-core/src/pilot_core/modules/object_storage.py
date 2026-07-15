@@ -8,21 +8,16 @@ from typing import Any, Protocol
 
 from pilot_core.settings import get_settings
 
-_SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._-]+")
+# Keys must be generated server-side (UUID + allowlisted kind/ext). Reject anything else.
+_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 
 
 def sanitize_storage_key(key: str) -> str:
-    """Normalize object keys: no path traversal, only safe path segments."""
-    parts: list[str] = []
-    for raw in str(key).replace("\\", "/").split("/"):
-        if not raw or raw in {".", ".."}:
-            continue
-        cleaned = _SAFE_SEGMENT.sub("_", raw).strip("._")[:180]
-        if cleaned:
-            parts.append(cleaned)
-    if not parts:
-        return "unnamed.bin"
-    return "/".join(parts)
+    """Accept only already-safe relative keys; never trust raw user paths."""
+    candidate = str(key).replace("\\", "/").strip("/")
+    if not candidate or ".." in candidate.split("/") or not _KEY_RE.fullmatch(candidate):
+        raise ValueError("invalid_storage_key")
+    return candidate
 
 
 class ObjectStorage(Protocol):
@@ -41,7 +36,11 @@ class MockObjectStorage:
         return {"key": safe, "size": len(data), "content_type": content_type, "backend": "mock"}
 
     def get(self, key: str) -> bytes | None:
-        return self._store.get(sanitize_storage_key(key))
+        try:
+            safe = sanitize_storage_key(key)
+        except ValueError:
+            return None
+        return self._store.get(safe)
 
 
 class FilesystemObjectStorage:
@@ -51,11 +50,10 @@ class FilesystemObjectStorage:
 
     def _resolve(self, key: str) -> Path:
         safe = sanitize_storage_key(key)
-        path = (self.root / safe).resolve()
-        try:
-            path.relative_to(self.root)
-        except ValueError as exc:
-            raise ValueError("path_escape") from exc
+        # Join only validated segments (no user path separators left).
+        path = self.root.joinpath(*safe.split("/")).resolve()
+        if not path.is_relative_to(self.root):
+            raise ValueError("path_escape")
         return path
 
     def put(self, key: str, data: bytes, content_type: str) -> dict[str, Any]:
@@ -71,7 +69,10 @@ class FilesystemObjectStorage:
         }
 
     def get(self, key: str) -> bytes | None:
-        path = self._resolve(key)
+        try:
+            path = self._resolve(key)
+        except ValueError:
+            return None
         if not path.is_file():
             return None
         return path.read_bytes()
@@ -117,7 +118,8 @@ class MinioObjectStorage:
 
     def get(self, key: str) -> bytes | None:
         try:
-            obj = self._client.get_object(Bucket=self.bucket, Key=sanitize_storage_key(key))
+            safe = sanitize_storage_key(key)
+            obj = self._client.get_object(Bucket=self.bucket, Key=safe)
             return obj["Body"].read()
         except Exception:
             return None
