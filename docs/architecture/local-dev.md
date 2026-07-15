@@ -49,7 +49,7 @@ make up
 | `http://localhost/pilot-core/health` | pilot-core |
 | `http://localhost/whatsapp/health` | whatsapp-adapter |
 | `http://localhost/documents/health` | documents |
-| `http://localhost/handoff/health` | handoff-liwa |
+| `http://localhost/handoff-liwa/health` | handoff-liwa |
 
 Puertos directos: 8201–8204 (ver [service-catalog.md](service-catalog.md)).
 

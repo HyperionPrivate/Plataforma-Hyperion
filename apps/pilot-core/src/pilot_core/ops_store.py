@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from threading import Lock
@@ -10,12 +11,50 @@ from typing import Any
 from uuid import uuid4
 
 _LOCK = Lock()
-_DB_PATH = Path(__file__).resolve().parents[4] / ".local-secrets-tmp" / "pulso_ops.sqlite3"
+_DB_PATH: Path | None = None
+
+
+def data_root() -> Path:
+    """Writable root for Ops SQLite + local docs (Docker-safe).
+
+    Prefer ``PULSO_DATA_DIR``. Fall back to monorepo ``.local-secrets-tmp``,
+    then ``/data``, then ``/tmp/pulso``.
+    """
+    env = (os.environ.get("PULSO_DATA_DIR") or "").strip()
+    candidates: list[Path] = []
+    if env:
+        candidates.append(Path(env))
+    try:
+        candidates.append(Path(__file__).resolve().parents[4] / ".local-secrets-tmp")
+    except (IndexError, OSError):
+        pass
+    candidates.extend([Path("/data"), Path("/tmp/pulso")])
+    for root in candidates:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            probe = root / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return root
+        except OSError:
+            continue
+    # Last resort — may still fail on read-only FS; callers surface the error.
+    fallback = Path("/tmp/pulso")
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def db_path() -> Path:
+    global _DB_PATH
+    if _DB_PATH is None:
+        _DB_PATH = data_root() / "pulso_ops.sqlite3"
+    return _DB_PATH
 
 
 def _connect() -> sqlite3.Connection:
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+    path = db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 

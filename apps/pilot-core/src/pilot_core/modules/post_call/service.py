@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from pilot_core import ops_store
 from pilot_core.modules.crm.service import crm_service
+from pilot_core.modules.compliance.service import compliance_service
 from pilot_core.modules.liwa_whatsapp import liwa_whatsapp_service
 from pilot_core.modules.product_flow import resolve_product_flow
 from pilot_core.modules.whatsapp_mock import whatsapp_mock_service
@@ -315,23 +316,33 @@ class PostCallService:
             result["crm"] = {"ok": False, "error": "crm_update_failed"}
 
         if wants_wa and not skip_whatsapp and phone_n:
-            settings = get_settings()
-            if settings.liwa_live_enabled():
-                wa = await liwa_whatsapp_service.send(
-                    phone=phone_n,
-                    first_name=name,
-                    kind="flow",
-                    flow_id=str(product["liwa_flow_id"] or "") or None,
-                    text=str(product["wa_followup_text"]),
-                )
+            decision = compliance_service.evaluate(phone=phone_n, channel="whatsapp")
+            result["compliance"] = compliance_service.as_dict(decision)
+            if not decision.allowed:
+                result["whatsapp"] = {
+                    "ok": False,
+                    "blocked": True,
+                    "compliance": result["compliance"],
+                }
+                result["whatsapp_sent"] = False
             else:
-                wa = whatsapp_mock_service.send_text(
-                    phone=phone_n,
-                    text=f"[post-call][{product['flow']}] {product['wa_followup_text']}",
-                    template=f"{product['continue_label']}_post_call",
-                )
-            result["whatsapp"] = wa
-            result["whatsapp_sent"] = bool(wa.get("ok"))
+                settings = get_settings()
+                if settings.liwa_live_enabled():
+                    wa = await liwa_whatsapp_service.send(
+                        phone=phone_n,
+                        first_name=name,
+                        kind="flow",
+                        flow_id=str(product["liwa_flow_id"] or "") or None,
+                        text=str(product["wa_followup_text"]),
+                    )
+                else:
+                    wa = whatsapp_mock_service.send_text(
+                        phone=phone_n,
+                        text=f"[post-call][{product['flow']}] {product['wa_followup_text']}",
+                        template=f"{product['continue_label']}_post_call",
+                    )
+                result["whatsapp"] = wa
+                result["whatsapp_sent"] = bool(wa.get("ok"))
         elif wants_wa and not phone_n:
             result["whatsapp"] = {"ok": False, "error": "phone_missing"}
         elif not wants_wa:

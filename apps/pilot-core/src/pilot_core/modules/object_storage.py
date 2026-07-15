@@ -139,6 +139,10 @@ def get_object_storage() -> ObjectStorage:
     elif backend == "mock":
         _storage = MockObjectStorage()
     else:
-        root = s.documents_local_root or ".local-secrets-tmp/documents"
+        root = (s.documents_local_root or "").strip()
+        if not root:
+            from pilot_core.ops_store import data_root
+
+            root = str(data_root() / "documents")
         _storage = FilesystemObjectStorage(root)
     return _storage

@@ -72,7 +72,11 @@ uvicorn pilot_core.main:app --host 127.0.0.1 --port 8201 --reload
 
 # UI
 cd apps/web
-# .env.local: NEXT_PUBLIC_API_MODE=live + NEXT_PUBLIC_PILOT_CORE_URL=http://127.0.0.1:8201
+# .env.local (dev local):
+#   NEXT_PUBLIC_API_MODE=live
+#   NEXT_PUBLIC_PILOT_CORE_URL=http://127.0.0.1:8201
+# Compose + Traefik (navegador):
+#   NEXT_PUBLIC_PILOT_CORE_URL=http://127.0.0.1:8088/pilot-core
 npm run dev
 ```
 

@@ -138,6 +138,11 @@ services:
       AUTH_DISABLED: "true"
       REDIS_CONSUMER_GROUP: pilot-core
       DIALER_BASE_URL: ${DIALER_BASE_URL:-http://host.docker.internal:8080}
+      PULSO_DATA_DIR: /data
+      DOCUMENTS_STORAGE_BACKEND: filesystem
+      DOCUMENTS_LOCAL_ROOT: /data/documents
+    volumes:
+      - pilot_core_data:/data
     depends_on:
       migrate-pilot-core:
         condition: service_completed_successfully
@@ -245,9 +250,9 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=coopfuturo_app
-      - traefik.http.routers.handoff.rule=PathPrefix(`/handoff`)
+      - traefik.http.routers.handoff.rule=PathPrefix(`/handoff-liwa`)
       - traefik.http.routers.handoff.entrypoints=web
-      - traefik.http.middlewares.handoff-strip.stripprefix.prefixes=/handoff
+      - traefik.http.middlewares.handoff-strip.stripprefix.prefixes=/handoff-liwa
       - traefik.http.routers.handoff.middlewares=handoff-strip
       - traefik.http.services.handoff.loadbalancer.server.port=8204
     networks: [coopfuturo_app, coopfuturo_data]
@@ -261,15 +266,19 @@ services:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_MODE: live
+        NEXT_PUBLIC_PILOT_CORE_URL: http://127.0.0.1:${TRAEFIK_HTTP_PORT:-8088}/pilot-core
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_MODE: mock
+      NEXT_PUBLIC_API_MODE: live
+      NEXT_PUBLIC_PILOT_CORE_URL: http://127.0.0.1:${TRAEFIK_HTTP_PORT:-8088}/pilot-core
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
     labels:
       - traefik.enable=true
       - traefik.docker.network=coopfuturo_app
-      - traefik.http.routers.web.rule=PathPrefix(`/`) && !PathPrefix(`/pilot-core`) && !PathPrefix(`/whatsapp`) && !PathPrefix(`/documents`) && !PathPrefix(`/handoff`)
+      - traefik.http.routers.web.rule=PathPrefix(`/`) && !PathPrefix(`/pilot-core`) && !PathPrefix(`/whatsapp`) && !PathPrefix(`/documents`) && !PathPrefix(`/handoff-liwa`)
       - traefik.http.routers.web.entrypoints=web
       - traefik.http.routers.web.priority=1
       - traefik.http.services.web.loadbalancer.server.port=3000
@@ -282,3 +291,4 @@ services:
 volumes:
   coopfuturo_pgdata:
   coopfuturo_redis:
+  pilot_core_data:

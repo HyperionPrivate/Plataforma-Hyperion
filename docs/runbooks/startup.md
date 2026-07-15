@@ -20,7 +20,7 @@ Traefik escucha en `http://127.0.0.1:8088` (ver `TRAEFIK_HTTP_PORT`).
 curl http://127.0.0.1:8088/pilot-core/health/live
 curl http://127.0.0.1:8088/whatsapp/health/live
 curl http://127.0.0.1:8088/documents/health/live
-curl http://127.0.0.1:8088/handoff/health/live
+curl http://127.0.0.1:8088/handoff-liwa/health/live
 
 # Readiness (DB + Redis + migraciones)
 curl http://127.0.0.1:8088/pilot-core/health/ready

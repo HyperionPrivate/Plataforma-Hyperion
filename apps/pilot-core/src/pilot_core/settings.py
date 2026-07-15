@@ -26,7 +26,7 @@ class Settings(PlatformSettings):
     liwa_handoff_tag_b: str = "REACTIVACION_VIP"
     # Documentos
     documents_storage_backend: str = "filesystem"  # mock | filesystem | minio
-    documents_local_root: str = ".local-secrets-tmp/documents"
+    documents_local_root: str = ""  # vacío = {PULSO_DATA_DIR|…}/documents
     minio_endpoint: str = ""
     minio_access_key: str = ""
     minio_secret_key: str = ""
