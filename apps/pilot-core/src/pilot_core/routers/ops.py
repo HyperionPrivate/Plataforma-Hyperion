@@ -647,7 +647,8 @@ async def get_report(report_id: str, _ctx: AuthContext = Depends(require_auth)) 
 @router.get("/settings")
 async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
     stored = ops_store.all_settings()
-    defaults = {
+    ui_defaults: dict[str, Any] = {"pii_masking": True}
+    defaults: dict[str, Any] = {
         "channels": {
             "voz_enabled": True,
             "whatsapp_enabled": True,
@@ -660,12 +661,13 @@ async def get_settings_api(_ctx: AuthContext = Depends(require_auth)) -> dict[st
             "default_phone_number_id": getattr(get_settings(), "dialer_default_phone_number_id", "")
             or "",
         },
-        "ui": {"pii_masking": True},
+        "ui": ui_defaults,
         "agent_config": agent_config_service.get(),
     }
-    merged = {**defaults, **stored, "agent_config": agent_config_service.get()}
-    ui = merged.get("ui") if isinstance(merged.get("ui"), dict) else {}
-    merged["ui"] = {**defaults["ui"], **ui}
+    merged: dict[str, Any] = {**defaults, **stored, "agent_config": agent_config_service.get()}
+    ui_raw = merged.get("ui")
+    ui: dict[str, Any] = ui_raw if isinstance(ui_raw, dict) else {}
+    merged["ui"] = {**ui_defaults, **ui}
     return merged
 
 

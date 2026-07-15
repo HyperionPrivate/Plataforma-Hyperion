@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,7 @@ type Msg = {
   attachment?: { name: string; size: string; validated?: boolean };
 };
 
-export default function ConversacionesPage() {
+function ConversacionesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data, isLoading, isError, refetch } = useConversations();
@@ -383,5 +383,19 @@ export default function ConversacionesPage() {
         </section>
       </div>
     </div>
+  );
+}
+
+export default function ConversacionesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="py-24 text-center text-sm text-[var(--muted)]">
+          Cargando conversaciones…
+        </div>
+      }
+    >
+      <ConversacionesContent />
+    </Suspense>
   );
 }
