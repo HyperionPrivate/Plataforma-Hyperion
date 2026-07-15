@@ -7,6 +7,11 @@ from typing import Any
 import httpx
 
 from pilot_core.modules.agent_config.service import agent_config_service
+from pilot_core.modules.lead_context import (
+    build_dynamic_variables,
+    display_name_from_contact,
+    find_contact,
+)
 from pilot_core.settings import get_settings
 
 _API = "https://api.elevenlabs.io/v1/convai/sip-trunk/outbound-call"
@@ -37,6 +42,7 @@ async def place_sip_outbound(
     to_number: str,
     flow: str = "A",
     first_name: str = "Asociado",
+    lead: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     api_key = (getattr(settings, "elevenlabs_api_key", None) or "").strip()
@@ -51,19 +57,21 @@ async def place_sip_outbound(
             "resolved": resolved,
         }
 
+    contact = lead or find_contact(to_number)
+    resolved_name = display_name_from_contact(contact, first_name)
+    dyn = build_dynamic_variables(
+        phone=to_number,
+        first_name=resolved_name,
+        flow=flow,
+        contact=contact,
+    )
+
     body = {
         "agent_id": resolved["agent_id"],
         "agent_phone_number_id": resolved["agent_phone_number_id"],
         "to_number": to_number,
         "conversation_initiation_client_data": {
-            "dynamic_variables": {
-                "nombre": first_name,
-                "first_name": first_name,
-                "phone": to_number,
-                "flujo": str(flow).upper(),
-                "product_flow": str(flow).upper(),
-                "segmento": "Reactivacion" if str(flow).upper() == "B" else "Renovacion",
-            }
+            "dynamic_variables": dyn,
         },
     }
     async with httpx.AsyncClient(timeout=45.0) as client:
@@ -90,5 +98,6 @@ async def place_sip_outbound(
             "provider": "elevenlabs_sip_trunk",
             "resolved": resolved,
             "conversation_id": conv_id,
+            "dynamic_variables": dyn,
             "response": data,
         }

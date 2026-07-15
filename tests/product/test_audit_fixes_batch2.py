@@ -33,6 +33,8 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setenv("AUTH_DISABLED", "true")
     monkeypatch.setenv("EVENT_WORKERS_ENABLED", "false")
     monkeypatch.setenv("LIWA_MODE", "mock")
+    # Estos tests validan el camino de envío/reintento de WhatsApp → auto-send ON.
+    monkeypatch.setenv("POST_CALL_WHATSAPP_AUTO_SEND", "true")
     monkeypatch.setenv("PULSO_DATA_DIR", str(tmp_path))
     from pilot_core.settings import get_settings
 

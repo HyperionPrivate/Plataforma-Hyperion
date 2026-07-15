@@ -4,7 +4,7 @@
 #
 # Isolates networks/volumes from /opt/coopfuturo (shared names would steal DNS for "postgres").
 # Publishes Traefik on :9088 (80/443/8080 occupied by other stacks on the VM).
-# Dialer Contabo existente: host gateway :8080
+# Outbound voice: ElevenLabs SIP only (no legacy Contabo dialer).
 
 name: pulso
 
@@ -48,8 +48,9 @@ services:
 
   pilot-core:
     environment:
-      DIALER_BASE_URL: ${DIALER_BASE_URL:-http://host.docker.internal:8080}
-      DIALER_DEFAULT_PHONE_NUMBER_ID: ${DIALER_DEFAULT_PHONE_NUMBER_ID:-}
+      # Empty on purpose — Contabo PULSO must not route to /opt/coopfuturo dialer.
+      DIALER_BASE_URL: ${DIALER_BASE_URL:-}
+      DIALER_DEFAULT_PHONE_NUMBER_ID: ${DIALER_DEFAULT_PHONE_NUMBER_ID:-phnum_0001kxk88197exs8dpam295z4rmb}
       LIWA_MODE: ${LIWA_MODE:-mock}
       LIWA_BASE_URL: ${LIWA_BASE_URL:-https://chat.liwa.co/api}
       LIWA_API_TOKEN: ${LIWA_API_TOKEN:-}
@@ -59,8 +60,6 @@ services:
       ELEVENLABS_WEBHOOK_SECRET: ${ELEVENLABS_WEBHOOK_SECRET:-}
       AUTH_DISABLED: ${AUTH_DISABLED:-true}
       APP_ENV: ${APP_ENV:-development}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     labels: !override
       - traefik.enable=true
       - traefik.docker.network=pulso_app

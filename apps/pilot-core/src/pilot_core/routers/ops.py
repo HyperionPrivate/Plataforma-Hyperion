@@ -556,6 +556,107 @@ async def whatsapp_send(
     return result
 
 
+def _pending_row(pc: dict[str, Any]) -> dict[str, Any]:
+    raw_product = pc.get("product")
+    product = raw_product if isinstance(raw_product, dict) else {}
+    return {
+        "conversation_id": pc.get("conversation_id"),
+        "phone": pc.get("phone"),
+        "first_name": pc.get("first_name"),
+        "intent": pc.get("intent"),
+        "flow": pc.get("flow"),
+        "flow_id": product.get("liwa_flow_id"),
+        "segment": product.get("segment"),
+        "status": pc.get("whatsapp_status") or "pending_review",
+        "post_call_id": pc.get("id"),
+    }
+
+
+@router.get("/whatsapp/pending")
+async def whatsapp_pending(_ctx: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    """Leads interesados con WhatsApp PENDIENTE de envío manual (modo revisión)."""
+    done = {"skipped", "sent", "sent_manual", "sent_mock"}
+    items = [
+        _pending_row(pc)
+        for pc in ops_store.list_post_calls(300)
+        if pc.get("wants_whatsapp")
+        and not pc.get("whatsapp_sent")
+        and str(pc.get("whatsapp_status") or "") not in done
+    ]
+    return {"items": items, "count": len(items)}
+
+
+class WhatsAppPendingBody(BaseModel):
+    conversation_id: str | None = None
+    phone: str | None = Field(default=None, max_length=20)
+    flow_id: str | None = None
+
+
+@router.post("/whatsapp/pending/send")
+async def whatsapp_pending_send(
+    body: WhatsAppPendingBody,
+    _ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    """Envía manualmente el WhatsApp de un lead pendiente (dispara el flujo LIWA)."""
+    pc = (
+        ops_store.get_post_call_by_conversation(body.conversation_id)
+        if body.conversation_id
+        else None
+    )
+    raw_product = pc.get("product") if pc else None
+    product = raw_product if isinstance(raw_product, dict) else {}
+    phone = body.phone or (pc or {}).get("phone")
+    if not phone:
+        raise PlatformError(
+            "validation_error", "phone o conversation_id requerido", status_code=422
+        )
+    decision = compliance_service.evaluate(phone=phone, channel="whatsapp")
+    if not decision.allowed:
+        raise PlatformError(
+            "compliance_blocked", ",".join(decision.reasons) or "blocked", status_code=403
+        )
+    flow_id = body.flow_id or product.get("liwa_flow_id")
+    first_name = (pc or {}).get("first_name") or "Asociado"
+    settings = get_settings()
+    if settings.liwa_live_enabled():
+        result = await liwa_whatsapp_service.send(
+            phone=phone,
+            first_name=first_name,
+            kind="flow",
+            flow_id=str(flow_id) if flow_id else None,
+            text="",
+        )
+    else:
+        result = whatsapp_mock_service.send_text(phone=phone, text=f"[manual flow:{flow_id}]")
+    if pc:
+        pc["whatsapp"] = result.get("message") or result
+        pc["whatsapp_sent"] = bool(result.get("ok"))
+        pc["whatsapp_status"] = "sent_manual" if result.get("ok") else "failed"
+        ops_store.insert_post_call(pc)
+    return {
+        "ok": bool(result.get("ok")),
+        "conversation_id": body.conversation_id,
+        "phone": phone,
+        "whatsapp": result,
+    }
+
+
+@router.post("/whatsapp/pending/skip")
+async def whatsapp_pending_skip(
+    body: WhatsAppPendingBody,
+    _ctx: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    """Descarta un lead pendiente (no se enviará WhatsApp)."""
+    if not body.conversation_id:
+        raise PlatformError("validation_error", "conversation_id requerido", status_code=422)
+    pc = ops_store.get_post_call_by_conversation(body.conversation_id)
+    if not pc:
+        raise PlatformError("not_found", "post_call no encontrado", status_code=404)
+    pc["whatsapp_status"] = "skipped"
+    ops_store.insert_post_call(pc)
+    return {"ok": True, "conversation_id": body.conversation_id, "status": "skipped"}
+
+
 class CrmMoveBody(BaseModel):
     lead_id: str
     to_column: str

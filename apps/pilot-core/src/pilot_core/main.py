@@ -15,9 +15,13 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app):  # type: ignore[no-untyped-def]
     await runtime.startup(settings)
+    from pilot_core.modules.post_call import watcher as post_call_watcher
+
+    await post_call_watcher.start_background()
     try:
         yield
     finally:
+        await post_call_watcher.stop_background()
         await runtime.shutdown()
 
 

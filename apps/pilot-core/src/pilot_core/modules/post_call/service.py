@@ -37,6 +37,9 @@ _CONTINUE = frozenset(
         "quiere_renovar",
         "follow_up",
         "follow_up_whatsapp",
+        "pedir_whatsapp",
+        "whatsapp",
+        "enviar_whatsapp",
         "documento",
         "enviar_documento",
         "doc_solicitado",
@@ -72,12 +75,18 @@ _STOP = frozenset(
 _SUMMARY_CONTINUE = re.compile(
     r"\b(interesad[oa]|quiere renovar|desea renovar|acept[oa]|continuar|"
     r"reactivar|reactivaci[oó]n|retomar|retoma|quiere reactivar|"
-    r"enviar (el )?documento|orden de matr[ií]cula|cupo preaprobado)\b",
+    r"enviar (el )?documento|orden de matr[ií]cula|cupo preaprobado|"
+    r"whats?\s*app|m[aá]ndeme|env[ií](e|ame)|por whatsapp|pdf de (la )?matr[ií]cula)\b",
     re.I,
 )
 _SUMMARY_STOP = re.compile(
     r"\b(no le interesa|no interesa|no desea|rechaz|opt[- ]?out|buz[oó]n|"
     r"no contest|colg[oó]|voicemail)\b",
+    re.I,
+)
+_TRANSCRIPT_WHATSAPP = re.compile(
+    r"\b(whats?\s*app|m[aá]ndeme.{0,40}whats|env[ií].{0,40}whats|"
+    r"por\s+wsp|por\s+wa\b|matr[ií]cula.{0,30}whats|whats.{0,30}matr[ií]cula)\b",
     re.I,
 )
 
@@ -100,6 +109,10 @@ def normalize_intent(raw: str | None) -> str:
         "answering_machine": "voicemail",
         "reactivation": "reactivar",
         "reactivar_credito": "reactivar",
+        "wa": "pedir_whatsapp",
+        "wsp": "pedir_whatsapp",
+        "send_whatsapp": "pedir_whatsapp",
+        "whatsapp_request": "pedir_whatsapp",
     }
     return aliases.get(s, s)
 
@@ -113,6 +126,20 @@ def intent_wants_whatsapp(intent: str) -> bool:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _transcript_text(payload: dict[str, Any]) -> str:
+    data = _as_dict(payload.get("data")) if "data" in payload else payload
+    chunks: list[str] = []
+    analysis = _as_dict(data.get("analysis"))
+    if analysis.get("transcript_summary"):
+        chunks.append(str(analysis["transcript_summary"]))
+    transcript = data.get("transcript") or payload.get("transcript") or []
+    if isinstance(transcript, list):
+        for turn in transcript:
+            if isinstance(turn, dict) and turn.get("message"):
+                chunks.append(str(turn["message"]))
+    return "\n".join(chunks)
 
 
 def infer_intent_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
@@ -133,6 +160,7 @@ def infer_intent_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
         "quiere_renovar",
         "quiere_reactivar",
         "follow_up_whatsapp",
+        "pedir_whatsapp",
     ):
         block = collected.get(key)
         if isinstance(block, dict) and block.get("value") is not None:
@@ -140,15 +168,31 @@ def infer_intent_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
         if isinstance(block, str) and block.strip():
             return normalize_intent(block), f"data_collection:{key}"
 
+    transcript_blob = _transcript_text(payload)
+    # Client asked for WhatsApp / matrícula PDF → always follow up on WA.
+    if (
+        transcript_blob
+        and _TRANSCRIPT_WHATSAPP.search(transcript_blob)
+        and not (
+            _SUMMARY_STOP.search(transcript_blob) and not _SUMMARY_CONTINUE.search(transcript_blob)
+        )
+    ):
+        return "pedir_whatsapp", "transcript_whatsapp_request"
+
     summary = str(analysis.get("transcript_summary") or "")
-    if summary and _SUMMARY_STOP.search(summary):
+    if summary and _SUMMARY_STOP.search(summary) and not _SUMMARY_CONTINUE.search(summary):
         return "no_interes", "transcript_summary"
     if summary and _SUMMARY_CONTINUE.search(summary):
         return "interesado", "transcript_summary"
+    if transcript_blob and _SUMMARY_CONTINUE.search(transcript_blob):
+        return "interesado", "transcript_body"
 
     call_ok = str(analysis.get("call_successful") or "").lower()
     if call_ok in {"failure", "failed", "unsuccessful"}:
         return "failed", "call_successful"
+    # ElevenLabs sometimes marks success even when WA follow-up is still needed.
+    if call_ok in {"success", "successful", "true"} and transcript_blob:
+        return "interesado", "call_successful_with_transcript"
     return "unknown", "default"
 
 
@@ -404,7 +448,19 @@ class PostCallService:
                         result["whatsapp_sent"] = False
                     else:
                         settings = get_settings()
-                        if settings.liwa_live_enabled():
+                        auto_send = bool(getattr(settings, "post_call_whatsapp_auto_send", False))
+                        if not auto_send:
+                            # Modo revisión: dejar el WA como PENDIENTE para envío manual.
+                            # El lead queda como interesado (CRM), sin afirmar "enviado".
+                            result["whatsapp"] = {
+                                "ok": True,
+                                "pending_review": True,
+                                "reason": "manual_send_required",
+                                "flow_id": str(product["liwa_flow_id"] or "") or None,
+                            }
+                            result["whatsapp_sent"] = False
+                            result["whatsapp_status"] = "pending_review"
+                        elif settings.liwa_live_enabled():
                             wa = await liwa_whatsapp_service.send(
                                 phone=phone_n,
                                 first_name=name,
@@ -412,6 +468,13 @@ class PostCallService:
                                 flow_id=str(product["liwa_flow_id"] or "") or None,
                                 text=str(product["wa_followup_text"]),
                             )
+                            result["whatsapp"] = wa
+                            result["whatsapp_sent"] = bool(wa.get("ok"))
+                            result["whatsapp_status"] = (
+                                "sent" if result["whatsapp_sent"] else "failed"
+                            )
+                            if result["whatsapp_sent"] and conv_id:
+                                ops_store.insert_post_call({**result, "status": "processing"})
                         else:
                             wa = whatsapp_mock_service.send_text(
                                 phone=phone_n,
@@ -420,11 +483,11 @@ class PostCallService:
                                 ),
                                 template=f"{product['continue_label']}_post_call",
                             )
-                        result["whatsapp"] = wa
-                        result["whatsapp_sent"] = bool(wa.get("ok"))
-                        # Checkpoint after successful WA before any later side effects.
-                        if result["whatsapp_sent"] and conv_id:
-                            ops_store.insert_post_call({**result, "status": "processing"})
+                            result["whatsapp"] = wa
+                            result["whatsapp_sent"] = bool(wa.get("ok"))
+                            result["whatsapp_status"] = "sent_mock"
+                            if result["whatsapp_sent"] and conv_id:
+                                ops_store.insert_post_call({**result, "status": "processing"})
             elif wants_wa and not phone_n:
                 result["whatsapp"] = {"ok": False, "error": "phone_missing"}
             elif not wants_wa:

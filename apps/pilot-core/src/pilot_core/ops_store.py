@@ -263,6 +263,12 @@ def insert_contact(contact: dict[str, Any]) -> dict[str, Any]:
     with _LOCK:
         conn = _connect()
         try:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone)")
+            existing = conn.execute(
+                "SELECT id FROM contacts WHERE phone=?", (contact["phone"],)
+            ).fetchone()
+            contact_id = existing["id"] if existing else contact["id"]
+            contact = {**contact, "id": contact_id}
             conn.execute(
                 """
                 INSERT INTO contacts(id, phone, first_name, segment, university, payload)
@@ -274,7 +280,7 @@ def insert_contact(contact: dict[str, Any]) -> dict[str, Any]:
                   payload=excluded.payload
                 """,
                 (
-                    contact["id"],
+                    contact_id,
                     contact["phone"],
                     contact["first_name"],
                     contact["segment"],
@@ -284,6 +290,19 @@ def insert_contact(contact: dict[str, Any]) -> dict[str, Any]:
             )
             conn.commit()
             return contact
+        finally:
+            conn.close()
+
+
+def get_contact_by_phone(phone: str) -> dict[str, Any] | None:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT payload FROM contacts WHERE phone=? LIMIT 1", (phone,)
+            ).fetchone()
+            return json.loads(row["payload"]) if row else None
         finally:
             conn.close()
 
@@ -550,6 +569,20 @@ def release_post_call_claim(post_call_id: str, *, error: str | None = None) -> N
                 (json.dumps(payload, ensure_ascii=False), post_call_id),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+
+def list_post_calls(limit: int = 100) -> list[dict[str, Any]]:
+    init_db()
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT payload FROM post_calls ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [json.loads(r["payload"]) for r in rows]
         finally:
             conn.close()
 
