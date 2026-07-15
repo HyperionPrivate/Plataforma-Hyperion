@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -24,10 +25,8 @@ def data_root() -> Path:
     candidates: list[Path] = []
     if env:
         candidates.append(Path(env))
-    try:
+    with contextlib.suppress(IndexError, OSError):
         candidates.append(Path(__file__).resolve().parents[4] / ".local-secrets-tmp")
-    except (IndexError, OSError):
-        pass
     candidates.extend([Path("/data"), Path("/tmp/pulso")])
     for root in candidates:
         try:

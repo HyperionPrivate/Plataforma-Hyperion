@@ -9,8 +9,8 @@ from typing import Any
 from uuid import uuid4
 
 from pilot_core import ops_store
-from pilot_core.modules.crm.service import crm_service
 from pilot_core.modules.compliance.service import compliance_service
+from pilot_core.modules.crm.service import crm_service
 from pilot_core.modules.liwa_whatsapp import liwa_whatsapp_service
 from pilot_core.modules.product_flow import resolve_product_flow
 from pilot_core.modules.whatsapp_mock import whatsapp_mock_service

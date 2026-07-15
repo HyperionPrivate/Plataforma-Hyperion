@@ -56,9 +56,9 @@ def resolve_product_flow(
 
     settings = get_settings()
     if code == "B":
-        explicit_b = str(block.get("liwa_flow_id") or "").strip() or (
-            settings.liwa_flow_id_b or ""
-        ).strip()
+        explicit_b = (
+            str(block.get("liwa_flow_id") or "").strip() or (settings.liwa_flow_id_b or "").strip()
+        )
         wa_flow = explicit_b or (settings.liwa_default_flow_id or "").strip()
         tag = (
             str(block.get("liwa_handoff_tag") or "").strip()
