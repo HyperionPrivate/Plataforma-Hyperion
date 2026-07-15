@@ -8,7 +8,8 @@ COPY apps/whatsapp-adapter/pyproject.toml /build/pyproject.toml
 COPY apps/whatsapp-adapter/src /build/src
 RUN pip install --no-cache-dir --prefix=/install /build/packages/platform-kit \
  && pip install --no-cache-dir --prefix=/install -r /build/requirements.txt \
- && pip install --no-cache-dir --prefix=/install --no-deps /build
+ && pip install --no-cache-dir --prefix=/install --no-deps /build \
+ && PYTHONPATH=/install/lib/python3.12/site-packages python -c "import platform_kit; print(platform_kit.__file__)"
 
 FROM python:3.12.10-slim-bookworm AS runtime
 RUN apt-get update \

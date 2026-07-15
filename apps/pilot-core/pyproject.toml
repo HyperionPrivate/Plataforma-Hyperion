@@ -13,7 +13,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["pilot_core"]
-
-[tool.hatch.build.targets.wheel.sources]
-"src/pilot_core" = "pilot_core"
+packages = ["src/pilot_core"]

@@ -61,8 +61,9 @@ async def consume_batch(
     effect: EffectHandler | None = None,
 ) -> ConsumeStats:
     """
-    Correct ordering:
-      process + inbox insert → commit → ACK
+    Correct ordering (single DB transaction, then ACK):
+      inbox insert/check → if new run effect → commit → ACK
+    If effect fails, rollback removes the inbox marker (redelivery-safe).
     Delivery attempts are durable in Redis (survive process restarts).
     Failures stay pending for XAUTOCLAIM; after max retries → DLQ + ACK.
     Malformed payloads go to DLQ immediately.
@@ -70,6 +71,9 @@ async def consume_batch(
     stats = ConsumeStats()
     group = settings.redis_consumer_group
     max_retries = settings.event_max_retries
+
+    if effect is None:
+        raise RuntimeError("consume_batch requires an effect handler")
 
     messages: list[StreamMessage] = []
     if hasattr(transport, "autoclaim"):
@@ -113,12 +117,12 @@ async def consume_batch(
             continue
 
         try:
-            if effect is None:
-                raise RuntimeError("consume_batch requires an effect handler")
             async with session_scope(factory) as session:
-                # Effect first — failures leave the message pending (no inbox / no ACK).
-                await effect(session, msg.envelope)
+                # Inbox first (idempotency). Effect only if newly inserted.
+                # Same transaction: effect failure rolls back inbox marker.
                 applied = await process_inbox_once(session, msg.envelope)
+                if applied:
+                    await effect(session, msg.envelope)
             await transport.ack(group, msg.message_id)
             if hasattr(transport, "clear_delivery_attempts"):
                 await transport.clear_delivery_attempts(msg.message_id)  # type: ignore[attr-defined]

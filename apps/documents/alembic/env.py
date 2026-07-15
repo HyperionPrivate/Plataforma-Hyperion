@@ -2,18 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from logging.config import fileConfig
-from pathlib import Path
 
 from alembic import context
-from platform_kit.alembic_path import prepend_alembic_import_paths
+from documents_app.settings import get_settings
+from platform_kit.db import Base
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
-
-prepend_alembic_import_paths(Path(__file__))
-
-from documents_app.settings import get_settings  # noqa: E402
-from platform_kit.db import Base  # noqa: E402
 
 config = context.config
 if config.config_file_name is not None:

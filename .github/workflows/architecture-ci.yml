@@ -84,6 +84,7 @@ jobs:
         run: |
           uv sync --frozen --group dev
           uv pip install -e packages/platform-kit -e apps/pilot-core
+          python -c "import platform_kit, pilot_core; print(platform_kit.__file__); print(pilot_core.__file__)"
       - name: Init databases
         env:
           PGPASSWORD: test_admin_only
@@ -101,11 +102,12 @@ jobs:
       - name: Alembic upgrade + downgrade
         env:
           DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
-          UV_NO_SYNC: "1"
         run: |
-          uv run --no-sync alembic -c apps/pilot-core/alembic.ini upgrade head
-          uv run --no-sync alembic -c apps/pilot-core/alembic.ini downgrade base
-          uv run --no-sync alembic -c apps/pilot-core/alembic.ini upgrade head
+          # Invoke venv binaries directly — `uv run` may re-sync and drop editable installs.
+          .venv/bin/python -c "import platform_kit, pilot_core; print(platform_kit.__file__); print(pilot_core.__file__)"
+          .venv/bin/alembic -c apps/pilot-core/alembic.ini upgrade head
+          .venv/bin/alembic -c apps/pilot-core/alembic.ini downgrade base
+          .venv/bin/alembic -c apps/pilot-core/alembic.ini upgrade head
       - name: Integration tests (outbox/redis + pg isolation)
         env:
           DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
@@ -114,8 +116,7 @@ jobs:
           POSTGRES_PORT: "5432"
           PILOT_CORE_DB_USER: app_pilot_core
           PILOT_CORE_DB_PASSWORD: test_pilot
-          UV_NO_SYNC: "1"
-        run: uv run --no-sync pytest tests/integration -q --override-ini addopts= -p no:cov -m integration
+        run: .venv/bin/pytest tests/integration -q --override-ini addopts= -p no:cov -m integration
 
   codeql:
     runs-on: ubuntu-latest
@@ -175,19 +176,34 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build images
         run: docker compose -f docker-compose.dev.yml build
-      - name: Alembic path smoke inside images
+      - name: Image import + Alembic smoke
         run: |
           set -euo pipefail
-          images=(
-            coopfuturo-pilot-core
-            coopfuturo-whatsapp-adapter
-            coopfuturo-documents
-            coopfuturo-handoff-liwa
+          declare -A APP_PKG=(
+            [coopfuturo-pilot-core]=pilot_core
+            [coopfuturo-whatsapp-adapter]=whatsapp_adapter
+            [coopfuturo-documents]=documents_app
+            [coopfuturo-handoff-liwa]=handoff_liwa
           )
-          for img in "${images[@]}"; do
-            echo "==== alembic path $img ===="
+          for img in "${!APP_PKG[@]}"; do
+            pkg="${APP_PKG[$img]}"
+            echo "==== import smoke $img ($pkg) ===="
             docker run --rm --entrypoint python "$img" -c \
-              "from pathlib import Path; from platform_kit.alembic_path import prepend_alembic_import_paths; p=Path('/app/alembic/env.py'); assert p.exists(), p; prepend_alembic_import_paths(p); import platform_kit; print('ok', '$img')"
+              "import platform_kit, ${pkg}; from pathlib import Path; assert Path('/app/alembic/env.py').exists(); print('imports-ok', platform_kit.__file__, ${pkg}.__file__)"
+            echo "==== alembic upgrade $img ===="
+            docker run --rm \
+              -e DATABASE_URL='sqlite+aiosqlite:////tmp/coopfuturo_mig.db' \
+              -e APP_ENV=test \
+              -e AUTH_DISABLED=true \
+              --entrypoint alembic \
+              "$img" upgrade head
+            echo "==== alembic downgrade $img ===="
+            docker run --rm \
+              -e DATABASE_URL='sqlite+aiosqlite:////tmp/coopfuturo_mig.db' \
+              -e APP_ENV=test \
+              -e AUTH_DISABLED=true \
+              --entrypoint alembic \
+              "$img" downgrade base
           done
       - name: Trivy scan all app images
         run: |
