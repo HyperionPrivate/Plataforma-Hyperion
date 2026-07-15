@@ -299,6 +299,7 @@ class PostCallService:
 
         claim_id = f"pc_{uuid4().hex[:10]}"
         claimed = True
+        resume: dict[str, Any] | None = None
         if conv_id:
             claimed, prior = ops_store.claim_post_call_conversation(
                 conv_id,
@@ -310,8 +311,11 @@ class PostCallService:
                     "status": "processing",
                 },
             )
-            if not claimed and prior:
-                # Only short-circuit true completions; failed claims were reclaimed above.
+            if claimed and prior:
+                # Reclaimed failed claim — resume CRM/WA effects.
+                resume = prior
+                claim_id = str(prior.get("id") or claim_id)
+            elif not claimed and prior:
                 if prior.get("status") == "completed":
                     return {
                         "ok": True,
@@ -326,6 +330,7 @@ class PostCallService:
                         "ok": False,
                         "idempotent": True,
                         "in_flight": True,
+                        "retryable": True,
                         "intent": prior.get("intent"),
                         "whatsapp_sent": prior.get("whatsapp_sent"),
                         "flow": prior.get("flow"),
@@ -352,52 +357,74 @@ class PostCallService:
             "intent": inferred,
             "intent_source": infer_source,
             "wants_whatsapp": wants_wa,
-            "whatsapp_sent": False,
-            "whatsapp": None,
-            "crm": None,
-            "dispatch_id": dispatch_id,
+            "whatsapp_sent": bool((resume or {}).get("whatsapp_sent")),
+            "whatsapp": (resume or {}).get("whatsapp"),
+            "crm": (resume or {}).get("crm"),
+            "dispatch_id": dispatch_id or (resume or {}).get("dispatch_id"),
+            "retry_count": (resume or {}).get("retry_count") or 0,
         }
 
         try:
-            try:
-                result["crm"] = self._update_crm(
-                    phone=phone_n,
-                    name=name,
-                    intent=inferred,
-                    wants_wa=wants_wa,
-                    funnel=str(product["crm_funnel"]),
-                )
-            except Exception:  # noqa: BLE001
-                result["crm"] = {"ok": False, "error": "crm_update_failed"}
+            prior_crm = result.get("crm") if isinstance(result.get("crm"), dict) else None
+            if prior_crm and prior_crm.get("id"):
+                # Idempotent CRM: reuse lead created on a previous attempt.
+                result["crm"] = {**prior_crm, "resumed": True}
+            else:
+                try:
+                    result["crm"] = self._update_crm(
+                        phone=phone_n,
+                        name=name,
+                        intent=inferred,
+                        wants_wa=wants_wa,
+                        funnel=str(product["crm_funnel"]),
+                    )
+                except Exception:  # noqa: BLE001
+                    result["crm"] = {"ok": False, "error": "crm_update_failed"}
+            # Checkpoint after CRM so a later failure does not lose the lead id.
+            if conv_id:
+                ops_store.insert_post_call({**result, "status": "processing"})
 
             if wants_wa and not skip_whatsapp and phone_n:
-                decision = compliance_service.evaluate(phone=phone_n, channel="whatsapp")
-                result["compliance"] = compliance_service.as_dict(decision)
-                if not decision.allowed:
+                if result.get("whatsapp_sent"):
                     result["whatsapp"] = {
-                        "ok": False,
-                        "blocked": True,
-                        "compliance": result["compliance"],
+                        **(result.get("whatsapp") or {}),
+                        "ok": True,
+                        "idempotent": True,
+                        "resumed": True,
                     }
-                    result["whatsapp_sent"] = False
                 else:
-                    settings = get_settings()
-                    if settings.liwa_live_enabled():
-                        wa = await liwa_whatsapp_service.send(
-                            phone=phone_n,
-                            first_name=name,
-                            kind="flow",
-                            flow_id=str(product["liwa_flow_id"] or "") or None,
-                            text=str(product["wa_followup_text"]),
-                        )
+                    decision = compliance_service.evaluate(phone=phone_n, channel="whatsapp")
+                    result["compliance"] = compliance_service.as_dict(decision)
+                    if not decision.allowed:
+                        result["whatsapp"] = {
+                            "ok": False,
+                            "blocked": True,
+                            "compliance": result["compliance"],
+                        }
+                        result["whatsapp_sent"] = False
                     else:
-                        wa = whatsapp_mock_service.send_text(
-                            phone=phone_n,
-                            text=f"[post-call][{product['flow']}] {product['wa_followup_text']}",
-                            template=f"{product['continue_label']}_post_call",
-                        )
-                    result["whatsapp"] = wa
-                    result["whatsapp_sent"] = bool(wa.get("ok"))
+                        settings = get_settings()
+                        if settings.liwa_live_enabled():
+                            wa = await liwa_whatsapp_service.send(
+                                phone=phone_n,
+                                first_name=name,
+                                kind="flow",
+                                flow_id=str(product["liwa_flow_id"] or "") or None,
+                                text=str(product["wa_followup_text"]),
+                            )
+                        else:
+                            wa = whatsapp_mock_service.send_text(
+                                phone=phone_n,
+                                text=(
+                                    f"[post-call][{product['flow']}] {product['wa_followup_text']}"
+                                ),
+                                template=f"{product['continue_label']}_post_call",
+                            )
+                        result["whatsapp"] = wa
+                        result["whatsapp_sent"] = bool(wa.get("ok"))
+                        # Checkpoint after successful WA before any later side effects.
+                        if result["whatsapp_sent"] and conv_id:
+                            ops_store.insert_post_call({**result, "status": "processing"})
             elif wants_wa and not phone_n:
                 result["whatsapp"] = {"ok": False, "error": "phone_missing"}
             elif not wants_wa:
@@ -412,7 +439,6 @@ class PostCallService:
             elif phone_n:
                 self._patch_latest_dispatch_for_phone(phone_n, result)
 
-            # Provider failure → failed (retryable), not completed (terminal).
             wa = result.get("whatsapp") or {}
             provider_failed = bool(
                 wants_wa
@@ -426,26 +452,25 @@ class PostCallService:
                 result["ok"] = False
                 result["status"] = "failed"
                 result["error"] = wa.get("error") or "whatsapp_send_failed"
-                ops_store.insert_post_call(result)
+                result["retryable"] = True
+                ops_store.fail_post_call_claim(result)
                 return result
 
             result["status"] = "completed"
+            result["retryable"] = False
             ops_store.insert_post_call(result)
             return result
         except Exception as exc:  # noqa: BLE001
-            # Release claim immediately so ElevenLabs / callers can retry.
+            result["ok"] = False
+            result["status"] = "failed"
+            result["error"] = "post_call_exception"
+            result["detail"] = str(exc)[:200]
+            result["retryable"] = True
             if claimed and conv_id:
+                ops_store.fail_post_call_claim(result)
+            else:
                 ops_store.release_post_call_claim(claim_id, error=str(exc))
-            return {
-                "ok": False,
-                "id": claim_id,
-                "status": "failed",
-                "error": "post_call_exception",
-                "detail": str(exc)[:200],
-                "conversation_id": conv_id,
-                "phone": phone_n or None,
-                "whatsapp_sent": False,
-            }
+            return result
 
     def _update_crm(
         self,

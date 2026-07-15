@@ -83,6 +83,7 @@ class DocumentsService:
             "contact_phone": contact_phone,
             "kind": _safe_kind(kind),
             "status": "rejected" if errors else "validated",
+            "ok": not errors,
             "errors": errors,
             "retention_days": 90,
             **storage_meta,

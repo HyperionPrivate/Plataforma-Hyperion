@@ -360,3 +360,143 @@ def test_dedupe_before_unique_index_on_legacy_sqlite(
     ]
     conn.close()
     assert n == 1
+
+
+def test_crm_lead_not_duplicated_on_wa_retry(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from pilot_core.modules.post_call.service import post_call_service
+    from pilot_core.settings import get_settings
+
+    get_settings.cache_clear()
+    s = get_settings()
+    monkeypatch.setattr(s, "liwa_mode", "real")
+    monkeypatch.setattr(s, "liwa_api_token", "tok")
+
+    calls = {"n": 0}
+
+    async def _fail_then_ok(**_kwargs: object) -> dict[str, object]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"ok": False, "error": "liwa_down"}
+        return {"ok": True, "message": {"id": "m_ok"}}
+
+    monkeypatch.setattr(
+        "pilot_core.modules.liwa_whatsapp.liwa_whatsapp_service.send",
+        _fail_then_ok,
+    )
+
+    first = asyncio.run(
+        post_call_service.process(
+            phone="+573001119900",
+            intent="interesado",
+            flow="A",
+            conversation_id="conv_crm_once",
+            source="test",
+        )
+    )
+    assert first.get("status") == "failed"
+    lead1 = (first.get("crm") or {}).get("id")
+    assert lead1
+
+    second = asyncio.run(
+        post_call_service.process(
+            phone="+573001119900",
+            intent="interesado",
+            flow="A",
+            conversation_id="conv_crm_once",
+            source="test",
+        )
+    )
+    assert second.get("status") == "completed"
+    assert (second.get("crm") or {}).get("id") == lead1
+    assert (second.get("crm") or {}).get("resumed") is True
+    get_settings.cache_clear()
+
+
+def test_whatsapp_not_resent_after_partial_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from pilot_core.modules.post_call.service import post_call_service
+
+    sends = {"n": 0}
+
+    def _send_ok(**_kwargs: object) -> dict[str, object]:
+        sends["n"] += 1
+        return {"ok": True, "message": {"id": f"m{sends['n']}"}}
+
+    monkeypatch.setattr(
+        "pilot_core.modules.whatsapp_mock.whatsapp_mock_service.send_text",
+        _send_ok,
+    )
+
+    original_patch = post_call_service._patch_latest_dispatch_for_phone
+    boomed = {"done": False}
+
+    def _boom_patch(phone: str, post_call: dict) -> None:
+        if not boomed["done"]:
+            boomed["done"] = True
+            raise RuntimeError("dispatch_crash_after_wa")
+        return original_patch(phone, post_call)
+
+    monkeypatch.setattr(post_call_service, "_patch_latest_dispatch_for_phone", _boom_patch)
+
+    first = asyncio.run(
+        post_call_service.process(
+            phone="+573001119901",
+            intent="interesado",
+            flow="A",
+            conversation_id="conv_wa_once",
+            source="test",
+        )
+    )
+    assert first.get("status") == "failed"
+    assert first.get("whatsapp_sent") is True
+    assert sends["n"] == 1
+
+    second = asyncio.run(
+        post_call_service.process(
+            phone="+573001119901",
+            intent="interesado",
+            flow="A",
+            conversation_id="conv_wa_once",
+            source="test",
+        )
+    )
+    assert second.get("status") == "completed"
+    assert sends["n"] == 1
+    assert (second.get("whatsapp") or {}).get("resumed") is True
+
+
+def test_webhook_returns_502_on_retryable_failure(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pilot_core.settings import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("AUTH_DISABLED", "true")
+    monkeypatch.setenv("ELEVENLABS_WEBHOOK_SECRET", "")
+    get_settings.cache_clear()
+
+    async def _fail(**_kwargs: object) -> dict[str, object]:
+        return {
+            "ok": False,
+            "status": "failed",
+            "retryable": True,
+            "error": "whatsapp_send_failed",
+        }
+
+    monkeypatch.setattr(
+        "pilot_core.modules.post_call.service.post_call_service.process",
+        _fail,
+    )
+    r = client.post(
+        "/ops/webhooks/elevenlabs/post-call",
+        json={"type": "post_call_transcription", "data": {"conversation_id": "c1"}},
+    )
+    assert r.status_code == 502
+    get_settings.cache_clear()

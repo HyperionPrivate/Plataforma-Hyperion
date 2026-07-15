@@ -396,11 +396,10 @@ def claim_post_call_conversation(
 ) -> tuple[bool, dict[str, Any] | None]:
     """Atomically claim a conversation_id for post-call processing.
 
-    Returns (True, None) if this caller owns the claim, or (False, existing)
-    if another post-call already claimed the conversation.
-
-    Stale ``processing`` placeholders older than ``stale_after_sec`` are
-    deleted so a retry can reclaim the conversation.
+    Returns (True, None) for a fresh claim, (True, prior) when reclaiming a
+    ``failed`` row (prior keeps CRM/WA effects for idempotent resume), or
+    (False, existing) when another owner holds a fresh ``processing`` /
+    ``completed`` claim.
     """
     from datetime import datetime, timedelta
 
@@ -421,11 +420,24 @@ def claim_post_call_conversation(
             if existing:
                 prior = json.loads(existing["payload"])
                 status = str(prior.get("status") or "")
-                # Failed / retryable outcomes can be reclaimed immediately.
                 if status in {"failed", "error"}:
-                    conn.execute("DELETE FROM post_calls WHERE id=?", (existing["id"],))
+                    resumed = {
+                        **prior,
+                        "status": "processing",
+                        "error": None,
+                        "retry_count": int(prior.get("retry_count") or 0) + 1,
+                    }
+                    conn.execute(
+                        "UPDATE post_calls SET phone=?, payload=? WHERE id=?",
+                        (
+                            resumed.get("phone") or placeholder.get("phone"),
+                            json.dumps(resumed, ensure_ascii=False),
+                            existing["id"],
+                        ),
+                    )
                     conn.commit()
-                elif status == "processing":
+                    return True, resumed
+                if status == "processing":
                     created_raw = str(existing["created_at"] or "")
                     try:
                         created = datetime.strptime(created_raw, "%Y-%m-%d %H:%M:%S").replace(
@@ -435,12 +447,22 @@ def claim_post_call_conversation(
                         created = datetime.now(tz=UTC) - timedelta(seconds=stale_after_sec + 1)
                     age_ok = datetime.now(tz=UTC) - created > timedelta(seconds=stale_after_sec)
                     if age_ok:
-                        conn.execute("DELETE FROM post_calls WHERE id=?", (existing["id"],))
+                        prior["status"] = "failed"
+                        prior["error"] = prior.get("error") or "stale_processing"
+                        resumed = {
+                            **prior,
+                            "status": "processing",
+                            "error": None,
+                            "retry_count": int(prior.get("retry_count") or 0) + 1,
+                        }
+                        conn.execute(
+                            "UPDATE post_calls SET payload=? WHERE id=?",
+                            (json.dumps(resumed, ensure_ascii=False), existing["id"]),
+                        )
                         conn.commit()
-                    else:
-                        return False, prior
-                else:
+                        return True, resumed
                     return False, prior
+                return False, prior
             try:
                 conn.execute(
                     """
@@ -473,8 +495,35 @@ def claim_post_call_conversation(
             conn.close()
 
 
+def fail_post_call_claim(entry: dict[str, Any]) -> dict[str, Any]:
+    """Persist a failed claim with partial effects so retries can resume."""
+    init_db()
+    entry = {**entry, "status": "failed", "ok": False}
+    if "id" not in entry:
+        entry["id"] = f"pc_{uuid4().hex[:10]}"
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO post_calls(id, conversation_id, phone, payload)
+                VALUES(?, ?, ?, ?)
+                """,
+                (
+                    entry["id"],
+                    entry.get("conversation_id"),
+                    entry.get("phone"),
+                    json.dumps(entry, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+            return entry
+        finally:
+            conn.close()
+
+
 def release_post_call_claim(post_call_id: str, *, error: str | None = None) -> None:
-    """Mark/delete an in-flight claim so the webhook can retry immediately."""
+    """Mark an in-flight claim as failed (keep row + effects for resume)."""
     init_db()
     with _LOCK:
         conn = _connect()
@@ -492,8 +541,14 @@ def release_post_call_claim(post_call_id: str, *, error: str | None = None) -> N
                 return
             if payload.get("status") != "processing":
                 return
-            # Delete processing row — unique index then allows a fresh claim.
-            conn.execute("DELETE FROM post_calls WHERE id=?", (post_call_id,))
+            payload["status"] = "failed"
+            payload["ok"] = False
+            if error:
+                payload["error"] = error
+            conn.execute(
+                "UPDATE post_calls SET payload=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False), post_call_id),
+            )
             conn.commit()
         finally:
             conn.close()

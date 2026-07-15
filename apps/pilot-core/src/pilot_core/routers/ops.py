@@ -451,10 +451,30 @@ async def elevenlabs_post_call_webhook(request: Request) -> dict[str, Any]:
     if event_type == "post_call_audio":
         return {"ok": True, "ignored": True, "reason": "audio_only"}
 
-    return await post_call_service.process(
+    result = await post_call_service.process(
         raw_payload=payload if isinstance(payload, dict) else {},
         source="elevenlabs_webhook",
     )
+    # Providers that only retry on non-2xx need a 5xx for retryable failures.
+    if result.get("in_flight"):
+        raise PlatformError(
+            "post_call_in_flight",
+            "Post-call already being processed",
+            status_code=409,
+            details=result if isinstance(result, dict) else None,
+        )
+    if (
+        result.get("ok") is False
+        and (result.get("status") == "failed" or result.get("retryable") is True)
+        and result.get("retryable") is not False
+    ):
+        raise PlatformError(
+            "post_call_failed",
+            str(result.get("error") or "post_call_failed"),
+            status_code=502,
+            details=result if isinstance(result, dict) else None,
+        )
+    return result
 
 
 @router.get("/calls/dispatch")
@@ -1002,8 +1022,10 @@ async def _e2e_campaign(
     if not body.skip_voice and voice.get("skipped") is not True and voice.get("ok") is False:
         ok = False
     doc = steps.get("document") or {}
-    if isinstance(doc, dict) and doc.get("ok") is False:
-        ok = False
+    if isinstance(doc, dict):
+        doc_status = str(doc.get("status") or "")
+        if doc.get("ok") is False or (doc_status and doc_status != "validated"):
+            ok = False
     ho = steps.get("handoff") or {}
     liwa = ho.get("liwa") if isinstance(ho, dict) else None
     if isinstance(liwa, dict) and liwa.get("ok") is False:
