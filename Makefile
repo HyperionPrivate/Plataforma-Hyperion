@@ -26,7 +26,7 @@ test:
 	$(UV) run pytest -m "not integration"
 
 contracts:
-	$(UV) run pytest tests/contracts -q
+	$(UV) run pytest tests/contracts -q --override-ini addopts= -p no:cov
 	$(UV) run python -c "import json,pathlib; p=pathlib.Path('contracts/events/v1'); files=list(p.glob('*.json'));\
 [json.loads(f.read_text(encoding='utf-8')) for f in files]; print('ok', len(files))"
 

@@ -1,5 +1,5 @@
-# NOTE: pin actions by full commit SHA in production hardening follow-ups.
 # Architecture foundation CI — blocks merge on failure.
+# Pin actions to full commit SHAs in a later hardening PR.
 
 name: architecture-ci
 
@@ -11,7 +11,9 @@ on:
 
 permissions:
   contents: read
+  actions: read
   security-events: write
+  pull-requests: read
 
 jobs:
   quality:
@@ -33,9 +35,10 @@ jobs:
       - name: Lint
         run: uv run ruff check packages apps tests
       - name: Tests
-        run: uv run pytest -m "not integration" --cov=platform_kit --cov-report=term-missing
+        run: uv run pytest -m "not integration" --cov=platform_kit --cov-report=term-missing --cov-fail-under=40
       - name: Contracts
-        run: uv run pytest tests/contracts -q
+        # Disable root addopts coverage gate — this job only validates schemas.
+        run: uv run pytest tests/contracts -q --override-ini addopts= -p no:cov
       - name: Compose config
         run: docker compose -f docker-compose.dev.yml config --quiet
       - name: Compose test config
@@ -47,14 +50,25 @@ jobs:
   codeql:
     runs-on: ubuntu-latest
     permissions:
-      security-events: write
       contents: read
+      actions: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
       - uses: github/codeql-action/init@v3
         with:
           languages: python
       - uses: github/codeql-action/analyze@v3
+        with:
+          # Repo may not have Code Scanning upload enabled yet; still run analysis.
+          upload: never
+          output: results
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif
+          path: results
+          if-no-files-found: warn
 
   gitleaks:
     runs-on: ubuntu-latest
@@ -72,12 +86,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build images
         run: docker compose -f docker-compose.dev.yml build
-      - name: Trivy pilot-core
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: coopfuturo-pilot-core
-          format: table
-          exit-code: "0"
-          severity: CRITICAL,HIGH
+      - name: Trivy scan pilot-core
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.58.1 image \
+            --exit-code 0 \
+            --severity CRITICAL,HIGH \
+            --format table \
+            coopfuturo-pilot-core
       - name: SBOM hint
-        run: echo "SBOM generation via trivy image --format cyclonedx in follow-up release job"
+        run: echo "SBOM via trivy cyclonedx in a follow-up release job"
