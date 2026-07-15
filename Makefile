@@ -20,7 +20,7 @@ lint:
 	$(UV) run ruff check packages apps tests
 
 typecheck:
-	$(UV) run mypy packages/platform-kit/src apps/pilot-core/src
+	$(UV) run mypy packages/platform-kit/src apps/pilot-core/src apps/whatsapp-adapter/src apps/documents/src apps/handoff-liwa/src
 
 test:
 	$(UV) run pytest -m "not integration"

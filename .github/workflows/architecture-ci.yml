@@ -34,7 +34,7 @@ jobs:
       - name: Lint
         run: uv run ruff check packages apps tests
       - name: Typecheck
-        run: uv run mypy packages/platform-kit/src apps/pilot-core/src
+        run: uv run mypy packages/platform-kit/src apps/pilot-core/src apps/whatsapp-adapter/src apps/documents/src apps/handoff-liwa/src
       - name: Tests
         run: uv run pytest -m "not integration" --cov=platform_kit --cov-report=term-missing --cov-fail-under=40
       - name: Contracts
@@ -89,25 +89,31 @@ jobs:
           PGPASSWORD: test_admin_only
         run: |
           sudo apt-get update && sudo apt-get install -y postgresql-client
-          for db in db_pilot_core; do
+          for db in db_pilot_core db_whatsapp; do
             psql -h localhost -U coopfuturo_admin -d postgres -c "CREATE DATABASE $db;" || true
           done
           psql -h localhost -U coopfuturo_admin -d postgres -c "CREATE USER app_pilot_core WITH PASSWORD 'test_pilot';" || true
           psql -h localhost -U coopfuturo_admin -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE db_pilot_core TO app_pilot_core;"
           psql -h localhost -U coopfuturo_admin -d db_pilot_core -c "GRANT ALL ON SCHEMA public TO app_pilot_core;"
+          # Isolation: app_pilot_core must NOT have CONNECT on db_whatsapp
+          psql -h localhost -U coopfuturo_admin -d postgres -c "REVOKE CONNECT ON DATABASE db_whatsapp FROM PUBLIC;"
+          psql -h localhost -U coopfuturo_admin -d postgres -c "REVOKE CONNECT ON DATABASE db_whatsapp FROM app_pilot_core;" || true
       - name: Alembic upgrade + downgrade
-        working-directory: apps/pilot-core
         env:
-          DATABASE_URL: postgresql://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
+          DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
         run: |
-          uv run alembic upgrade head
-          uv run alembic downgrade base
-          uv run alembic upgrade head
-      - name: Outbox Redis inbox integration
+          uv run alembic -c apps/pilot-core/alembic.ini upgrade head
+          uv run alembic -c apps/pilot-core/alembic.ini downgrade base
+          uv run alembic -c apps/pilot-core/alembic.ini upgrade head
+      - name: Integration tests (outbox/redis + pg isolation)
         env:
           DATABASE_URL: postgresql+asyncpg://app_pilot_core:test_pilot@localhost:5432/db_pilot_core
           REDIS_URL: redis://localhost:6379/0
-        run: uv run pytest tests/integration/test_outbox_redis_inbox.py -q --override-ini addopts= -p no:cov -m integration
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          PILOT_CORE_DB_USER: app_pilot_core
+          PILOT_CORE_DB_PASSWORD: test_pilot
+        run: uv run pytest tests/integration -q --override-ini addopts= -p no:cov -m integration
 
   codeql:
     runs-on: ubuntu-latest

@@ -23,14 +23,3 @@ class EventTransport(Protocol):
     async def dead_letter(self, envelope: EventEnvelope, *, reason: str) -> None: ...
 
     async def ping(self) -> bool: ...
-
-    async def autoclaim(
-        self,
-        *,
-        group: str,
-        consumer: str,
-        min_idle_ms: int,
-        count: int = 10,
-    ) -> list[tuple[str, EventEnvelope]]:
-        """Optional; reclaim idle pending messages. Default transports may omit."""
-        ...

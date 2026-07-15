@@ -67,8 +67,9 @@ async def test_outbox_commit_then_relay_then_inbox_ack() -> None:
     async with session_scope(factory) as session:
         await enqueue_outbox(session, envelope)
     # Must not publish inside business txn — relay after commit
-    published = await relay_outbox(factory, transport)
-    assert published == 1
+    relay_stats = await relay_outbox(factory, transport, settings)
+    assert relay_stats.published == 1
+    assert relay_stats.poisoned == 0
 
     stats = await consume_batch(
         factory,

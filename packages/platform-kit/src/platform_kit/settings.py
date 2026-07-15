@@ -29,17 +29,23 @@ class PlatformSettings(BaseSettings):
     redis_stream_key: str = "coopfuturo.events"
     redis_consumer_group: str = "default"
     redis_dlq_stream_key: str = "coopfuturo.events.dlq"
-    redis_stream_maxlen: int = 100_000
+    redis_stream_maxlen: int = 0  # 0 = disabled (do not trim pending entries)
     redis_dlq_maxlen: int = 10_000
+    redis_allow_maxlen_trim: bool = False  # must be explicit to enable primary MAXLEN
     redis_claim_min_idle_ms: int = 30_000
     event_max_retries: int = 3
     event_backoff_base_seconds: float = 0.5
+    event_workers_enabled: bool = True
+    worker_poll_seconds: float = 1.0
+    worker_batch_size: int = 20
 
     # Auth — empty issuer disables JWT enforcement (development/test only)
     oidc_issuer: str = ""
     oidc_audience: str = ""
     oidc_jwks_url: str = ""
     oidc_jwks_static_json: str = ""  # for tests / offline JWKS
+    # Comma-separated OAuth client_ids allowed for token_type=service
+    service_allowed_clients: str = ""
     # Deprecated: shared-secret service auth removed; use service JWT + tenant_id claim.
     service_auth_shared_secret: SecretStr = Field(default=SecretStr(""))
     auth_disabled: bool = False  # forced false when app_env in staging/production

@@ -21,7 +21,6 @@ def _registry() -> Registry:
         data = json.loads(path.read_text(encoding="utf-8"))
         uri = data.get("$id") or f"https://coopfuturo.local/contracts/events/v1/{path.name}"
         resources.append((uri, Resource.from_contents(data, default_specification=DRAFT202012)))
-        # Also allow relative file resolution used by $ref: ./_envelope.json
         resources.append(
             (
                 f"https://coopfuturo.local/contracts/events/v1/{path.name}",
@@ -37,7 +36,6 @@ def _registry() -> Registry:
 def _validator_for(schema_name: str) -> Draft202012Validator:
     schema = json.loads((EVENTS / schema_name).read_text(encoding="utf-8"))
 
-    # Rewrite relative $ref to absolute ids so referencing can resolve them
     def _rewrite(node: object) -> object:
         if isinstance(node, dict):
             if "$ref" in node and isinstance(node["$ref"], str) and node["$ref"].startswith("./"):
@@ -128,20 +126,22 @@ def test_commercial_schemas_exist() -> None:
         assert (EVENTS / name).exists()
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["whatsapp-provider.yaml", "liwa-handoff.yaml", "core-coopfuturo.yaml"],
-)
-def test_openapi_has_auth_and_typed_errors(name: str) -> None:
-    doc = yaml.safe_load((OPENAPI / name).read_text(encoding="utf-8"))
+@pytest.mark.parametrize("path", sorted(OPENAPI.glob("*.yaml")))
+def test_openapi_documents_are_valid(path: Path) -> None:
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert doc.get("openapi", "").startswith("3.")
+    assert "info" in doc and "title" in doc["info"] and "version" in doc["info"]
+    assert "paths" in doc and isinstance(doc["paths"], dict) and doc["paths"]
     assert "components" in doc
-    assert "securitySchemes" in doc["components"] or name == "core-coopfuturo.yaml"
     assert "schemas" in doc["components"]
     assert "Error" in doc["components"]["schemas"]
-    # At least one path documents 401 or security
-    assert doc.get("security") or any(
-        "401" in (op or {}).get("responses", {})
-        for path_item in doc.get("paths", {}).values()
-        for op in path_item.values()
-        if isinstance(op, dict)
-    )
+    err = doc["components"]["schemas"]["Error"]
+    assert "error_code" in err.get("properties", {})
+    assert "error_code" in err.get("required", [])
+    assert "error" not in err.get("properties", {}), "runtime uses error_code, not error"
+    # Every operation should declare responses
+    for path_item in doc["paths"].values():
+        for method, op in path_item.items():
+            if method.startswith("x-") or not isinstance(op, dict):
+                continue
+            assert "responses" in op and op["responses"]

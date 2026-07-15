@@ -26,6 +26,7 @@ class AuthContext:
     roles: frozenset[str]
     token_type: str  # user | service
     scopes: frozenset[str]
+    client_id: str | None = None
 
 
 class JWKSCache:
@@ -105,12 +106,21 @@ def _tenant_from_claims(claims: dict[str, Any]) -> str:
 
 
 def _token_type_from_claims(claims: dict[str, Any], roles: frozenset[str]) -> str:
-    explicit = str(claims.get("token_type") or claims.get("typ") or "").lower()
+    """Service status only from explicit claim or issuer-granted role — never from client_id alone."""
+    explicit = str(claims.get("token_type") or "").lower()
     if explicit in ("service", "user"):
         return explicit
-    if "service" in roles or claims.get("client_id"):
+    # JWT "typ" header/claim is often "JWT" — ignore unless exactly service/user
+    typ = str(claims.get("typ") or "").lower()
+    if typ in ("service", "user"):
+        return typ
+    if "service" in roles:
         return "service"
     return "user"
+
+
+def _allowed_service_clients(settings: PlatformSettings) -> frozenset[str]:
+    return frozenset(c.strip() for c in settings.service_allowed_clients.split(",") if c.strip())
 
 
 async def require_auth(
@@ -144,10 +154,34 @@ async def require_auth(
     roles = _roles_from_claims(claims)
     token_type = _token_type_from_claims(claims, roles)
     scopes = _scopes_from_claims(claims)
+    client_id = str(claims["client_id"]) if claims.get("client_id") else None
 
-    # Service tokens must carry explicit service role or token_type=service
-    if token_type == "service" and "service" not in roles and "admin" not in roles:
-        roles = frozenset(set(roles) | {"service"})
+    if token_type == "service":
+        if "service" not in roles and "admin" not in roles:
+            raise PlatformError(
+                "forbidden",
+                "service tokens require an issuer-granted service (or admin) role",
+                status_code=403,
+            )
+        allowed = _allowed_service_clients(settings)
+        if not allowed:
+            raise PlatformError(
+                "auth_misconfigured",
+                "SERVICE_ALLOWED_CLIENTS must be configured for service tokens",
+                status_code=500,
+            )
+        if not client_id or client_id not in allowed:
+            raise PlatformError(
+                "forbidden",
+                "client_id is not in the service allowlist",
+                status_code=403,
+            )
+        if not scopes:
+            raise PlatformError(
+                "forbidden",
+                "service tokens require explicit scopes",
+                status_code=403,
+            )
 
     tenant_id_ctx.set(tenant)
     return AuthContext(
@@ -156,6 +190,7 @@ async def require_auth(
         roles=roles,
         token_type=token_type,
         scopes=scopes,
+        client_id=client_id,
     )
 
 

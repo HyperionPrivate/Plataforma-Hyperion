@@ -36,15 +36,15 @@ async def synthetic_event(
         correlation_id=cid,
         marker=body.marker,
     )
-    # 1) business + outbox in one transaction (commit on scope exit)
     async with session_scope(runtime.session_factory) as session:
         await enqueue_outbox(session, envelope)
-    # 2) independent relay publishes only after commit
-    published = await relay_outbox(runtime.session_factory, runtime.transport)
+    stats = await relay_outbox(runtime.session_factory, runtime.transport, settings)
     return {
         "mock_commercial": False,
         "event_id": envelope.event_id,
-        "published": published,
+        "published": stats.published,
+        "relay_failed": stats.failed,
+        "relay_poisoned": stats.poisoned,
         "correlation_id": cid,
         "event_type": envelope.event_type,
     }
@@ -56,8 +56,14 @@ async def relay_outbox_endpoint(
 ) -> dict[str, object]:
     if runtime.session_factory is None or runtime.transport is None:
         raise PlatformError("not_ready", "Runtime not started", status_code=503)
-    published = await relay_outbox(runtime.session_factory, runtime.transport)
-    return {"published": published, "tenant": ctx.tenant_id}
+    settings = get_settings()
+    stats = await relay_outbox(runtime.session_factory, runtime.transport, settings)
+    return {
+        "published": stats.published,
+        "failed": stats.failed,
+        "poisoned": stats.poisoned,
+        "tenant": ctx.tenant_id,
+    }
 
 
 @router.post("/consume-once")
@@ -81,6 +87,7 @@ async def consume_once(
         "dead_lettered": stats.dead_lettered,
         "reclaimed": stats.reclaimed,
         "failed": stats.failed,
+        "malformed": stats.malformed,
         "tenant": ctx.tenant_id,
     }
 

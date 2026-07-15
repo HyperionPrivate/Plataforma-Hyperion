@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from platform_kit.events.envelope import build_synthetic_ping
-from platform_kit.events.redis_streams import RedisStreamsTransport, _as_str
+from platform_kit.events.redis_streams import RedisStreamsTransport, StreamMessage, _as_str
 from platform_kit.settings import PlatformSettings
 
 
@@ -15,12 +15,17 @@ class _FakeRedis:
     def __init__(self) -> None:
         self.acked: list[tuple] = []
         self.published: list[dict] = []
+        self.attempts: dict[str, int] = {}
+        self.dlq: list[dict] = []
 
     async def xgroup_create(self, *args, **kwargs):
         return True
 
     async def xadd(self, stream, fields, maxlen=None, approximate=None):
-        self.published.append(fields)
+        if "dlq" in str(stream):
+            self.dlq.append(fields)
+        else:
+            self.published.append(fields)
         return b"1700000000000-0"
 
     async def xreadgroup(self, group, consumer, streams=None, count=10, block=1000):
@@ -49,6 +54,22 @@ class _FakeRedis:
     async def xautoclaim(self, *args, **kwargs):
         return (b"0-0", [])
 
+    async def xpending_range(self, *args, **kwargs):
+        return []
+
+    async def hget(self, key, field):
+        val = self.attempts.get(_as_str(field))
+        return None if val is None else str(val).encode()
+
+    async def hincrby(self, key, field, amount):
+        k = _as_str(field)
+        self.attempts[k] = self.attempts.get(k, 0) + int(amount)
+        return self.attempts[k]
+
+    async def hdel(self, key, field):
+        self.attempts.pop(_as_str(field), None)
+        return 1
+
     async def ping(self):
         return True
 
@@ -74,3 +95,45 @@ async def test_redis_transport_acks_decoded_message_id() -> None:
     assert fake.acked[0][2] == "1700000000000-0"
     published_id = await transport.publish(envelope)
     assert published_id == "1700000000000-0"
+
+
+@pytest.mark.asyncio
+async def test_malformed_message_parsed_as_stream_message() -> None:
+    settings = PlatformSettings(
+        service_name="pilot-core",
+        app_env="test",
+        auth_disabled=True,
+        redis_stream_key="s",
+        redis_consumer_group="g",
+        redis_dlq_stream_key="dlq",
+    )
+    fake = _FakeRedis()
+
+    async def bad_read(*args, **kwargs):
+        return [(b"stream", [(b"1-0", {b"envelope": b"{not-json}"})])]
+
+    fake.xreadgroup = bad_read  # type: ignore[method-assign]
+    transport = RedisStreamsTransport(fake, settings)
+    msgs = await transport.read_group_messages(group="g", consumer="c", count=1, block_ms=1)
+    assert len(msgs) == 1
+    assert isinstance(msgs[0], StreamMessage)
+    assert msgs[0].envelope is None
+    assert msgs[0].parse_error is not None
+
+
+@pytest.mark.asyncio
+async def test_durable_attempt_counter() -> None:
+    settings = PlatformSettings(
+        service_name="pilot-core",
+        app_env="test",
+        auth_disabled=True,
+        redis_stream_key="s",
+        redis_consumer_group="g",
+        redis_dlq_stream_key="dlq",
+    )
+    fake = _FakeRedis()
+    transport = RedisStreamsTransport(fake, settings)
+    assert await transport.incr_delivery_attempts("1-0") == 1
+    assert await transport.incr_delivery_attempts("1-0") == 2
+    await transport.clear_delivery_attempts("1-0")
+    assert fake.attempts.get("1-0") is None

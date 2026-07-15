@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -9,6 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from platform_kit.db import InboxEvent, OutboxEvent
 from platform_kit.events.envelope import EventEnvelope
 from platform_kit.events.transport import EventTransport
+
+
+@dataclass
+class RelayStats:
+    published: int = 0
+    failed: int = 0
+    poisoned: int = 0
 
 
 async def enqueue_outbox(session: AsyncSession, envelope: EventEnvelope) -> OutboxEvent:
@@ -32,11 +40,13 @@ async def publish_pending_outbox(
     transport: EventTransport,
     *,
     limit: int = 50,
-) -> int:
+    max_attempts: int = 3,
+) -> RelayStats:
     """
     Independent relay: claim pending rows (SKIP LOCKED when supported), publish, mark published.
-    Must run in its own transaction AFTER the business+outbox commit.
+    Poison / unparseable rows are marked failed and do not abort the batch.
     """
+    stats = RelayStats()
     dialect = session.bind.dialect.name if session.bind is not None else ""
     stmt = (
         select(OutboxEvent)
@@ -48,15 +58,24 @@ async def publish_pending_outbox(
         stmt = stmt.with_for_update(skip_locked=True)
     result = await session.execute(stmt)
     rows = list(result.scalars())
-    published = 0
     for row in rows:
-        envelope = EventEnvelope.from_json(row.payload_json)
-        await transport.publish(envelope)
-        row.status = "published"
-        row.published_at = datetime.now(UTC)
-        row.attempts += 1
-        published += 1
-    return published
+        try:
+            envelope = EventEnvelope.from_json(row.payload_json)
+            await transport.publish(envelope)
+            row.status = "published"
+            row.published_at = datetime.now(UTC)
+            row.attempts += 1
+            row.last_error = None
+            stats.published += 1
+        except Exception as exc:  # noqa: BLE001 — isolate poison rows
+            row.attempts += 1
+            row.last_error = f"{type(exc).__name__}:{exc}"[:500]
+            stats.failed += 1
+            if row.attempts >= max_attempts:
+                row.status = "failed"
+                stats.poisoned += 1
+            # leave status=pending under max_attempts for retry
+    return stats
 
 
 async def process_inbox_once(
