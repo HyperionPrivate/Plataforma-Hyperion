@@ -368,23 +368,27 @@ class PostCallService:
             inferred = normalize_intent(intent)
             infer_source = "explicit"
 
-        phone_n = (
-            normalize_phone(phone or extract_phone_from_payload(payload) or "")
-            or (phone or extract_phone_from_payload(payload) or "").strip()
+        # Explicit operator phone (ops/calls/complete) vs provider payload phone.
+        explicit_phone = normalize_phone(phone or "") or (phone or "").strip() if phone else ""
+        payload_phone = (
+            normalize_phone(extract_phone_from_payload(payload) or "")
+            or (extract_phone_from_payload(payload) or "").strip()
         )
+        phone_n = explicit_phone
         name = first_name if first_name != "Asociado" else extract_name_from_payload(payload)
         conv_id = conversation_id or extract_conversation_id(payload)
         resolved_flow = flow
         data = _as_dict(payload.get("data"))
         agent_id = str(data["agent_id"]) if data.get("agent_id") else None
 
-        # Resolve phone only via conversation_id / explicit dispatch — never the
-        # most recent unrelated dispatch (wrong-lead risk).
-        if not phone_n and conv_id:
+        # AUD2-007: when conversation_id is known, phone comes from dispatch store
+        # (provider payload must not redirect CRM/WA to another number).
+        store_phone = ""
+        if conv_id:
             for d in ops_store.list_dispatches(50):
                 if str(d.get("conversation_id") or "") == conv_id:
                     lead = _as_dict(d.get("lead"))
-                    phone_n = (
+                    store_phone = (
                         normalize_phone(str(lead.get("phone") or ""))
                         or str(lead.get("phone") or "").strip()
                     )
@@ -395,11 +399,11 @@ class PostCallService:
                     if not resolved_flow and d.get("flow"):
                         resolved_flow = str(d.get("flow"))
                     break
-        if not phone_n and dispatch_id:
+        if not store_phone and dispatch_id:
             matched = ops_store.get_dispatch(dispatch_id)
             if matched:
                 lead = _as_dict(matched.get("lead"))
-                phone_n = (
+                store_phone = (
                     normalize_phone(str(lead.get("phone") or matched.get("phone") or ""))
                     or str(lead.get("phone") or matched.get("phone") or "").strip()
                 )
@@ -407,8 +411,21 @@ class PostCallService:
                     name = str(lead["first_name"])
                 if not resolved_flow and matched.get("flow"):
                     resolved_flow = str(matched.get("flow"))
+        if store_phone:
+            phone_n = store_phone
+        elif not phone_n:
+            phone_n = payload_phone
 
         product = resolve_product_flow(resolved_flow, agent_id=agent_id, payload=payload)
+
+        # AUD2-007: webhook path must bind to a conversation for claim/idempotency.
+        if str(source).startswith("elevenlabs") and not conv_id:
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": "conversation_id_required",
+                "retryable": False,
+            }
 
         claim_id = f"pc_{uuid4().hex[:10]}"
         claimed = True
@@ -514,11 +531,21 @@ class PostCallService:
                 prior_delivery = str(
                     (prior_wa or {}).get("delivery") or result.get("whatsapp_status") or ""
                 )
-                # Skip resend if already handed to provider/local queue (not only "sent").
-                already_dispatched = bool(result.get("whatsapp_sent")) or (
-                    prior_wa is not None
-                    and prior_wa.get("ok") is True
-                    and prior_delivery in {"sent", "queued_mock", "accepted_pending"}
+                # AUD2-001: skip resend once handed to provider/queue — even if ok=False
+                # (accepted_pending has no receipt_id but must not be retried as failure).
+                already_dispatched = (
+                    bool(result.get("whatsapp_sent"))
+                    or (
+                        prior_delivery in {"sent", "queued_mock", "accepted_pending", "sent_manual"}
+                    )
+                    or (
+                        prior_wa is not None
+                        and (
+                            prior_wa.get("ok") is True
+                            or str(prior_wa.get("status") or "")
+                            in {"sent", "queued_mock", "accepted_pending"}
+                        )
+                    )
                 )
                 if already_dispatched:
                     result["whatsapp"] = {
@@ -634,12 +661,27 @@ class PostCallService:
                 self._patch_latest_dispatch_for_phone(phone_n, result)
 
             wa = result.get("whatsapp") or {}
+            delivery = str(
+                result.get("whatsapp_status")
+                or wa.get("delivery")
+                or (
+                    (wa.get("message") or {}).get("status")
+                    if isinstance(wa.get("message"), dict)
+                    else ""
+                )
+                or ""
+            )
+            # AUD2-001: accepted_pending / queued_mock are terminal handoffs — complete,
+            # do not fail+reclaim (that caused double WhatsApp sends).
+            handed_off = delivery in {"accepted_pending", "queued_mock", "sent", "sent_manual"}
             provider_failed = bool(
                 wants_wa
                 and not skip_whatsapp
                 and phone_n
                 and wa.get("blocked") is not True
                 and wa.get("skipped") is not True
+                and wa.get("pending_review") is not True
+                and not handed_off
                 and wa.get("ok") is False
             )
             if provider_failed:
@@ -652,6 +694,10 @@ class PostCallService:
 
             result["status"] = "completed"
             result["retryable"] = False
+            if handed_off and delivery == "accepted_pending":
+                result["ok"] = True
+                result["whatsapp_sent"] = False
+                result["whatsapp_status"] = "accepted_pending"
             ops_store.insert_post_call(result)
             return result
         except Exception as exc:  # noqa: BLE001

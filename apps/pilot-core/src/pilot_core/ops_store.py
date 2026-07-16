@@ -484,9 +484,12 @@ def _dedupe_post_calls_by_conversation(conn: sqlite3.Connection) -> None:
 
 
 def _recover_stale_post_call_claims(conn: sqlite3.Connection, *, max_age_sec: int = 300) -> None:
+    """AUD2-002: drop stuck processing only when lease_until elapsed (not row created_at)."""
     from datetime import datetime, timedelta
 
-    cutoff = datetime.now(tz=UTC) - timedelta(seconds=max_age_sec)
+    now = datetime.now(tz=UTC)
+    # Absolute safety net if lease_until missing/unparseable (watcher max ~1200s).
+    hard_cutoff = now - timedelta(seconds=max(max_age_sec * 4, 1200))
     rows = conn.execute(
         "SELECT tenant_id, id, payload, created_at FROM post_calls WHERE conversation_id IS NOT NULL"
     ).fetchall()
@@ -497,16 +500,22 @@ def _recover_stale_post_call_claims(conn: sqlite3.Connection, *, max_age_sec: in
             continue
         if payload.get("status") != "processing":
             continue
-        created_raw = str(row["created_at"] or "")
-        try:
-            created = datetime.strptime(created_raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-        except ValueError:
-            created = cutoff
-        if created <= cutoff:
-            conn.execute(
-                "DELETE FROM post_calls WHERE tenant_id=? AND id=?",
-                (row["tenant_id"], row["id"]),
-            )
+        lease = _parse_lease_until(payload.get("lease_until"))
+        if lease is not None:
+            if now <= lease:
+                continue
+        else:
+            created_raw = str(row["created_at"] or "")
+            try:
+                created = datetime.strptime(created_raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+            except ValueError:
+                created = hard_cutoff
+            if created > hard_cutoff:
+                continue
+        conn.execute(
+            "DELETE FROM post_calls WHERE tenant_id=? AND id=?",
+            (row["tenant_id"], row["id"]),
+        )
 
 
 def _with_tenant_payload(entry: dict[str, Any], tenant_id: str) -> dict[str, Any]:
@@ -1518,10 +1527,28 @@ def claim_saga(
                         return False, prior
                     prior["status"] = "failed"
                     prior["error"] = prior.get("error") or "stale_processing"
-                # failed / stale → reclaim
+                # AUD2-003: reclaim without wiping durable step checkpoints.
+                prior_steps = prior.get("steps") if isinstance(prior.get("steps"), dict) else {}
+                ph_steps = (
+                    placeholder.get("steps") if isinstance(placeholder.get("steps"), dict) else {}
+                )
+                merged_steps = {**ph_steps, **prior_steps}  # prior checkpoints win
+                control_keys = {
+                    "id",
+                    "kind",
+                    "idempotency_key",
+                    "status",
+                    "error",
+                    "lease_until",
+                    "retry_count",
+                    "tenant_id",
+                    "steps",
+                    "result",
+                }
+                overlay = {k: v for k, v in placeholder.items() if k not in control_keys}
                 resumed = {
                     **prior,
-                    **placeholder,
+                    **overlay,
                     "id": existing["id"],
                     "kind": kind,
                     "idempotency_key": key,
@@ -1530,6 +1557,7 @@ def claim_saga(
                     "lease_until": lease_until,
                     "retry_count": int(prior.get("retry_count") or 0) + 1,
                     "tenant_id": tid,
+                    "steps": merged_steps,
                 }
                 conn.execute(
                     "UPDATE sagas SET payload=? WHERE tenant_id=? AND id=?",

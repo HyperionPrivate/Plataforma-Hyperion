@@ -1,4 +1,5 @@
 # Traefik for Contabo PULSO stack — isolated from easypanel/coopfuturo labels.
+# AUD2-004: optional TLS via websecure when ENABLE_TLS=true and certs mounted.
 
 api:
   dashboard: false
@@ -9,10 +10,15 @@ providers:
     exposedByDefault: false
     network: pulso_app
     constraints: "Label(`com.docker.compose.project`,`pulso`)"
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
 
 entryPoints:
   web:
     address: ":80"
+  websecure:
+    address: ":443"
 
 log:
   level: INFO

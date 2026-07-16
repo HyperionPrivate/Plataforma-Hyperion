@@ -98,7 +98,7 @@ def test_valid_secret_verifies_before_json(
         "pilot_core.modules.post_call.service.post_call_service.process",
         _ok,
     )
-    body = b'{"type":"post_call_transcription","data":{}}'
+    body = b'{"type":"post_call_transcription","data":{"conversation_id":"c_cap_1"}}'
     ts = str(int(time.time()))
     digest = hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
     r = client.post(

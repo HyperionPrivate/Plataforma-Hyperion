@@ -39,6 +39,67 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path):
     return TestClient(app)
 
 
+def test_claim_saga_preserves_steps_on_reclaim(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PULSO_DATA_DIR", str(tmp_path))
+    import pilot_core.ops_store as ops_store
+
+    ops_store._DB_PATH = None
+    ops_store.init_db()
+    with ops_store.tenant_scope("tenant-dev"):
+        claimed, saga = ops_store.claim_saga(
+            "e2e",
+            "saga-preserve-1",
+            {"steps": {"voice": {"ok": True}, "whatsapp": {"ok": True}}},
+        )
+        assert claimed is True
+        assert saga is not None
+        saga["status"] = "failed"
+        saga["error"] = "boom"
+        ops_store.save_saga(saga)
+
+        claimed2, resumed = ops_store.claim_saga(
+            "e2e",
+            "saga-preserve-1",
+            {"steps": {}},
+        )
+        assert claimed2 is True
+        assert resumed is not None
+        steps = resumed.get("steps") or {}
+        assert steps.get("voice", {}).get("ok") is True
+        assert steps.get("whatsapp", {}).get("ok") is True
+
+
+def test_handoff_fails_when_liwa_live_does_not_sync(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pilot_core.settings import get_settings
+
+    get_settings.cache_clear()
+    s = get_settings()
+    monkeypatch.setattr(s, "liwa_mode", "real")
+    monkeypatch.setattr(s, "liwa_api_token", "tok")
+
+    async def _fail(**_kwargs: object) -> dict[str, object]:
+        return {"ok": False, "error": "liwa_down", "synced": False}
+
+    monkeypatch.setattr(
+        "pilot_core.modules.liwa_whatsapp.liwa_whatsapp_service.handoff_to_agency",
+        _fail,
+    )
+    r = client.post(
+        "/ops/handoff",
+        json={
+            "name": "Ana",
+            "segment": "Renovacion",
+            "motivo": "Calificado",
+            "phone": "+573001115588",
+            "idempotency_key": "handoff-liwa-fail-1",
+        },
+    )
+    assert r.status_code == 502
+    get_settings.cache_clear()
+
+
 def test_handoff_idempotent_on_replay(client: TestClient) -> None:
     body = {
         "name": "Ana",

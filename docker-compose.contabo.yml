@@ -3,7 +3,8 @@
 #   docker compose -f docker-compose.dev.yml -f docker-compose.contabo.yml --env-file .env.contabo up -d --build
 #
 # Isolates networks/volumes from /opt/coopfuturo (shared names would steal DNS for "postgres").
-# Binds Traefik to loopback on :9088 until the authenticated HTTPS ingress exists.
+# Binds Traefik to loopback on :9088. Optional TLS: set ENABLE_TLS=true + mount certs
+# (see .env.contabo.example) to also publish 127.0.0.1:9443 → :443.
 # Production auth is fail-closed: OIDC issuer/audience/JWKS required; AUTH_DISABLED forbidden.
 # Outbound voice: ElevenLabs SIP only (no legacy Contabo dialer).
 
@@ -38,8 +39,12 @@ services:
     image: traefik:v3.6.7
     ports: !override
       - "127.0.0.1:${TRAEFIK_HTTP_PORT:-9088}:80"
+      # AUD2-004: HTTPS entrypoint (enable with certs under infra/certs/contabo/)
+      - "127.0.0.1:${TRAEFIK_HTTPS_PORT:-9443}:443"
     volumes: !override
       - ./infra/traefik/traefik.contabo.yml:/etc/traefik/traefik.yml:ro
+      - ./infra/traefik/dynamic.contabo.yml:/etc/traefik/dynamic.yml:ro
+      - ./infra/certs/contabo:/certs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   postgres:

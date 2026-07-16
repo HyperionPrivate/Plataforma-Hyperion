@@ -1,7 +1,8 @@
 # Ops UI PULSO — módulos y fuentes de datos
 
-App: `apps/web` (Next.js). Hoy: `NEXT_PUBLIC_API_MODE=mock` → JSON en `src/data/`.  
-Live: stubs en `src/services/live/` (aún no cableados a `pilot-core` / Traefik).
+App: `apps/web` (Next.js).  
+- `NEXT_PUBLIC_API_MODE=mock` → JSON en `src/data/`.  
+- `NEXT_PUBLIC_API_MODE=live` → `src/services/live/` + `ops-client.ts` contra `pilot-core` `/ops` (Traefik o URL directa).
 
 ## Mapa rápido
 

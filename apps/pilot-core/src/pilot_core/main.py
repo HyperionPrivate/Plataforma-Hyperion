@@ -53,5 +53,7 @@ app = create_app(
     redis_ping=runtime.redis_ping,
     routers=[tech_router, ops_router],
     lifespan=lifespan,
+    # AUD2-011: hide OpenAPI in staging/production.
+    expose_docs=settings.app_env not in ("staging", "production"),
     extra_checks=_pilot_extra_checks,
 )

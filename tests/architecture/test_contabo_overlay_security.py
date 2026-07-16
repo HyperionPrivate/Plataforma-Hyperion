@@ -8,6 +8,8 @@ def test_contabo_overlay_is_loopback_only_and_fail_closed() -> None:
     overlay = (ROOT / "docker-compose.contabo.yml").read_text(encoding="utf-8")
 
     assert '"127.0.0.1:${TRAEFIK_HTTP_PORT:-9088}:80"' in overlay
+    assert '"127.0.0.1:${TRAEFIK_HTTPS_PORT:-9443}:443"' in overlay
+    assert "dynamic.contabo.yml" in overlay
     assert '"0.0.0.0:${TRAEFIK_HTTP_PORT:-9088}:80"' not in overlay
     assert "AUTH_DISABLED: ${AUTH_DISABLED:-false}" in overlay
     assert "APP_ENV: ${APP_ENV:-production}" in overlay
