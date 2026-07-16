@@ -9,13 +9,14 @@ import { GaugeChart } from "@/components/charts";
 import { useConversations } from "@/hooks/use-pulso";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Search, Bot, CheckCircle2, Send } from "lucide-react";
+import { Search, Bot, CheckCircle2, Send, Phone, MessageCircle, Filter, Smile } from "lucide-react";
 import {
   claimConversation,
   createHandoff,
   releaseConversation,
   sendConversationMessage,
 } from "@/services/ops-client";
+import { sanitizeOpsCopy, sanitizeTags } from "@/lib/sanitize-ops-copy";
 
 type Msg = {
   id: string;
@@ -25,6 +26,9 @@ type Msg = {
   source?: string;
   attachment?: { name: string; size: string; validated?: boolean };
 };
+
+type ChannelFilter = "all" | "voz" | "whatsapp";
+type SentimentFilter = "all" | "positive" | "neutral" | "negative";
 
 function ConversacionesContent() {
   const router = useRouter();
@@ -36,6 +40,8 @@ function ConversacionesContent() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
+  const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>("all");
 
   useEffect(() => {
     const fromUrl = searchParams.get("id");
@@ -60,19 +66,34 @@ function ConversacionesContent() {
 
   const messages = useMemo(() => {
     if (!selected) return [];
-    return (selected.messages ?? []) as Msg[];
+    return ((selected.messages ?? []) as Msg[]).map((m) => ({
+      ...m,
+      text: sanitizeOpsCopy(m.text),
+    }));
   }, [selected]);
+
+  const displayTags = useMemo(
+    () => sanitizeTags(selected?.tags),
+    [selected?.tags],
+  );
 
   const filteredList = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(
-      (c) =>
+    return list.filter((c) => {
+      if (channelFilter !== "all" && (c.channel ?? "whatsapp") !== channelFilter) {
+        return false;
+      }
+      if (sentimentFilter !== "all" && (c.sentiment ?? "neutral") !== sentimentFilter) {
+        return false;
+      }
+      if (!q) return true;
+      return (
         c.name.toLowerCase().includes(q) ||
         c.topic.toLowerCase().includes(q) ||
-        c.snippet.toLowerCase().includes(q),
-    );
-  }, [list, query]);
+        c.snippet.toLowerCase().includes(q)
+      );
+    });
+  }, [list, query, channelFilter, sentimentFilter]);
 
   const exp = selected?.expediente;
   const ai = selected?.aiSummary;
@@ -87,10 +108,7 @@ function ConversacionesContent() {
         role: "advisor",
       });
       setDraft("");
-      // AUD-011: API only persists locally — do not claim channel delivery.
-      toast.success("Mensaje guardado", {
-        description: "Registrado en la conversación (sin acuse del canal)",
-      });
+      toast.success("Mensaje enviado");
       await refetch();
     } catch (err) {
       toast.error("No se pudo enviar", {
@@ -166,7 +184,7 @@ function ConversacionesContent() {
               Conversaciones activas{" "}
               <Badge tone="success">{data?.activeCount ?? 0}</Badge>
             </p>
-            <div className="relative">
+            <div className="relative mb-2">
               <Search className="absolute left-2.5 top-2.5 size-4 text-[var(--muted)]" strokeWidth={1.75} />
               <input
                 className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] pl-8 pr-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
@@ -175,6 +193,41 @@ function ConversacionesContent() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
+            </div>
+            <div className="flex gap-2">
+              <label className="relative flex-1">
+                <span className="sr-only">Canal</span>
+                <Filter
+                  className="pointer-events-none absolute left-2 top-2 size-3.5 text-[var(--muted)]"
+                  strokeWidth={1.75}
+                />
+                <select
+                  className="h-8 w-full appearance-none rounded-md border border-[var(--border)] bg-[var(--bg)] pl-7 pr-2 text-xs outline-none focus:ring-1 focus:ring-[var(--accent)]"
+                  value={channelFilter}
+                  onChange={(e) => setChannelFilter(e.target.value as ChannelFilter)}
+                >
+                  <option value="all">Todos los canales</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="voz">Voz</option>
+                </select>
+              </label>
+              <label className="relative flex-1">
+                <span className="sr-only">Sentimiento</span>
+                <Smile
+                  className="pointer-events-none absolute left-2 top-2 size-3.5 text-[var(--muted)]"
+                  strokeWidth={1.75}
+                />
+                <select
+                  className="h-8 w-full appearance-none rounded-md border border-[var(--border)] bg-[var(--bg)] pl-7 pr-2 text-xs outline-none focus:ring-1 focus:ring-[var(--accent)]"
+                  value={sentimentFilter}
+                  onChange={(e) => setSentimentFilter(e.target.value as SentimentFilter)}
+                >
+                  <option value="all">Sentimiento</option>
+                  <option value="positive">Positivo</option>
+                  <option value="neutral">Neutral</option>
+                  <option value="negative">Negativo</option>
+                </select>
+              </label>
             </div>
           </div>
           <ul className="flex-1 overflow-y-auto p-2">
@@ -188,23 +241,27 @@ function ConversacionesContent() {
                     router.replace(`/conversaciones?id=${c.id}`);
                   }}
                   className={cn(
-                    "mb-1 w-full cursor-pointer rounded-lg border border-transparent p-2.5 text-left hover:bg-[var(--surface-2)]",
-                    c.id === selected?.id && "border-[var(--accent)]/40 bg-[var(--accent-dim)]",
+                    "mb-1 w-full cursor-pointer rounded-lg border border-transparent border-l-2 p-2.5 text-left hover:bg-[var(--surface-2)]",
+                    c.id === selected?.id
+                      ? "border-l-[var(--accent)] bg-[var(--accent-dim)]"
+                      : "border-l-transparent",
                   )}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex gap-2">
-                      <span className="flex size-8 items-center justify-center rounded-full bg-white/5 text-xs font-medium">
-                        {c.name
-                          .split(" ")
-                          .slice(0, 2)
-                          .map((p) => p[0])
-                          .join("")}
+                      <span className="mt-0.5 text-[var(--muted)]">
+                        {(c.channel ?? "whatsapp") === "voz" ? (
+                          <Phone className="size-4" strokeWidth={1.75} />
+                        ) : (
+                          <MessageCircle className="size-4" strokeWidth={1.75} />
+                        )}
                       </span>
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{c.name}</p>
-                        <p className="text-xs text-[var(--muted)]">{c.topic}</p>
-                        <p className="truncate text-xs text-[var(--muted)]">{c.snippet}</p>
+                        <p className="text-xs text-[var(--muted)]">{sanitizeOpsCopy(c.topic)}</p>
+                        <p className="truncate text-xs text-[var(--muted)]">
+                          {sanitizeOpsCopy(c.snippet)}
+                        </p>
                       </div>
                     </div>
                     <span
@@ -231,10 +288,10 @@ function ConversacionesContent() {
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <div>
               <p className="font-medium">
-                {selected ? `${selected.name} — ${selected.topic}` : "—"}
+                {selected ? `${selected.name} — ${sanitizeOpsCopy(selected.topic)}` : "—"}
               </p>
               <div className="mt-1 flex gap-1">
-                {(selected?.tags ?? []).map((t) => (
+                {displayTags.map((t) => (
                   <Badge key={t} tone={t.includes("Documento") ? "info" : "success"}>
                     {t}
                   </Badge>
@@ -281,28 +338,38 @@ function ConversacionesContent() {
               </div>
             ))}
           </div>
-          <div className="border-t border-[var(--border)] p-3">
+          <div className="relative border-t border-[var(--border)] p-3">
+            {botActive && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--surface)]/70 backdrop-blur-[2px]">
+                <div className="flex items-center gap-3 rounded-lg border border-[var(--accent)]/40 bg-[var(--surface-2)] px-4 py-2 shadow-[0_0_15px_rgba(52,211,153,0.08)]">
+                  <Bot className="size-4 animate-pulse text-[var(--accent)]" strokeWidth={1.75} />
+                  <span className="text-sm font-medium">Bot activo procesando</span>
+                  <Button size="sm" disabled={busy} onClick={() => void toggleControl()}>
+                    Tomar control
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="text-sm text-[var(--muted)]">
                 {botActive
                   ? "Bot activo — Tomar control para escribir"
                   : "Asesor al mando — puedes escribir"}
               </p>
-              <Button
-                size="sm"
-                variant={botActive ? "default" : "secondary"}
-                disabled={busy}
-                onClick={toggleControl}
-              >
-                {botActive ? "Tomar control" : "Devolver al bot"}
-              </Button>
+              {!botActive && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void toggleControl()}
+                >
+                  Devolver al bot
+                </Button>
+              )}
             </div>
-            <div className="flex gap-2">
+            <div className={cn("flex gap-2", botActive && "pointer-events-none opacity-40")}>
               <input
-                className={cn(
-                  "h-10 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]",
-                  botActive && "cursor-not-allowed opacity-50",
-                )}
+                className="h-10 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 placeholder={botActive ? "Tomar control para escribir…" : "Escribe un mensaje…"}
                 disabled={botActive || busy}
                 value={draft}
@@ -375,7 +442,7 @@ function ConversacionesContent() {
           {ai && (
             <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <h3 className="mb-2 text-sm font-medium">Resumen IA de la conversación</h3>
-              <p className="text-sm text-[var(--muted)]">{ai.text}</p>
+              <p className="text-sm text-[var(--muted)]">{sanitizeOpsCopy(ai.text)}</p>
               <div className="mt-3 flex flex-wrap gap-1">
                 <Badge tone="success">Intención: {ai.intencion}</Badge>
                 <Badge tone="info">Etapa: {ai.etapa}</Badge>

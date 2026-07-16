@@ -8,6 +8,7 @@ from uuid import uuid4
 import httpx
 
 from pilot_core import ops_store
+from pilot_core.modules.activity import record_outbound_conversation
 from pilot_core.settings import get_settings
 
 
@@ -75,6 +76,18 @@ def _audit(
             "lead": {"phone": phone, "first_name": first_name},
             "whatsapp": entry,
         }
+    )
+    snippet = str(entry.get("text") or "").strip() or (
+        "Flujo WhatsApp enviado"
+        if str(entry.get("kind") or "") == "flow"
+        else "Mensaje WhatsApp enviado"
+    )
+    record_outbound_conversation(
+        phone=phone,
+        first_name=first_name or "Asociado",
+        channel="whatsapp",
+        snippet=snippet[:160],
+        topic="WhatsApp",
     )
 
 

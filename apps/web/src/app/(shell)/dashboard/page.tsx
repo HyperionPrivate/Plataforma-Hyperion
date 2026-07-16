@@ -5,6 +5,7 @@ import { motion } from "motion/react";
 import { Filter, RefreshCw, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/data/stat-card";
 import { ChartCard } from "@/components/data/chart-card";
 import { DualSeriesChart, FunnelChart, DonutChart } from "@/components/charts";
@@ -13,7 +14,6 @@ import { useDashboard, useLiveFeed } from "@/hooks/use-pulso";
 import { stagger } from "@/lib/motion";
 import { cn, formatNumber } from "@/lib/utils";
 import { Phone, MessageCircle, Clock, Users, Headphones, Percent, Timer, Activity } from "lucide-react";
-import { toast } from "sonner";
 
 const OPS_ICONS = [Phone, MessageCircle, Percent, Clock, Activity, Timer, Headphones, Users];
 
@@ -40,6 +40,7 @@ export default function DashboardPage() {
   const live = useLiveFeed(seed);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [period, setPeriod] = useState<"hoy" | "7d" | "30d">("hoy");
 
   const filtered = useMemo(() => {
     if (!data) return null;
@@ -48,9 +49,13 @@ export default function DashboardPage() {
     const segmentScale =
       (filters.renovacion ? 0.55 : 0) + (filters.reactivacion ? 0.45 : 0) || 0.01;
     const scale = Math.max(0.25, channelScale * (0.55 + segmentScale * 0.45));
+    // Period is a local view only — API still returns a fixed shell (no date range).
+    const periodDays =
+      period === "hoy" ? 1 : period === "7d" ? 7 : data.contactsByDay.length;
+    const daySlice = data.contactsByDay.slice(-Math.min(periodDays, data.contactsByDay.length));
 
     return {
-      contactsByDay: data.contactsByDay.map((d) => ({
+      contactsByDay: daySlice.map((d) => ({
         ...d,
         voz: filters.voz ? d.voz : 0,
         whatsapp: filters.whatsapp ? d.whatsapp : 0,
@@ -68,7 +73,7 @@ export default function DashboardPage() {
           })),
       scale,
     };
-  }, [data, filters]);
+  }, [data, filters, period]);
 
   if (isError) {
     return (
@@ -88,11 +93,36 @@ export default function DashboardPage() {
     <div>
       <PageHeader
         title="Dashboard del Piloto — Coopfuturo"
+        subtitle="Visión ejecutiva de contactabilidad, intención y resultados · periodo = vista local"
         actions={
           <div className="relative flex items-center gap-2">
-            <Button variant="outline" size="sm">
-              19 may. – 25 may. 2025
-            </Button>
+            <div
+              className="hidden items-center rounded-lg border border-[var(--border)] p-0.5 sm:flex"
+              title="Recorta la serie local; la API aún no filtra por rango de fechas"
+            >
+              {(
+                [
+                  ["hoy", "Hoy"],
+                  ["7d", "7D"],
+                  ["30d", "30D"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setPeriod(id)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-xs transition",
+                    period === id
+                      ? "bg-[var(--accent-dim)] text-[var(--accent)]"
+                      : "text-[var(--muted)] hover:text-[var(--text)]",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <Badge tone="success">Datos vivos</Badge>
             <Button
               variant="secondary"
               size="sm"
@@ -170,7 +200,6 @@ export default function DashboardPage() {
                     className="flex-1"
                     onClick={() => {
                       setFiltersOpen(false);
-                      toast.success("Filtros aplicados");
                     }}
                   >
                     Aplicar
@@ -180,7 +209,6 @@ export default function DashboardPage() {
                     variant="outline"
                     onClick={() => {
                       setFilters(DEFAULT_FILTERS);
-                      toast.message("Filtros restablecidos");
                     }}
                   >
                     Limpiar
@@ -194,9 +222,19 @@ export default function DashboardPage() {
 
       {activeFilters && (
         <p className="mb-3 text-xs text-[var(--accent)]">
-          Vista filtrada (mock) · escala ~{Math.round((filtered?.scale ?? 1) * 100)}%
+          Vista filtrada · escala ~{Math.round((filtered?.scale ?? 1) * 100)}%
         </p>
       )}
+
+      {!isLoading &&
+        filtered &&
+        filtered.kpis.length > 0 &&
+        filtered.kpis.every((k) => Number(k.value) === 0) && (
+          <p className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--muted)]">
+            Sin actividad aún — gráficas en cero. Los valores se llenan con dispatches, contactos y
+            campañas reales.
+          </p>
+        )}
 
       <motion.div
         className="grid gap-[var(--page-gap)] sm:grid-cols-2 lg:grid-cols-5"
@@ -220,6 +258,30 @@ export default function DashboardPage() {
               />
             ))}
       </motion.div>
+
+      <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+          <p className="font-medium">Meta vs. resultado ({period.toUpperCase()})</p>
+          <p className="tabular text-[var(--muted)]">
+            {formatNumber(vozTotal + waTotal)} contactos canal
+          </p>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
+          <div
+            className="h-full rounded-full bg-[var(--accent)] transition-all"
+            style={{
+              width: `${Math.min(
+                100,
+                Math.round(((vozTotal + waTotal) / Math.max(vozTotal + waTotal, 50)) * 100),
+              )}%`,
+            }}
+          />
+        </div>
+        <p className="mt-2 text-xs text-[var(--muted)]">
+          Volumen del periodo filtrado · Voz {formatNumber(vozTotal)} · WhatsApp{" "}
+          {formatNumber(waTotal)}
+        </p>
+      </div>
 
       <div className="mt-[var(--page-gap)] grid gap-[var(--page-gap)] xl:grid-cols-[1fr_var(--panel-right-width)]">
         <div className="grid gap-[var(--page-gap)]">
@@ -249,8 +311,8 @@ export default function DashboardPage() {
           </div>
 
           <div className="grid gap-[var(--page-gap)] lg:grid-cols-2">
-            <ChartCard title="Estados de la base" loading={isLoading} footer="Última actualización: hace 2 min.">
-              {data && <DonutChart slices={data.baseStatus} centerValue={30000} />}
+            <ChartCard title="Estados de la base" loading={isLoading} footer="Datos en vivo">
+              {data && <DonutChart slices={data.baseStatus} />}
             </ChartCard>
             <ChartCard title="Indicadores operacionales" loading={isLoading}>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

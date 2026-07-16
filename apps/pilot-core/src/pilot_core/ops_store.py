@@ -767,12 +767,17 @@ def list_dispatches(limit: int = 50, *, offset: int = 0) -> list[dict[str, Any]]
         try:
             rows = conn.execute(
                 """
-                SELECT payload FROM dispatches
+                SELECT payload, created_at FROM dispatches
                 WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?
                 """,
                 (tid, limit, max(0, int(offset))),
             ).fetchall()
-            return [json.loads(r["payload"]) for r in rows]
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                item = json.loads(r["payload"])
+                item["_created_at"] = r["created_at"]
+                out.append(item)
+            return out
         finally:
             conn.close()
 
@@ -1030,12 +1035,17 @@ def list_post_calls(limit: int = 100) -> list[dict[str, Any]]:
         try:
             rows = conn.execute(
                 """
-                SELECT payload FROM post_calls
+                SELECT payload, created_at FROM post_calls
                 WHERE tenant_id=? ORDER BY created_at DESC LIMIT ?
                 """,
                 (tid, limit),
             ).fetchall()
-            return [json.loads(r["payload"]) for r in rows]
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                item = json.loads(r["payload"])
+                item["_created_at"] = r["created_at"]
+                out.append(item)
+            return out
         finally:
             conn.close()
 

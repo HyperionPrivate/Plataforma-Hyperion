@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from pilot_core import ops_store
-
-_FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "ops"
 
 # Allowed transitions per funnel column (strict).
 _TRANSITIONS: dict[str, list[str]] = {
@@ -24,6 +20,18 @@ _TRANSITIONS: dict[str, list[str]] = {
 
 _TIPIFICACION_REQUIRED = {"no_interes", "renovado"}
 
+_COLUMN_DEFS: list[tuple[str, str]] = [
+    ("pendiente", "Pendiente de contacto"),
+    ("contactado", "Contactado"),
+    ("interesado", "Interesado"),
+    ("documento", "Documento recibido"),
+    ("transferido", "Transferido a asesor"),
+    ("renovado", "Renovado"),
+    ("no_interes", "No interés"),
+]
+
+_FUNNEL_NAMES = ("Renovación", "Reactivación", "Nuevos", "Microcrédito")
+
 
 class CrmService:
     name: str = "crm"
@@ -32,24 +40,20 @@ class CrmService:
         return self.name
 
     def _base(self) -> dict[str, Any]:
-        return json.loads((_FIXTURES / "crm.json").read_text(encoding="utf-8"))
+        funnels: dict[str, Any] = {}
+        for name in _FUNNEL_NAMES:
+            funnels[name] = {
+                "title": f"CRM — Funnel {name}",
+                "columns": [
+                    {"id": col_id, "label": label, "count": 0, "cards": []}
+                    for col_id, label in _COLUMN_DEFS
+                ],
+                "tipificaciones": [],
+            }
+        return {"funnels": funnels}
 
     def transitions(self) -> dict[str, list[str]]:
         return {k: list(v) for k, v in _TRANSITIONS.items()}
-
-    def _find_fixture_card(self, lead_id: str) -> dict[str, Any] | None:
-        data = self._base()
-        for funnel_name, funnel in (data.get("funnels") or {}).items():
-            for col in funnel.get("columns") or []:
-                for card in col.get("cards") or []:
-                    if card.get("id") == lead_id:
-                        return {
-                            **card,
-                            "funnel": funnel_name,
-                            "column_id": col["id"],
-                            "tipificacion": None,
-                        }
-        return None
 
     def snapshot(self) -> dict[str, Any]:
         data = self._base()
@@ -107,20 +111,8 @@ class CrmService:
                     tip_counts[tip] = tip_counts.get(tip, 0) + 1
             new_cols = []
             for c in cols:
-                stored = by_col.get(c["id"]) or []
-                if stored:
-                    cards = stored
-                else:
-                    # Fixture cards get allowed_next for UI.
-                    cards = []
-                    for card in c.get("cards") or []:
-                        cards.append(
-                            {
-                                **card,
-                                "allowed_next": _TRANSITIONS.get(c["id"], []),
-                            }
-                        )
-                new_cols.append({**c, "cards": cards, "count": max(c.get("count", 0), len(cards))})
+                cards = by_col.get(c["id"]) or []
+                new_cols.append({**c, "cards": cards, "count": len(cards)})
             funnel["columns"] = new_cols
             if tip_counts:
                 funnel["tipificaciones"] = [
@@ -137,10 +129,7 @@ class CrmService:
         leads = {x["id"]: x for x in ops_store.list_crm_leads()}
         lead = leads.get(lead_id)
         if lead is None:
-            fixture = self._find_fixture_card(lead_id)
-            if fixture is None:
-                raise ValueError(f"lead_not_found:{lead_id}")
-            lead = fixture
+            raise ValueError(f"lead_not_found:{lead_id}")
 
         current = lead.get("column_id") or "pendiente"
         if to_column == current:

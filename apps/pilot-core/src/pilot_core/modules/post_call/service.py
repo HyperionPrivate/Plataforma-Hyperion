@@ -609,6 +609,16 @@ class PostCallService:
                                         "lease_until": _lease_until_iso(),
                                     }
                                 )
+            elif wants_wa and skip_whatsapp:
+                # Explicit skip → cola de revisión manual (/ops/whatsapp/pending).
+                result["whatsapp"] = {
+                    "ok": True,
+                    "pending_review": True,
+                    "reason": "skip_whatsapp",
+                    "flow_id": str(product["liwa_flow_id"] or "") or None,
+                }
+                result["whatsapp_sent"] = False
+                result["whatsapp_status"] = "pending_review"
             elif wants_wa and not phone_n:
                 result["whatsapp"] = {"ok": False, "error": "phone_missing"}
             elif not wants_wa:

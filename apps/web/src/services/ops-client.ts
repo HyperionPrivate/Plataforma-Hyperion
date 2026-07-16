@@ -131,6 +131,35 @@ export async function completeCall(input: {
   }>("/ops/calls/complete", input);
 }
 
+export async function fetchWhatsAppPending(scope: "pending" | "review" = "pending") {
+  const q = scope === "review" ? "?scope=review" : "";
+  return getJson<{
+    items: Record<string, unknown>[];
+    count: number;
+    scope?: string;
+    pii_masked?: boolean;
+  }>(`/ops/whatsapp/pending${q}`);
+}
+
+export async function sendWhatsAppPending(input: {
+  conversation_id?: string;
+  phone?: string;
+  flow_id?: string;
+}) {
+  return postJson<{
+    ok: boolean;
+    conversation_id?: string;
+    phone?: string;
+    whatsapp?: Record<string, unknown>;
+  }>("/ops/whatsapp/pending/send", input);
+}
+
+export async function skipWhatsAppPending(input: { conversation_id: string }) {
+  return postJson<{ ok: boolean; conversation_id: string; status: string }>(
+    "/ops/whatsapp/pending/skip",
+    input,
+  );
+}
 
 export async function optOut(phone: string) {
   return postJson<{ ok: boolean; phone: string }>("/ops/compliance/opt-out", { phone });
