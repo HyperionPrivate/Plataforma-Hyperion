@@ -516,7 +516,7 @@ class PostCallService:
                 )
                 # Skip resend if already handed to provider/local queue (not only "sent").
                 already_dispatched = bool(result.get("whatsapp_sent")) or (
-                    bool(prior_wa)
+                    prior_wa is not None
                     and prior_wa.get("ok") is True
                     and prior_delivery in {"sent", "queued_mock", "accepted_pending"}
                 )

@@ -268,7 +268,8 @@ async def create_handoff(
         {"steps": {}, "phone": body.phone, "name": body.name},
     )
     if not claimed and saga and saga.get("status") == "completed":
-        result = saga.get("result") if isinstance(saga.get("result"), dict) else saga
+        raw_result = saga.get("result")
+        result: dict[str, Any] = raw_result if isinstance(raw_result, dict) else dict(saga)
         return {**result, "ok": True, "idempotent": True, "saga_id": saga.get("id")}
     if not claimed and saga and saga.get("status") == "processing":
         raise PlatformError(
@@ -278,7 +279,7 @@ async def create_handoff(
             details={"saga_id": saga.get("id")},
         )
     assert saga is not None
-    steps = dict(saga.get("steps") or {})
+    steps: dict[str, Any] = dict(saga.get("steps") or {})
     try:
         cid = str(steps.get("conversation_id") or f"cv_{uuid4().hex[:10]}")
         hid = str(steps.get("handoff_id") or f"h_{uuid4().hex[:10]}")
@@ -325,8 +326,9 @@ async def create_handoff(
             saga["steps"] = steps
             ops_store.save_saga(saga)
 
+        raw_liwa = steps.get("liwa")
         liwa_meta: dict[str, Any] = (
-            steps.get("liwa") if isinstance(steps.get("liwa"), dict) else {"synced": False}
+            dict(raw_liwa) if isinstance(raw_liwa, dict) else {"synced": False}
         )
         settings = get_settings()
         if body.phone and settings.liwa_live_enabled() and not liwa_meta.get("synced"):
@@ -343,11 +345,13 @@ async def create_handoff(
                     }
                 )
             else:
-                liwa_meta = await liwa_whatsapp_service.handoff_to_agency(
-                    phone=body.phone,
-                    first_name=body.name.split()[0] if body.name else "Asociado",
-                    motivo=body.motivo,
-                    tag_name=agency_tag,
+                liwa_meta = dict(
+                    await liwa_whatsapp_service.handoff_to_agency(
+                        phone=body.phone,
+                        first_name=body.name.split()[0] if body.name else "Asociado",
+                        motivo=body.motivo,
+                        tag_name=agency_tag,
+                    )
                 )
                 liwa_meta["synced"] = bool(liwa_meta.get("ok"))
                 liwa_meta["compliance"] = compliance_service.as_dict(decision)
@@ -355,15 +359,14 @@ async def create_handoff(
             saga["steps"] = steps
             ops_store.save_saga(saga)
         elif not body.phone or not settings.liwa_live_enabled():
+            raw_skip = steps.get("liwa")
             liwa_meta = (
-                steps.get("liwa")
-                if isinstance(steps.get("liwa"), dict)
-                else {"synced": False, "skipped": True}
+                dict(raw_skip) if isinstance(raw_skip, dict) else {"synced": False, "skipped": True}
             )
             steps["liwa"] = liwa_meta
 
         if not steps.get("persisted"):
-            entry = {
+            entry: dict[str, Any] = {
                 "id": hid,
                 "conversationId": cid,
                 "name": body.name,
@@ -389,7 +392,9 @@ async def create_handoff(
             try:
                 entry = ops_store.insert_handoff(entry)
             except Exception:  # noqa: BLE001 — resume if row already exists
-                entry = steps.get("handoff") if isinstance(steps.get("handoff"), dict) else entry
+                prior_ho = steps.get("handoff")
+                if isinstance(prior_ho, dict):
+                    entry = prior_ho
             steps["persisted"] = True
             steps["handoff"] = entry
             saga["steps"] = steps
@@ -397,7 +402,8 @@ async def create_handoff(
             saga["result"] = entry
             ops_store.save_saga(saga)
             return entry
-        entry = steps.get("handoff") if isinstance(steps.get("handoff"), dict) else {}
+        prior_done = steps.get("handoff")
+        entry = prior_done if isinstance(prior_done, dict) else {}
         saga["status"] = "completed"
         saga["result"] = entry
         ops_store.save_saga(saga)
@@ -1098,7 +1104,8 @@ async def get_settings_api(_ctx: AuthContext = Depends(require_ops_auth)) -> dic
     # Always reflect runtime LIWA mode (not overwritten by stale SQLite).
     merged["whatsapp"] = defaults["whatsapp"]
     # AUD-005: dialer.base_url is env-owned; ignore any SQLite copy.
-    dialer_raw = merged.get("dialer") if isinstance(merged.get("dialer"), dict) else {}
+    dialer_candidate = merged.get("dialer")
+    dialer_raw: dict[str, Any] = dialer_candidate if isinstance(dialer_candidate, dict) else {}
     merged["dialer"] = {
         "default_phone_number_id": str(
             dialer_raw.get("default_phone_number_id")
@@ -1272,7 +1279,8 @@ async def _e2e_campaign(
         {"steps": {}, "phone": body.phone, "flow": body.flow},
     )
     if not claimed and saga and saga.get("status") == "completed":
-        result = saga.get("result") if isinstance(saga.get("result"), dict) else {}
+        done = saga.get("result")
+        result: dict[str, Any] = done if isinstance(done, dict) else {}
         return {**result, "idempotent": True, "saga_id": saga.get("id")}
     if not claimed and saga and saga.get("status") == "processing":
         raise PlatformError(
