@@ -14,6 +14,7 @@ from platform_kit.errors import PlatformError
 from pydantic import BaseModel, Field
 
 from pilot_core import ops_store
+from pilot_core.modules.activity import humanize_conversation_row
 from pilot_core.modules.agent_config.service import agent_config_service
 from pilot_core.modules.analytics.service import analytics_service
 from pilot_core.modules.campaigns.service import campaigns_service
@@ -58,9 +59,153 @@ def _load(name: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def empty_dashboard() -> dict[str, Any]:
+    """Zero-filled dashboard shell so charts render without smoke/demo numbers."""
+    days = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+    zero_spark = [0, 0, 0, 0, 0, 0, 0]
+    return {
+        "kpis": [
+            {
+                "id": "contactabilidad",
+                "label": "Contactabilidad",
+                "value": 0,
+                "unit": "%",
+                "delta": 0,
+                "deltaUnit": "pp",
+                "sparkline": list(zero_spark),
+            },
+            {
+                "id": "conversacion",
+                "label": "Conversación completada",
+                "value": 0,
+                "unit": "%",
+                "delta": 0,
+                "deltaUnit": "pp",
+                "sparkline": list(zero_spark),
+            },
+            {
+                "id": "intencion",
+                "label": "Intención positiva",
+                "value": 0,
+                "unit": "%",
+                "delta": 0,
+                "deltaUnit": "pp",
+                "sparkline": list(zero_spark),
+            },
+            {
+                "id": "ordenes",
+                "label": "Órdenes recibidas",
+                "value": 0,
+                "unit": "",
+                "delta": 0,
+                "deltaUnit": "%",
+                "sparkline": list(zero_spark),
+            },
+            {
+                "id": "csat",
+                "label": "CSAT",
+                "value": 0,
+                "unit": "/5",
+                "delta": 0,
+                "deltaUnit": "",
+                "sparkline": list(zero_spark),
+            },
+        ],
+        "contactsByDay": [{"date": d, "voz": 0, "whatsapp": 0} for d in days],
+        "funnelRenovacion": [
+            {"key": "contactado", "label": "Contactado", "count": 0, "pct": 0},
+            {"key": "interesado", "label": "Interesado", "count": 0, "pct": 0},
+            {"key": "documento", "label": "Documento", "count": 0, "pct": 0},
+            {"key": "transferido", "label": "Transferido", "count": 0, "pct": 0},
+            {"key": "renovado", "label": "Renovado", "count": 0, "pct": 0},
+        ],
+        "baseStatus": [
+            {
+                "key": "contactados",
+                "label": "Contactados",
+                "count": 0,
+                "pct": 0,
+                "color": "success",
+            },
+            {
+                "key": "no_contactados",
+                "label": "No contactados",
+                "count": 0,
+                "pct": 0,
+                "color": "muted",
+            },
+            {
+                "key": "no_disponibles",
+                "label": "No disponibles",
+                "count": 0,
+                "pct": 0,
+                "color": "warning",
+            },
+            {"key": "rechazados", "label": "Rechazados", "count": 0, "pct": 0, "color": "danger"},
+            {"key": "otros", "label": "Otros", "count": 0, "pct": 0, "color": "info"},
+        ],
+        "ops": [
+            {"id": "llamadas", "label": "Dispatches voz", "value": "0"},
+            {"id": "wa", "label": "WhatsApp", "value": "0"},
+            {"id": "contactos", "label": "Contactos en store", "value": "0"},
+            {"id": "campanas", "label": "Campañas", "value": "0"},
+            {"id": "handoffs", "label": "Handoffs", "value": "0"},
+            {"id": "crm", "label": "Leads CRM", "value": "0"},
+        ],
+        "liveEvents": [],
+    }
+
+
+def empty_campaigns() -> dict[str, Any]:
+    days = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+    hours = ["8–10", "10–12", "12–14", "14–16", "16–18", "18–20"]
+    return {
+        "dayChips": {
+            "llamadasHoy": 0,
+            "whatsappHoy": 0,
+            "reintentos": 0,
+            "ventana": "8:00-20:00",
+            "ventanaActiva": True,
+        },
+        "campaigns": [],
+        "heatmap": {
+            "days": days,
+            "hours": hours,
+            "values": [[0.0] * len(hours) for _ in days],
+            "unitLabel": "Tasa de conversión",
+        },
+        "ab": None,
+    }
+
+
+def empty_handoff() -> dict[str, Any]:
+    return {
+        "kpis": [
+            {"id": "cola", "label": "Leads en cola", "value": 0, "delta": 0, "deltaUnit": "%"},
+            {"id": "sla", "label": "SLA promedio", "value": "0h 00m", "delta": 0, "deltaUnit": "m"},
+            {
+                "id": "expediente",
+                "label": "Expediente completo",
+                "value": 0,
+                "unit": "%",
+                "delta": 0,
+                "deltaUnit": "pp",
+            },
+            {"id": "cerrados", "label": "Cerrados hoy", "value": 0, "delta": 0, "deltaUnit": "%"},
+        ],
+        "queue": [],
+        "byAdvisor": [],
+        "quality": {"score": 0, "label": "", "breakdown": []},
+    }
+
+
+def empty_conversations() -> dict[str, Any]:
+    return {"conversations": [], "activeCount": 0}
+
+
 @router.get("/dashboard")
 async def ops_dashboard(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, Any]:
-    data = _load("dashboard.json")
+    data = empty_dashboard()
     stored = ops_store.list_dispatches(5)
     if stored:
         live = []
@@ -71,7 +216,11 @@ async def ops_dashboard(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[s
                     "id": d.get("id"),
                     "channel": "whatsapp" if "whatsapp" in str(d.get("mode")) else "voz",
                     "personName": lead.get("first_name") or "Lead",
-                    "kind": "Dispatch " + str(d.get("status") or d.get("mode") or "ok"),
+                    "kind": (
+                        "WhatsApp enviado"
+                        if "whatsapp" in str(d.get("mode") or "").lower()
+                        else "Llamada enviada"
+                    ),
                     "at": "ahora",
                 }
             )
@@ -81,7 +230,7 @@ async def ops_dashboard(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[s
 
 @router.get("/campaigns")
 async def ops_campaigns(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, Any]:
-    data = _load("campaigns.json")
+    data = empty_campaigns()
     extra = ops_store.list_campaigns()
     if extra:
         data = {**data, "campaigns": [*extra, *data.get("campaigns", [])]}
@@ -113,7 +262,7 @@ async def ops_crm(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, An
 
 @router.get("/handoff")
 async def ops_handoff(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, Any]:
-    data = _load("handoff.json")
+    data = empty_handoff()
     extra = ops_store.list_handoffs(20)
     if extra:
         queue = []
@@ -664,7 +813,11 @@ async def whatsapp_send(
 def _pending_row(pc: dict[str, Any]) -> dict[str, Any]:
     raw_product = pc.get("product")
     product = raw_product if isinstance(raw_product, dict) else {}
+    raw_wa = pc.get("whatsapp")
+    whatsapp = raw_wa if isinstance(raw_wa, dict) else {}
+    status = str(pc.get("whatsapp_status") or "pending_review")
     return {
+        "id": pc.get("id") or pc.get("conversation_id"),
         "conversation_id": pc.get("conversation_id"),
         "phone": pc.get("phone"),
         "first_name": pc.get("first_name"),
@@ -672,25 +825,39 @@ def _pending_row(pc: dict[str, Any]) -> dict[str, Any]:
         "flow": pc.get("flow"),
         "flow_id": product.get("liwa_flow_id"),
         "segment": product.get("segment"),
-        "status": pc.get("whatsapp_status") or "pending_review",
+        "status": status,
+        "whatsapp_status": status,
+        "whatsapp_sent": bool(pc.get("whatsapp_sent")),
+        "wants_whatsapp": bool(pc.get("wants_whatsapp")),
         "post_call_id": pc.get("id"),
+        "whatsapp": whatsapp,
+        "_created_at": pc.get("_created_at"),
     }
 
 
 @router.get("/whatsapp/pending")
-async def whatsapp_pending(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, Any]:
-    """Leads interesados con WhatsApp PENDIENTE de envío manual (modo revisión)."""
+async def whatsapp_pending(
+    scope: str = "pending",
+    _ctx: AuthContext = Depends(require_ops_auth),
+) -> dict[str, Any]:
+    """Cola de revisión WhatsApp post-llamada (pending) o historial (scope=review)."""
     done = {"skipped", "sent", "sent_manual", "sent_mock"}
-    items = [
-        _pending_row(pc)
-        for pc in ops_store.list_post_calls(300)
-        if pc.get("wants_whatsapp")
-        and not pc.get("whatsapp_sent")
-        and str(pc.get("whatsapp_status") or "") not in done
-    ]
+    rows = [pc for pc in ops_store.list_post_calls(300) if pc.get("wants_whatsapp")]
+    if scope != "review":
+        rows = [
+            pc
+            for pc in rows
+            if not pc.get("whatsapp_sent") and str(pc.get("whatsapp_status") or "") not in done
+        ]
+    items = [_pending_row(pc) for pc in rows]
     if should_mask_pii(_ctx):
         items = [mask_phone_fields(row) for row in items]
-    return {"items": items, "count": len(items), "pii_masked": should_mask_pii(_ctx)}
+    return {
+        "items": items,
+        "count": len(items),
+        "scope": "review" if scope == "review" else "pending",
+        "pii_masked": should_mask_pii(_ctx),
+    }
 
 
 class WhatsAppPendingBody(BaseModel):
@@ -902,17 +1069,14 @@ async def post_conversation_message(
 
 @router.get("/conversations")
 async def ops_conversations(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, Any]:
-    data = _load("conversation.json")
+    data = empty_conversations()
     claims = {c["id"]: c for c in ops_store.list_conversation_claims()}
-    by_id: dict[str, Any] = {c["id"]: dict(c) for c in (data.get("conversations") or [])}
+    by_id: dict[str, Any] = {}
     for t in ops_store.list_conversation_threads():
         tid = t.get("id")
         if not tid:
             continue
-        if tid in by_id:
-            by_id[tid] = {**by_id[tid], **t, "messages": by_id[tid].get("messages") or []}
-        else:
-            by_id[tid] = t
+        by_id[tid] = t
 
     convs = []
     for cid, c in by_id.items():
@@ -926,7 +1090,7 @@ async def ops_conversations(_ctx: AuthContext = Depends(require_ops_auth)) -> di
             row["claimedBy"] = claim.get("advisor")
             row["botPaused"] = True
             row["botActive"] = False
-        convs.append(row)
+        convs.append(humanize_conversation_row(row))
 
     if should_mask_pii(_ctx):
         convs = [mask_conversation(c) for c in convs]
@@ -1013,7 +1177,7 @@ async def get_report(
     report_id: str, _ctx: AuthContext = Depends(require_ops_auth)
 ) -> dict[str, Any]:
     c = ops_store.counts()
-    dashboard = analytics_service.overlay_dashboard(_load("dashboard.json"))
+    dashboard = analytics_service.overlay_dashboard(empty_dashboard())
     handoffs = ops_store.list_handoffs(50)
     dispatches = ops_store.list_dispatches(50)
     opt_outs = compliance_service.list_suppressed()

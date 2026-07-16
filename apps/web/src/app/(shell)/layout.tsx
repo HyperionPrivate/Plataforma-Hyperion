@@ -1,5 +1,5 @@
 import { LogoutButton } from "@/components/auth-gate";
-import { SideNav } from "@/components/layout/side-nav";
+import { MobileNav, SideNav } from "@/components/layout/side-nav";
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -8,6 +8,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         <SideNav />
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
+        <MobileNav />
         <main className="flex-1 p-[var(--page-padding)]">{children}</main>
         <footer className="flex items-center justify-center gap-4 border-t border-[var(--border)] py-3 text-center text-[10px] tracking-[0.2em] text-[var(--muted)]">
           <span>HYPERION ONE · Applied Intelligence</span>
