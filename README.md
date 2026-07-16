@@ -1,17 +1,17 @@
 # Coopfuturo — architecture foundation (PULSO / Hyperion One)
 
-Base técnica **lista para desarrollar el producto**.  
-**No** incluye lógica comercial de campañas, funnels, WhatsApp real, Dialer real, ni handoff funcional.
+Base técnica + **piloto Ops** (campañas/import/CRM/revisión post-llamada) sobre `pilot-core` `/ops`.  
+Canales reales (LIWA/Dialer/IdP/TLS) siguen sujetos a [docs/EXTERNAL_BLOCKERS.md](docs/EXTERNAL_BLOCKERS.md).
 
 ## Unidades desplegables
 
 | App | Rol técnico |
 |---|---|
-| `apps/pilot-core` | Módulos internos + orchestration interface al Dialer externo |
-| `apps/whatsapp-adapter` | Interfaces + **MOCK** proveedor |
-| `apps/documents` | Interfaces + **MOCK** object storage |
-| `apps/handoff-liwa` | Interfaces + **MOCK** LIWA |
-| `apps/web` | Ops UI PULSO (Next.js) — **MOCK** datos; sin backend real |
+| `apps/pilot-core` | Ops API + orchestration / post-call / CRM (SQLite ops + Postgres plataforma) |
+| `apps/whatsapp-adapter` | Interfaces + **MOCK** proveedor (satélite) |
+| `apps/documents` | Interfaces + object storage |
+| `apps/handoff-liwa` | Interfaces + **MOCK** LIWA (satélite) |
+| `apps/web` | Ops UI PULSO (Next.js) — `API_MODE=live` habla `/ops`; `mock` usa JSON local |
 
 Kit técnico compartido: `packages/platform-kit` (sin lógica comercial).
 
@@ -32,7 +32,7 @@ Con Traefik (compose): `http://127.0.0.1:8088/dashboard` tras `docker compose -f
 ```powershell
 git clone https://github.com/AdministracionHyperion/CoopFuturo_.git
 cd CoopFuturo_
-git checkout feat/architecture-foundation   # o main tras merge
+git checkout main
 copy .env.example .env
 make bootstrap
 make test

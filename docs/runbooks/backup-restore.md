@@ -58,9 +58,24 @@ Definir con `@TBD-platform` antes de producción.
 
 Cada DB se restaura **independientemente**. Restore cross-unit no existe — reconciliar vía eventos si hay divergencia.
 
-## Pruebas de restore
+## Pruebas de restore (AUD2-008)
 
-- Trimestral en staging (TBD)
+Drill local no destructivo (backup → abrir SQLite restaurado):
+
+```bash
+./infra/scripts/drill_ops_sqlite_restore.sh
+```
+
+Restore destructivo hacia el volumen/contenedor:
+
+```bash
+./infra/scripts/backup_ops_sqlite.sh ./backups/ops
+./infra/scripts/restore_ops_sqlite.sh ./backups/ops/ops_<stamp>
+# reiniciar pilot-core y verificar GET /ready
+```
+
+- Ejecutar el drill en cada release candidato a Contabo
+- Trimestral en staging con RTO medido (TBD platform)
 - Documentar duración real vs RTO
 
 ## Referencias

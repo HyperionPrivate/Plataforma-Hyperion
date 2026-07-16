@@ -36,7 +36,11 @@ from pilot_core.modules.pii import (
     mask_segmentation_point,
     should_mask_pii,
 )
-from pilot_core.modules.post_call.service import post_call_service, verify_elevenlabs_signature
+from pilot_core.modules.post_call.service import (
+    extract_conversation_id,
+    post_call_service,
+    verify_elevenlabs_signature,
+)
 from pilot_core.modules.segmentation.service import segmentation_service
 from pilot_core.modules.whatsapp_mock import whatsapp_mock_service
 from pilot_core.ops_auth import (
@@ -514,6 +518,25 @@ async def create_handoff(
             )
             steps["liwa"] = liwa_meta
 
+        # AUD2-009: LIWA live handoff that did not sync must not complete the saga.
+        liwa_required = bool(body.phone and settings.liwa_live_enabled())
+        if (
+            liwa_required
+            and not liwa_meta.get("synced")
+            and not liwa_meta.get("blocked")
+            and not liwa_meta.get("skipped")
+        ):
+            saga["status"] = "failed"
+            saga["error"] = str(liwa_meta.get("error") or "liwa_handoff_failed")[:200]
+            saga["steps"] = steps
+            ops_store.save_saga(saga)
+            raise PlatformError(
+                "liwa_handoff_failed",
+                str(liwa_meta.get("error") or "LIWA handoff failed"),
+                status_code=502,
+                details={"liwa": liwa_meta, "saga_id": saga.get("id")},
+            )
+
         if not steps.get("persisted"):
             entry: dict[str, Any] = {
                 "id": hid,
@@ -557,6 +580,8 @@ async def create_handoff(
         saga["result"] = entry
         ops_store.save_saga(saga)
         return entry
+    except PlatformError:
+        raise
     except Exception as exc:  # noqa: BLE001
         saga["status"] = "failed"
         saga["error"] = str(exc)[:200]
@@ -696,8 +721,17 @@ async def elevenlabs_post_call_webhook(request: Request) -> dict[str, Any]:
     if event_type == "post_call_audio":
         return {"ok": True, "ignored": True, "reason": "audio_only"}
 
+    # AUD2-007: require conversation_id so claims/idempotency can bind the call.
+    body = payload if isinstance(payload, dict) else {}
+    if not extract_conversation_id(body):
+        raise PlatformError(
+            "validation_error",
+            "conversation_id required for post-call webhook",
+            status_code=422,
+        )
+
     result = await post_call_service.process(
-        raw_payload=payload if isinstance(payload, dict) else {},
+        raw_payload=body,
         source="elevenlabs_webhook",
     )
     # Providers that only retry on non-2xx need a 5xx for retryable failures.
@@ -841,7 +875,15 @@ async def whatsapp_pending(
     _ctx: AuthContext = Depends(require_ops_auth),
 ) -> dict[str, Any]:
     """Cola de revisión WhatsApp post-llamada (pending) o historial (scope=review)."""
-    done = {"skipped", "sent", "sent_manual", "sent_mock"}
+    # Terminal / already-handed statuses must not reappear as "send again".
+    done = {
+        "skipped",
+        "sent",
+        "sent_manual",
+        "sent_mock",
+        "queued_mock",
+        "accepted_pending",
+    }
     rows = [pc for pc in ops_store.list_post_calls(300) if pc.get("wants_whatsapp")]
     if scope != "review":
         rows = [
@@ -871,19 +913,37 @@ async def whatsapp_pending_send(
     body: WhatsAppPendingBody,
     _ctx: AuthContext = Depends(require_ops_roles(*OPS_OPERATE)),
 ) -> dict[str, Any]:
-    """EnvÃ­a manualmente el WhatsApp de un lead pendiente (dispara el flujo LIWA)."""
-    pc = (
-        ops_store.get_post_call_by_conversation(body.conversation_id)
-        if body.conversation_id
-        else None
-    )
+    """Envía manualmente el WhatsApp de un lead pendiente (dispara el flujo LIWA)."""
+    # AUD2-006: require conversation_id + idempotent guards against double send.
+    if not body.conversation_id:
+        raise PlatformError("validation_error", "conversation_id requerido", status_code=422)
+    pc = ops_store.get_post_call_by_conversation(body.conversation_id)
+    if not pc:
+        raise PlatformError("not_found", "post_call no encontrado", status_code=404)
+    status = str(pc.get("whatsapp_status") or "")
+    terminal = {
+        "skipped",
+        "sent",
+        "sent_manual",
+        "sent_mock",
+        "queued_mock",
+        "accepted_pending",
+    }
+    if pc.get("whatsapp_sent") or status in terminal:
+        return {
+            "ok": True,
+            "idempotent": True,
+            "conversation_id": body.conversation_id,
+            "phone": pc.get("phone"),
+            "whatsapp_status": status or ("sent" if pc.get("whatsapp_sent") else None),
+            "whatsapp": pc.get("whatsapp"),
+        }
     raw_product = pc.get("product") if pc else None
     product = raw_product if isinstance(raw_product, dict) else {}
-    phone = body.phone or (pc or {}).get("phone")
+    # Prefer store phone over client-supplied (AUD2-007 binding).
+    phone = (pc or {}).get("phone") or body.phone
     if not phone:
-        raise PlatformError(
-            "validation_error", "phone o conversation_id requerido", status_code=422
-        )
+        raise PlatformError("validation_error", "phone requerido en post_call", status_code=422)
     decision = compliance_service.evaluate(phone=phone, channel="whatsapp")
     if not decision.allowed:
         raise PlatformError(
@@ -902,16 +962,30 @@ async def whatsapp_pending_send(
         )
     else:
         result = whatsapp_mock_service.send_text(phone=phone, text=f"[manual flow:{flow_id}]")
-    if pc:
-        pc["whatsapp"] = result.get("message") or result
-        pc["whatsapp_sent"] = bool(result.get("ok"))
-        pc["whatsapp_status"] = "sent_manual" if result.get("ok") else "failed"
-        ops_store.insert_post_call(pc)
+    delivery = str(result.get("delivery") or "")
+    if result.get("ok"):
+        wa_status = "sent_manual"
+        sent = True
+    elif delivery == "accepted_pending":
+        # Handed to provider without receipt — terminal, do not retry as failed.
+        wa_status = "accepted_pending"
+        sent = False
+    elif delivery == "queued_mock":
+        wa_status = "queued_mock"
+        sent = False
+    else:
+        wa_status = "failed"
+        sent = False
+    pc["whatsapp"] = result.get("message") or result
+    pc["whatsapp_sent"] = sent
+    pc["whatsapp_status"] = wa_status
+    ops_store.insert_post_call(pc)
     return {
-        "ok": bool(result.get("ok")),
+        "ok": bool(result.get("ok")) or wa_status in {"accepted_pending", "queued_mock"},
         "conversation_id": body.conversation_id,
         "phone": phone,
         "whatsapp": result,
+        "whatsapp_status": wa_status,
     }
 
 

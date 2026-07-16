@@ -1,0 +1,10 @@
+# Dynamic Traefik routes for Contabo.
+# Default: HTTP only on entryPoint web (loopback bind in compose).
+# When TLS certs are present, routers also attach to websecure (see labels / future TLS overlay).
+
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
