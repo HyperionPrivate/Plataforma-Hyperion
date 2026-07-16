@@ -32,6 +32,10 @@ service_roles=(
   pulso-iris-service:hyperion_pulso
   whatsapp-channel-service:hyperion_channel
   lumen-service:hyperion_lumen
+  nova-core-service:hyperion_nova
+  voice-channel-service:hyperion_voice
+  liwa-channel-service:hyperion_liwa
+  documents-service:hyperion_documents
 )
 
 for service_and_role in "${service_roles[@]}"; do

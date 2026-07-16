@@ -39,6 +39,10 @@ export interface ServiceUrlMap {
   pulsoIris: string;
   whatsappChannel: string;
   lumen: string;
+  novaCore: string;
+  voiceChannel: string;
+  liwaChannel: string;
+  documents: string;
 }
 
 const defaultPorts: Record<ServiceName, number> = {
@@ -52,7 +56,11 @@ const defaultPorts: Record<ServiceName, number> = {
   "integration-service": 8087,
   "pulso-iris-service": 8088,
   "whatsapp-channel-service": 8089,
-  "lumen-service": 8090
+  "lumen-service": 8090,
+  "nova-core-service": 8091,
+  "voice-channel-service": 8092,
+  "liwa-channel-service": 8093,
+  "documents-service": 8094
 };
 
 export function readServiceConfig(serviceName: ServiceName): ServiceConfig {
@@ -78,7 +86,11 @@ export function readServiceUrls(): ServiceUrlMap {
     integration: process.env.INTEGRATION_SERVICE_URL ?? "http://localhost:8087",
     pulsoIris: process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088",
     whatsappChannel: process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089",
-    lumen: process.env.LUMEN_SERVICE_URL ?? "http://localhost:8090"
+    lumen: process.env.LUMEN_SERVICE_URL ?? "http://localhost:8090",
+    novaCore: process.env.NOVA_CORE_SERVICE_URL ?? "http://localhost:8091",
+    voiceChannel: process.env.VOICE_CHANNEL_SERVICE_URL ?? "http://localhost:8092",
+    liwaChannel: process.env.LIWA_CHANNEL_SERVICE_URL ?? "http://localhost:8093",
+    documents: process.env.DOCUMENTS_SERVICE_URL ?? "http://localhost:8094"
   };
 }
 

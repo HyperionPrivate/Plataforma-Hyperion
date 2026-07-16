@@ -1,0 +1,292 @@
+# Overlay: Neutral Dialer v3 stack for local/integration with Hyperion (ADR-0004).
+#
+# Usage (from repo root):
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.dialer.yml up -d --build
+#
+# Optional companions (sibling checkout under DIALER_CONTEXT parents):
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.dialer.yml --profile asr --profile amd up -d --build
+#
+# Image source:
+#   - Default: build from DIALER_CONTEXT (relative to infra/), default ../dialer/Dialer
+#   - Prebuilt: set DIALER_IMAGE=ghcr.io/...@sha256:... and run with --no-build
+#
+# IMPORTANT — single-worker: Neutral Dialer runs one Uvicorn worker by design
+# (campaign ownership + async dispatcher live in-process). Do NOT scale
+# `neutral-dialer` horizontally (replicas > 1). Scale is via dispatcher CPS/
+# concurrency settings, not Compose replicas.
+#
+# Postgres TLS: this overlay is for local/integration only (DB_SSLMODE=disable).
+# Production dialer deployments use verify-full + CA mounts (see dialer
+# docs/docker-compose.prod.example.yml).
+
+x-dialer-build: &dialer-build
+  image: ${DIALER_IMAGE:-neutral-dialer:local}
+  build:
+    context: ${DIALER_CONTEXT:-../dialer/Dialer}
+    dockerfile: docker/Dockerfile.dialer
+    args:
+      SOURCE_REVISION: ${SOURCE_REVISION:-unversioned}
+
+x-dialer-db-env: &dialer-db-env
+  DB_HOST: dialer-postgres
+  DB_PORT: "5432"
+  DB_NAME: ${DIALER_POSTGRES_DB:-dialer}
+  DB_SSLMODE: ${DIALER_DB_SSLMODE:-disable}
+  DB_CONNECT_TIMEOUT_SECONDS: ${DB_CONNECT_TIMEOUT_SECONDS:-10}
+  DB_COMMAND_TIMEOUT_SECONDS: ${DB_COMMAND_TIMEOUT_SECONDS:-30}
+  DB_MIGRATION_LOCK_TIMEOUT_SECONDS: ${DB_MIGRATION_LOCK_TIMEOUT_SECONDS:-60}
+  DB_MIGRATION_DDL_LOCK_TIMEOUT_SECONDS: ${DB_MIGRATION_DDL_LOCK_TIMEOUT_SECONDS:-5}
+
+services:
+  dialer-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DIALER_POSTGRES_USER:-dialer}
+      POSTGRES_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
+      POSTGRES_DB: ${DIALER_POSTGRES_DB:-dialer}
+    volumes:
+      - dialer_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DIALER_POSTGRES_USER:-dialer} -d ${DIALER_POSTGRES_DB:-dialer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  dialer-redis:
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - dialer_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dialer-migrate:
+    <<: *dialer-build
+    restart: "no"
+    init: true
+    command: ["python", "tools/migrate_db.py"]
+    environment:
+      <<: *dialer-db-env
+      APP_ENV: ${DIALER_APP_ENV:-local}
+      DB_USER: ${DIALER_POSTGRES_USER:-dialer}
+      DB_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
+      DB_RUNTIME_USER: ${DIALER_POSTGRES_USER:-dialer}
+      DB_MIGRATION_COMMAND_TIMEOUT_SECONDS: ${DB_MIGRATION_COMMAND_TIMEOUT_SECONDS:-600}
+    depends_on:
+      dialer-postgres:
+        condition: service_healthy
+
+  # API listens on 8080 inside the container (see Dialer/docker/Dockerfile.dialer).
+  # Do not scale this service horizontally — single Uvicorn worker is intentional.
+  neutral-dialer:
+    <<: *dialer-build
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 150s
+    environment:
+      <<: *dialer-db-env
+      APP_ENV: ${DIALER_APP_ENV:-local}
+      APP_VERSION: "3.0.0"
+      LOG_LEVEL: ${DIALER_LOG_LEVEL:-INFO}
+      EXPOSE_DOCS: ${DIALER_EXPOSE_DOCS:-true}
+      AUTH_ALLOW_ANONYMOUS_DEV: "false"
+      WEBHOOK_ALLOW_INSECURE_DEV: "false"
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET is required}
+      AUTH_ADMIN_USER: ${AUTH_ADMIN_USER:-admin}
+      AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:?AUTH_ADMIN_PASSWORD is required}
+      AUTH_JWT_EXPIRES_MIN: ${AUTH_JWT_EXPIRES_MIN:-480}
+      AUTH_LOGIN_RATE_LIMIT: ${AUTH_LOGIN_RATE_LIMIT:-5/minute}
+      WEBHOOK_HMAC_SECRET: ${DIALER_WEBHOOK_HMAC_SECRET:?DIALER_WEBHOOK_HMAC_SECRET is required}
+      WEBHOOK_HMAC_SECRET_PREVIOUS: ${WEBHOOK_HMAC_SECRET_PREVIOUS:-}
+      DEMO_API_KEY: ${DEMO_API_KEY:-${VOICE_TO_DIALER_TOKEN:-}}
+      DEMO_AGENT_ID: ${DEMO_AGENT_ID:-${ELEVENLABS_AGENT_ID:-}}
+      DEMO_DDI_PHONE_NUMBER_ID: ${DEMO_DDI_PHONE_NUMBER_ID:-}
+      DEMO_AUTHORIZATION_MODE: ${DEMO_AUTHORIZATION_MODE:-}
+      DEMO_ALLOWED_DESTINATIONS: ${DEMO_ALLOWED_DESTINATIONS:-}
+      CORS_ALLOWED_ORIGINS: ${DIALER_CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      CSRF_TRUSTED_ORIGINS: ${DIALER_CSRF_TRUSTED_ORIGINS:-http://localhost:3000}
+      FORWARDED_ALLOW_IPS: ${DIALER_FORWARDED_ALLOW_IPS:-127.0.0.1}
+      TRUSTED_PROXY_HMAC_SECRET: ${TRUSTED_PROXY_HMAC_SECRET:-}
+      REDIS_URL: redis://dialer-redis:6379/0
+      REDIS_CONNECT_TIMEOUT_SECONDS: ${REDIS_CONNECT_TIMEOUT_SECONDS:-2}
+      REQUIRE_REDIS: "true"
+      REQUIRE_DATABASE: "true"
+      DB_USER: ${DIALER_POSTGRES_USER:-dialer}
+      DB_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
+      DB_AUTO_SCHEMA: "false"
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_CALL_TIMEOUT_SECONDS: ${ELEVENLABS_CALL_TIMEOUT_SECONDS:-90}
+      NUMBER_ROTATION_MODE: ${NUMBER_ROTATION_MODE:-static}
+      FALLBACK_DDI_PHONE_NUMBER_ID: ${FALLBACK_DDI_PHONE_NUMBER_ID:-}
+      FALLBACK_DDI_PHONE_NUMBER: ${FALLBACK_DDI_PHONE_NUMBER:-}
+      ASR_API_URL: ${ASR_API_URL:-http://dialer-asr:8001}
+      ASR_SERVICE_TOKEN: ${ASR_SERVICE_TOKEN:-}
+      ASR_TIMEOUT_MS: ${ASR_TIMEOUT_MS:-500}
+      ASR_MAX_RETRIES: ${ASR_MAX_RETRIES:-3}
+      AMD_ENABLED: ${AMD_ENABLED:-false}
+      AMD_REQUIRED: ${AMD_REQUIRED:-false}
+      AMD_URL: ${AMD_URL:-http://dialer-amd:8000}
+      AMD_SERVICE_TOKEN: ${AMD_SERVICE_TOKEN:-}
+      AUDIO_ALLOWED_HOSTS: ${AUDIO_ALLOWED_HOSTS:-api.elevenlabs.io,media.example.test}
+      WEBHOOK_ARTIFACT_STORAGE_MODE: ${WEBHOOK_ARTIFACT_STORAGE_MODE:-optional}
+      ML_MODEL_PATH: ${ML_MODEL_PATH:-./infrastructure/ml/models/scheduler_v1.pkl}
+      ML_MODEL_HMAC_KEY: ${ML_MODEL_HMAC_KEY:-hyperion-dialer-local-ml-hmac-key-32b}
+      SCHEDULER_TIMEZONE: ${SCHEDULER_TIMEZONE:-UTC}
+      DEFAULT_CPS: ${DEFAULT_CPS:-10}
+      MIN_CPS: ${MIN_CPS:-1}
+      MAX_CPS: ${MAX_CPS:-70}
+      MAX_CONCURRENT_CALLS: ${MAX_CONCURRENT_CALLS:-100}
+      DISPATCH_QUEUE_SIZE: ${DISPATCH_QUEUE_SIZE:-10000}
+      DEFAULT_PHONE_REGION: ${DEFAULT_PHONE_REGION:-}
+    depends_on:
+      dialer-migrate:
+        condition: service_completed_successfully
+      dialer-redis:
+        condition: service_healthy
+      dialer-postgres:
+        condition: service_healthy
+    # Host publish avoids clashing with api-gateway :8080; voice-channel uses the service DNS.
+    ports:
+      - "127.0.0.1:${DIALER_HOST_PORT:-18080}:8080"
+    expose:
+      - "8080"
+    volumes:
+      - dialer_model_data:/app/infrastructure/ml/models
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import httpx; httpx.get('http://127.0.0.1:8080/health/ready', timeout=5).raise_for_status()"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  dialer-asr-migrate:
+    profiles: ["asr"]
+    image: ${ASR_IMAGE:-neutral-dialer-asr:local}
+    build:
+      context: ${ASR_CONTEXT:-../dialer/companions/Asr-Api}
+      dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unversioned}
+    restart: "no"
+    init: true
+    command: ["python", "setup_database.py"]
+    environment:
+      APP_ENV: ${DIALER_APP_ENV:-local}
+      DB_HOST: dialer-postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DIALER_POSTGRES_DB:-dialer}
+      DB_USER: ${DIALER_POSTGRES_USER:-dialer}
+      DB_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
+      DB_SSLMODE: ${DIALER_DB_SSLMODE:-disable}
+      DB_RUNTIME_USER: ${DIALER_POSTGRES_USER:-dialer}
+      INSERT_TEST_DDIS: "false"
+    depends_on:
+      dialer-postgres:
+        condition: service_healthy
+
+  dialer-asr:
+    profiles: ["asr"]
+    image: ${ASR_IMAGE:-neutral-dialer-asr:local}
+    build:
+      context: ${ASR_CONTEXT:-../dialer/companions/Asr-Api}
+      dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unversioned}
+    restart: unless-stopped
+    init: true
+    environment:
+      API_PORT: "8001"
+      APP_ENV: ${DIALER_APP_ENV:-local}
+      # Required at runtime when --profile asr is enabled (Compose still interpolates inactive profiles).
+      ASR_SERVICE_TOKEN: ${ASR_SERVICE_TOKEN:-}
+      ASR_ADMIN_TOKEN: ${ASR_ADMIN_TOKEN:-}
+      ASR_EXPOSE_DOCS: ${ASR_EXPOSE_DOCS:-true}
+      DB_HOST: dialer-postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DIALER_POSTGRES_DB:-dialer}
+      DB_USER: ${DIALER_POSTGRES_USER:-dialer}
+      DB_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
+      DB_SSLMODE: ${DIALER_DB_SSLMODE:-disable}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_BASE_URL: ${ELEVENLABS_BASE_URL:-https://api.elevenlabs.io/v1}
+      LOG_LEVEL: ${ASR_LOG_LEVEL:-INFO}
+      METRICS_TIMEZONE: ${SCHEDULER_TIMEZONE:-UTC}
+    expose:
+      - "8001"
+    depends_on:
+      dialer-asr-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"
+        ]
+      interval: 20s
+      timeout: 8s
+      retries: 5
+
+  dialer-amd:
+    profiles: ["amd"]
+    image: ${AMD_IMAGE:-neutral-dialer-amd:local}
+    build:
+      context: ${AMD_CONTEXT:-../dialer/companions/AMD}
+      dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unversioned}
+    restart: unless-stopped
+    init: true
+    environment:
+      APP_ENV: ${DIALER_APP_ENV:-local}
+      MODELS_DIR: /app/models
+      AMD_ALLOW_MODELLESS_DEV: ${AMD_ALLOW_MODELLESS_DEV:-true}
+      AMD_SERVICE_TOKEN: ${AMD_SERVICE_TOKEN:-}
+      AMD_LOG_LEVEL: ${AMD_LOG_LEVEL:-INFO}
+      INFERENCE_TIMEOUT_MS: ${INFERENCE_TIMEOUT_MS:-2500}
+      WEB_CONCURRENCY: "1"
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+        ]
+      interval: 20s
+      timeout: 8s
+      retries: 5
+
+  voice-channel-service:
+    environment:
+      VOICE_MODE: dialer
+      DIALER_BASE_URL: ${DIALER_BASE_URL:-http://neutral-dialer:8080}
+      DIALER_ADMIN_USER: ${DIALER_ADMIN_USER:-${AUTH_ADMIN_USER:-admin}}
+      DIALER_ADMIN_PASSWORD: ${DIALER_ADMIN_PASSWORD:-${AUTH_ADMIN_PASSWORD:?AUTH_ADMIN_PASSWORD is required}}
+      DIALER_DEMO_API_KEY: ${DIALER_DEMO_API_KEY:-${DEMO_API_KEY:-${VOICE_TO_DIALER_TOKEN:-}}}
+      DIALER_WEBHOOK_HMAC_SECRET: ${DIALER_WEBHOOK_HMAC_SECRET:?DIALER_WEBHOOK_HMAC_SECRET is required}
+      VOICE_TO_DIALER_TOKEN: ${VOICE_TO_DIALER_TOKEN:-${DEMO_API_KEY:-}}
+      ELEVENLABS_AGENT_ID: ${ELEVENLABS_AGENT_ID:-}
+    depends_on:
+      neutral-dialer:
+        condition: service_healthy
+
+volumes:
+  dialer_postgres_data:
+  dialer_redis_data:
+  dialer_model_data:

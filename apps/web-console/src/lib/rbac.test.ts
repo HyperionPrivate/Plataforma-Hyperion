@@ -4,6 +4,7 @@ import { can } from "./rbac.js";
 describe("LUMEN RBAC", () => {
   it.each(["admin", "coordinator", "advisor"] as const)("allows %s to review and approve demo records", (role) => {
     expect(can(role, "view:lumen")).toBe(true);
+    expect(can(role, "view:nova")).toBe(true);
     expect(can(role, "write:lumen")).toBe(true);
   });
 

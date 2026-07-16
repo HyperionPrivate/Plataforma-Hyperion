@@ -12,7 +12,11 @@ const DATABASE_IDENTITIES = {
   "integration-service": "hyperion_integration",
   "pulso-iris-service": "hyperion_pulso",
   "whatsapp-channel-service": "hyperion_channel",
-  "lumen-service": "hyperion_lumen"
+  "lumen-service": "hyperion_lumen",
+  "nova-core-service": "hyperion_nova",
+  "voice-channel-service": "hyperion_voice",
+  "liwa-channel-service": "hyperion_liwa",
+  "documents-service": "hyperion_documents"
 };
 
 const NATS_IDENTITIES = {
@@ -52,6 +56,10 @@ const HTTP_EDGE_IDENTITIES = {
   GATEWAY_TO_INTEGRATION_TOKEN: ["api-gateway", "integration-service"],
   GATEWAY_TO_PULSO_TOKEN: ["api-gateway", "pulso-iris-service"],
   GATEWAY_TO_LUMEN_TOKEN: ["api-gateway", "lumen-service"],
+  GATEWAY_TO_NOVA_TOKEN: ["api-gateway", "nova-core-service"],
+  GATEWAY_TO_VOICE_TOKEN: ["api-gateway", "voice-channel-service"],
+  GATEWAY_TO_LIWA_TOKEN: ["api-gateway", "liwa-channel-service"],
+  GATEWAY_TO_DOCUMENTS_TOKEN: ["api-gateway", "documents-service"],
   GATEWAY_TO_TENANT_TOKEN: ["api-gateway", "tenant-service"],
   GATEWAY_TO_AUDIT_TOKEN: ["api-gateway", "audit-service"],
   GATEWAY_TO_KNOWLEDGE_TOKEN: ["api-gateway", "knowledge-service"],
@@ -61,7 +69,11 @@ const HTTP_EDGE_IDENTITIES = {
     "identity-service",
     "integration-service",
     "pulso-iris-service",
-    "lumen-service"
+    "lumen-service",
+    "nova-core-service",
+    "voice-channel-service",
+    "liwa-channel-service",
+    "documents-service"
   ],
   INTEGRATION_TO_CHANNEL_TOKEN: ["integration-service", "whatsapp-channel-service"],
   INTEGRATION_TO_SOFIA_TOKEN: ["integration-service", "agent-service"],
@@ -76,7 +88,18 @@ const HTTP_EDGE_IDENTITIES = {
   SOFIA_TO_PULSO_TOKEN: ["agent-service", "pulso-iris-service"],
   SOFIA_TO_AUDIT_TOKEN: ["agent-service", "audit-service"],
   LUMEN_TO_AUDIT_TOKEN: ["lumen-service", "audit-service"],
-  ACCESS_TO_LUMEN_TOKEN: ["identity-service", "lumen-service"]
+  ACCESS_TO_LUMEN_TOKEN: ["identity-service", "lumen-service"],
+  ACCESS_TO_NOVA_TOKEN: ["identity-service", "nova-core-service"],
+  NOVA_TO_AUDIT_TOKEN: ["nova-core-service", "audit-service"],
+  NOVA_TO_VOICE_TOKEN: ["nova-core-service", "voice-channel-service"],
+  NOVA_TO_LIWA_TOKEN: ["nova-core-service", "liwa-channel-service"],
+  NOVA_TO_DOCUMENTS_TOKEN: ["nova-core-service", "documents-service"],
+  VOICE_TO_AUDIT_TOKEN: ["voice-channel-service", "audit-service"],
+  VOICE_TO_NOVA_TOKEN: ["voice-channel-service", "nova-core-service"],
+  LIWA_TO_AUDIT_TOKEN: ["liwa-channel-service", "audit-service"],
+  LIWA_TO_NOVA_TOKEN: ["liwa-channel-service", "nova-core-service"],
+  DOCUMENTS_TO_AUDIT_TOKEN: ["documents-service", "audit-service"],
+  DOCUMENTS_TO_NOVA_TOKEN: ["documents-service", "nova-core-service"]
 };
 
 export function validateComposeIdentities(base, overlay) {

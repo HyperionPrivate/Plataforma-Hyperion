@@ -10,6 +10,7 @@ credenciales ni información reservada de clientes.
 | --------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | [PULSO IRIS](PULSO-IRIS.md) | Atención administrativa, agenda y automatización multicanal. SOFÍA es su agente conversacional. | Implementación parcial con integraciones y automatizaciones todavía simuladas o pendientes. |
 | [LUMEN](LUMEN.md)           | Asistencia clínica por voz con revisión y aprobación humana.                                    | Corte de demostración clínica limitado a datos sintéticos.                                  |
+| [NOVA](NOVA.md)             | Campañas de contacto proactivo (voz IA + WhatsApp). Primer tenant: Coopfuturo.                  | Walking skeleton + slices iniciales en mock; Dialer/LIWA reales detrás de flags.            |
 
 SOFÍA puede desplegarse en un contexto técnico separado para proteger su ciclo de vida, datos y operación, pero
 no constituye un producto comercial independiente. La consultoría y otros servicios profesionales tampoco son
@@ -34,7 +35,7 @@ por separado mediante commit, imágenes y registro operativo.
 
 ## Control de cambios
 
-- Cada requisito estable conserva su identificador `PUL-*` o `LUM-*`.
+- Cada requisito estable conserva su identificador `PUL-*`, `LUM-*` o `NOV-*`.
 - Cambiar alcance o estado exige actualizar la especificación y la matriz en el mismo cambio.
 - Las decisiones que alteren límites, seguridad, retención o cumplimiento se registran como ADR.
 - Una promesa futura, un mockup o una pantalla local nunca se clasifican como `implementado` sin backend,

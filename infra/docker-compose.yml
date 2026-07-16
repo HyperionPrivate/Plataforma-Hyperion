@@ -1,4 +1,4 @@
-﻿name: plataforma-hyperion
+name: plataforma-hyperion
 
 x-node-build: &node-build
   context: ..
@@ -15,6 +15,10 @@ x-integration-database-url: &integration-database-url postgres://hyperion_integr
 x-pulso-database-url: &pulso-database-url postgres://hyperion_pulso:${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
 x-channel-database-url: &channel-database-url postgres://hyperion_channel:${CHANNEL_DATABASE_PASSWORD:?CHANNEL_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
 x-lumen-database-url: &lumen-database-url postgres://hyperion_lumen:${LUMEN_DATABASE_PASSWORD:?LUMEN_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+x-nova-database-url: &nova-database-url postgres://hyperion_nova:${NOVA_DATABASE_PASSWORD:?NOVA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+x-voice-database-url: &voice-database-url postgres://hyperion_voice:${VOICE_DATABASE_PASSWORD:?VOICE_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+x-liwa-database-url: &liwa-database-url postgres://hyperion_liwa:${LIWA_DATABASE_PASSWORD:?LIWA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+x-documents-database-url: &documents-database-url postgres://hyperion_documents:${DOCUMENTS_DATABASE_PASSWORD:?DOCUMENTS_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
 
 # Los secretos HTTP se declaran por vínculo productor→consumidor en cada
 # workload. Ningún servicio recibe una credencial global reutilizable.
@@ -105,6 +109,10 @@ services:
       PULSO_DATABASE_PASSWORD: ${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}
       CHANNEL_DATABASE_PASSWORD: ${CHANNEL_DATABASE_PASSWORD:?CHANNEL_DATABASE_PASSWORD is required}
       LUMEN_DATABASE_PASSWORD: ${LUMEN_DATABASE_PASSWORD:?LUMEN_DATABASE_PASSWORD is required}
+      NOVA_DATABASE_PASSWORD: ${NOVA_DATABASE_PASSWORD:?NOVA_DATABASE_PASSWORD is required}
+      VOICE_DATABASE_PASSWORD: ${VOICE_DATABASE_PASSWORD:?VOICE_DATABASE_PASSWORD is required}
+      LIWA_DATABASE_PASSWORD: ${LIWA_DATABASE_PASSWORD:?LIWA_DATABASE_PASSWORD is required}
+      DOCUMENTS_DATABASE_PASSWORD: ${DOCUMENTS_DATABASE_PASSWORD:?DOCUMENTS_DATABASE_PASSWORD is required}
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -125,6 +133,7 @@ services:
       GATEWAY_TO_IDENTITY_TOKEN: ${GATEWAY_TO_IDENTITY_TOKEN:?GATEWAY_TO_IDENTITY_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
       ACCESS_TO_LUMEN_TOKEN: ${ACCESS_TO_LUMEN_TOKEN:?ACCESS_TO_LUMEN_TOKEN is required}
+      ACCESS_TO_NOVA_TOKEN: ${ACCESS_TO_NOVA_TOKEN:?ACCESS_TO_NOVA_TOKEN is required}
       PORT: 8081
     expose:
       - "8081"
@@ -255,6 +264,10 @@ services:
       PULSO_TO_AUDIT_TOKEN: ${PULSO_TO_AUDIT_TOKEN:?PULSO_TO_AUDIT_TOKEN is required}
       SOFIA_TO_AUDIT_TOKEN: ${SOFIA_TO_AUDIT_TOKEN:?SOFIA_TO_AUDIT_TOKEN is required}
       LUMEN_TO_AUDIT_TOKEN: ${LUMEN_TO_AUDIT_TOKEN:?LUMEN_TO_AUDIT_TOKEN is required}
+      NOVA_TO_AUDIT_TOKEN: ${NOVA_TO_AUDIT_TOKEN:?NOVA_TO_AUDIT_TOKEN is required}
+      VOICE_TO_AUDIT_TOKEN: ${VOICE_TO_AUDIT_TOKEN:?VOICE_TO_AUDIT_TOKEN is required}
+      LIWA_TO_AUDIT_TOKEN: ${LIWA_TO_AUDIT_TOKEN:?LIWA_TO_AUDIT_TOKEN is required}
+      DOCUMENTS_TO_AUDIT_TOKEN: ${DOCUMENTS_TO_AUDIT_TOKEN:?DOCUMENTS_TO_AUDIT_TOKEN is required}
       GATEWAY_TO_AUDIT_TOKEN: ${GATEWAY_TO_AUDIT_TOKEN:?GATEWAY_TO_AUDIT_TOKEN is required}
       PORT: 8086
     expose:
@@ -411,6 +424,189 @@ services:
       db-role-bootstrap:
         condition: service_completed_successfully
 
+  nova-core-service:
+    build:
+      <<: *node-build
+      target: nova-core-service
+    restart: unless-stopped
+    stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/nova-core-service/dist/index.js"]
+    environment:
+      <<: *service-env
+      DATABASE_URL: *nova-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_nova
+      GATEWAY_TO_NOVA_TOKEN: ${GATEWAY_TO_NOVA_TOKEN:?GATEWAY_TO_NOVA_TOKEN is required}
+      GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      ACCESS_TO_NOVA_TOKEN: ${ACCESS_TO_NOVA_TOKEN:?ACCESS_TO_NOVA_TOKEN is required}
+      NOVA_TO_AUDIT_TOKEN: ${NOVA_TO_AUDIT_TOKEN:?NOVA_TO_AUDIT_TOKEN is required}
+      NOVA_TO_VOICE_TOKEN: ${NOVA_TO_VOICE_TOKEN:?NOVA_TO_VOICE_TOKEN is required}
+      NOVA_TO_LIWA_TOKEN: ${NOVA_TO_LIWA_TOKEN:?NOVA_TO_LIWA_TOKEN is required}
+      NOVA_TO_DOCUMENTS_TOKEN: ${NOVA_TO_DOCUMENTS_TOKEN:?NOVA_TO_DOCUMENTS_TOKEN is required}
+      VOICE_TO_NOVA_TOKEN: ${VOICE_TO_NOVA_TOKEN:?VOICE_TO_NOVA_TOKEN is required}
+      LIWA_TO_NOVA_TOKEN: ${LIWA_TO_NOVA_TOKEN:?LIWA_TO_NOVA_TOKEN is required}
+      DOCUMENTS_TO_NOVA_TOKEN: ${DOCUMENTS_TO_NOVA_TOKEN:?DOCUMENTS_TO_NOVA_TOKEN is required}
+      AUDIT_SERVICE_URL: http://audit-service:8086
+      VOICE_CHANNEL_SERVICE_URL: http://voice-channel-service:8092
+      LIWA_CHANNEL_SERVICE_URL: http://liwa-channel-service:8093
+      DOCUMENTS_SERVICE_URL: http://documents-service:8094
+      CORE_MODE: ${CORE_MODE:-contract}
+      CORE_BASE_URL: ${CORE_BASE_URL:-}
+      LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1782399915832}
+      LIWA_FLOW_ID_B: ${LIWA_FLOW_ID_B:-1782486171458}
+      PORT: 8091
+    expose:
+      - "8091"
+    healthcheck: *node-readycheck
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-role-bootstrap:
+        condition: service_completed_successfully
+
+  voice-channel-service:
+    build:
+      <<: *node-build
+      target: voice-channel-service
+    restart: unless-stopped
+    stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/voice-channel-service/dist/index.js"]
+    environment:
+      <<: *service-env
+      DATABASE_URL: *voice-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_voice
+      GATEWAY_TO_VOICE_TOKEN: ${GATEWAY_TO_VOICE_TOKEN:?GATEWAY_TO_VOICE_TOKEN is required}
+      GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      NOVA_TO_VOICE_TOKEN: ${NOVA_TO_VOICE_TOKEN:?NOVA_TO_VOICE_TOKEN is required}
+      VOICE_TO_NOVA_TOKEN: ${VOICE_TO_NOVA_TOKEN:?VOICE_TO_NOVA_TOKEN is required}
+      VOICE_TO_AUDIT_TOKEN: ${VOICE_TO_AUDIT_TOKEN:?VOICE_TO_AUDIT_TOKEN is required}
+      VOICE_TO_DIALER_TOKEN: ${VOICE_TO_DIALER_TOKEN:-}
+      DIALER_WEBHOOK_HMAC_SECRET: ${DIALER_WEBHOOK_HMAC_SECRET:-}
+      DIALER_BASE_URL: ${DIALER_BASE_URL:-}
+      DIALER_ADMIN_USER: ${DIALER_ADMIN_USER:-}
+      DIALER_ADMIN_PASSWORD: ${DIALER_ADMIN_PASSWORD:-}
+      DIALER_DEMO_API_KEY: ${DIALER_DEMO_API_KEY:-}
+      VOICE_MODE: ${VOICE_MODE:-dialer}
+      ELEVENLABS_AGENT_ID: ${ELEVENLABS_AGENT_ID:-}
+      NOVA_CORE_SERVICE_URL: http://nova-core-service:8091
+      AUDIT_SERVICE_URL: http://audit-service:8086
+      PORT: 8092
+    expose:
+      - "8092"
+    healthcheck: *node-readycheck
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-role-bootstrap:
+        condition: service_completed_successfully
+
+  liwa-channel-service:
+    build:
+      <<: *node-build
+      target: liwa-channel-service
+    restart: unless-stopped
+    stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/liwa-channel-service/dist/index.js"]
+    environment:
+      <<: *service-env
+      DATABASE_URL: *liwa-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_liwa
+      GATEWAY_TO_LIWA_TOKEN: ${GATEWAY_TO_LIWA_TOKEN:?GATEWAY_TO_LIWA_TOKEN is required}
+      GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      NOVA_TO_LIWA_TOKEN: ${NOVA_TO_LIWA_TOKEN:?NOVA_TO_LIWA_TOKEN is required}
+      LIWA_TO_NOVA_TOKEN: ${LIWA_TO_NOVA_TOKEN:?LIWA_TO_NOVA_TOKEN is required}
+      LIWA_TO_AUDIT_TOKEN: ${LIWA_TO_AUDIT_TOKEN:?LIWA_TO_AUDIT_TOKEN is required}
+      LIWA_WEBHOOK_SECRET: ${LIWA_WEBHOOK_SECRET:-}
+      LIWA_BASE_URL: ${LIWA_BASE_URL:-https://chat.liwa.co/api}
+      LIWA_API_TOKEN: ${LIWA_API_TOKEN:-}
+      LIWA_ACCOUNT_ID: ${LIWA_ACCOUNT_ID:-1656233}
+      LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1782399915832}
+      LIWA_FLOW_ID_B: ${LIWA_FLOW_ID_B:-1782486171458}
+      LIWA_MODE: ${LIWA_MODE:-http}
+      NOVA_CORE_SERVICE_URL: http://nova-core-service:8091
+      AUDIT_SERVICE_URL: http://audit-service:8086
+      PORT: 8093
+    expose:
+      - "8093"
+    healthcheck: *node-readycheck
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-role-bootstrap:
+        condition: service_completed_successfully
+
+  documents-service:
+    build:
+      <<: *node-build
+      target: documents-service
+    restart: unless-stopped
+    stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/documents-service/dist/index.js"]
+    environment:
+      <<: *service-env
+      DATABASE_URL: *documents-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_documents
+      GATEWAY_TO_DOCUMENTS_TOKEN: ${GATEWAY_TO_DOCUMENTS_TOKEN:?GATEWAY_TO_DOCUMENTS_TOKEN is required}
+      GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      NOVA_TO_DOCUMENTS_TOKEN: ${NOVA_TO_DOCUMENTS_TOKEN:?NOVA_TO_DOCUMENTS_TOKEN is required}
+      DOCUMENTS_TO_NOVA_TOKEN: ${DOCUMENTS_TO_NOVA_TOKEN:?DOCUMENTS_TO_NOVA_TOKEN is required}
+      DOCUMENTS_TO_AUDIT_TOKEN: ${DOCUMENTS_TO_AUDIT_TOKEN:?DOCUMENTS_TO_AUDIT_TOKEN is required}
+      DOCUMENTS_S3_BUCKET: ${DOCUMENTS_S3_BUCKET:-hyperion-documents}
+      DOCUMENTS_S3_ENDPOINT: ${DOCUMENTS_S3_ENDPOINT:-http://minio:9000}
+      DOCUMENTS_S3_ACCESS_KEY: ${DOCUMENTS_S3_ACCESS_KEY:-minioadmin}
+      DOCUMENTS_S3_SECRET_KEY: ${DOCUMENTS_S3_SECRET_KEY:-minioadmin}
+      DOCUMENTS_S3_REGION: ${DOCUMENTS_S3_REGION:-us-east-1}
+      DOCUMENTS_S3_FORCE_PATH_STYLE: ${DOCUMENTS_S3_FORCE_PATH_STYLE:-true}
+      DOCUMENTS_STORAGE_DIR: ${DOCUMENTS_STORAGE_DIR:-/var/lib/hyperion/documents}
+      NOVA_CORE_SERVICE_URL: http://nova-core-service:8091
+      AUDIT_SERVICE_URL: http://audit-service:8086
+      PORT: 8094
+    expose:
+      - "8094"
+    volumes:
+      - documents_data:/var/lib/hyperion/documents
+    healthcheck: *node-readycheck
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-role-bootstrap:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb local/hyperion-documents --ignore-existing;
+      exit 0;
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+
   api-gateway:
     build:
       <<: *node-build
@@ -436,10 +632,18 @@ services:
       PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
       WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
       LUMEN_SERVICE_URL: http://lumen-service:8090
+      NOVA_CORE_SERVICE_URL: http://nova-core-service:8091
+      VOICE_CHANNEL_SERVICE_URL: http://voice-channel-service:8092
+      LIWA_CHANNEL_SERVICE_URL: http://liwa-channel-service:8093
+      DOCUMENTS_SERVICE_URL: http://documents-service:8094
       GATEWAY_TO_IDENTITY_TOKEN: ${GATEWAY_TO_IDENTITY_TOKEN:?GATEWAY_TO_IDENTITY_TOKEN is required}
       GATEWAY_TO_INTEGRATION_TOKEN: ${GATEWAY_TO_INTEGRATION_TOKEN:?GATEWAY_TO_INTEGRATION_TOKEN is required}
       GATEWAY_TO_PULSO_TOKEN: ${GATEWAY_TO_PULSO_TOKEN:?GATEWAY_TO_PULSO_TOKEN is required}
       GATEWAY_TO_LUMEN_TOKEN: ${GATEWAY_TO_LUMEN_TOKEN:?GATEWAY_TO_LUMEN_TOKEN is required}
+      GATEWAY_TO_NOVA_TOKEN: ${GATEWAY_TO_NOVA_TOKEN:?GATEWAY_TO_NOVA_TOKEN is required}
+      GATEWAY_TO_VOICE_TOKEN: ${GATEWAY_TO_VOICE_TOKEN:?GATEWAY_TO_VOICE_TOKEN is required}
+      GATEWAY_TO_LIWA_TOKEN: ${GATEWAY_TO_LIWA_TOKEN:?GATEWAY_TO_LIWA_TOKEN is required}
+      GATEWAY_TO_DOCUMENTS_TOKEN: ${GATEWAY_TO_DOCUMENTS_TOKEN:?GATEWAY_TO_DOCUMENTS_TOKEN is required}
       GATEWAY_TO_TENANT_TOKEN: ${GATEWAY_TO_TENANT_TOKEN:?GATEWAY_TO_TENANT_TOKEN is required}
       GATEWAY_TO_AUDIT_TOKEN: ${GATEWAY_TO_AUDIT_TOKEN:?GATEWAY_TO_AUDIT_TOKEN is required}
       GATEWAY_TO_KNOWLEDGE_TOKEN: ${GATEWAY_TO_KNOWLEDGE_TOKEN:?GATEWAY_TO_KNOWLEDGE_TOKEN is required}
@@ -469,3 +673,5 @@ services:
 volumes:
   postgres_data:
   whatsapp_sessions:
+  documents_data:
+  minio_data:

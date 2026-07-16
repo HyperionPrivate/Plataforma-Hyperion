@@ -1,0 +1,1863 @@
+import { randomUUID, createHash } from "node:crypto";
+import {
+  envelope,
+  novaCatalog,
+  novaIngressEventSchema,
+  tenantIdSchema,
+  contactImportedPayloadSchema,
+  contactScoredPayloadSchema,
+  contactEligibilityDecidedPayloadSchema,
+  voiceCallRequestedPayloadSchema,
+  handoffRequestedPayloadSchema,
+  leadQualifiedPayloadSchema,
+  coreOutcomeRecordedPayloadSchema,
+  voiceCallCompletedPayloadSchema,
+  waMessageSentPayloadSchema,
+  waSendRequestedPayloadSchema,
+  documentReceivedPayloadSchema,
+  documentValidatedPayloadSchema,
+  prequalCompletedPayloadSchema,
+  csatRecordedPayloadSchema,
+  optOutPayloadSchema
+} from "@hyperion/contracts";
+import { readServiceUrls } from "@hyperion/config";
+import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
+import type { ServiceContext } from "@hyperion/service-runtime";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
+import {
+  agencyCodeFromTag,
+  agencyTagFromCode,
+  buildAgencySeedList,
+  decideEligibility,
+  DEFAULT_COMPLIANCE,
+  normalizeE164,
+  scoreContact,
+  type ComplianceSettings
+} from "./domain.js";
+import {
+  extractMultipartFile,
+  isCsvFilename,
+  parseContactsCsv,
+  type ContactImportRow
+} from "./contact-import-file.js";
+import { createCoreAdapter, type CoreAdapter } from "./core-adapter.js";
+import { insertNovaOutboxEvent, listNovaOutboxDlq, redriveNovaOutboxDlq } from "./outbox.js";
+import { canTransitionCrm, inferIntentFromPayload, stageFromPostCallIntent, type CrmStage } from "./post-call.js";
+
+const contactImportSchema = z.object({
+  contacts: z
+    .array(
+      z.object({
+        phone_e164: z.string().min(8).max(20),
+        full_name: z.string().max(160).optional(),
+        agency_code: z.string().min(2).max(40).optional()
+      })
+    )
+    .min(1)
+    .max(500)
+});
+
+const scoreSchema = z.object({
+  segment: z.string().min(1).max(80).optional(),
+  score: z.number().optional(),
+  auto: z.boolean().optional()
+});
+
+const campaignCreateSchema = z.object({
+  name: z.string().min(2).max(160),
+  channel: z.enum(["voice", "whatsapp", "mixed"]),
+  product_flow: z.enum(["renovacion", "reactivacion"])
+});
+
+const enrollSchema = z.object({
+  contact_ids: z.array(z.string().uuid()).min(1).max(500)
+});
+
+const CRM_STAGES = [
+  "pendiente",
+  "contactado",
+  "interesado",
+  "documento",
+  "transferido",
+  "renovado",
+  "no_interes",
+  "new",
+  "contacted",
+  "prequalified",
+  "handoff",
+  "won",
+  "lost"
+] as const;
+
+const TERMINAL_CRM_STAGES = new Set<string>(["renovado", "no_interes", "won", "lost"]);
+
+const leadPatchSchema = z.object({
+  stage: z.enum(CRM_STAGES).optional(),
+  tipification: z.string().max(80).optional()
+});
+
+const complianceSettingsSchema = z.object({
+  window_start_hour: z.number().int().min(0).max(23),
+  window_end_hour: z.number().int().min(1).max(24),
+  voice_enabled: z.boolean(),
+  whatsapp_enabled: z.boolean(),
+  max_attempts_per_contact: z.number().int().min(1).max(20),
+  min_hours_between_attempts: z.number().int().min(0).max(720),
+  respect_holidays: z.boolean()
+});
+
+const productFlowSchema = z.enum(["renovacion", "reactivacion"]);
+
+const agentConfigSchema = z.object({
+  product_flow: productFlowSchema,
+  elevenlabs_agent_id: z.string().min(1).max(120),
+  elevenlabs_phone_number_id: z.string().min(1).max(120),
+  liwa_flow_id: z.string().max(120).optional().nullable(),
+  from_number_e164: z.string().max(20).optional().nullable(),
+  lead_context_templates: z.record(z.string()).default({}),
+  is_active: z.boolean().optional()
+});
+
+const reviewDecisionSchema = z.object({
+  decision: z.enum(["approve", "skip"]),
+  operator_id: z.string().uuid().optional(),
+  flow_id: z.string().max(80).optional()
+});
+
+const claimSchema = z.object({
+  operator_id: z.string().uuid()
+});
+
+const replySchema = z.object({
+  text: z.string().min(1).max(2000)
+});
+
+const outcomeSchema = z.object({
+  contact_id: z.string().uuid(),
+  kind: z.enum(["csat", "core_financial", "campaign"]),
+  payload: z.record(z.unknown()).default({})
+});
+
+const bootstrapSchema = z.object({
+  tenant_id: z.string().uuid(),
+  display_name: z.string().min(1).max(160)
+});
+
+export interface NovaRouteDependencies {
+  coreAdapter: CoreAdapter;
+}
+
+export async function registerNovaRoutes(
+  app: FastifyInstance,
+  context: ServiceContext,
+  dependencies: NovaRouteDependencies = { coreAdapter: createCoreAdapter(process.env) }
+): Promise<void> {
+  const serviceUrls = readServiceUrls();
+
+  if (!app.hasContentTypeParser("multipart/form-data")) {
+    app.addContentTypeParser("multipart/form-data", { parseAs: "buffer" }, (_request, body, done) => {
+      done(null, body);
+    });
+  }
+
+  app.get("/v1/nova/catalog", async (request) => envelope(novaCatalog, request.id));
+
+  app.get("/v1/tenants/:tenantId/nova/catalog", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+    return envelope(novaCatalog, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/dashboard", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const counts = await scope.db.query<{
+      contacts: string;
+      campaigns: string;
+      leads: string;
+      handoffs: string;
+      conversations: string;
+    }>(
+      `select
+         (select count(*)::text from nova.contacts where tenant_id = $1) as contacts,
+         (select count(*)::text from nova.campaigns where tenant_id = $1) as campaigns,
+         (select count(*)::text from nova.leads where tenant_id = $1) as leads,
+         (select count(*)::text from nova.handoffs where tenant_id = $1 and status = 'queued') as handoffs,
+         (select count(*)::text from nova.conversations where tenant_id = $1 and status <> 'closed') as conversations`,
+      [scope.tenantId]
+    );
+
+    const row = counts.rows[0]!;
+    return envelope(
+      {
+        contacts: Number(row.contacts),
+        campaigns: Number(row.campaigns),
+        leads: Number(row.leads),
+        handoffsQueued: Number(row.handoffs),
+        openConversations: Number(row.conversations)
+      },
+      request.id
+    );
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/contacts", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const q = readQueryString(request.query, "q");
+    const agencyCode = readQueryString(request.query, "agency_code");
+    const segment = readQueryString(request.query, "segment");
+    const limitRaw = Number(readQueryString(request.query, "limit") ?? 50);
+    const offsetRaw = Number(readQueryString(request.query, "offset") ?? 0);
+    const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, Math.trunc(limitRaw))) : 50;
+    const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.trunc(offsetRaw)) : 0;
+
+    const result = await scope.db.query(
+      `select contact_id, phone_e164, full_name, agency_code, segment, score, eligibility, opted_out,
+              propensity, urgency, wave, created_at, updated_at
+         from nova.contacts
+        where tenant_id = $1
+          and ($2::text is null or agency_code = $2)
+          and ($3::text is null or segment = $3)
+          and (
+            $4::text is null
+            or phone_e164 ilike '%' || $4 || '%'
+            or coalesce(full_name, '') ilike '%' || $4 || '%'
+            or contact_id::text = $4
+          )
+        order by updated_at desc
+        limit $5 offset $6`,
+      [scope.tenantId, agencyCode ?? null, segment ?? null, q ?? null, limit, offset]
+    );
+    const count = await scope.db.query<{ total: string }>(
+      `select count(*)::text as total from nova.contacts
+        where tenant_id = $1
+          and ($2::text is null or agency_code = $2)
+          and ($3::text is null or segment = $3)
+          and (
+            $4::text is null
+            or phone_e164 ilike '%' || $4 || '%'
+            or coalesce(full_name, '') ilike '%' || $4 || '%'
+            or contact_id::text = $4
+          )`,
+      [scope.tenantId, agencyCode ?? null, segment ?? null, q ?? null]
+    );
+
+    return envelope(
+      {
+        items: result.rows,
+        total: Number(count.rows[0]?.total ?? 0),
+        limit,
+        offset
+      },
+      request.id
+    );
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/contacts/import", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const parsed = contactImportSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid import payload", issues: parsed.error.issues }, request.id));
+    }
+
+    const imported: Array<{ contact_id: string; phone_e164: string; created: boolean }> = [];
+
+    await scope.db.transaction(async (tx) => {
+      for (const row of parsed.data.contacts) {
+        const phone = normalizeE164(row.phone_e164);
+        if (!phone) continue;
+
+        const contactId = randomUUID();
+        const correlationId = randomUUID();
+        const existing = await tx.query<{ contactId: string }>(
+          `select contact_id as "contactId"
+           from nova.contacts
+           where tenant_id = $1 and phone_e164 = $2`,
+          [scope.tenantId, phone]
+        );
+
+        const resolvedId = existing.rows[0]?.contactId ?? contactId;
+        const created = !existing.rows[0];
+
+        await tx.query(
+          `insert into nova.contacts (tenant_id, contact_id, phone_e164, full_name, agency_code, updated_at)
+           values ($1, $2, $3, $4, $5, now())
+           on conflict (tenant_id, phone_e164) do update
+           set full_name = coalesce(excluded.full_name, nova.contacts.full_name),
+               agency_code = coalesce(excluded.agency_code, nova.contacts.agency_code),
+               updated_at = now()`,
+          [scope.tenantId, resolvedId, phone, row.full_name ?? null, row.agency_code ?? null]
+        );
+
+        const payload = contactImportedPayloadSchema.parse({
+          contact_id: resolvedId,
+          phone_e164: phone,
+          agency_code: row.agency_code,
+          full_name_masked: row.full_name ? maskName(row.full_name) : undefined
+        });
+
+        await insertNovaOutboxEvent(tx, {
+          eventId: randomUUID(),
+          eventType: "contact.imported",
+          tenantId: scope.tenantId,
+          correlationId,
+          businessIdempotencyKey: `contact-import:${scope.tenantId}:${phone}`,
+          payload,
+          destination: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
+        });
+
+        imported.push({ contact_id: resolvedId, phone_e164: phone, created });
+      }
+    });
+
+    return reply.code(201).send(envelope({ imported }, request.id));
+  });
+
+  app.post(
+    "/v1/tenants/:tenantId/nova/contacts/import/file",
+    { bodyLimit: 2_100_000 },
+    async (request, reply) => {
+      const scope = requireTenantDb(context, request, reply);
+      if (!scope) return;
+      if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+      const body = Buffer.isBuffer(request.body)
+        ? request.body
+        : typeof request.body === "string"
+          ? Buffer.from(request.body)
+          : null;
+      if (!body) {
+        return reply.code(400).send(envelope({ error: "multipart file required" }, request.id));
+      }
+
+      const extracted = extractMultipartFile(request.headers["content-type"], body);
+      if ("error" in extracted) {
+        return reply.code(400).send(envelope({ error: extracted.error }, request.id));
+      }
+      if (!isCsvFilename(extracted.filename)) {
+        return reply
+          .code(415)
+          .send(envelope({ error: "csv_only", detail: "XLSX not supported; upload CSV" }, request.id));
+      }
+
+      const parsed = parseContactsCsv(extracted.content.toString("utf8"));
+      if (parsed.rows.length === 0 && parsed.errors.length > 0 && parsed.errors[0]?.row === 0) {
+        return reply.code(400).send(envelope({ imported: 0, errors: parsed.errors }, request.id));
+      }
+
+      const importedIds: string[] = [];
+      const errors = [...parsed.errors];
+
+      await scope.db.transaction(async (tx) => {
+        for (const row of parsed.rows) {
+          const contactId = await upsertImportedContact(tx, scope.tenantId, row, serviceUrls.audit);
+          importedIds.push(contactId);
+        }
+      });
+
+      return reply.code(201).send(
+        envelope(
+          {
+            imported: importedIds.length,
+            contact_ids: importedIds,
+            errors
+          },
+          request.id
+        )
+      );
+    }
+  );
+
+  app.get("/v1/tenants/:tenantId/nova/compliance/settings", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const result = await scope.db.query<{
+      window_start_hour: number;
+      window_end_hour: number;
+      voice_enabled: boolean;
+      whatsapp_enabled: boolean;
+      max_attempts_per_contact: number;
+      min_hours_between_attempts: number;
+      respect_holidays: boolean;
+      updated_at: Date;
+    }>(
+      `select window_start_hour, window_end_hour, voice_enabled, whatsapp_enabled,
+              max_attempts_per_contact, min_hours_between_attempts, respect_holidays, updated_at
+         from nova.compliance_settings where tenant_id = $1`,
+      [scope.tenantId]
+    );
+
+    if (result.rowCount === 0) {
+      return envelope(
+        {
+          window_start_hour: DEFAULT_COMPLIANCE.windowStartHour,
+          window_end_hour: DEFAULT_COMPLIANCE.windowEndHour,
+          voice_enabled: DEFAULT_COMPLIANCE.voiceEnabled,
+          whatsapp_enabled: DEFAULT_COMPLIANCE.whatsappEnabled,
+          max_attempts_per_contact: DEFAULT_COMPLIANCE.maxAttemptsPerContact,
+          min_hours_between_attempts: DEFAULT_COMPLIANCE.minHoursBetweenAttempts,
+          respect_holidays: DEFAULT_COMPLIANCE.respectHolidays,
+          source: "defaults"
+        },
+        request.id
+      );
+    }
+
+    return envelope({ ...result.rows[0]!, source: "stored" }, request.id);
+  });
+
+  app.put("/v1/tenants/:tenantId/nova/compliance/settings", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const parsed = complianceSettingsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid compliance settings", issues: parsed.error.issues }, request.id));
+    }
+    if (parsed.data.window_start_hour >= parsed.data.window_end_hour) {
+      return reply.code(400).send(envelope({ error: "window_start_hour must be < window_end_hour" }, request.id));
+    }
+
+    await scope.db.query(
+      `insert into nova.compliance_settings (
+         tenant_id, window_start_hour, window_end_hour, voice_enabled, whatsapp_enabled,
+         max_attempts_per_contact, min_hours_between_attempts, respect_holidays, updated_at
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, now())
+       on conflict (tenant_id) do update set
+         window_start_hour = excluded.window_start_hour,
+         window_end_hour = excluded.window_end_hour,
+         voice_enabled = excluded.voice_enabled,
+         whatsapp_enabled = excluded.whatsapp_enabled,
+         max_attempts_per_contact = excluded.max_attempts_per_contact,
+         min_hours_between_attempts = excluded.min_hours_between_attempts,
+         respect_holidays = excluded.respect_holidays,
+         updated_at = now()`,
+      [
+        scope.tenantId,
+        parsed.data.window_start_hour,
+        parsed.data.window_end_hour,
+        parsed.data.voice_enabled,
+        parsed.data.whatsapp_enabled,
+        parsed.data.max_attempts_per_contact,
+        parsed.data.min_hours_between_attempts,
+        parsed.data.respect_holidays
+      ]
+    );
+
+    return envelope(parsed.data, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/agent-configs", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const result = await scope.db.query(
+      `select product_flow, elevenlabs_agent_id, elevenlabs_phone_number_id, liwa_flow_id,
+              from_number_e164, lead_context_templates, is_active, updated_at
+         from nova.agent_configs where tenant_id = $1 order by product_flow`,
+      [scope.tenantId]
+    );
+    return envelope(result.rows, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/agent-configs/:productFlow", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const productFlow = readProductFlow(request.params);
+    if (!productFlow) {
+      return reply.code(400).send(envelope({ error: "productFlow must be renovacion|reactivacion" }, request.id));
+    }
+
+    const result = await scope.db.query(
+      `select product_flow, elevenlabs_agent_id, elevenlabs_phone_number_id, liwa_flow_id,
+              from_number_e164, lead_context_templates, is_active, updated_at
+         from nova.agent_configs where tenant_id = $1 and product_flow = $2`,
+      [scope.tenantId, productFlow]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(404).send(envelope({ error: "Agent config not found" }, request.id));
+    }
+    return envelope(result.rows[0], request.id);
+  });
+
+  app.put("/v1/tenants/:tenantId/nova/agent-configs", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const parsed = agentConfigSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid agent config", issues: parsed.error.issues }, request.id));
+    }
+
+    await upsertAgentConfig(scope.db, scope.tenantId, parsed.data);
+    return envelope(parsed.data, request.id);
+  });
+
+  app.put("/v1/tenants/:tenantId/nova/agent-configs/:productFlow", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const productFlow = readProductFlow(request.params);
+    if (!productFlow) {
+      return reply.code(400).send(envelope({ error: "productFlow must be renovacion|reactivacion" }, request.id));
+    }
+
+    const parsed = agentConfigSchema.safeParse({
+      ...(typeof request.body === "object" && request.body ? request.body : {}),
+      product_flow: productFlow
+    });
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid agent config", issues: parsed.error.issues }, request.id));
+    }
+
+    await upsertAgentConfig(scope.db, scope.tenantId, parsed.data);
+    return envelope(parsed.data, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/contacts/:contactId/score", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const contactId = readUuid(request.params, "contactId");
+    if (!contactId) return reply.code(400).send(envelope({ error: "contactId must be a UUID" }, request.id));
+
+    const parsed = scoreSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid score payload" }, request.id));
+    }
+
+    const features = await scope.db.query<{
+      segment: string | null;
+      cupo: boolean | null;
+      mora: string | null;
+      saldo: string | null;
+      universidad: string | null;
+    }>(
+      `select segment, cupo_preaprobado as cupo, mora_actual::text as mora, saldo_total::text as saldo, universidad
+         from nova.contacts where tenant_id = $1 and contact_id = $2`,
+      [scope.tenantId, contactId]
+    );
+    if (features.rowCount === 0) {
+      return reply.code(404).send(envelope({ error: "Contact not found" }, request.id));
+    }
+
+    const computed = scoreContact({
+      segment: parsed.data.segment ?? features.rows[0]!.segment,
+      cupoPreaprobado: features.rows[0]!.cupo,
+      moraActual: features.rows[0]!.mora ? Number(features.rows[0]!.mora) : null,
+      saldoTotal: features.rows[0]!.saldo ? Number(features.rows[0]!.saldo) : null,
+      universidad: features.rows[0]!.universidad
+    });
+    const segment = parsed.data.segment ?? computed.segment;
+    const score = parsed.data.score ?? computed.score;
+
+    const correlationId = randomUUID();
+    try {
+      await scope.db.transaction(async (tx) => {
+        const updated = await tx.query(
+          `update nova.contacts
+           set segment = $3, score = $4, propensity = $5, urgency = $6, wave = $7, updated_at = now()
+           where tenant_id = $1 and contact_id = $2`,
+          [scope.tenantId, contactId, segment, score, computed.propensity, computed.urgency, computed.wave]
+        );
+        if (updated.rowCount === 0) throw new Error("contact_not_found");
+
+        const payload = contactScoredPayloadSchema.parse({
+          contact_id: contactId,
+          segment,
+          score,
+          propensity: computed.propensity,
+          urgency: computed.urgency,
+          wave: computed.wave
+        });
+        await insertNovaOutboxEvent(tx, {
+          eventId: randomUUID(),
+          eventType: "contact.scored",
+          tenantId: scope.tenantId,
+          correlationId,
+          businessIdempotencyKey: `contact-scored:${scope.tenantId}:${contactId}:${segment}`,
+          payload,
+          destination: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
+        });
+      });
+    } catch {
+      return reply.code(404).send(envelope({ error: "Contact not found" }, request.id));
+    }
+    return envelope({ contact_id: contactId, ...parsed.data }, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/contacts/:contactId/eligibility", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const contactId = readUuid(request.params, "contactId");
+    if (!contactId) return reply.code(400).send(envelope({ error: "contactId must be a UUID" }, request.id));
+
+    const contact = await scope.db.query<{ optedOut: boolean; phone: string }>(
+      `select opted_out as "optedOut", phone_e164 as phone
+         from nova.contacts where tenant_id = $1 and contact_id = $2`,
+      [scope.tenantId, contactId]
+    );
+    if (contact.rowCount === 0) {
+      return reply.code(404).send(envelope({ error: "Contact not found" }, request.id));
+    }
+
+    const settingsRow = await scope.db.query<{
+      windowStartHour: number;
+      windowEndHour: number;
+      voiceEnabled: boolean;
+      whatsappEnabled: boolean;
+      maxAttemptsPerContact: number;
+      minHoursBetweenAttempts: number;
+      respectHolidays: boolean;
+    }>(
+      `select window_start_hour as "windowStartHour", window_end_hour as "windowEndHour",
+              voice_enabled as "voiceEnabled", whatsapp_enabled as "whatsappEnabled",
+              max_attempts_per_contact as "maxAttemptsPerContact",
+              min_hours_between_attempts as "minHoursBetweenAttempts",
+              respect_holidays as "respectHolidays"
+         from nova.compliance_settings where tenant_id = $1`,
+      [scope.tenantId]
+    );
+    const settings: ComplianceSettings = settingsRow.rows[0] ?? DEFAULT_COMPLIANCE;
+
+    const optOut = await scope.db.query(
+      `select 1 from nova.opt_outs where tenant_id = $1 and phone_e164 = $2`,
+      [scope.tenantId, contact.rows[0]!.phone]
+    );
+    const holiday = await scope.db.query(
+      `select 1 from nova.holidays where holiday_date = (timezone('America/Bogota', now()))::date`
+    );
+    const attempts = await scope.db.query<{ count: string; hours: string | null }>(
+      `select count(*)::text as count,
+              extract(epoch from (now() - max(created_at)))/3600 as hours
+         from nova.contact_attempts
+        where tenant_id = $1 and contact_id = $2`,
+      [scope.tenantId, contactId]
+    );
+
+    const decision = decideEligibility({
+      optedOut: contact.rows[0]!.optedOut || (optOut.rowCount ?? 0) > 0,
+      settings,
+      isHoliday: (holiday.rowCount ?? 0) > 0,
+      attemptCount: Number(attempts.rows[0]?.count ?? 0),
+      hoursSinceLastAttempt: attempts.rows[0]?.hours === null ? null : Number(attempts.rows[0]?.hours)
+    });
+    const correlationId = randomUUID();
+
+    await scope.db.transaction(async (tx) => {
+      await tx.query(
+        `update nova.contacts set eligibility = $3, updated_at = now() where tenant_id = $1 and contact_id = $2`,
+        [scope.tenantId, contactId, decision.eligibility]
+      );
+      const payload = contactEligibilityDecidedPayloadSchema.parse({
+        contact_id: contactId,
+        eligibility: decision.eligibility,
+        reason: decision.reason
+      });
+      await insertNovaOutboxEvent(tx, {
+        eventId: randomUUID(),
+        eventType: "contact.eligibility.decided",
+        tenantId: scope.tenantId,
+        correlationId,
+        businessIdempotencyKey: `eligibility:${scope.tenantId}:${contactId}`,
+        payload,
+        destination: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
+      });
+    });
+
+    return envelope({ contact_id: contactId, ...decision }, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/campaigns", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const parsed = campaignCreateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid campaign payload" }, request.id));
+    }
+
+    const campaignId = randomUUID();
+    await scope.db.query(
+      `insert into nova.campaigns (tenant_id, campaign_id, name, channel, product_flow, status)
+       values ($1, $2, $3, $4, $5, 'draft')`,
+      [scope.tenantId, campaignId, parsed.data.name, parsed.data.channel, parsed.data.product_flow]
+    );
+
+    return reply.code(201).send(envelope({ campaign_id: campaignId, status: "draft", ...parsed.data }, request.id));
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/campaigns", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const result = await scope.db.query(
+      `select campaign_id, name, channel, product_flow, status, created_at, updated_at
+       from nova.campaigns where tenant_id = $1 order by created_at desc`,
+      [scope.tenantId]
+    );
+    return envelope(result.rows, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/campaigns/:id/enroll", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const campaignId = readUuid(request.params, "id");
+    if (!campaignId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+    const parsed = enrollSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid enroll payload" }, request.id));
+    }
+
+    let enrolled = 0;
+    for (const contactId of parsed.data.contact_ids) {
+      const result = await scope.db.query(
+        `insert into nova.campaign_enrollments (tenant_id, campaign_id, contact_id, status)
+         values ($1, $2, $3, 'enrolled')
+         on conflict (tenant_id, campaign_id, contact_id) do nothing`,
+        [scope.tenantId, campaignId, contactId]
+      );
+      enrolled += result.rowCount ?? 0;
+    }
+
+    return envelope({ campaign_id: campaignId, enrolled }, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/campaigns/:id/start", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const campaignId = readUuid(request.params, "id");
+    if (!campaignId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+    const voiceDestination = `${serviceUrls.voiceChannel.replace(/\/$/, "")}/v1/voice/internal/events`;
+    let queued = 0;
+
+    await scope.db.transaction(async (tx) => {
+      await tx.query(
+        `update nova.campaigns set status = 'running', updated_at = now()
+         where tenant_id = $1 and campaign_id = $2 and status in ('draft', 'ready', 'paused')`,
+        [scope.tenantId, campaignId]
+      );
+
+      const eligible = await tx.query<{ contactId: string; phoneE164: string }>(
+        `select c.contact_id as "contactId", c.phone_e164 as "phoneE164"
+         from nova.campaign_enrollments e
+         join nova.contacts c on c.tenant_id = e.tenant_id and c.contact_id = e.contact_id
+         where e.tenant_id = $1 and e.campaign_id = $2
+           and e.status = 'enrolled' and c.eligibility = 'eligible' and c.opted_out = false`,
+        [scope.tenantId, campaignId]
+      );
+
+      for (const row of eligible.rows) {
+        const callId = randomUUID();
+        const correlationId = randomUUID();
+        const payload = voiceCallRequestedPayloadSchema.parse({
+          call_id: callId,
+          contact_id: row.contactId,
+          phone_e164: row.phoneE164,
+          campaign_id: campaignId
+        });
+        await insertNovaOutboxEvent(tx, {
+          eventId: randomUUID(),
+          eventType: "voice.call.requested",
+          tenantId: scope.tenantId,
+          correlationId,
+          businessIdempotencyKey: `voice-request:${scope.tenantId}:${campaignId}:${row.contactId}`,
+          payload,
+          destination: voiceDestination
+        });
+        await tx.query(
+          `insert into nova.contact_attempts (tenant_id, attempt_id, contact_id, channel, campaign_id, call_id, status)
+           values ($1, $2, $3, 'voice', $4, $5, 'queued')`,
+          [scope.tenantId, randomUUID(), row.contactId, campaignId, callId]
+        );
+        await tx.query(
+          `update nova.campaign_enrollments
+              set status = 'attempted', updated_at = now()
+            where tenant_id = $1 and campaign_id = $2 and contact_id = $3 and status = 'enrolled'`,
+          [scope.tenantId, campaignId, row.contactId]
+        );
+        queued += 1;
+      }
+    });
+
+    return envelope({ campaign_id: campaignId, status: "running", voice_calls_queued: queued }, request.id);
+  });
+
+  for (const action of ["pause", "cancel"] as const) {
+    app.post(`/v1/tenants/:tenantId/nova/campaigns/:id/${action}`, async (request, reply) => {
+      const scope = requireTenantDb(context, request, reply);
+      if (!scope) return;
+      if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+      const campaignId = readUuid(request.params, "id");
+      if (!campaignId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+      const status = action === "pause" ? "paused" : "cancelled";
+      const result = await scope.db.query(
+        `update nova.campaigns set status = $3, updated_at = now()
+         where tenant_id = $1 and campaign_id = $2 returning campaign_id`,
+        [scope.tenantId, campaignId, status]
+      );
+      if (result.rowCount === 0) {
+        return reply.code(404).send(envelope({ error: "Campaign not found" }, request.id));
+      }
+      return envelope({ campaign_id: campaignId, status }, request.id);
+    });
+  }
+
+  app.get("/v1/tenants/:tenantId/nova/leads", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const result = await scope.db.query(
+      `select lead_id, contact_id, stage, tipification, agency_code, owner_operator_id, created_at, updated_at
+       from nova.leads where tenant_id = $1 order by updated_at desc`,
+      [scope.tenantId]
+    );
+    return envelope(result.rows, request.id);
+  });
+
+  app.patch("/v1/tenants/:tenantId/nova/leads/:id", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const leadId = readUuid(request.params, "id");
+    if (!leadId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+    const parsed = leadPatchSchema.safeParse(request.body);
+    if (!parsed.success || (!parsed.data.stage && parsed.data.tipification === undefined)) {
+      return reply.code(400).send(envelope({ error: "stage or tipification required" }, request.id));
+    }
+
+    const existing = await scope.db.query<{ stage: string; tipification: string | null }>(
+      `select stage, tipification from nova.leads where tenant_id = $1 and lead_id = $2`,
+      [scope.tenantId, leadId]
+    );
+    if (existing.rowCount === 0) {
+      return reply.code(404).send(envelope({ error: "Lead not found" }, request.id));
+    }
+
+    const nextStage = parsed.data.stage ?? existing.rows[0]!.stage;
+    const nextTipification =
+      parsed.data.tipification ?? existing.rows[0]!.tipification ?? undefined;
+    if (TERMINAL_CRM_STAGES.has(nextStage) && !nextTipification?.trim()) {
+      return reply.code(400).send(
+        envelope(
+          {
+            error: "tipification_required",
+            detail: "Terminal stages (renovado, no_interes, won, lost) require tipification"
+          },
+          request.id
+        )
+      );
+    }
+
+    const correlationId = randomUUID();
+    try {
+      await scope.db.transaction(async (tx) => {
+        const result = await tx.query<{ contactId: string; stage: string; tipification: string | null }>(
+          `update nova.leads
+           set stage = coalesce($3, stage),
+               tipification = coalesce($4, tipification),
+               updated_at = now()
+           where tenant_id = $1 and lead_id = $2
+           returning contact_id as "contactId", stage, tipification`,
+          [scope.tenantId, leadId, parsed.data.stage ?? null, parsed.data.tipification ?? null]
+        );
+        if (result.rowCount === 0) throw new Error("lead_not_found");
+
+        const row = result.rows[0]!;
+        const payload = leadQualifiedPayloadSchema.parse({
+          lead_id: leadId,
+          contact_id: row.contactId,
+          stage: row.stage,
+          tipification: row.tipification ?? undefined
+        });
+        await insertNovaOutboxEvent(tx, {
+          eventId: randomUUID(),
+          eventType: "lead.qualified",
+          tenantId: scope.tenantId,
+          correlationId,
+          businessIdempotencyKey: `lead:${scope.tenantId}:${leadId}:${row.stage}`,
+          payload,
+          destination: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
+        });
+      });
+    } catch {
+      return reply.code(404).send(envelope({ error: "Lead not found" }, request.id));
+    }
+    return envelope({ lead_id: leadId, ...parsed.data }, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/handoffs", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const agencyCode = readQueryString(request.query, "agency_code");
+    const result = agencyCode
+      ? await scope.db.query(
+          `select handoff_id, contact_id, agency_code, status, claimed_by, reason, created_at
+           from nova.handoffs where tenant_id = $1 and agency_code = $2 order by created_at desc`,
+          [scope.tenantId, agencyCode]
+        )
+      : await scope.db.query(
+          `select handoff_id, contact_id, agency_code, status, claimed_by, reason, created_at
+           from nova.handoffs where tenant_id = $1 order by created_at desc`,
+          [scope.tenantId]
+        );
+
+    return envelope(result.rows, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/handoffs/:id/claim", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const handoffId = readUuid(request.params, "id");
+    if (!handoffId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+    const parsed = claimSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "operator_id required" }, request.id));
+    }
+
+    const result = await scope.db.query(
+      `update nova.handoffs
+       set status = 'claimed', claimed_by = $3, claimed_at = now(), updated_at = now()
+       where tenant_id = $1 and handoff_id = $2 and status = 'queued'
+       returning handoff_id`,
+      [scope.tenantId, handoffId, parsed.data.operator_id]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(409).send(envelope({ error: "Handoff unavailable" }, request.id));
+    }
+    return envelope({ handoff_id: handoffId, status: "claimed", operator_id: parsed.data.operator_id }, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/conversations", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const agencyCodes = readAgencyCodesQuery(request.query);
+    const result =
+      agencyCodes.length > 0
+        ? await scope.db.query(
+            `select conversation_id, contact_id, channel, agency_code, status, claimed_by, last_message_at
+             from nova.conversations
+             where tenant_id = $1 and agency_code = any($2::text[])
+             order by coalesce(last_message_at, created_at) desc`,
+            [scope.tenantId, agencyCodes]
+          )
+        : await scope.db.query(
+            `select conversation_id, contact_id, channel, agency_code, status, claimed_by, last_message_at
+             from nova.conversations where tenant_id = $1 order by coalesce(last_message_at, created_at) desc`,
+            [scope.tenantId]
+          );
+
+    return envelope(result.rows, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/conversations/:id/claim", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const conversationId = readUuid(request.params, "id");
+    if (!conversationId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+    const parsed = claimSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "operator_id required" }, request.id));
+    }
+
+    const result = await scope.db.query(
+      `update nova.conversations
+       set status = 'claimed', claimed_by = $3, updated_at = now()
+       where tenant_id = $1 and conversation_id = $2 and status = 'open'
+       returning conversation_id`,
+      [scope.tenantId, conversationId, parsed.data.operator_id]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(409).send(envelope({ error: "Conversation unavailable" }, request.id));
+    }
+    return envelope(
+      { conversation_id: conversationId, status: "claimed", operator_id: parsed.data.operator_id },
+      request.id
+    );
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/conversations/:id/reply", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const conversationId = readUuid(request.params, "id");
+    if (!conversationId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+    const parsed = replySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "text required" }, request.id));
+    }
+
+    const messageId = randomUUID();
+    const correlationId = randomUUID();
+
+    try {
+      await scope.db.transaction(async (tx) => {
+        const convo = await tx.query<{ contactId: string }>(
+          `update nova.conversations
+           set last_message_at = now(), updated_at = now()
+           where tenant_id = $1 and conversation_id = $2
+           returning contact_id as "contactId"`,
+          [scope.tenantId, conversationId]
+        );
+        if (convo.rowCount === 0) throw new Error("conversation_not_found");
+
+        await insertNovaOutboxEvent(tx, {
+          eventId: randomUUID(),
+          eventType: "wa.send.requested",
+          tenantId: scope.tenantId,
+          correlationId,
+          businessIdempotencyKey: `wa-reply:${scope.tenantId}:${conversationId}:${messageId}`,
+          payload: {
+            message_id: messageId,
+            contact_id: convo.rows[0]!.contactId,
+            contact_ref: convo.rows[0]!.contactId,
+            mode: "text",
+            text: parsed.data.text
+          },
+          destination: `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/internal/events`
+        });
+      });
+    } catch {
+      return reply.code(404).send(envelope({ error: "Conversation not found" }, request.id));
+    }
+    return envelope({ conversation_id: conversationId, message_id: messageId, queued: true }, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/core/associates/:documentId", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const documentId = readUuid(request.params, "documentId");
+    if (!documentId) return reply.code(400).send(envelope({ error: "documentId must be a UUID" }, request.id));
+
+    const associate = await dependencies.coreAdapter.lookupAssociate(documentId);
+    if (!associate) {
+      return reply.code(404).send(envelope({ error: "Associate not found for document" }, request.id));
+    }
+
+    return envelope(associate, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/outcomes", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const parsed = outcomeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid outcome payload" }, request.id));
+    }
+
+    const outcomeId = randomUUID();
+    const correlationId = randomUUID();
+
+    await scope.db.transaction(async (tx) => {
+      await tx.query(
+        `insert into nova.outcomes (tenant_id, outcome_id, contact_id, kind, payload)
+         values ($1, $2, $3, $4, $5::jsonb)`,
+        [scope.tenantId, outcomeId, parsed.data.contact_id, parsed.data.kind, JSON.stringify(parsed.data.payload)]
+      );
+
+      const payload = coreOutcomeRecordedPayloadSchema.parse({
+        outcome_id: outcomeId,
+        contact_id: parsed.data.contact_id,
+        kind: parsed.data.kind,
+        score: typeof parsed.data.payload.score === "number" ? parsed.data.payload.score : undefined
+      });
+      await insertNovaOutboxEvent(tx, {
+        eventId: randomUUID(),
+        eventType: "core.outcome.recorded",
+        tenantId: scope.tenantId,
+        correlationId,
+        businessIdempotencyKey: `outcome:${scope.tenantId}:${outcomeId}`,
+        payload,
+        destination: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
+      });
+    });
+
+    return reply.code(201).send(envelope({ outcome_id: outcomeId }, request.id));
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/bootstrap", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+
+    const parsed = bootstrapSchema.safeParse({
+      ...(typeof request.body === "object" && request.body ? request.body : {}),
+      tenant_id: scope.tenantId
+    });
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid bootstrap payload" }, request.id));
+    }
+
+    const now = new Date();
+    const payloadHash = createHash("sha256")
+      .update(JSON.stringify({ tenant_id: parsed.data.tenant_id, display_name: parsed.data.display_name }))
+      .digest("hex");
+
+    await scope.db.transaction(async (tx) => {
+      await tx.query(
+        `insert into nova.tenant_snapshots (
+           tenant_id, status, display_name, source_version, source_updated_at, payload_hash
+         ) values ($1, 'active', $2, 1, $3, $4)
+         on conflict (tenant_id) do update
+         set display_name = excluded.display_name, updated_at = now()`,
+        [parsed.data.tenant_id, parsed.data.display_name, now, payloadHash]
+      );
+
+      for (const agency of buildAgencySeedList()) {
+        await tx.query(
+          `insert into nova.agencies (tenant_id, code, name, city, advisor_group)
+           values ($1, $2, $3, $4, $5)
+           on conflict (tenant_id, code) do nothing`,
+          [parsed.data.tenant_id, agency.code, agency.name, agency.city, agency.advisorGroup]
+        );
+      }
+    });
+
+    return reply
+      .code(201)
+      .send(
+        envelope(
+          { tenant_id: parsed.data.tenant_id, display_name: parsed.data.display_name, agencies: buildAgencySeedList().length },
+          request.id
+        )
+      );
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/reviews", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const result = await scope.db.query(
+      `select review_id, contact_id, call_id, status, intent, flow_id, created_at, updated_at
+         from nova.whatsapp_reviews
+        where tenant_id = $1
+        order by created_at desc
+        limit 200`,
+      [scope.tenantId]
+    );
+    return envelope(result.rows, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/reviews/:reviewId/decide", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const reviewId = readUuid(request.params, "reviewId");
+    if (!reviewId) return reply.code(400).send(envelope({ error: "reviewId must be a UUID" }, request.id));
+    const parsed = reviewDecisionSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send(envelope({ error: "Invalid review decision" }, request.id));
+
+    const liwaDestination = `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/internal/events`;
+    const autoFlow =
+      parsed.data.flow_id ??
+      process.env.LIWA_DEFAULT_FLOW_ID ??
+      "1782399915832";
+
+    try {
+      await scope.db.transaction(async (tx) => {
+        const row = await tx.query<{
+          contactId: string;
+          phone: string;
+          agencyCode: string | null;
+          status: string;
+        }>(
+          `select r.contact_id as "contactId", c.phone_e164 as phone, c.agency_code as "agencyCode", r.status
+             from nova.whatsapp_reviews r
+             join nova.contacts c on c.tenant_id = r.tenant_id and c.contact_id = r.contact_id
+            where r.tenant_id = $1 and r.review_id = $2
+            for update of r`,
+          [scope.tenantId, reviewId]
+        );
+        if (row.rowCount === 0) throw new Error("not_found");
+        const review = row.rows[0]!;
+        if (review.status !== "pending_review") throw new Error("not_pending");
+
+        if (parsed.data.decision === "skip") {
+          await tx.query(
+            `update nova.whatsapp_reviews
+                set status = 'skipped', decided_by = $3, decided_at = now(), updated_at = now()
+              where tenant_id = $1 and review_id = $2`,
+            [scope.tenantId, reviewId, parsed.data.operator_id ?? null]
+          );
+          return;
+        }
+
+        const messageId = randomUUID();
+        const agencyTag = agencyTagFromCode(review.agencyCode);
+        await insertNovaOutboxEvent(tx, {
+          eventId: randomUUID(),
+          eventType: "wa.send.requested",
+          tenantId: scope.tenantId,
+          correlationId: randomUUID(),
+          businessIdempotencyKey: `wa-send:${reviewId}`,
+          payload: waSendRequestedPayloadSchema.parse({
+            message_id: messageId,
+            contact_id: review.contactId,
+            contact_ref: review.phone,
+            mode: "flow",
+            flow_id: autoFlow,
+            agency_tag: agencyTag,
+            review_id: reviewId
+          }),
+          destination: liwaDestination
+        });
+        await tx.query(
+          `update nova.whatsapp_reviews
+              set status = 'approved', flow_id = $3, decided_by = $4, decided_at = now(), updated_at = now()
+            where tenant_id = $1 and review_id = $2`,
+          [scope.tenantId, reviewId, autoFlow, parsed.data.operator_id ?? null]
+        );
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "not_found") return reply.code(404).send(envelope({ error: "Review not found" }, request.id));
+      if (message === "not_pending") return reply.code(409).send(envelope({ error: "Review is not pending" }, request.id));
+      throw error;
+    }
+
+    return envelope({ review_id: reviewId, decision: parsed.data.decision }, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/analytics/daily", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    const result = await scope.db.query(
+      `select day, channel, contacts_imported, calls_requested, calls_completed, calls_failed,
+              wa_sent, leads_contacted, leads_interested, leads_won, leads_lost, handoffs_queued,
+              csat_sum, csat_count
+         from nova.analytics_daily
+        where tenant_id = $1
+        order by day desc
+        limit 90`,
+      [scope.tenantId]
+    );
+    return envelope(result.rows, request.id);
+  });
+
+  app.post("/internal/events", async (request, reply) => {
+    if (!context.db) {
+      return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
+    }
+
+    const parsed = novaIngressEventSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid event envelope", issues: parsed.error.issues }, request.id));
+    }
+
+    const event = parsed.data;
+    const duplicate = await context.db.query(
+      `select event_id from nova.inbox_events where event_id = $1`,
+      [event.event_id]
+    );
+    if ((duplicate.rowCount ?? 0) > 0) {
+      return envelope({ status: "duplicate", event_id: event.event_id }, request.id);
+    }
+
+    await context.db.query(
+      `insert into nova.inbox_events (event_id, event_type, tenant_id, correlation_id, business_idempotency_key, payload)
+       values ($1, $2, $3, $4, $5, $6::jsonb)`,
+      [
+        event.event_id,
+        event.event_type,
+        event.tenant_id,
+        event.correlation_id ?? randomUUID(),
+        event.business_idempotency_key,
+        JSON.stringify(event.payload)
+      ]
+    );
+
+    await processInboundEvent(context.db, event.tenant_id, event.event_type, event.payload, serviceUrls);
+
+    await context.db.query(`update nova.inbox_events set processed_at = now() where event_id = $1`, [event.event_id]);
+
+    return envelope({ status: "accepted", event_id: event.event_id }, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/outbox/dlq", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const pendingOnly = readQueryString(request.query, "pending") === "true";
+    const limitRaw = readQueryString(request.query, "limit");
+    const limit = limitRaw ? Number(limitRaw) : 50;
+    const rows = await listNovaOutboxDlq(scope.db, scope.tenantId, {
+      pendingOnly,
+      limit: Number.isFinite(limit) ? limit : 50
+    });
+
+    return envelope(
+      {
+        items: rows.map((row) => ({
+          event_id: row.eventId,
+          event_type: row.eventType,
+          tenant_id: row.tenantId,
+          payload: row.payload,
+          destination: row.destination,
+          last_error: row.lastError,
+          failed_at: row.failedAt.toISOString(),
+          redriven_at: row.redrivenAt?.toISOString() ?? null
+        }))
+      },
+      request.id
+    );
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/outbox/dlq/:eventId/redrive", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const eventId = readUuid(request.params, "eventId");
+    if (!eventId) return reply.code(400).send(envelope({ error: "eventId must be a UUID" }, request.id));
+
+    const redriven = await redriveNovaOutboxDlq(scope.db, scope.tenantId, eventId);
+    if (!redriven) {
+      return reply.code(404).send(envelope({ error: "DLQ event not found for tenant" }, request.id));
+    }
+
+    return envelope({ event_id: eventId, status: "pending", redriven: true }, request.id);
+  });
+}
+
+async function processInboundEvent(
+  db: DatabaseClient,
+  tenantId: string,
+  eventType: string,
+  payload: Record<string, unknown>,
+  serviceUrls: ReturnType<typeof readServiceUrls>
+): Promise<void> {
+  if (eventType === "voice.call.completed") {
+    const parsed = voiceCallCompletedPayloadSchema.parse(payload);
+    const intent = inferIntentFromPayload({
+      intent: parsed.intent,
+      disposition: parsed.disposition,
+      result_code: parsed.result_code,
+      amd_label: parsed.amd_label,
+      transcript_excerpt: parsed.transcript_excerpt
+    });
+    const stageInfo = stageFromPostCallIntent(intent);
+
+    await db.query(
+      `insert into nova.leads (tenant_id, lead_id, contact_id, stage, tipification, agency_code)
+       select $1, $2, $3, $4, $5, c.agency_code
+         from nova.contacts c
+        where c.tenant_id = $1 and c.contact_id = $3
+       on conflict do nothing`,
+      [tenantId, randomUUID(), parsed.contact_id, stageInfo.stage, stageInfo.tipification ?? null]
+    );
+
+    await db.query(
+      `update nova.leads
+          set stage = $3, tipification = coalesce($4, tipification), updated_at = now()
+        where tenant_id = $1 and contact_id = $2
+          and stage not in ('renovado', 'no_interes', 'won', 'lost')`,
+      [tenantId, parsed.contact_id, stageInfo.stage, stageInfo.tipification ?? null]
+    );
+
+    await bumpAnalytics(db, tenantId, {
+      calls_completed: parsed.status === "completed" ? 1 : 0,
+      calls_failed: parsed.status === "failed" ? 1 : 0,
+      leads_contacted: 1,
+      leads_interested: stageInfo.stage === "interesado" ? 1 : 0,
+      leads_lost: stageInfo.stage === "no_interes" ? 1 : 0
+    });
+
+    if (parsed.campaign_id) {
+      const enrollmentStatus =
+        parsed.status === "failed"
+          ? "failed"
+          : stageInfo.stage === "renovado"
+            ? "converted"
+            : "reached";
+      await db.query(
+        `update nova.campaign_enrollments
+            set status = $4, updated_at = now()
+          where tenant_id = $1 and campaign_id = $2 and contact_id = $3
+            and status in ('enrolled', 'attempted', 'reached')`,
+        [tenantId, parsed.campaign_id, parsed.contact_id, enrollmentStatus]
+      );
+    }
+
+    if (stageInfo.wantsWhatsapp) {
+      const autoSend = (process.env.POST_CALL_WHATSAPP_AUTO_SEND ?? "false").toLowerCase() === "true";
+      const reviewId = randomUUID();
+      await db.query(
+        `insert into nova.whatsapp_reviews (tenant_id, review_id, contact_id, call_id, status, intent)
+         values ($1, $2, $3, $4, $5, $6)`,
+        [tenantId, reviewId, parsed.contact_id, parsed.call_id, autoSend ? "approved" : "pending_review", intent]
+      );
+
+      if (autoSend) {
+        const contact = await db.query<{ phone: string; agencyCode: string | null }>(
+          `select phone_e164 as phone, agency_code as "agencyCode"
+             from nova.contacts where tenant_id = $1 and contact_id = $2`,
+          [tenantId, parsed.contact_id]
+        );
+        const row = contact.rows[0];
+        if (row) {
+          const flowId = process.env.LIWA_DEFAULT_FLOW_ID ?? "1782399915832";
+          await insertNovaOutboxEvent(db, {
+            eventId: randomUUID(),
+            eventType: "wa.send.requested",
+            tenantId,
+            correlationId: randomUUID(),
+            businessIdempotencyKey: `wa-send-auto:${parsed.call_id}`,
+            payload: waSendRequestedPayloadSchema.parse({
+              message_id: randomUUID(),
+              contact_id: parsed.contact_id,
+              contact_ref: row.phone,
+              mode: "flow",
+              flow_id: flowId,
+              agency_tag: agencyTagFromCode(row.agencyCode),
+              review_id: reviewId
+            }),
+            destination: `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/internal/events`
+          });
+        }
+      }
+    }
+    return;
+  }
+
+  if (eventType === "wa.message.sent") {
+    const parsed = waMessageSentPayloadSchema.parse(payload);
+    await bumpAnalytics(db, tenantId, { wa_sent: 1 });
+    if (parsed.contact_id) {
+      await db.query(
+        `update nova.whatsapp_reviews set status = 'sent', updated_at = now()
+          where tenant_id = $1 and contact_id = $2 and status = 'approved'`,
+        [tenantId, parsed.contact_id]
+      );
+    }
+    return;
+  }
+
+  if (eventType === "document.received" || eventType === "document.validated") {
+    const parsed =
+      eventType === "document.received"
+        ? documentReceivedPayloadSchema.parse(payload)
+        : documentValidatedPayloadSchema.parse(payload);
+    const contactId = parsed.contact_id;
+    if (contactId) {
+      await upsertLeadStage(db, tenantId, contactId, "documento", "doc_recibido");
+    }
+    return;
+  }
+
+  if (eventType === "wa.prequal.completed") {
+    const parsed = prequalCompletedPayloadSchema.parse(payload);
+    const contactId = await resolveContactId(db, tenantId, parsed.contact_id, parsed.contact_ref);
+    if (contactId) await upsertLeadStage(db, tenantId, contactId, "interesado", "prequal_liwa");
+    return;
+  }
+
+  if (eventType === "csat.recorded") {
+    const parsed = csatRecordedPayloadSchema.parse(payload);
+    const contactId = await resolveContactId(db, tenantId, parsed.contact_id, parsed.contact_ref);
+    await db.query(
+      `insert into nova.csat_scores (tenant_id, csat_id, contact_id, score, channel, note)
+       values ($1, $2, $3, $4, $5, $6)`,
+      [tenantId, randomUUID(), contactId ?? null, parsed.score, parsed.channel ?? "whatsapp", parsed.note ?? null]
+    );
+    await bumpAnalytics(db, tenantId, { csat_sum: parsed.score, csat_count: 1 });
+    return;
+  }
+
+  if (eventType === "contact.opt_out") {
+    const parsed = optOutPayloadSchema.parse(payload);
+    const contactId = await resolveContactId(db, tenantId, parsed.contact_id, parsed.contact_ref);
+    if (contactId) {
+      const phone = await db.query<{ phone: string }>(
+        `select phone_e164 as phone from nova.contacts where tenant_id = $1 and contact_id = $2`,
+        [tenantId, contactId]
+      );
+      if (phone.rows[0]) {
+        await db.query(
+          `insert into nova.opt_outs (tenant_id, phone_e164, contact_id, reason, source)
+           values ($1, $2, $3, $4, 'liwa')
+           on conflict (tenant_id, phone_e164) do nothing`,
+          [tenantId, phone.rows[0].phone, contactId, parsed.reason ?? "opt_out"]
+        );
+      }
+      await db.query(
+        `update nova.contacts set opted_out = true, eligibility = 'blocked_opt_out', updated_at = now()
+          where tenant_id = $1 and contact_id = $2`,
+        [tenantId, contactId]
+      );
+      await upsertLeadStage(db, tenantId, contactId, "no_interes", "opt_out");
+      await db.query(
+        `update nova.campaign_enrollments
+            set status = 'opted_out', updated_at = now()
+          where tenant_id = $1 and contact_id = $2 and status not in ('converted', 'opted_out')`,
+        [tenantId, contactId]
+      );
+    }
+    return;
+  }
+
+  if (eventType === "handoff.requested") {
+    const parsed = handoffRequestedPayloadSchema.parse(payload);
+    const agencyCode = parsed.agency_code || agencyCodeFromTag(parsed.agency_tag) || "BGA";
+    const contactId = await ensureContactFromRef(db, tenantId, parsed.contact_id, parsed.contact_ref, agencyCode);
+    if (!contactId) {
+      throw new Error("handoff.requested requires resolvable contact_id or contact_ref phone");
+    }
+    await db.query(
+      `insert into nova.handoffs (tenant_id, handoff_id, contact_id, agency_code, status, reason)
+       values ($1, $2, $3, $4, 'queued', $5)
+       on conflict (tenant_id, handoff_id) do nothing`,
+      [tenantId, parsed.handoff_id, contactId, agencyCode, parsed.reason ?? null]
+    );
+    await upsertLeadStage(db, tenantId, contactId, "transferido", "handoff_liwa");
+    await bumpAnalytics(db, tenantId, { handoffs_queued: 1 });
+    return;
+  }
+
+  if (eventType === "crm.tipificacion.recorded") {
+    const tipificacion = String(payload.tipificacion ?? "").trim();
+    if (!tipificacion) return;
+    const contactId = await ensureContactFromRef(
+      db,
+      tenantId,
+      typeof payload.contact_id === "string" ? payload.contact_id : undefined,
+      typeof payload.contact_ref === "string" ? payload.contact_ref : undefined
+    );
+    if (!contactId) return;
+    const stageRaw = typeof payload.stage === "string" ? payload.stage : undefined;
+    const stage = (stageRaw as CrmStage | undefined) ?? "contactado";
+    await upsertLeadStage(db, tenantId, contactId, stage, tipificacion);
+  }
+}
+
+async function resolveContactId(
+  db: DatabaseClient,
+  tenantId: string,
+  contactId?: string,
+  contactRef?: string
+): Promise<string | undefined> {
+  if (contactId) return contactId;
+  if (!contactRef) return undefined;
+  const byPhone = await db.query<{ contactId: string }>(
+    `select contact_id as "contactId" from nova.contacts
+      where tenant_id = $1 and (phone_e164 = $2 or contact_id::text = $2)
+      limit 1`,
+    [tenantId, contactRef]
+  );
+  return byPhone.rows[0]?.contactId;
+}
+
+async function ensureContactFromRef(
+  db: DatabaseClient,
+  tenantId: string,
+  contactId?: string,
+  contactRef?: string,
+  agencyCode?: string
+): Promise<string | undefined> {
+  const existing = await resolveContactId(db, tenantId, contactId, contactRef);
+  if (existing) return existing;
+  const phone = contactRef ? normalizeE164(contactRef) : null;
+  if (!phone) return undefined;
+  const id = randomUUID();
+  await db.query(
+    `insert into nova.contacts (tenant_id, contact_id, phone_e164, agency_code, updated_at)
+     values ($1, $2, $3, $4, now())
+     on conflict (tenant_id, phone_e164) do update
+     set agency_code = coalesce(excluded.agency_code, nova.contacts.agency_code),
+         updated_at = now()`,
+    [tenantId, id, phone, agencyCode ?? null]
+  );
+  const resolved = await resolveContactId(db, tenantId, undefined, phone);
+  return resolved ?? id;
+}
+
+async function upsertLeadStage(
+  db: DatabaseClient,
+  tenantId: string,
+  contactId: string,
+  stage: CrmStage,
+  tipification?: string
+): Promise<void> {
+  const existing = await db.query<{ leadId: string; stage: string }>(
+    `select lead_id as "leadId", stage from nova.leads
+      where tenant_id = $1 and contact_id = $2
+      order by updated_at desc limit 1`,
+    [tenantId, contactId]
+  );
+  if (existing.rowCount === 0) {
+    await db.query(
+      `insert into nova.leads (tenant_id, lead_id, contact_id, stage, tipification)
+       values ($1, $2, $3, $4, $5)`,
+      [tenantId, randomUUID(), contactId, stage, tipification ?? null]
+    );
+    return;
+  }
+  const current = existing.rows[0]!;
+  const from = (current.stage as CrmStage) || "pendiente";
+  if (!canTransitionCrm(from, stage) && from !== stage) return;
+  await db.query(
+    `update nova.leads set stage = $3, tipification = coalesce($4, tipification), updated_at = now()
+      where tenant_id = $1 and lead_id = $2`,
+    [tenantId, current.leadId, stage, tipification ?? null]
+  );
+}
+
+async function bumpAnalytics(
+  db: DatabaseClient,
+  tenantId: string,
+  deltas: Partial<Record<string, number>>
+): Promise<void> {
+  const day = new Date().toISOString().slice(0, 10);
+  await db.query(
+    `insert into nova.analytics_daily (
+       tenant_id, day, channel, contacts_imported, calls_requested, calls_completed, calls_failed,
+       wa_sent, leads_contacted, leads_interested, leads_won, leads_lost, handoffs_queued, csat_sum, csat_count
+     ) values ($1, $2::date, 'all', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     on conflict (tenant_id, day, channel) do update set
+       contacts_imported = nova.analytics_daily.contacts_imported + excluded.contacts_imported,
+       calls_requested = nova.analytics_daily.calls_requested + excluded.calls_requested,
+       calls_completed = nova.analytics_daily.calls_completed + excluded.calls_completed,
+       calls_failed = nova.analytics_daily.calls_failed + excluded.calls_failed,
+       wa_sent = nova.analytics_daily.wa_sent + excluded.wa_sent,
+       leads_contacted = nova.analytics_daily.leads_contacted + excluded.leads_contacted,
+       leads_interested = nova.analytics_daily.leads_interested + excluded.leads_interested,
+       leads_won = nova.analytics_daily.leads_won + excluded.leads_won,
+       leads_lost = nova.analytics_daily.leads_lost + excluded.leads_lost,
+       handoffs_queued = nova.analytics_daily.handoffs_queued + excluded.handoffs_queued,
+       csat_sum = nova.analytics_daily.csat_sum + excluded.csat_sum,
+       csat_count = nova.analytics_daily.csat_count + excluded.csat_count`,
+    [
+      tenantId,
+      day,
+      deltas.contacts_imported ?? 0,
+      deltas.calls_requested ?? 0,
+      deltas.calls_completed ?? 0,
+      deltas.calls_failed ?? 0,
+      deltas.wa_sent ?? 0,
+      deltas.leads_contacted ?? 0,
+      deltas.leads_interested ?? 0,
+      deltas.leads_won ?? 0,
+      deltas.leads_lost ?? 0,
+      deltas.handoffs_queued ?? 0,
+      deltas.csat_sum ?? 0,
+      deltas.csat_count ?? 0
+    ]
+  );
+}
+
+async function upsertImportedContact(
+  tx: DatabaseExecutor,
+  tenantId: string,
+  row: ContactImportRow,
+  auditBaseUrl: string
+): Promise<string> {
+  const contactId = randomUUID();
+  const existing = await tx.query<{ contactId: string }>(
+    `select contact_id as "contactId"
+       from nova.contacts
+      where tenant_id = $1 and phone_e164 = $2`,
+    [tenantId, row.phone_e164]
+  );
+  const resolvedId = existing.rows[0]?.contactId ?? contactId;
+
+  await tx.query(
+    `insert into nova.contacts (
+       tenant_id, contact_id, phone_e164, full_name, agency_code, segment,
+       cupo_preaprobado, mora_actual, saldo_total, universidad, documento, email, ciudad, updated_at
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+     on conflict (tenant_id, phone_e164) do update set
+       full_name = coalesce(excluded.full_name, nova.contacts.full_name),
+       agency_code = coalesce(excluded.agency_code, nova.contacts.agency_code),
+       segment = coalesce(excluded.segment, nova.contacts.segment),
+       cupo_preaprobado = coalesce(excluded.cupo_preaprobado, nova.contacts.cupo_preaprobado),
+       mora_actual = coalesce(excluded.mora_actual, nova.contacts.mora_actual),
+       saldo_total = coalesce(excluded.saldo_total, nova.contacts.saldo_total),
+       universidad = coalesce(excluded.universidad, nova.contacts.universidad),
+       documento = coalesce(excluded.documento, nova.contacts.documento),
+       email = coalesce(excluded.email, nova.contacts.email),
+       ciudad = coalesce(excluded.ciudad, nova.contacts.ciudad),
+       updated_at = now()`,
+    [
+      tenantId,
+      resolvedId,
+      row.phone_e164,
+      row.full_name ?? null,
+      row.agency_code ?? null,
+      row.segment ?? null,
+      row.cupo_preaprobado ?? null,
+      row.mora_actual ?? null,
+      row.saldo_total ?? null,
+      row.universidad ?? null,
+      row.documento ?? null,
+      row.email ?? null,
+      row.ciudad ?? null
+    ]
+  );
+
+  const payload = contactImportedPayloadSchema.parse({
+    contact_id: resolvedId,
+    phone_e164: row.phone_e164,
+    agency_code: row.agency_code,
+    full_name_masked: row.full_name ? maskName(row.full_name) : undefined
+  });
+  await insertNovaOutboxEvent(tx, {
+    eventId: randomUUID(),
+    eventType: "contact.imported",
+    tenantId,
+    correlationId: randomUUID(),
+    businessIdempotencyKey: `contact-import:${tenantId}:${row.phone_e164}`,
+    payload,
+    destination: `${auditBaseUrl.replace(/\/$/, "")}/internal/v1/events`
+  });
+
+  return resolvedId;
+}
+
+async function upsertAgentConfig(
+  db: DatabaseClient,
+  tenantId: string,
+  config: z.infer<typeof agentConfigSchema>
+): Promise<void> {
+  await db.query(
+    `insert into nova.agent_configs (
+       tenant_id, product_flow, elevenlabs_agent_id, elevenlabs_phone_number_id,
+       liwa_flow_id, from_number_e164, lead_context_templates, is_active, updated_at
+     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, coalesce($8, true), now())
+     on conflict (tenant_id, product_flow) do update set
+       elevenlabs_agent_id = excluded.elevenlabs_agent_id,
+       elevenlabs_phone_number_id = excluded.elevenlabs_phone_number_id,
+       liwa_flow_id = excluded.liwa_flow_id,
+       from_number_e164 = excluded.from_number_e164,
+       lead_context_templates = excluded.lead_context_templates,
+       is_active = coalesce(excluded.is_active, nova.agent_configs.is_active),
+       updated_at = now()`,
+    [
+      tenantId,
+      config.product_flow,
+      config.elevenlabs_agent_id,
+      config.elevenlabs_phone_number_id,
+      config.liwa_flow_id ?? null,
+      config.from_number_e164 ?? null,
+      JSON.stringify(config.lead_context_templates),
+      config.is_active ?? null
+    ]
+  );
+}
+
+function readProductFlow(params: unknown): "renovacion" | "reactivacion" | undefined {
+  const value =
+    typeof params === "object" && params && "productFlow" in params
+      ? (params as { productFlow?: unknown }).productFlow
+      : undefined;
+  const parsed = productFlowSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function requireTenantDb(
+  context: ServiceContext,
+  request: FastifyRequest,
+  reply: FastifyReply
+): { tenantId: string; db: DatabaseClient } | undefined {
+  const raw =
+    typeof request.params === "object" && request.params && "tenantId" in request.params
+      ? (request.params as { tenantId?: unknown }).tenantId
+      : undefined;
+  const parsed = tenantIdSchema.safeParse(raw);
+  if (!parsed.success) {
+    void reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
+    return undefined;
+  }
+  if (!context.db) {
+    void reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
+    return undefined;
+  }
+  return { tenantId: parsed.data, db: context.db };
+}
+
+async function ensureTenantSnapshot(
+  db: DatabaseClient,
+  tenantId: string,
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<boolean> {
+  const result = await db.query(`select tenant_id from nova.tenant_snapshots where tenant_id = $1`, [tenantId]);
+  if (result.rowCount === 0) {
+    void reply.code(404).send(envelope({ error: "Tenant snapshot not found; bootstrap required" }, request.id));
+    return false;
+  }
+  return true;
+}
+
+function readUuid(params: unknown, key: string): string | undefined {
+  const value =
+    typeof params === "object" && params && key in params ? (params as Record<string, unknown>)[key] : undefined;
+  const parsed = tenantIdSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function readQueryString(query: unknown, key: string): string | undefined {
+  if (typeof query !== "object" || !query || !(key in query)) return undefined;
+  const value = (query as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readAgencyCodesQuery(query: unknown): string[] {
+  const raw = readQueryString(query, "agency_codes");
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((code) => code.trim())
+    .filter(Boolean);
+}
+
+function maskName(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0) return "***";
+  return `${parts[0]!.slice(0, 1)}***`;
+}

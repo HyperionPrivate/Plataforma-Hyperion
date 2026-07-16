@@ -7,6 +7,7 @@ import {
   LogOut,
   MessagesSquare,
   Megaphone,
+  PhoneCall,
   Settings,
   Stethoscope
 } from "lucide-react";
@@ -20,6 +21,7 @@ const NAV = [
   { to: "/conversaciones", label: "Conversaciones", icon: MessagesSquare, capability: "view:conversations" },
   { to: "/agenda", label: "Agenda", icon: CalendarDays, capability: "view:agenda" },
   { to: "/lumen", label: "LUMEN clinico", icon: Stethoscope, capability: "view:lumen" },
+  { to: "/nova", label: "NOVA", icon: PhoneCall, capability: "view:nova" },
   { to: "/rpa", label: "Workers RPA", icon: Bot, capability: "view:rpa" },
   { to: "/campanas", label: "Campanas", icon: Megaphone, capability: "view:campaigns" },
   { to: "/bi", label: "BI y Reportes", icon: BarChart3, capability: "view:bi" },

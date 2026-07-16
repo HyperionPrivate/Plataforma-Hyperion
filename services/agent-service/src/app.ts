@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { envelope } from "@hyperion/contracts";
+import { envelope, productModules } from "@hyperion/contracts";
 import {
   HttpOutboxDispatcher,
   JetStreamOutboxDispatcher,
@@ -79,12 +79,16 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     if (authError) {
       return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
     }
-    if (!context.db) return envelope([], request.id);
-    const result = await context.db.query(`
-      select id, code, name, status, owner_service, created_at, updated_at
-      from platform.products order by created_at desc limit 100
-    `);
-    return envelope(result.rows, request.id);
+    // Catalogo de producto versionado en contracts (sin SQL cruzado a access/platform.products).
+    return envelope(
+      productModules.map((module) => ({
+        code: module.code,
+        name: module.name,
+        status: module.status,
+        owner_service: module.ownerService
+      })),
+      request.id
+    );
   });
 
   app.get("/v1/agents", async (request, reply) => {

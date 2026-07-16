@@ -36,3 +36,19 @@ export function tenantPath(tenantId: string, suffix: string): string {
 export function lumenPath(tenantId: string, suffix: string): string {
   return `/v1/tenants/${tenantId}/lumen/${suffix}`;
 }
+
+export function novaPath(tenantId: string, suffix: string): string {
+  return `/v1/tenants/${tenantId}/nova/${suffix}`;
+}
+
+export function voicePath(tenantId: string, suffix: string): string {
+  return `/v1/tenants/${tenantId}/voice/${suffix}`;
+}
+
+export function liwaPath(tenantId: string, suffix: string): string {
+  return `/v1/tenants/${tenantId}/liwa/${suffix}`;
+}
+
+export function documentsPath(tenantId: string, suffix: string): string {
+  return `/v1/tenants/${tenantId}/documents/${suffix}`;
+}
