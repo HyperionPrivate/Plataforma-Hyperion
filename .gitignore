@@ -30,6 +30,11 @@ Thumbs.db
 /data/
 postgres-data/
 
+# Local audit / graphify outputs (not for git)
+audit-artifacts/
+coverage-audit.json
+graphify-out/
+
 # Build
 dist/
 build/
