@@ -1528,11 +1528,13 @@ def claim_saga(
                     prior["status"] = "failed"
                     prior["error"] = prior.get("error") or "stale_processing"
                 # AUD2-003: reclaim without wiping durable step checkpoints.
-                prior_steps = prior.get("steps") if isinstance(prior.get("steps"), dict) else {}
-                ph_steps = (
-                    placeholder.get("steps") if isinstance(placeholder.get("steps"), dict) else {}
+                prior_steps: dict[str, Any] = (
+                    dict(prior["steps"]) if isinstance(prior.get("steps"), dict) else {}
                 )
-                merged_steps = {**ph_steps, **prior_steps}  # prior checkpoints win
+                ph_steps: dict[str, Any] = (
+                    dict(placeholder["steps"]) if isinstance(placeholder.get("steps"), dict) else {}
+                )
+                merged_steps: dict[str, Any] = {**ph_steps, **prior_steps}  # prior wins
                 control_keys = {
                     "id",
                     "kind",
