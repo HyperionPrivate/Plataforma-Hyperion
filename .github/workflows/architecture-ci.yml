@@ -43,9 +43,44 @@ jobs:
         run: docker compose -f docker-compose.dev.yml config --quiet
       - name: Compose test config
         run: docker compose -f docker-compose.test.yml config --quiet
+      - name: Compose Contabo config
+        # AUD-033: fail closed Contabo overlay must stay parseable without real secrets.
+        run: |
+          docker compose -f docker-compose.dev.yml -f docker-compose.contabo.yml \
+            --env-file .env.contabo.example config --quiet
+        env:
+          OIDC_ISSUER: https://issuer.example/realms/x
+          OIDC_AUDIENCE: pulso-ops
+          OIDC_JWKS_URL: https://issuer.example/certs
+          POSTGRES_PASSWORD: ci-test-postgres
+          REDIS_PASSWORD: ci-test-redis
       - name: pip-audit
+        # AUD-033: supply-chain findings must fail the PR gate.
         run: uv run pip-audit --progress-spinner off
-        continue-on-error: true
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_MODE: mock
+          NEXT_PUBLIC_REQUIRE_AUTH: "false"
 
   integration:
     runs-on: ubuntu-latest

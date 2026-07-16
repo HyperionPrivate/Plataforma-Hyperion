@@ -22,6 +22,15 @@ class WhatsAppMockService:
         text: str,
         template: str | None = None,
     ) -> dict[str, Any]:
+        from pilot_core.settings import get_settings
+
+        if not get_settings().mocks_allowed():
+            return {
+                "ok": False,
+                "mock_commercial": False,
+                "error": "whatsapp_mock_disabled",
+                "message": {"status": "failed", "error": "whatsapp_mock_disabled"},
+            }
         entry = {
             "id": f"wa_{uuid4().hex[:10]}",
             "channel": "whatsapp",
@@ -42,7 +51,13 @@ class WhatsAppMockService:
                 "whatsapp": entry,
             }
         )
-        return {"ok": True, "mock_commercial": True, "message": entry}
+        # queued_mock is not a provider receipt — ok=True only signals local queue.
+        return {
+            "ok": True,
+            "mock_commercial": True,
+            "message": entry,
+            "delivery": "queued_mock",
+        }
 
 
 whatsapp_mock_service = WhatsAppMockService()

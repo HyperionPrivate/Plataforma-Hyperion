@@ -71,10 +71,22 @@ async def publish_pending_outbox(
             row.attempts += 1
             row.last_error = f"{type(exc).__name__}:{exc}"[:500]
             stats.failed += 1
-            if row.attempts >= max_attempts:
+            # AUD-012: transport/transient errors stay pending for replay after recovery.
+            transient = isinstance(
+                exc, (ConnectionError, TimeoutError, OSError)
+            ) or type(exc).__name__ in {
+                "ConnectionError",
+                "TimeoutError",
+                "RedisConnectionError",
+                "ConnectionResetError",
+                "BrokenPipeError",
+            }
+            if transient:
+                row.status = "pending"
+            elif row.attempts >= max_attempts:
                 row.status = "failed"
                 stats.poisoned += 1
-            # leave status=pending under max_attempts for retry
+            # else leave status=pending under max_attempts for retry
     return stats
 
 

@@ -40,6 +40,27 @@ def _extract_contact_id(payload: Any) -> str | None:
     return None
 
 
+def _extract_receipt_id(payload: Any) -> str | None:
+    """Provider message / delivery id — required to declare WhatsApp 'sent' (AUD-016)."""
+    if not isinstance(payload, dict):
+        return None
+    for key in ("message_id", "messageId", "wa_message_id", "provider_message_id", "id"):
+        val = payload.get(key)
+        if val is not None and str(val).strip() and key != "id":
+            return str(val).strip()
+        # bare "id" only if it looks like a message id (not a boolean/contact echo)
+        if key == "id" and val is not None:
+            s = str(val).strip()
+            if s and s.lower() not in {"true", "false", "none"} and len(s) >= 6:
+                return s
+    for nested_key in ("data", "message", "result"):
+        nested = payload.get(nested_key)
+        found = _extract_receipt_id(nested)
+        if found:
+            return found
+    return None
+
+
 def _audit(
     *,
     phone: str,
@@ -167,7 +188,13 @@ class LiwaWhatsAppService:
         except Exception:
             data = {"raw": resp.text[:800]}
 
-        status = "sent" if resp.is_success else "failed"
+        receipt = _extract_receipt_id(data) if resp.is_success else None
+        if resp.is_success and receipt:
+            status = "sent"
+        elif resp.is_success:
+            status = "accepted_pending"
+        else:
+            status = "failed"
         entry = cast(
             dict[str, Any],
             {
@@ -176,6 +203,7 @@ class LiwaWhatsAppService:
                 "mode": self.mode,
                 "kind": "text",
                 "status": status,
+                "receipt_id": receipt,
                 "to": phone,
                 "text": text[:500],
                 "template": template,
@@ -187,9 +215,10 @@ class LiwaWhatsAppService:
         )
         _audit(phone=phone, first_name=first_name, entry=entry)
         return {
-            "ok": resp.is_success,
+            "ok": status == "sent",
             "mock_commercial": False,
             "message": entry,
+            "delivery": status,
         }
 
     async def send_flow(
@@ -250,7 +279,17 @@ class LiwaWhatsAppService:
         except Exception:
             data = {"raw": resp.text[:800]}
 
-        ok = resp.is_success and bool(data.get("success", True) if isinstance(data, dict) else True)
+        success_flag = True
+        if isinstance(data, dict) and "success" in data:
+            success_flag = bool(data.get("success"))
+        receipt = _extract_receipt_id(data) if resp.is_success and success_flag else None
+        # AUD-016: 200 {} without receipt is not "sent".
+        if resp.is_success and success_flag and receipt:
+            status = "sent"
+        elif resp.is_success and success_flag:
+            status = "accepted_pending"
+        else:
+            status = "failed"
         entry = cast(
             dict[str, Any],
             {
@@ -258,7 +297,8 @@ class LiwaWhatsAppService:
                 "channel": "whatsapp",
                 "mode": self.mode,
                 "kind": "flow",
-                "status": "sent" if ok else "failed",
+                "status": status,
+                "receipt_id": receipt,
                 "to": phone,
                 "text": (text or "")[:500],
                 "flow_id": fid,
@@ -273,9 +313,10 @@ class LiwaWhatsAppService:
         )
         _audit(phone=phone, first_name=first_name, entry=entry)
         return {
-            "ok": ok,
+            "ok": status == "sent",
             "mock_commercial": False,
             "message": entry,
+            "delivery": status,
         }
 
     async def list_tags(self) -> list[dict[str, Any]]:

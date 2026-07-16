@@ -1,13 +1,12 @@
 /** Mutations against pilot-core `/ops` (works alongside mock reads). */
-const base = (process.env.NEXT_PUBLIC_PILOT_CORE_URL ?? "http://127.0.0.1:8201").replace(
-  /\/$/,
-  "",
-);
+import { authHeaders, pilotCoreBaseUrl } from "@/lib/auth";
+
+const base = pilotCoreBaseUrl();
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    headers: authHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -20,7 +19,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method: "GET",
-    headers: { Accept: "application/json" },
+    headers: authHeaders({ Accept: "application/json" }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -32,7 +31,7 @@ async function getJson<T>(path: string): Promise<T> {
 async function putJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method: "PUT",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    headers: authHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -226,7 +225,7 @@ export async function uploadDocument(input: {
   form.append("kind", input.kind ?? "orden_matricula");
   const res = await fetch(`${base}/ops/documents/upload`, {
     method: "POST",
-    headers: { Accept: "application/json" },
+    headers: authHeaders({ Accept: "application/json" }),
     body: form,
   });
   if (!res.ok) {

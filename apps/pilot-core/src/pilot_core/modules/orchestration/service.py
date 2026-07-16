@@ -10,6 +10,7 @@ import httpx
 from pilot_core import ops_store
 from pilot_core.modules.campaigns.service import campaigns_service
 from pilot_core.modules.compliance.service import compliance_service
+from pilot_core.modules.dialer_safety import assert_safe_dialer_url
 from pilot_core.modules.elevenlabs_outbound import place_sip_outbound
 from pilot_core.modules.lead_context import display_name_from_contact, find_contact
 from pilot_core.modules.post_call.watcher import schedule_watch
@@ -89,6 +90,7 @@ class OrchestrationService:
                     phone=phone_n,
                     first_name=resolved_name,
                     flow=flow,
+                    tenant_id=tenant_id,
                 )
             if campaign_id and result.get("ok"):
                 campaigns_service.bump_contacted(campaign_id)
@@ -100,8 +102,9 @@ class OrchestrationService:
             }
 
         if dialer_url:
+            dialer_url = assert_safe_dialer_url(dialer_url)
             phone_id = getattr(settings, "dialer_default_phone_number_id", "") or ""
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
                 resp = await client.post(
                     f"{dialer_url}/internal/dialer/calls/dispatch",
                     json={
@@ -131,6 +134,13 @@ class OrchestrationService:
                     "dispatch": entry,
                 }
 
+        if not settings.mocks_allowed():
+            return {
+                "ok": False,
+                "mock_commercial": False,
+                "error": "voice_provider_unconfigured",
+                "detail": "Configure ELEVENLABS_API_KEY or DIALER_BASE_URL (mocks disabled)",
+            }
         entry = {
             "id": f"orch_{uuid4().hex[:10]}",
             "mode": "mock",
@@ -138,8 +148,7 @@ class OrchestrationService:
             **payload,
         }
         ops_store.insert_dispatch(entry)
-        if campaign_id:
-            campaigns_service.bump_contacted(campaign_id)
+        # Mock queue is not a real send — do not bump campaign contacted.
         return {"ok": True, "mock_commercial": True, "dispatch": entry}
 
 

@@ -1,3 +1,4 @@
+import { LogoutButton } from "@/components/auth-gate";
 import { SideNav } from "@/components/layout/side-nav";
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
@@ -8,8 +9,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
         <main className="flex-1 p-[var(--page-padding)]">{children}</main>
-        <footer className="border-t border-[var(--border)] py-3 text-center text-[10px] tracking-[0.2em] text-[var(--muted)]">
-          HYPERION ONE · Applied Intelligence
+        <footer className="flex items-center justify-center gap-4 border-t border-[var(--border)] py-3 text-center text-[10px] tracking-[0.2em] text-[var(--muted)]">
+          <span>HYPERION ONE · Applied Intelligence</span>
+          <LogoutButton />
         </footer>
       </div>
     </div>

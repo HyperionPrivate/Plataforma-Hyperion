@@ -9,7 +9,7 @@ from platform_kit.events.consumer import consume_batch, relay_outbox
 from platform_kit.events.envelope import build_synthetic_ping
 from platform_kit.events.handlers import architecture_effect
 from platform_kit.events.outbox_inbox import enqueue_outbox
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from handoff_liwa import runtime
 from handoff_liwa.settings import get_settings
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/_tech", tags=["technical"])
 
 
 class PingBody(BaseModel):
-    marker: str = "architecture"
+    marker: str = Field(default="architecture", max_length=64)
 
 
 @router.post("/synthetic-event")

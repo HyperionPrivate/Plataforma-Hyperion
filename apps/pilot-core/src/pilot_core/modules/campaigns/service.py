@@ -22,6 +22,8 @@ class CampaignsService:
         channels: list[str] | None = None,
         total: int = 0,
     ) -> dict[str, Any]:
+        # AUD-030: no roster → draft (not an active callable campaign).
+        status = "activa" if int(total or 0) > 0 else "draft"
         campaign = {
             "id": f"c_{uuid4().hex[:8]}",
             "name": name,
@@ -30,7 +32,7 @@ class CampaignsService:
             "contacted": 0,
             "total": total,
             "conversion": 0,
-            "status": "activa",
+            "status": status,
             "ab": {"a": 0, "b": 0, "winner": None},
         }
         return ops_store.upsert_campaign(campaign)

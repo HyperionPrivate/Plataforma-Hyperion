@@ -1,4 +1,4 @@
-"""core_adapter — HTTP real si CORE_BASE_URL; stub si no."""
+"""core_adapter — HTTP real si CORE_BASE_URL; stub solo si mocks permitidos."""
 
 from __future__ import annotations
 
@@ -23,6 +23,14 @@ class CoreAdapterService:
         settings = get_settings()
         base = (settings.core_base_url or "").rstrip("/")
         if not base:
+            if not settings.mocks_allowed():
+                return {
+                    "ok": False,
+                    "mock_commercial": False,
+                    "mode": "unconfigured",
+                    "document_id": document_id,
+                    "error": "CORE_BASE_URL required",
+                }
             return {
                 "ok": True,
                 "mock_commercial": True,

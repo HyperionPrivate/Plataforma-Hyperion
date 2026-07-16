@@ -91,6 +91,17 @@ _TRANSCRIPT_WHATSAPP = re.compile(
 )
 
 
+def _lease_until_iso(seconds: int | None = None) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    from pilot_core.settings import get_settings
+
+    ttl = seconds if seconds is not None else int(
+        getattr(get_settings(), "post_call_claim_lease_sec", 120) or 120
+    )
+    return (datetime.now(tz=timezone.utc) + timedelta(seconds=ttl)).isoformat()
+
+
 def normalize_intent(raw: str | None) -> str:
     if not raw:
         return "unknown"
@@ -190,9 +201,7 @@ def infer_intent_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
     call_ok = str(analysis.get("call_successful") or "").lower()
     if call_ok in {"failure", "failed", "unsuccessful"}:
         return "failed", "call_successful"
-    # ElevenLabs sometimes marks success even when WA follow-up is still needed.
-    if call_ok in {"success", "successful", "true"} and transcript_blob:
-        return "interesado", "call_successful_with_transcript"
+    # AUD-019: technical call success + neutral transcript ≠ commercial interest.
     return "unknown", "default"
 
 
@@ -272,6 +281,31 @@ def verify_elevenlabs_signature(
     return hmac.compare_digest(expected, v0)
 
 
+def _resolve_tenant_for_process(
+    *,
+    dispatch_id: str | None,
+    conversation_id: str | None,
+    raw_payload: dict[str, Any] | None,
+) -> str:
+    """Bootstrap tenant for webhooks/watchers; prefer ContextVar when already set."""
+    from platform_kit.correlation import tenant_id_ctx
+
+    current = (tenant_id_ctx.get() or "").strip()
+    if current:
+        return current
+    if dispatch_id:
+        found = ops_store.get_dispatch_unscoped(dispatch_id)
+        if found:
+            return found[0]
+    conv = conversation_id or extract_conversation_id(raw_payload or {})
+    if conv:
+        owned = ops_store.find_tenant_for_conversation(conv)
+        if owned:
+            return owned
+    # Dev / AUTH_DISABLED paths without prior store rows.
+    return "tenant-dev"
+
+
 class PostCallService:
     name: str = "post_call"
 
@@ -279,6 +313,38 @@ class PostCallService:
         return self.name
 
     async def process(
+        self,
+        *,
+        phone: str | None = None,
+        first_name: str = "Asociado",
+        intent: str | None = None,
+        flow: str | None = None,
+        skip_whatsapp: bool = False,
+        conversation_id: str | None = None,
+        dispatch_id: str | None = None,
+        raw_payload: dict[str, Any] | None = None,
+        source: str = "ops",
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        tenant = (tenant_id or "").strip() or _resolve_tenant_for_process(
+            dispatch_id=dispatch_id,
+            conversation_id=conversation_id,
+            raw_payload=raw_payload,
+        )
+        with ops_store.tenant_scope(tenant):
+            return await self._process_scoped(
+                phone=phone,
+                first_name=first_name,
+                intent=intent,
+                flow=flow,
+                skip_whatsapp=skip_whatsapp,
+                conversation_id=conversation_id,
+                dispatch_id=dispatch_id,
+                raw_payload=raw_payload,
+                source=source,
+            )
+
+    async def _process_scoped(
         self,
         *,
         phone: str | None = None,
@@ -345,6 +411,9 @@ class PostCallService:
         claimed = True
         resume: dict[str, Any] | None = None
         if conv_id:
+            lease_sec = int(
+                getattr(get_settings(), "post_call_claim_lease_sec", 120) or 120
+            )
             claimed, prior = ops_store.claim_post_call_conversation(
                 conv_id,
                 {
@@ -353,7 +422,9 @@ class PostCallService:
                     "phone": phone_n or None,
                     "source": source,
                     "status": "processing",
+                    "lease_until": _lease_until_iso(lease_sec),
                 },
+                stale_after_sec=lease_sec,
             )
             if claimed and prior:
                 # Reclaimed failed claim — resume CRM/WA effects.
@@ -402,6 +473,7 @@ class PostCallService:
             "intent_source": infer_source,
             "wants_whatsapp": wants_wa,
             "whatsapp_sent": bool((resume or {}).get("whatsapp_sent")),
+            "whatsapp_status": (resume or {}).get("whatsapp_status"),
             "whatsapp": (resume or {}).get("whatsapp"),
             "crm": (resume or {}).get("crm"),
             "dispatch_id": dispatch_id or (resume or {}).get("dispatch_id"),
@@ -426,12 +498,35 @@ class PostCallService:
                     result["crm"] = {"ok": False, "error": "crm_update_failed"}
             # Checkpoint after CRM so a later failure does not lose the lead id.
             if conv_id:
-                ops_store.insert_post_call({**result, "status": "processing"})
+                ops_store.insert_post_call(
+                    {
+                        **result,
+                        "status": "processing",
+                        "lease_until": _lease_until_iso(),
+                    }
+                )
 
             if wants_wa and not skip_whatsapp and phone_n:
-                if result.get("whatsapp_sent"):
+                prior_wa = (
+                    result.get("whatsapp")
+                    if isinstance(result.get("whatsapp"), dict)
+                    else None
+                )
+                prior_delivery = str(
+                    (prior_wa or {}).get("delivery")
+                    or result.get("whatsapp_status")
+                    or ""
+                )
+                # Skip resend if already handed to provider/local queue (not only "sent").
+                already_dispatched = bool(result.get("whatsapp_sent")) or (
+                    bool(prior_wa)
+                    and prior_wa.get("ok") is True
+                    and prior_delivery
+                    in {"sent", "queued_mock", "accepted_pending"}
+                )
+                if already_dispatched:
                     result["whatsapp"] = {
-                        **(result.get("whatsapp") or {}),
+                        **(prior_wa or {}),
                         "ok": True,
                         "idempotent": True,
                         "resumed": True,
@@ -449,7 +544,15 @@ class PostCallService:
                     else:
                         settings = get_settings()
                         auto_send = bool(getattr(settings, "post_call_whatsapp_auto_send", False))
-                        if not auto_send:
+                        if not product.get("whatsapp_runnable", True):
+                            result["whatsapp"] = {
+                                "ok": False,
+                                "error": "flow_whatsapp_not_configured",
+                                "flow": product.get("flow"),
+                            }
+                            result["whatsapp_sent"] = False
+                            result["whatsapp_status"] = "failed"
+                        elif not auto_send:
                             # Modo revisión: dejar el WA como PENDIENTE para envío manual.
                             # El lead queda como interesado (CRM), sin afirmar "enviado".
                             result["whatsapp"] = {
@@ -469,12 +572,21 @@ class PostCallService:
                                 text=str(product["wa_followup_text"]),
                             )
                             result["whatsapp"] = wa
-                            result["whatsapp_sent"] = bool(wa.get("ok"))
-                            result["whatsapp_status"] = (
-                                "sent" if result["whatsapp_sent"] else "failed"
+                            delivery = str(
+                                wa.get("delivery")
+                                or ((wa.get("message") or {}).get("status") if isinstance(wa.get("message"), dict) else "")
+                                or ""
                             )
-                            if result["whatsapp_sent"] and conv_id:
-                                ops_store.insert_post_call({**result, "status": "processing"})
+                            result["whatsapp_sent"] = delivery == "sent"
+                            result["whatsapp_status"] = delivery or ("failed" if not wa.get("ok") else "accepted_pending")
+                            if conv_id:
+                                ops_store.insert_post_call(
+                                    {
+                                        **result,
+                                        "status": "processing",
+                                        "lease_until": _lease_until_iso(),
+                                    }
+                                )
                         else:
                             wa = whatsapp_mock_service.send_text(
                                 phone=phone_n,
@@ -484,10 +596,17 @@ class PostCallService:
                                 template=f"{product['continue_label']}_post_call",
                             )
                             result["whatsapp"] = wa
-                            result["whatsapp_sent"] = bool(wa.get("ok"))
-                            result["whatsapp_status"] = "sent_mock"
-                            if result["whatsapp_sent"] and conv_id:
-                                ops_store.insert_post_call({**result, "status": "processing"})
+                            # Mock queue ≠ provider receipt.
+                            result["whatsapp_sent"] = False
+                            result["whatsapp_status"] = str(wa.get("delivery") or "queued_mock")
+                            if conv_id:
+                                ops_store.insert_post_call(
+                                    {
+                                        **result,
+                                        "status": "processing",
+                                        "lease_until": _lease_until_iso(),
+                                    }
+                                )
             elif wants_wa and not phone_n:
                 result["whatsapp"] = {"ok": False, "error": "phone_missing"}
             elif not wants_wa:

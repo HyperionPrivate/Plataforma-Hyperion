@@ -7,13 +7,22 @@
 | Componente | Método | Frecuencia sugerida | Owner |
 |---|---|---|---|
 | PostgreSQL (×4 DBs) | `pg_dump` / snapshots managed | Diario + PITR prod | `@TBD-platform` |
+| **Ops SQLite + docs locales** (`PULSO_DATA_DIR`) | `infra/scripts/backup_ops_sqlite.sh` | Diario (AUD-022) | `@TBD-platform` |
 | Redis Streams | RDB/AOF snapshot | Diario (retención corta) | `@TBD-platform` |
 | Object storage (MinIO/S3) | Versioning + replication | Continuo | `@TBD-platform` |
 | Secretos | Secret manager native backup | Según proveedor | `@TBD-security` |
 
+> **AUD-022:** el estado funcional de Ops (contactos, CRM, post-calls, conversaciones, settings) vive en SQLite bajo `PULSO_DATA_DIR` (volumen `pilot_core_data`). Un dump solo de PostgreSQL **no** recupera la operación del piloto.
+
 ## Backup manual local (dev)
 
 ```powershell
+# Postgres técnicos
+./infra/scripts/backup_postgres.sh ./backups
+
+# Estado funcional Ops (SQLite + documentos locales) — obligatorio para restore útil
+./infra/scripts/backup_ops_sqlite.sh ./backups/ops
+
 # Postgres — ejemplo db_pilot_core
 docker compose exec postgres pg_dump -U postgres db_pilot_core > backup_pilot_core.sql
 

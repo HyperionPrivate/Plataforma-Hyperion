@@ -21,9 +21,19 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
     ops_store._DB_PATH = None
     ops_store.init_db()
+    with ops_store.tenant_scope("tenant-dev"):
+        ops_store.set_setting(
+            "channels",
+            {
+                "voz_enabled": True,
+                "whatsapp_enabled": True,
+                "ventana_8_20": False,
+            },
+        )
 
     from pilot_core.main import app
 
+    app.state.settings = get_settings()
     return TestClient(app)
 
 

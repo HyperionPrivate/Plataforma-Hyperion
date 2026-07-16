@@ -87,7 +87,10 @@ function ConversacionesContent() {
         role: "advisor",
       });
       setDraft("");
-      toast.success("Mensaje enviado");
+      // AUD-011: API only persists locally — do not claim channel delivery.
+      toast.success("Mensaje guardado", {
+        description: "Registrado en la conversación (sin acuse del canal)",
+      });
       await refetch();
     } catch (err) {
       toast.error("No se pudo enviar", {

@@ -14,6 +14,20 @@ from pilot_core.settings import get_settings
 _ALLOWED = {".pdf", ".jpg", ".jpeg", ".png"}
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _ALLOWED_KINDS = frozenset({"orden_matricula", "cedula", "ingresos", "otro", "doc"})
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _magic_ok(content: bytes, ext: str) -> bool:
+    """AUD-027: reject extension spoofing; validated requires matching magic bytes."""
+    if not content:
+        return False
+    if ext == ".pdf":
+        return content.startswith(b"%PDF-")
+    if ext in {".jpg", ".jpeg"}:
+        return content.startswith(b"\xff\xd8\xff")
+    if ext == ".png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    return False
 
 
 def _safe_filename(filename: str) -> str:
@@ -53,8 +67,13 @@ class DocumentsService:
         if not ext:
             errors.append("extension_not_allowed")
         effective_size = len(content) if content is not None else size_bytes
-        if effective_size > 10 * 1024 * 1024:
+        if effective_size > _MAX_UPLOAD_BYTES:
             errors.append("file_too_large")
+        if content is not None and ext and not _magic_ok(content, ext):
+            errors.append("content_type_mismatch")
+        if content is None:
+            # Metadata-only registration is received, not content-validated.
+            pass
         infected = "virus" in lower
         if infected:
             errors.append("antivirus_rejected")
@@ -75,6 +94,12 @@ class DocumentsService:
                 "bucket": put.get("bucket"),
             }
 
+        if errors:
+            status = "rejected"
+        elif content is not None:
+            status = "validated"
+        else:
+            status = "received"
         doc = {
             "id": f"doc_{uuid4().hex[:10]}",
             "filename": safe_name,
@@ -82,7 +107,7 @@ class DocumentsService:
             "size_bytes": effective_size,
             "contact_phone": contact_phone,
             "kind": _safe_kind(kind),
-            "status": "rejected" if errors else "validated",
+            "status": status,
             "ok": not errors,
             "errors": errors,
             "retention_days": 90,

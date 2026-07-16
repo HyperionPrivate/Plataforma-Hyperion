@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from platform_kit.events.envelope import EventEnvelope, validate_event_size
 from platform_kit.settings import PlatformSettings
 
+# Re-export for consumers that validate after parse.
+
 
 def _as_str(value: object) -> str:
     if isinstance(value, bytes):
@@ -34,6 +36,7 @@ class RedisStreamsTransport:
     def __init__(self, redis: object, settings: PlatformSettings) -> None:
         self._redis = redis  # redis.asyncio.Redis
         self._settings = settings
+        self._acks_since_trim = 0
 
     @property
     def _attempts_key(self) -> str:
@@ -134,6 +137,49 @@ class RedisStreamsTransport:
         await self._redis.xack(  # type: ignore[attr-defined]
             self._settings.redis_stream_key, group, _as_str(message_id)
         )
+        self._acks_since_trim += 1
+        every = int(getattr(self._settings, "redis_trim_every_n_acks", 32) or 32)
+        if (
+            getattr(self._settings, "redis_trim_acked", True)
+            and every > 0
+            and self._acks_since_trim >= every
+        ):
+            self._acks_since_trim = 0
+            await self.trim_acked(group)
+
+    async def trim_acked(self, group: str) -> int:
+        """AUD-013: drop entries older than the oldest pending ID (never pending).
+
+        If the PEL is empty, trim exclusively below the stream's last entry so
+        ACKed history does not grow without bound while leaving the tip intact.
+        """
+        stream = self._settings.redis_stream_key
+        try:
+            pending = await self._redis.xpending(stream, group)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return 0
+        min_id: str | None = None
+        if isinstance(pending, (list, tuple)) and len(pending) >= 2 and pending[0]:
+            raw_min = pending[1]
+            if raw_min is not None:
+                min_id = _as_str(raw_min)
+        if not min_id:
+            try:
+                rows = await self._redis.xrevrange(stream, count=1)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                return 0
+            if not rows:
+                return 0
+            tip = _as_str(rows[0][0] if isinstance(rows[0], (list, tuple)) else rows[0])
+            # Exclusive MINID keeps the tip; drops everything older (all ACKed).
+            min_id = f"({tip}"
+        try:
+            removed = await self._redis.xtrim(  # type: ignore[attr-defined]
+                stream, minid=min_id, approximate=True
+            )
+            return int(removed or 0)
+        except Exception:  # noqa: BLE001
+            return 0
 
     async def dead_letter(self, envelope: EventEnvelope, *, reason: str) -> None:
         payload = envelope.as_redis_fields()
@@ -217,6 +263,8 @@ class RedisStreamsTransport:
             )
         try:
             envelope = EventEnvelope.from_json(raw)
+            # AUD-029: reject oversized envelopes on consume, not only publish.
+            validate_event_size(envelope)
         except Exception as exc:  # noqa: BLE001
             return StreamMessage(
                 message_id=message_id,
