@@ -79,7 +79,7 @@ def test_cross_tenant_settings_and_contacts_isolated(client: TestClient) -> None
 
     r = client.get("/ops/settings", headers={"X-Tenant-ID": "tenant-b"})
     assert r.status_code == 200
-    ui = (r.json().get("ui") or {})
+    ui = r.json().get("ui") or {}
     # B never wrote ui.pii_masking=false
     assert ui.get("pii_masking") is not False
 

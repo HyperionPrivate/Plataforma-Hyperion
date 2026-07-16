@@ -72,9 +72,9 @@ async def publish_pending_outbox(
             row.last_error = f"{type(exc).__name__}:{exc}"[:500]
             stats.failed += 1
             # AUD-012: transport/transient errors stay pending for replay after recovery.
-            transient = isinstance(
-                exc, (ConnectionError, TimeoutError, OSError)
-            ) or type(exc).__name__ in {
+            transient = isinstance(exc, (ConnectionError, TimeoutError, OSError)) or type(
+                exc
+            ).__name__ in {
                 "ConnectionError",
                 "TimeoutError",
                 "RedisConnectionError",

@@ -62,9 +62,7 @@ def test_missing_jwks_returns_503_not_500() -> None:
     jwks_cache.configure(settings)
     assert jwks_cache.is_configured() is False
     # Minimal three-segment JWT so header parsing succeeds before JWKS lookup.
-    header = jwt.utils.base64url_encode(
-        b'{"alg":"RS256","typ":"JWT","kid":"x"}'
-    ).decode("ascii")
+    header = jwt.utils.base64url_encode(b'{"alg":"RS256","typ":"JWT","kid":"x"}').decode("ascii")
     payload = jwt.utils.base64url_encode(b'{"sub":"u1"}').decode("ascii")
     token = f"{header}.{payload}.sig"
     with pytest.raises(PlatformError) as exc:

@@ -27,17 +27,14 @@ async def _auth_readiness(settings: PlatformSettings) -> dict[str, Any]:
     """Fail readiness in staging/production when OIDC/JWKS is incomplete."""
     if settings.app_env not in ("staging", "production"):
         return {"ok": True, "mode": settings.app_env}
-    ok = (
-        not settings.auth_disabled
-        and settings.oidc_configured()
-        and jwks_cache.is_configured()
-    )
+    ok = not settings.auth_disabled and settings.oidc_configured() and jwks_cache.is_configured()
     return {
         "ok": ok,
         "auth_disabled": settings.auth_disabled,
         "oidc_configured": settings.oidc_configured(),
         "jwks_configured": jwks_cache.is_configured(),
     }
+
 
 HTTP_REQUESTS = Counter(
     "coopfuturo_http_requests_total",
@@ -99,19 +96,13 @@ def create_app(
             and content_length is None
             and not any(path.endswith(p) for p in _self_capped)
         ):
-            return JSONResponse(
-                status_code=411, content={"error": "content_length_required"}
-            )
+            return JSONResponse(status_code=411, content={"error": "content_length_required"})
         if content_length:
             try:
                 if int(content_length) > settings.max_request_bytes:
-                    return JSONResponse(
-                        status_code=413, content={"error": "payload_too_large"}
-                    )
+                    return JSONResponse(status_code=413, content={"error": "payload_too_large"})
             except ValueError:
-                return JSONResponse(
-                    status_code=400, content={"error": "invalid_content_length"}
-                )
+                return JSONResponse(status_code=400, content={"error": "invalid_content_length"})
 
         client = request.client.host if request.client else "unknown"
         # AUD-025: quota by route template, not raw client-controlled path.

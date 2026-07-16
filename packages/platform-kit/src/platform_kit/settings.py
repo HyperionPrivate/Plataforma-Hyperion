@@ -67,7 +67,9 @@ class PlatformSettings(BaseSettings):
         return bool(self.oidc_jwks_url.strip() or self.oidc_jwks_static_json.strip())
 
     def oidc_configured(self) -> bool:
-        return bool(self.oidc_issuer.strip() and self.oidc_audience.strip() and self.jwks_configured())
+        return bool(
+            self.oidc_issuer.strip() and self.oidc_audience.strip() and self.jwks_configured()
+        )
 
     def require_secrets_or_fail(self) -> None:
         if self.app_env in ("staging", "production"):

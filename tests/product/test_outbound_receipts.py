@@ -193,9 +193,9 @@ def test_claim_lease_is_renewable(
     import asyncio
     from datetime import UTC, datetime, timedelta
 
+    import pilot_core.ops_store as ops_store
     from pilot_core.modules.post_call.service import post_call_service
     from pilot_core.settings import get_settings
-    import pilot_core.ops_store as ops_store
 
     get_settings.cache_clear()
     s = get_settings()

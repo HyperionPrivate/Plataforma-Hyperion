@@ -1,4 +1,4 @@
-﻿"""Ops product API - shapes aligned with apps/web MODULES.md (piloto PULSO)."""
+"""Ops product API - shapes aligned with apps/web MODULES.md (piloto PULSO)."""
 
 from __future__ import annotations
 
@@ -325,7 +325,9 @@ async def create_handoff(
             saga["steps"] = steps
             ops_store.save_saga(saga)
 
-        liwa_meta: dict[str, Any] = steps.get("liwa") if isinstance(steps.get("liwa"), dict) else {"synced": False}
+        liwa_meta: dict[str, Any] = (
+            steps.get("liwa") if isinstance(steps.get("liwa"), dict) else {"synced": False}
+        )
         settings = get_settings()
         if body.phone and settings.liwa_live_enabled() and not liwa_meta.get("synced"):
             decision = compliance_service.evaluate(phone=body.phone, channel="whatsapp")
@@ -353,7 +355,11 @@ async def create_handoff(
             saga["steps"] = steps
             ops_store.save_saga(saga)
         elif not body.phone or not settings.liwa_live_enabled():
-            liwa_meta = steps.get("liwa") if isinstance(steps.get("liwa"), dict) else {"synced": False, "skipped": True}
+            liwa_meta = (
+                steps.get("liwa")
+                if isinstance(steps.get("liwa"), dict)
+                else {"synced": False, "skipped": True}
+            )
             steps["liwa"] = liwa_meta
 
         if not steps.get("persisted"):
@@ -405,7 +411,9 @@ async def create_handoff(
 
 
 @router.post("/compliance/opt-out")
-async def opt_out(body: OptOutBody, _ctx: AuthContext = Depends(require_ops_roles(*OPS_OPERATE))) -> dict[str, Any]:
+async def opt_out(
+    body: OptOutBody, _ctx: AuthContext = Depends(require_ops_roles(*OPS_OPERATE))
+) -> dict[str, Any]:
     return {"ok": True, **compliance_service.suppress(body.phone)}
 
 
@@ -519,11 +527,8 @@ async def elevenlabs_post_call_webhook(request: Request) -> dict[str, Any]:
 
     raw = await _read_body_capped(request, max_bytes=_WEBHOOK_MAX_BYTES)
     sig = request.headers.get("elevenlabs-signature")
-    if secret:
-        if not verify_elevenlabs_signature(body=raw, signature_header=sig, secret=secret):
-            raise PlatformError(
-                "webhook_signature", "Invalid ElevenLabs signature", status_code=401
-            )
+    if secret and not verify_elevenlabs_signature(body=raw, signature_header=sig, secret=secret):
+        raise PlatformError("webhook_signature", "Invalid ElevenLabs signature", status_code=401)
 
     try:
         payload = json.loads(raw.decode("utf-8") or "{}")
@@ -761,7 +766,9 @@ class CrmMoveBody(BaseModel):
 
 
 @router.post("/crm/move")
-async def crm_move(body: CrmMoveBody, _ctx: AuthContext = Depends(require_ops_roles(*OPS_OPERATE))) -> dict[str, Any]:
+async def crm_move(
+    body: CrmMoveBody, _ctx: AuthContext = Depends(require_ops_roles(*OPS_OPERATE))
+) -> dict[str, Any]:
     try:
         lead = crm_service.move(
             lead_id=body.lead_id, to_column=body.to_column, tipificacion=body.tipificacion
@@ -996,7 +1003,9 @@ async def list_documents(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[
 
 
 @router.get("/reports/{report_id}")
-async def get_report(report_id: str, _ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, Any]:
+async def get_report(
+    report_id: str, _ctx: AuthContext = Depends(require_ops_auth)
+) -> dict[str, Any]:
     c = ops_store.counts()
     dashboard = analytics_service.overlay_dashboard(_load("dashboard.json"))
     handoffs = ops_store.list_handoffs(50)
@@ -1174,9 +1183,7 @@ async def put_settings(
                 "dialer.base_url is configured via DIALER_BASE_URL and cannot be set from the API",
                 status_code=403,
             )
-        safe_dialer = {
-            k: v for k, v in body.dialer.items() if k != "base_url"
-        }
+        safe_dialer = {k: v for k, v in body.dialer.items() if k != "base_url"}
         prev = ops_store.get_setting("dialer") or {}
         if not isinstance(prev, dict):
             prev = {}
@@ -1195,13 +1202,16 @@ async def put_settings(
         agent_config_service.save(body.agent_config)
     if body.ui is not None:
         # AUD-006: only admin may disable PII masking (global).
-        if "pii_masking" in body.ui and body.ui.get("pii_masking") is False:
-            if "admin" not in (_ctx.roles or ()):
-                raise PlatformError(
-                    "forbidden",
-                    "Only admin can disable PII masking",
-                    status_code=403,
-                )
+        if (
+            "pii_masking" in body.ui
+            and body.ui.get("pii_masking") is False
+            and "admin" not in (_ctx.roles or ())
+        ):
+            raise PlatformError(
+                "forbidden",
+                "Only admin can disable PII masking",
+                status_code=403,
+            )
         prev = ops_store.get_setting("ui") or {}
         if not isinstance(prev, dict):
             prev = {}
@@ -1301,9 +1311,7 @@ async def _e2e_campaign(
             saga["steps"] = steps
             ops_store.save_saga(saga)
             if blocked_unique:
-                raise PlatformError(
-                    "compliance_blocked", ",".join(blocked_unique), status_code=403
-                )
+                raise PlatformError("compliance_blocked", ",".join(blocked_unique), status_code=403)
 
         if "voice" not in steps:
             if not body.skip_voice:

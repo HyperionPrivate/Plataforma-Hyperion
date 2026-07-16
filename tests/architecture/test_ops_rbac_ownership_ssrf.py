@@ -10,9 +10,9 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
+from pilot_core.modules.dialer_safety import assert_safe_dialer_url
 from platform_kit.auth import jwks_cache
 from platform_kit.errors import PlatformError
-from pilot_core.modules.dialer_safety import assert_safe_dialer_url
 
 
 def _rsa():

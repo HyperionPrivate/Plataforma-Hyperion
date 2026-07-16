@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import re
 import time
+from datetime import UTC
 from typing import Any
 from uuid import uuid4
 
@@ -92,14 +93,16 @@ _TRANSCRIPT_WHATSAPP = re.compile(
 
 
 def _lease_until_iso(seconds: int | None = None) -> str:
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from pilot_core.settings import get_settings
 
-    ttl = seconds if seconds is not None else int(
-        getattr(get_settings(), "post_call_claim_lease_sec", 120) or 120
+    ttl = (
+        seconds
+        if seconds is not None
+        else int(getattr(get_settings(), "post_call_claim_lease_sec", 120) or 120)
     )
-    return (datetime.now(tz=timezone.utc) + timedelta(seconds=ttl)).isoformat()
+    return (datetime.now(tz=UTC) + timedelta(seconds=ttl)).isoformat()
 
 
 def normalize_intent(raw: str | None) -> str:
@@ -411,9 +414,7 @@ class PostCallService:
         claimed = True
         resume: dict[str, Any] | None = None
         if conv_id:
-            lease_sec = int(
-                getattr(get_settings(), "post_call_claim_lease_sec", 120) or 120
-            )
+            lease_sec = int(getattr(get_settings(), "post_call_claim_lease_sec", 120) or 120)
             claimed, prior = ops_store.claim_post_call_conversation(
                 conv_id,
                 {
@@ -508,21 +509,16 @@ class PostCallService:
 
             if wants_wa and not skip_whatsapp and phone_n:
                 prior_wa = (
-                    result.get("whatsapp")
-                    if isinstance(result.get("whatsapp"), dict)
-                    else None
+                    result.get("whatsapp") if isinstance(result.get("whatsapp"), dict) else None
                 )
                 prior_delivery = str(
-                    (prior_wa or {}).get("delivery")
-                    or result.get("whatsapp_status")
-                    or ""
+                    (prior_wa or {}).get("delivery") or result.get("whatsapp_status") or ""
                 )
                 # Skip resend if already handed to provider/local queue (not only "sent").
                 already_dispatched = bool(result.get("whatsapp_sent")) or (
                     bool(prior_wa)
                     and prior_wa.get("ok") is True
-                    and prior_delivery
-                    in {"sent", "queued_mock", "accepted_pending"}
+                    and prior_delivery in {"sent", "queued_mock", "accepted_pending"}
                 )
                 if already_dispatched:
                     result["whatsapp"] = {
@@ -574,11 +570,17 @@ class PostCallService:
                             result["whatsapp"] = wa
                             delivery = str(
                                 wa.get("delivery")
-                                or ((wa.get("message") or {}).get("status") if isinstance(wa.get("message"), dict) else "")
+                                or (
+                                    (wa.get("message") or {}).get("status")
+                                    if isinstance(wa.get("message"), dict)
+                                    else ""
+                                )
                                 or ""
                             )
                             result["whatsapp_sent"] = delivery == "sent"
-                            result["whatsapp_status"] = delivery or ("failed" if not wa.get("ok") else "accepted_pending")
+                            result["whatsapp_status"] = delivery or (
+                                "failed" if not wa.get("ok") else "accepted_pending"
+                            )
                             if conv_id:
                                 ops_store.insert_post_call(
                                     {

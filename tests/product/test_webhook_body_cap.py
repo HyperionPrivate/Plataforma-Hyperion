@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import time as dt_time
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient

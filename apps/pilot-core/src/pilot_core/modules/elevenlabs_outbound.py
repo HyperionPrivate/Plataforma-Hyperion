@@ -103,5 +103,7 @@ async def place_sip_outbound(
             "conversation_id": conv_id_s or None,
             "dynamic_variables": dyn,
             "response": data,
-            "error": None if ok else ("missing_conversation_id" if resp.is_success else "provider_error"),
+            "error": None
+            if ok
+            else ("missing_conversation_id" if resp.is_success else "provider_error"),
         }

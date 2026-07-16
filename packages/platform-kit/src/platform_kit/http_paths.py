@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import re
 
-_UUID = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _HEX = re.compile(r"^[0-9a-fA-F]{8,}$")
 _NUM = re.compile(r"^\d{2,}$")
 _PHONEISH = re.compile(r"^\+?\d{7,15}$")

@@ -63,8 +63,8 @@ def test_real_pdf_magic_is_validated(client: TestClient) -> None:
 
 
 def test_metadata_only_is_received_not_validated(client: TestClient) -> None:
-    from pilot_core.modules.documents_service import documents_service
     import pilot_core.ops_store as ops_store
+    from pilot_core.modules.documents_service import documents_service
 
     with ops_store.tenant_scope("tenant-dev"):
         doc = documents_service.register(

@@ -1,7 +1,6 @@
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -19,8 +18,7 @@ def test_contabo_overlay_is_loopback_only_and_fail_closed() -> None:
     assert "REDIS_PASSWORD:?REDIS_PASSWORD is required" in overlay
     assert "--requirepass" in overlay
     assert (
-        "REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/0"
-        in overlay
+        "REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/0" in overlay
     )
     for service in ("pilot-core", "whatsapp-adapter", "documents", "handoff-liwa"):
         match = re.search(
@@ -32,10 +30,7 @@ def test_contabo_overlay_is_loopback_only_and_fail_closed() -> None:
         body = match.group("body")
         assert "<<: *oidc_env" in body or "OIDC_ISSUER" in body
     assert "LIWA_MODE: ${LIWA_MODE:-mock}" in overlay
-    assert (
-        "POST_CALL_WHATSAPP_AUTO_SEND: "
-        "${POST_CALL_WHATSAPP_AUTO_SEND:-false}"
-    ) in overlay
+    assert ("POST_CALL_WHATSAPP_AUTO_SEND: ${POST_CALL_WHATSAPP_AUTO_SEND:-false}") in overlay
     assert "NEXT_PUBLIC_PILOT_CORE_URL: ${PUBLIC_PILOT_CORE_URL:-/pilot-core}" in overlay
     assert "127.0.0.1:9088/pilot-core" not in overlay
     assert 'NEXT_PUBLIC_REQUIRE_AUTH: "true"' in overlay

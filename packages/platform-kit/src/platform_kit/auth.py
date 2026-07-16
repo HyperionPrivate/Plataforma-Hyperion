@@ -76,9 +76,7 @@ class JWKSCache:
                     self._negative_kids[kid] = time.monotonic() + self._NEGATIVE_KID_TTL_SECONDS
                 raise PlatformError("invalid_token", "No matching JWK", status_code=401)
             if self._client is None:
-                raise PlatformError(
-                    "auth_misconfigured", "JWKS not configured", status_code=503
-                )
+                raise PlatformError("auth_misconfigured", "JWKS not configured", status_code=503)
             return self._client.get_signing_key_from_jwt(token).key
         except PlatformError:
             raise

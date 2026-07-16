@@ -6,11 +6,12 @@ import contextlib
 import json
 import os
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC
 from pathlib import Path
 from threading import Lock
-from typing import Any, Iterator
+from typing import Any
 from uuid import uuid4
 
 from platform_kit.correlation import tenant_id_ctx
@@ -219,9 +220,7 @@ def init_db() -> None:
             )
             current = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
             if current > SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"ops_store schema too new: db={current} code={SCHEMA_VERSION}"
-                )
+                raise RuntimeError(f"ops_store schema too new: db={current} code={SCHEMA_VERSION}")
             if current < SCHEMA_VERSION:
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             conn.commit()
@@ -296,9 +295,7 @@ def _rebuild_entity_table(conn: sqlite3.Connection, table: str) -> None:
     # Recreate using the IF NOT EXISTS script shape — simplest: create from known schemas.
     _create_empty_entity(conn, table)
     select_cols = ", ".join(["tenant_id"] + col_list)
-    conn.execute(
-        f"INSERT OR IGNORE INTO {table} ({select_cols}) SELECT {select_cols} FROM {tmp}"
-    )
+    conn.execute(f"INSERT OR IGNORE INTO {table} ({select_cols}) SELECT {select_cols} FROM {tmp}")
     conn.execute(f"DROP TABLE {tmp}")
 
 
@@ -446,9 +443,7 @@ def _migrate_normalize_opt_outs(conn: sqlite3.Connection) -> None:
             continue
         tid = str(row["tenant_id"] or _LEGACY_TENANT)
         conn.execute("DELETE FROM opt_outs WHERE tenant_id=? AND phone=?", (tid, raw))
-        conn.execute(
-            "INSERT OR IGNORE INTO opt_outs(tenant_id, phone) VALUES(?, ?)", (tid, canon)
-        )
+        conn.execute("INSERT OR IGNORE INTO opt_outs(tenant_id, phone) VALUES(?, ?)", (tid, canon))
 
 
 def _dedupe_post_calls_by_conversation(conn: sqlite3.Connection) -> None:
@@ -485,9 +480,7 @@ def _dedupe_post_calls_by_conversation(conn: sqlite3.Connection) -> None:
             keep_id = str(rows[0]["id"])
         for row in rows:
             if str(row["id"]) != keep_id:
-                conn.execute(
-                    "DELETE FROM post_calls WHERE tenant_id=? AND id=?", (tid, row["id"])
-                )
+                conn.execute("DELETE FROM post_calls WHERE tenant_id=? AND id=?", (tid, row["id"]))
 
 
 def _recover_stale_post_call_claims(conn: sqlite3.Connection, *, max_age_sec: int = 300) -> None:
@@ -851,9 +844,7 @@ def claim_post_call_conversation(
     if "id" not in placeholder:
         placeholder["id"] = f"pc_{uuid4().hex[:10]}"
     owner_id = str(placeholder.get("owner_id") or uuid4().hex)
-    lease_until = (
-        datetime.now(tz=UTC) + timedelta(seconds=stale_after_sec)
-    ).isoformat()
+    lease_until = (datetime.now(tz=UTC) + timedelta(seconds=stale_after_sec)).isoformat()
     with _LOCK:
         conn = _connect()
         try:
@@ -1493,9 +1484,7 @@ def claim_saga(
     if not key:
         raise ValueError("idempotency_key required")
     sid = str(placeholder.get("id") or f"sg_{uuid4().hex[:10]}")
-    lease_until = (
-        datetime.now(tz=UTC) + timedelta(seconds=stale_after_sec)
-    ).isoformat()
+    lease_until = (datetime.now(tz=UTC) + timedelta(seconds=stale_after_sec)).isoformat()
     with _LOCK:
         conn = _connect()
         try:

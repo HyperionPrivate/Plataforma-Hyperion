@@ -36,9 +36,7 @@ def assert_safe_dialer_url(url: str) -> str:
     if not host:
         raise PlatformError("dialer_url_invalid", "Dialer URL host required", status_code=400)
     if host in _BLOCKED_HOSTS or host.endswith(".localhost") or host.endswith(".local"):
-        raise PlatformError(
-            "dialer_url_forbidden", "Dialer host is not allowed", status_code=400
-        )
+        raise PlatformError("dialer_url_forbidden", "Dialer host is not allowed", status_code=400)
     # Literal IP
     try:
         ip = ipaddress.ip_address(host)

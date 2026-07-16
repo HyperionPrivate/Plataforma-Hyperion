@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta, time as dt_time
+from datetime import UTC, datetime, timedelta
+from datetime import time as dt_time
 
 import jwt
 import pytest
