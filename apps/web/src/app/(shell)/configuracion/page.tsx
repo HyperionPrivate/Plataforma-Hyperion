@@ -339,8 +339,8 @@ export default function ConfiguracionPage() {
             </li>
           </ul>
           <p className="mt-4 text-xs text-[var(--muted)]">
-            Desactivar la ventana permite orquestar fuera de 8–20 (solo demo local). Opt-outs
-            persisten en SQLite.
+            Desactivar la ventana 8–20 requiere rol admin. Opt-outs persisten en SQLite por
+            tenant.
           </p>
         </ChartCard>
       )}
@@ -352,8 +352,8 @@ export default function ConfiguracionPage() {
               <div>
                 <p className="text-sm">Enmascarar PII en lecturas Ops</p>
                 <p className="text-xs text-[var(--muted)]">
-                  Teléfonos, cédulas y nombres en GET /ops (CRM, handoff, conversaciones,
-                  contactos). Laboratorio sigue usando valores crudos para pruebas.
+                  Teléfonos, cédulas y nombres en lecturas Ops. Asesores/analistas siempre
+                  ven datos enmascarados; solo un admin puede desactivar el enmascarado.
                 </p>
               </div>
               <button

@@ -90,19 +90,26 @@ class ContactsService:
         }
 
     def commit_valid(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        # Commit ALL valid rows — preview cap must not truncate persistence.
+        # AUD-030: atomic batch — preview cap must not truncate persistence.
+        if len(rows) > 5000:
+            return {
+                "committed": 0,
+                "valid": 0,
+                "invalid": 0,
+                "total": len(rows),
+                "error": "too_many_rows",
+                "max_rows": 5000,
+            }
         parsed = self.parse_rows(rows)
-        committed = 0
-        for row in parsed:
-            if row["valid"]:
-                ops_store.insert_contact(row)
-                committed += 1
+        valid_rows = [r for r in parsed if r["valid"]]
+        committed = ops_store.insert_contacts_batch(valid_rows)
         return {
             "committed": committed,
-            "valid": sum(1 for r in parsed if r["valid"]),
+            "valid": len(valid_rows),
             "invalid": sum(1 for r in parsed if not r["valid"]),
             "total": len(parsed),
             "store_size": len(ops_store.list_contacts(10_000)),
+            "atomic": True,
         }
 
     def list_contacts(self, limit: int = 100) -> dict[str, Any]:

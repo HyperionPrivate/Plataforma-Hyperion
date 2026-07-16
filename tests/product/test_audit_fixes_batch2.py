@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import time as dt_time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,11 +47,22 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
     from pilot_core.modules.compliance.service import compliance_service
 
-    compliance_service.suppressed.clear()
-    compliance_service._hydrated = False
+    with ops_store.tenant_scope("tenant-dev"):
+        ops_store.set_setting(
+            "channels",
+            {
+                "voz_enabled": True,
+                "whatsapp_enabled": True,
+                "ventana_8_20": False,
+            },
+        )
+    compliance_service._suppressed_by_tenant.clear()
+    compliance_service.window_start = dt_time(0, 0)
+    compliance_service.window_end = dt_time(23, 59)
 
     from pilot_core.main import app
 
+    app.state.settings = get_settings()
     return TestClient(app)
 
 
@@ -131,7 +143,13 @@ def test_handoff_respects_opt_out_before_liwa(
 def test_e2e_skips_voice_when_voz_disabled(client: TestClient) -> None:
     client.put(
         "/ops/settings",
-        json={"channels": {"voz_enabled": False, "whatsapp_enabled": True}},
+        json={
+            "channels": {
+                "voz_enabled": False,
+                "whatsapp_enabled": True,
+                "ventana_8_20": False,
+            }
+        },
     )
     r = client.post(
         "/ops/e2e/campaign",
@@ -151,7 +169,13 @@ def test_e2e_skips_voice_when_voz_disabled(client: TestClient) -> None:
 def test_e2e_blocks_whatsapp_when_channel_disabled(client: TestClient) -> None:
     client.put(
         "/ops/settings",
-        json={"channels": {"voz_enabled": True, "whatsapp_enabled": False}},
+        json={
+            "channels": {
+                "voz_enabled": True,
+                "whatsapp_enabled": False,
+                "ventana_8_20": False,
+            }
+        },
     )
     r = client.post(
         "/ops/e2e/campaign",
@@ -198,21 +222,23 @@ def test_post_call_without_phone_does_not_steal_latest_dispatch(
     import pilot_core.ops_store as ops_store
     from pilot_core.modules.post_call.service import post_call_service
 
-    ops_store.upsert_dispatch(
-        {
-            "id": "d_unrelated",
-            "status": "sent",
-            "flow": "A",
-            "lead": {"phone": "+573001110000", "first_name": "Otro"},
-            "conversation_id": "conv_other",
-        }
-    )
+    with ops_store.tenant_scope("tenant-dev"):
+        ops_store.upsert_dispatch(
+            {
+                "id": "d_unrelated",
+                "status": "sent",
+                "flow": "A",
+                "lead": {"phone": "+573001110000", "first_name": "Otro"},
+                "conversation_id": "conv_other",
+            }
+        )
     result = asyncio.run(
         post_call_service.process(
             phone=None,
             intent="interesado",
             flow="A",
             source="test",
+            tenant_id="tenant-dev",
             raw_payload={"type": "post_call_transcription", "data": {}},
         )
     )
@@ -240,7 +266,11 @@ def test_failed_liwa_claim_is_retryable_immediately(
         calls["n"] += 1
         if calls["n"] == 1:
             return {"ok": False, "error": "liwa_down"}
-        return {"ok": True, "message": {"id": "m1"}}
+        return {
+            "ok": True,
+            "delivery": "sent",
+            "message": {"id": "m1", "status": "sent", "receipt_id": "m1"},
+        }
 
     monkeypatch.setattr(
         "pilot_core.modules.liwa_whatsapp.liwa_whatsapp_service.send",
@@ -383,7 +413,11 @@ def test_crm_lead_not_duplicated_on_wa_retry(
         calls["n"] += 1
         if calls["n"] == 1:
             return {"ok": False, "error": "liwa_down"}
-        return {"ok": True, "message": {"id": "m_ok"}}
+        return {
+            "ok": True,
+            "delivery": "sent",
+            "message": {"id": "m_ok", "status": "sent", "receipt_id": "m_ok"},
+        }
 
     monkeypatch.setattr(
         "pilot_core.modules.liwa_whatsapp.liwa_whatsapp_service.send",
@@ -429,7 +463,11 @@ def test_whatsapp_not_resent_after_partial_success(
 
     def _send_ok(**_kwargs: object) -> dict[str, object]:
         sends["n"] += 1
-        return {"ok": True, "message": {"id": f"m{sends['n']}"}}
+        return {
+            "ok": True,
+            "delivery": "queued_mock",
+            "message": {"id": f"m{sends['n']}", "status": "queued_mock"},
+        }
 
     monkeypatch.setattr(
         "pilot_core.modules.whatsapp_mock.whatsapp_mock_service.send_text",
@@ -457,7 +495,9 @@ def test_whatsapp_not_resent_after_partial_success(
         )
     )
     assert first.get("status") == "failed"
-    assert first.get("whatsapp_sent") is True
+    # Mock queue is not a provider receipt (AUD-016), but must not be resent.
+    assert first.get("whatsapp_sent") is False
+    assert first.get("whatsapp_status") == "queued_mock"
     assert sends["n"] == 1
 
     second = asyncio.run(

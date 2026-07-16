@@ -16,3 +16,4 @@ for db in db_pilot_core db_whatsapp db_documents db_handoff; do
 done
 echo "backup complete under $OUT"
 echo "RPO proposed: 24h | RTO proposed: 4h (pending approval)"
+echo "NOTE (AUD-022): also run backup_ops_sqlite.sh — Postgres alone omits Ops SQLite state"

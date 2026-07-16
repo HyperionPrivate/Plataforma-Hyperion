@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from pilot_core import ops_store
+from pilot_core.modules.activity import record_outbound_conversation
 
 
 class WhatsAppMockService:
@@ -21,7 +22,17 @@ class WhatsAppMockService:
         phone: str,
         text: str,
         template: str | None = None,
+        first_name: str = "",
     ) -> dict[str, Any]:
+        from pilot_core.settings import get_settings
+
+        if not get_settings().mocks_allowed():
+            return {
+                "ok": False,
+                "mock_commercial": False,
+                "error": "whatsapp_mock_disabled",
+                "message": {"status": "failed", "error": "whatsapp_mock_disabled"},
+            }
         entry = {
             "id": f"wa_{uuid4().hex[:10]}",
             "channel": "whatsapp",
@@ -38,11 +49,26 @@ class WhatsAppMockService:
                 "id": entry["id"],
                 "mode": "whatsapp_mock",
                 "status": "queued_mock",
-                "lead": {"phone": phone, "first_name": ""},
+                "lead": {"phone": phone, "first_name": first_name or ""},
                 "whatsapp": entry,
             }
         )
-        return {"ok": True, "mock_commercial": True, "message": entry}
+        thread = record_outbound_conversation(
+            phone=phone,
+            first_name=first_name or "Asociado",
+            channel="whatsapp",
+            snippet=text[:160]
+            or (f"Plantilla WhatsApp · {template}" if template else "Mensaje WhatsApp encolado"),
+            topic="WhatsApp",
+        )
+        # queued_mock is not a provider receipt — ok=True only signals local queue.
+        return {
+            "ok": True,
+            "mock_commercial": True,
+            "message": entry,
+            "delivery": "queued_mock",
+            "conversation_id": thread.get("id"),
+        }
 
 
 whatsapp_mock_service = WhatsAppMockService()

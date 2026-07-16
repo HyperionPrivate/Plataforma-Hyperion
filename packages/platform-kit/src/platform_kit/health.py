@@ -56,6 +56,13 @@ def build_health_router(
         if extra_checks is not None:
             try:
                 checks["extra"] = await extra_checks()
+                extra = checks["extra"]
+                if isinstance(extra, dict):
+                    if extra.get("ok") is False:
+                        ok = False
+                    auth = extra.get("auth")
+                    if isinstance(auth, dict) and auth.get("ok") is False:
+                        ok = False
             except Exception:  # noqa: BLE001
                 checks["extra"] = {"ok": False, "error": "extra_check_failed"}
                 ok = False

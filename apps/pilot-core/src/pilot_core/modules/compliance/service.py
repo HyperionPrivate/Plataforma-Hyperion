@@ -1,4 +1,4 @@
-"""Compliance gate — policies for outbound contact (piloto)."""
+"""Compliance gate — policies for outbound contact (piloto), per tenant."""
 
 from __future__ import annotations
 
@@ -26,43 +26,63 @@ class ComplianceService:
     window_end: time = time(20, 0)
 
     def __init__(self) -> None:
-        self.suppressed: set[str] = set()
-        self._hydrated = False
+        self._suppressed_by_tenant: dict[str, set[str]] = {}
+
+    @property
+    def suppressed(self) -> set[str]:
+        """Backward-compatible view of the current tenant opt-out set."""
+        try:
+            tid = ops_store.require_tenant()
+        except RuntimeError:
+            return set()
+        return self._suppressed_by_tenant.setdefault(tid, set())
+
+    @suppressed.setter
+    def suppressed(self, value: set[str]) -> None:
+        try:
+            tid = ops_store.require_tenant()
+        except RuntimeError:
+            tid = "tenant-dev"
+        self._suppressed_by_tenant[tid] = set(value)
 
     def ping(self) -> str:
         return self.name
 
     def hydrate(self) -> None:
-        """Load opt-outs from SQLite into memory (normalized phones)."""
-        try:
-            ops_store.init_db()
-            self.suppressed = {
-                normalize_phone(p) or p.strip() for p in ops_store.list_opt_outs() if p
-            }
-            self._hydrated = True
-        except Exception:
-            self._hydrated = False
+        """Load opt-outs for the current tenant from durable store."""
+        tid = ops_store.require_tenant()
+        ops_store.init_db()
+        self._suppressed_by_tenant[tid] = {
+            normalize_phone(p) or p.strip() for p in ops_store.list_opt_outs() if p
+        }
 
-    def _ensure_hydrated(self) -> None:
-        if not self._hydrated:
-            self.hydrate()
+    def _ensure_hydrated(self) -> set[str]:
+        # AUD-018: always re-read SQLite so multi-instance sees fresh opt-outs.
+        self.hydrate()
+        tid = ops_store.require_tenant()
+        return self._suppressed_by_tenant.get(tid, set())
 
     def suppress(self, phone: str) -> dict[str, Any]:
+        tid = ops_store.require_tenant()
         phone = normalize_phone(phone) or phone.strip()
         ops_store.add_opt_out(phone)
-        self.suppressed.add(phone)
-        self._hydrated = True
-        return {"phone": phone, "suppressed": True}
+        bucket = self._suppressed_by_tenant.setdefault(tid, set())
+        bucket.add(phone)
+        return {"phone": phone, "suppressed": True, "tenant_id": tid}
 
     def evaluate(
         self, *, phone: str, channel: str = "voz", now: datetime | None = None
     ) -> PolicyDecision:
-        self._ensure_hydrated()
+        # Fail-closed if compliance store is unavailable.
+        try:
+            suppressed = self._ensure_hydrated()
+            channels = ops_store.get_setting("channels") or {}
+        except Exception:
+            return PolicyDecision(allowed=False, reasons=["compliance_unavailable"])
         reasons: list[str] = []
         phone = normalize_phone(phone) or phone.strip()
-        if phone in self.suppressed:
+        if phone in suppressed:
             reasons.append("opt_out_suppressed")
-        channels = ops_store.get_setting("channels") or {}
         if isinstance(channels, dict):
             if channel == "voz" and channels.get("voz_enabled") is False:
                 reasons.append("channel_disabled_voz")
@@ -70,7 +90,13 @@ class ComplianceService:
                 reasons.append("channel_disabled_whatsapp")
         current = now or datetime.now(tz=_CO)
         local = current.astimezone(_CO)
-        if not (self.window_start <= local.time() <= self.window_end):
+        # AUD-028: window from durable channels setting (not process-global mutate).
+        ventana_on = True
+        if isinstance(channels, dict) and "ventana_8_20" in channels:
+            ventana_on = bool(channels.get("ventana_8_20"))
+        start = time(8, 0) if ventana_on else time(0, 0)
+        end = time(20, 0) if ventana_on else time(23, 59)
+        if not (start <= local.time() <= end):
             reasons.append("outside_contact_window")
         if channel not in {"voz", "whatsapp"}:
             reasons.append("channel_not_allowed")
@@ -84,8 +110,7 @@ class ComplianceService:
         }
 
     def list_suppressed(self) -> list[str]:
-        self._ensure_hydrated()
-        return sorted(self.suppressed)
+        return sorted(self._ensure_hydrated())
 
 
 compliance_service = ComplianceService()

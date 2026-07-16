@@ -92,12 +92,18 @@ async def place_sip_outbound(
             or data.get("conversationId")
             or nested.get("conversation_id")
         )
+        conv_id_s = str(conv_id).strip() if conv_id else ""
+        # AUD-015: HTTP 200 {} / success sin conversation_id no es envío.
+        ok = bool(resp.is_success and conv_id_s and data.get("success", True) is not False)
         return {
-            "ok": resp.is_success and bool(data.get("success", True)),
+            "ok": ok,
             "http_status": resp.status_code,
             "provider": "elevenlabs_sip_trunk",
             "resolved": resolved,
-            "conversation_id": conv_id,
+            "conversation_id": conv_id_s or None,
             "dynamic_variables": dyn,
             "response": data,
+            "error": None
+            if ok
+            else ("missing_conversation_id" if resp.is_success else "provider_error"),
         }

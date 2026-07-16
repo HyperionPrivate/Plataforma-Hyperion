@@ -39,19 +39,6 @@ class SegmentationService:
                 }
             )
 
-        # Fallback demo cloud if empty store.
-        if not points:
-            for i in range(24):
-                points.append(
-                    {
-                        "x": (i * 7) % 100,
-                        "y": (i * 11) % 100,
-                        "z": 40,
-                        "segment": "renovacion" if i % 2 == 0 else "reactivacion",
-                        "name": f"P-{i}",
-                    }
-                )
-
         waves = [
             {
                 "ola": "Ola 1",
@@ -81,17 +68,12 @@ class SegmentationService:
             "Objeción económica → nutrir 7 días",
             "Opt-out → exclusión permanente",
         ]
+        days = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]
+        hours = ["8", "10", "12", "14", "16", "18"]
         heatmap = {
-            "days": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"],
-            "hours": ["8", "10", "12", "14", "16", "18"],
-            "values": [
-                [0.2, 0.4, 0.5, 0.6, 0.7, 0.5],
-                [0.3, 0.5, 0.6, 0.7, 0.8, 0.4],
-                [0.4, 0.6, 0.7, 0.8, 0.7, 0.5],
-                [0.3, 0.5, 0.6, 0.7, 0.6, 0.4],
-                [0.2, 0.4, 0.5, 0.6, 0.5, 0.3],
-                [0.1, 0.2, 0.3, 0.3, 0.2, 0.1],
-            ],
+            "days": days,
+            "hours": hours,
+            "values": [[0.0] * len(hours) for _ in days],
         }
         return {"points": points, "waves": waves, "retries": retries, "heatmap": heatmap}
 

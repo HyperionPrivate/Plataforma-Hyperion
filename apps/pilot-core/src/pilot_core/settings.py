@@ -50,9 +50,20 @@ class Settings(PlatformSettings):
     core_api_token: str = ""
     core_associate_path: str = "/associates/{document_id}"
     cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # Allow orden-de-matrícula PDFs up to documents_service cap (+ multipart overhead).
+    max_request_bytes: int = 11 * 1024 * 1024
+    # AUD-010: mocks comerciales solo con opt-in explícito fuera de development/test.
+    allow_mock_commercial: bool = False
+    post_call_watch_concurrency: int = 32
+    post_call_claim_lease_sec: int = 120
 
     def liwa_live_enabled(self) -> bool:
         return str(self.liwa_mode).lower() == "real" and bool(self.liwa_api_token.strip())
+
+    def mocks_allowed(self) -> bool:
+        if self.app_env in ("development", "test"):
+            return True
+        return bool(self.allow_mock_commercial)
 
 
 @lru_cache

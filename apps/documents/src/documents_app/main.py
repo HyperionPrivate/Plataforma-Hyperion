@@ -20,6 +20,7 @@ async def lifespan(app):  # type: ignore[no-untyped-def]
         await runtime.shutdown()
 
 
+# AUD-032: mock satellite — not a product surface (no docs / Traefik in Contabo).
 app = create_app(
     settings=settings,
     version=__version__,
@@ -28,4 +29,6 @@ app = create_app(
     redis_ping=runtime.redis_ping,
     routers=[tech_router],
     lifespan=lifespan,
+    expose_docs=False,
+    product_available=False,
 )

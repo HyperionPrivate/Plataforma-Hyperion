@@ -51,6 +51,17 @@ class _FakeRedis:
         self.acked.append((stream, group, message_id))
         return 1
 
+    async def xpending(self, stream, group):
+        return [0, None, None, []]
+
+    async def xrevrange(self, stream, max="+", min="-", count=1):
+        return [(b"1700000000000-0", {})]
+
+    async def xtrim(self, stream, minid=None, approximate=None):
+        self.trimmed = getattr(self, "trimmed", [])
+        self.trimmed.append({"stream": stream, "minid": minid, "approximate": approximate})
+        return 3
+
     async def xautoclaim(self, *args, **kwargs):
         return (b"0-0", [])
 
@@ -119,6 +130,25 @@ async def test_malformed_message_parsed_as_stream_message() -> None:
     assert isinstance(msgs[0], StreamMessage)
     assert msgs[0].envelope is None
     assert msgs[0].parse_error is not None
+
+
+@pytest.mark.asyncio
+async def test_ack_triggers_safe_minid_trim() -> None:
+    settings = PlatformSettings(
+        service_name="pilot-core",
+        app_env="test",
+        auth_disabled=True,
+        redis_stream_key="s",
+        redis_consumer_group="g",
+        redis_dlq_stream_key="dlq",
+        redis_trim_acked=True,
+        redis_trim_every_n_acks=1,
+    )
+    fake = _FakeRedis()
+    transport = RedisStreamsTransport(fake, settings)
+    await transport.ack("g", "1700000000000-0")
+    assert getattr(fake, "trimmed", [])
+    assert str(fake.trimmed[0]["minid"]).startswith("(")
 
 
 @pytest.mark.asyncio

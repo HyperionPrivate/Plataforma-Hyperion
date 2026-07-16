@@ -30,33 +30,59 @@ class AuthContext:
 
 
 class JWKSCache:
+    """Signing-key lookup with fail-closed misconfig and short negative kid cache."""
+
+    _NEGATIVE_KID_TTL_SECONDS = 60.0
+
     def __init__(self) -> None:
         self._client: PyJWKClient | None = None
         self._static_keys: dict[str, Any] | None = None
+        self._negative_kids: dict[str, float] = {}
 
     def configure(self, settings: PlatformSettings) -> None:
+        self._negative_kids.clear()
         if settings.oidc_jwks_static_json:
             self._static_keys = json.loads(settings.oidc_jwks_static_json)
             self._client = None
         elif settings.oidc_jwks_url:
             self._client = PyJWKClient(settings.oidc_jwks_url, cache_keys=True)
             self._static_keys = None
+        else:
+            self._client = None
+            self._static_keys = None
+
+    def is_configured(self) -> bool:
+        return self._static_keys is not None or self._client is not None
 
     def get_signing_key(self, token: str) -> Any:
         try:
+            header = jwt.get_unverified_header(token)
+        except Exception as exc:  # noqa: BLE001
+            raise PlatformError("invalid_token", "Invalid or expired JWT", status_code=401) from exc
+        kid = header.get("kid")
+        if isinstance(kid, str) and kid:
+            until = self._negative_kids.get(kid)
+            if until is not None:
+                if time.monotonic() < until:
+                    raise PlatformError("invalid_token", "Unknown signing key", status_code=401)
+                del self._negative_kids[kid]
+
+        try:
             if self._static_keys is not None:
-                header = jwt.get_unverified_header(token)
-                kid = header.get("kid")
                 for key in self._static_keys.get("keys", []):
                     if kid is None or key.get("kid") == kid:
                         return jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key))
+                if isinstance(kid, str) and kid:
+                    self._negative_kids[kid] = time.monotonic() + self._NEGATIVE_KID_TTL_SECONDS
                 raise PlatformError("invalid_token", "No matching JWK", status_code=401)
             if self._client is None:
-                raise PlatformError("auth_misconfigured", "JWKS not configured", status_code=500)
+                raise PlatformError("auth_misconfigured", "JWKS not configured", status_code=503)
             return self._client.get_signing_key_from_jwt(token).key
         except PlatformError:
             raise
         except Exception as exc:  # noqa: BLE001
+            if isinstance(kid, str) and kid:
+                self._negative_kids[kid] = time.monotonic() + self._NEGATIVE_KID_TTL_SECONDS
             raise PlatformError("invalid_token", "Invalid or expired JWT", status_code=401) from exc
 
 

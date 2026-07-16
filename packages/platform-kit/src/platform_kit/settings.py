@@ -32,6 +32,9 @@ class PlatformSettings(BaseSettings):
     redis_stream_maxlen: int = 0  # 0 = disabled (do not trim pending entries)
     redis_dlq_maxlen: int = 10_000
     redis_allow_maxlen_trim: bool = False  # must be explicit to enable primary MAXLEN
+    # AUD-013: after ACK, trim entries older than the oldest pending (safe MINID).
+    redis_trim_acked: bool = True
+    redis_trim_every_n_acks: int = 32
     redis_claim_min_idle_ms: int = 30_000
     event_max_retries: int = 3
     event_backoff_base_seconds: float = 0.5
@@ -60,12 +63,22 @@ class PlatformSettings(BaseSettings):
     otel_exporter_otlp_endpoint: str = ""
     metrics_enabled: bool = True
 
+    def jwks_configured(self) -> bool:
+        return bool(self.oidc_jwks_url.strip() or self.oidc_jwks_static_json.strip())
+
+    def oidc_configured(self) -> bool:
+        return bool(
+            self.oidc_issuer.strip() and self.oidc_audience.strip() and self.jwks_configured()
+        )
+
     def require_secrets_or_fail(self) -> None:
         if self.app_env in ("staging", "production"):
             if self.auth_disabled:
                 raise RuntimeError("auth_disabled is forbidden in staging/production")
             if not self.oidc_issuer or not self.oidc_audience:
                 raise RuntimeError("OIDC_ISSUER and OIDC_AUDIENCE are required")
+            if not self.jwks_configured():
+                raise RuntimeError("OIDC_JWKS_URL or OIDC_JWKS_STATIC_JSON is required")
             db = self.database_url.get_secret_value()
             if "CHANGE_ME" in db or "coopfuturo_admin" in db:
                 raise RuntimeError("DATABASE_URL must use least-privilege app role")

@@ -56,10 +56,11 @@ def resolve_product_flow(
 
     settings = get_settings()
     if code == "B":
+        # AUD-020: Flow B must not silently reuse Renewal A's LIWA flow.
         explicit_b = (
             str(block.get("liwa_flow_id") or "").strip() or (settings.liwa_flow_id_b or "").strip()
         )
-        wa_flow = explicit_b or (settings.liwa_default_flow_id or "").strip()
+        wa_flow = explicit_b
         tag = (
             str(block.get("liwa_handoff_tag") or "").strip()
             or (settings.liwa_handoff_tag_b or "").strip()
@@ -67,7 +68,7 @@ def resolve_product_flow(
         )
         funnel = "Reactivación"
         segment = "Reactivacion"
-        wa_fallback = not bool(explicit_b)
+        wa_fallback = False
         continue_label = "reactivar"
     else:
         wa_flow = (
@@ -96,6 +97,7 @@ def resolve_product_flow(
         "liwa_flow_id": wa_flow,
         "liwa_handoff_tag": tag,
         "liwa_flow_fallback_to_a": wa_fallback,
+        "whatsapp_runnable": bool(wa_flow),
         "document_kind": "orden_matricula",
         "continue_label": continue_label,
         "wa_followup_text": (

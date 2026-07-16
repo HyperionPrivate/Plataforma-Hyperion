@@ -4,12 +4,13 @@ import type campaigns from "@/data/campaigns.json";
 import type conversation from "@/data/conversation.json";
 import type crm from "@/data/crm.json";
 import type handoff from "@/data/handoff.json";
+import { authHeaders, pilotCoreBaseUrl } from "@/lib/auth";
 
-const base = (process.env.NEXT_PUBLIC_PILOT_CORE_URL ?? "http://127.0.0.1:8201").replace(/\/$/, "");
+const base = pilotCoreBaseUrl();
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${base}${path}`, {
-    headers: { Accept: "application/json" },
+    headers: authHeaders({ Accept: "application/json" }),
     cache: "no-store",
   });
   if (!res.ok) {
