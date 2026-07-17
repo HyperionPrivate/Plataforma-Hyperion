@@ -175,7 +175,8 @@ async function ensureSipPhone({ e164, label, agentId, trunk }) {
       phoneNumberId = found ? phoneIdOf(found) : "";
       if (!phoneNumberId) {
         throw new Error(
-          `Phone ${e164} reported as existing but not visible in GET /v1/convai/phone-numbers`
+          `Phone ${e164} reported as existing but not visible in GET /v1/convai/phone-numbers`,
+          { cause: err }
         );
       }
     }
@@ -238,8 +239,7 @@ async function main() {
   const allList = allFromEnv.length ? allFromEnv : coopDefault;
 
   /** @type {Array<{ e164: string, agentId: string, flow: "A" | "B" }>} */
-  let plan = [];
-
+  let plan;
   if (splitAb) {
     const listA = listAEnv.length ? listAEnv : allList.slice(0, 5);
     const listB = listBEnv.length ? listBEnv : allList.slice(5, 10);

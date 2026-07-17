@@ -49,7 +49,7 @@ async function el(path) {
     headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY, Accept: "application/json" }
   });
   const text = await res.text();
-  let json = null;
+  let json;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
