@@ -22,6 +22,7 @@ def greeting_cot(now: datetime | None = None) -> str:
         return "Buenas tardes"
     return "Buenas noches"
 
+
 _UNITS = (
     "cero",
     "uno",

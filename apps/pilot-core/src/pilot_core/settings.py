@@ -37,6 +37,7 @@ class Settings(PlatformSettings):
             or (self.liwa_webhook_default_tenant or "").strip()
             or "coopfuturo"
         )
+
     # Documentos
     documents_storage_backend: str = "filesystem"  # mock | filesystem | minio
     documents_local_root: str = ""  # vacío = {PULSO_DATA_DIR|…}/documents

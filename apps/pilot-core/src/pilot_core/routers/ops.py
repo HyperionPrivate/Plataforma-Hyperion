@@ -281,9 +281,7 @@ async def ops_handoff(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str
                     "canal": "whatsapp" if h.get("phone") else "voz",
                     "phone": h.get("phone") or (info if isinstance(info, str) else ""),
                 }
-            conversation_id = (
-                h.get("conversationId") or h.get("conversation_id") or None
-            )
+            conversation_id = h.get("conversationId") or h.get("conversation_id") or None
             queue.append(
                 {
                     "id": h.get("id"),
@@ -456,9 +454,8 @@ async def create_handoff(
         )
         if existing_queued and not steps.get("handoff_id"):
             steps["handoff_id"] = str(existing_queued.get("id"))
-            prior_cid = (
-                existing_queued.get("conversationId")
-                or existing_queued.get("conversation_id")
+            prior_cid = existing_queued.get("conversationId") or existing_queued.get(
+                "conversation_id"
             )
             if prior_cid and not steps.get("conversation_id"):
                 steps["conversation_id"] = str(prior_cid)
@@ -468,17 +465,11 @@ async def create_handoff(
         else:
             cid = str(steps.get("conversation_id") or f"cv_{uuid4().hex[:10]}")
         hid = str(
-            steps.get("handoff_id")
-            or (existing_queued or {}).get("id")
-            or f"h_{uuid4().hex[:10]}"
+            steps.get("handoff_id") or (existing_queued or {}).get("id") or f"h_{uuid4().hex[:10]}"
         )
         if not steps.get("thread_done"):
             existing_thread = next(
-                (
-                    t
-                    for t in ops_store.list_conversation_threads()
-                    if t.get("id") == cid
-                ),
+                (t for t in ops_store.list_conversation_threads() if t.get("id") == cid),
                 None,
             )
             if existing_thread is not None:
@@ -637,14 +628,12 @@ async def create_handoff(
                 "expedientePct": base_entry.get("expedientePct", 85),
                 "tiempoCola": base_entry.get("tiempoCola", "0h 01m"),
                 "asesor": None,
-                "aiSummary": body.motivo or base_entry.get("aiSummary") or "Creado desde laboratorio/API",
+                "aiSummary": body.motivo
+                or base_entry.get("aiSummary")
+                or "Creado desde laboratorio/API",
                 "liwa": liwa_meta,
                 "info": {
-                    **(
-                        base_entry.get("info")
-                        if isinstance(base_entry.get("info"), dict)
-                        else {}
-                    ),
+                    **(base_entry.get("info") if isinstance(base_entry.get("info"), dict) else {}),
                     "universidad": (
                         (base_entry.get("info") or {}).get("universidad")
                         if isinstance(base_entry.get("info"), dict)
@@ -693,7 +682,8 @@ async def create_handoff(
         raise
     except Exception as exc:  # noqa: BLE001
         saga["status"] = "failed"
-        saga["error"] = str(exc)[:200]
+        # Persist a safe code only — never raw exception / stack text.
+        saga["error"] = type(exc).__name__[:80]
         saga["steps"] = steps
         ops_store.save_saga(saga)
         raise
@@ -1205,13 +1195,19 @@ async def crm_move(
             lead_id=body.lead_id, to_column=body.to_column, tipificacion=body.tipificacion
         )
     except ValueError as exc:
-        # Controlled CRM messages only â€” never raw stack traces.
-        msg = str(exc)
-        if not msg.startswith(
-            ("transition_not_allowed:", "tipificacion_required:", "lead_not_found:")
-        ):
+        # Controlled CRM codes only — never raw exception / stack text to clients.
+        raw = str(exc)
+        allowed = (
+            "transition_not_allowed:",
+            "tipificacion_required:",
+            "lead_not_found:",
+        )
+        if raw.startswith(allowed):
+            code = raw.split(":", 1)[0]
+            msg = code
+        else:
             msg = "crm_transition_blocked"
-        raise PlatformError("crm_transition_blocked", msg, status_code=400) from exc
+        raise PlatformError("crm_transition_blocked", msg, status_code=400) from None
     if body.funnel:
         lead["funnel"] = body.funnel
         ops_store.upsert_crm_lead(lead)
@@ -1511,7 +1507,11 @@ async def post_conversation_message(
 
     if body.role == "advisor":
         thread = next(
-            (t for t in ops_store.list_conversation_threads() if t.get("id") == body.conversation_id),
+            (
+                t
+                for t in ops_store.list_conversation_threads()
+                if t.get("id") == body.conversation_id
+            ),
             None,
         )
         phone = str((thread or {}).get("expediente", {}).get("phone") or "").strip()
@@ -2128,7 +2128,7 @@ async def _e2e_campaign(
         raise
     except Exception as exc:  # noqa: BLE001
         saga["status"] = "failed"
-        saga["error"] = str(exc)[:200]
+        saga["error"] = type(exc).__name__[:80]
         saga["steps"] = steps
         ops_store.save_saga(saga)
         raise

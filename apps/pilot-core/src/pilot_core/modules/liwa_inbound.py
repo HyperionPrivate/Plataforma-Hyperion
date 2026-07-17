@@ -61,9 +61,7 @@ _CITY_TO_AG: dict[str, str] = {
 
 
 def _strip_accents(s: str) -> str:
-    return "".join(
-        c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn"
-    )
+    return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
 
 def agency_tag_from_ciudad(ciudad: str | None, explicit: str | None = None) -> str | None:
@@ -226,8 +224,9 @@ def _crm_to(
             tipificacion=tipificacion,
             channel="whatsapp",
         )
-    except Exception as exc:
-        return {"error": str(exc)}
+    except Exception:
+        # Never return exception text to webhook/Lab clients (CodeQL py/stack-trace-exposure).
+        return {"error": "crm_update_failed"}
 
 
 def record_csat(score: int, *, phone: str | None = None) -> dict[str, Any]:
@@ -432,8 +431,10 @@ async def process_liwa_inbound(payload: dict[str, Any]) -> dict[str, Any]:
         "source": "liwa_inbound",
     }
     if event == "document" or n["file_url"]:
-        validated = True if event == "document" else (
-            bool(n["file_url"]) and str(n["file_name"]).lower().endswith(".pdf")
+        validated = (
+            True
+            if event == "document"
+            else (bool(n["file_url"]) and str(n["file_name"]).lower().endswith(".pdf"))
         )
         msg["attachment"] = {
             "name": n["file_name"],
