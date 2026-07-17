@@ -704,12 +704,13 @@ class PostCallService:
             result["ok"] = False
             result["status"] = "failed"
             result["error"] = "post_call_exception"
-            result["detail"] = str(exc)[:200]
+            # Safe code only — webhook clients must not receive exception text.
+            result["detail"] = type(exc).__name__[:80]
             result["retryable"] = True
             if claimed and conv_id:
                 ops_store.fail_post_call_claim(result)
             else:
-                ops_store.release_post_call_claim(claim_id, error=str(exc))
+                ops_store.release_post_call_claim(claim_id, error=type(exc).__name__[:80])
             return result
 
     def _update_crm(
