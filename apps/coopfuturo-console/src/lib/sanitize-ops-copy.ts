@@ -14,7 +14,8 @@ const REPLACEMENTS: [RegExp, string][] = [
   [/\bmock_commercial\b/gi, "demo"],
 ];
 
-export function sanitizeOpsCopy(input: string): string {
+export function sanitizeOpsCopy(input: string | null | undefined): string {
+  if (input == null || typeof input !== "string") return "";
   let out = input;
   for (const [re, to] of REPLACEMENTS) {
     out = out.replace(re, to);

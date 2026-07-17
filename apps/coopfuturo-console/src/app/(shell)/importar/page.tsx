@@ -15,8 +15,6 @@ const FIELD_OPTIONS = [
   { key: "phone", label: "Teléfono (E.164)" },
   { key: "nombre", label: "Nombre" },
   { key: "segmento", label: "Segmento" },
-  { key: "universidad", label: "Universidad" },
-  { key: "documento", label: "Documento / cédula" },
   { key: "ignore", label: "Ignorar" },
 ] as const;
 
@@ -48,9 +46,7 @@ function guessMap(headers: string[]): Record<string, string> {
   for (const h of headers) {
     const low = h.toLowerCase();
     if (/(phone|tel|celular|movil|móvil)/.test(low)) map[h] = "phone";
-    else if (/(universidad|university)/.test(low)) map[h] = "universidad";
-    else if (/(documento|cedula|cédula|id\.?\s*nro)/.test(low)) map[h] = "documento";
-    else if (/(nombre|name|first|estudiante)/.test(low)) map[h] = "nombre";
+    else if (/(nombre|name|first)/.test(low)) map[h] = "nombre";
     else if (/(segment|flujo|tipo)/.test(low)) map[h] = "segmento";
     else map[h] = "ignore";
   }
@@ -84,11 +80,8 @@ export default function ImportarContactosPage() {
 
   async function onFile(file: File | null) {
     if (!file) return;
-    const lower = file.name.toLowerCase();
-    if (!lower.endsWith(".csv") && file.type !== "text/csv") {
-      toast.error("Usa CSV (UTF-8)", {
-        description: "Si tienes Excel, exporta → CSV. El backend ya acepta columnas Celular/Nombres/Universidad.",
-      });
+    if (!file.name.toLowerCase().endsWith(".csv") && file.type !== "text/csv") {
+      toast.error("Por ahora solo CSV", { description: "XLSX queda para una próxima iteración" });
       return;
     }
     const text = await file.text();
