@@ -18,7 +18,8 @@ import {
   NovaReviewsTab,
   NovaSegmentationTab,
   NOVA_TABS,
-  mapPlatformRole
+  mapPlatformRole,
+  type ChannelStatus
 } from "./nova/index.js";
 import type {
   AnalyticsDailyRow,
@@ -233,10 +234,7 @@ export function NovaPage() {
     await refresh();
   }
 
-  async function patchLead(
-    leadId: string,
-    body: { stage?: string; tipification?: string; product_line?: string }
-  ) {
+  async function patchLead(leadId: string, body: { stage?: string; tipification?: string; product_line?: string }) {
     if (!canWriteOps) return;
     await api.patch(novaPath(tenant.id, `leads/${leadId}`), body);
     setNotice("Lead actualizado.");
@@ -273,8 +271,8 @@ export function NovaPage() {
     return api.post(novaPath(tenant.id, "lab/liwa-event"), input);
   }
 
-  async function fetchChannelStatus(conversationId: string) {
-    return api.get(novaPath(tenant.id, `conversations/${conversationId}/channel-status`));
+  async function fetchChannelStatus(conversationId: string): Promise<ChannelStatus> {
+    return api.get<ChannelStatus>(novaPath(tenant.id, `conversations/${conversationId}/channel-status`));
   }
 
   return (

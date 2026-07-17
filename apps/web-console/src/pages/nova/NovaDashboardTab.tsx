@@ -105,8 +105,7 @@ export function NovaDashboardTab({
         {metaHoy > 0 ? (
           <>
             <p className="tiny muted" style={{ marginBottom: 8 }}>
-              Resultado {resultadoHoy} · Meta diaria {metaHoy} · Voz {totals.callsCompleted} · WhatsApp{" "}
-              {totals.waSent}
+              Resultado {resultadoHoy} · Meta diaria {metaHoy} · Voz {totals.callsCompleted} · WhatsApp {totals.waSent}
             </p>
             <div
               style={{
@@ -130,9 +129,7 @@ export function NovaDashboardTab({
             </p>
           </>
         ) : (
-          <p className="muted tiny">
-            Sin meta configurada. Define la meta diaria en Configuración → Operación.
-          </p>
+          <p className="muted tiny">Sin meta configurada. Define la meta diaria en Configuración → Operación.</p>
         )}
       </Card>
 

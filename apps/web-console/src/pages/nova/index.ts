@@ -1,6 +1,7 @@
 export { NovaDashboardTab } from "./NovaDashboardTab.js";
 export { NovaCampaignsTab } from "./NovaCampaignsTab.js";
 export { NovaConversationsTab } from "./NovaConversationsTab.js";
+export type { ChannelStatus } from "./NovaConversationsTab.js";
 export { NovaReviewsTab } from "./NovaReviewsTab.js";
 export { NovaCrmTab } from "./NovaCrmTab.js";
 export { NovaHandoffTab } from "./NovaHandoffTab.js";

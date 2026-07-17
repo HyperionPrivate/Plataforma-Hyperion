@@ -41,7 +41,10 @@ export function NovaCrmTab({
 }: {
   leads: LeadRow[];
   canWriteOps: boolean;
-  onPatchLead: (leadId: string, body: { stage?: string; tipification?: string; product_line?: string }) => Promise<void>;
+  onPatchLead: (
+    leadId: string,
+    body: { stage?: string; tipification?: string; product_line?: string }
+  ) => Promise<void>;
 }) {
   const [productLine, setProductLine] = useState<NovaProductLine>("renovacion");
   const [selectedId, setSelectedId] = useState<string>();

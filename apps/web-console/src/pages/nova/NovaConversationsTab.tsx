@@ -137,7 +137,10 @@ export function NovaConversationsTab({
                 <p className="tiny" style={{ marginBottom: 6 }}>
                   Canal (webhook-first)
                   {channelStatus.handoff_detected ? (
-                    <strong> · Handoff detectado{channelStatus.agency_hint ? ` · ${channelStatus.agency_hint}` : ""}</strong>
+                    <strong>
+                      {" "}
+                      · Handoff detectado{channelStatus.agency_hint ? ` · ${channelStatus.agency_hint}` : ""}
+                    </strong>
                   ) : (
                     " · sin handoff en cola"
                   )}

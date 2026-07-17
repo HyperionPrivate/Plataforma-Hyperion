@@ -379,7 +379,12 @@ export async function registerVoiceRoutes(
 
     if (!conversationId) {
       return envelope(
-        { accepted: true, signature_valid: verification.signatureValid, mode: "receipt_only", reason: "no_conversation_id" },
+        {
+          accepted: true,
+          signature_valid: verification.signatureValid,
+          mode: "receipt_only",
+          reason: "no_conversation_id"
+        },
         request.id
       );
     }
@@ -387,7 +392,12 @@ export async function registerVoiceRoutes(
     // Deduped receipt → still ok, but skip double tipify.
     if (!insert.rowCount) {
       return envelope(
-        { accepted: true, signature_valid: verification.signatureValid, mode: "deduped", conversation_id: conversationId },
+        {
+          accepted: true,
+          signature_valid: verification.signatureValid,
+          mode: "deduped",
+          conversation_id: conversationId
+        },
         request.id
       );
     }

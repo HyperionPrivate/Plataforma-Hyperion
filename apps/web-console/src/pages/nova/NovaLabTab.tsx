@@ -168,11 +168,7 @@ export function NovaLabTab({
           </label>
           <label>
             Tipificación
-            <input
-              className="input"
-              value={liwaTipificacion}
-              onChange={(e) => setLiwaTipificacion(e.target.value)}
-            />
+            <input className="input" value={liwaTipificacion} onChange={(e) => setLiwaTipificacion(e.target.value)} />
           </label>
         </div>
         <button

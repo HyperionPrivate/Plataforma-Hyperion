@@ -22,15 +22,15 @@ voice.call.completed (poller o webhook EL)
 
 ## Variables de entorno
 
-| Variable | Default | Rol |
-| --- | --- | --- |
-| `POST_CALL_WHATSAPP_AUTO_SEND` | `true` | `false` = cola de revisión humana |
-| `LIWA_API_TOKEN` | — | Auth Swagger LIWA |
-| `LIWA_BASE_URL` | `https://chat.liwa.co/api` | Base API |
-| `LIWA_DEFAULT_FLOW_ID` | `1782399915832` | Renovaciones (prod) |
-| `LIWA_FLOW_ID_B` | `1782486171458` | Reactivación / A-B |
-| `LIWA_VIP_TAG` | `RENOVACION_VIP` | Tag antes del flow |
-| `LIWA_BLOCK_TEXT` | unset | Si `1`, bloquea `send/text` salvo `LIWA_FORCE_TEXT` |
+| Variable                       | Default                    | Rol                                                 |
+| ------------------------------ | -------------------------- | --------------------------------------------------- |
+| `POST_CALL_WHATSAPP_AUTO_SEND` | `true`                     | `false` = cola de revisión humana                   |
+| `LIWA_API_TOKEN`               | —                          | Auth Swagger LIWA                                   |
+| `LIWA_BASE_URL`                | `https://chat.liwa.co/api` | Base API                                            |
+| `LIWA_DEFAULT_FLOW_ID`         | `1782399915832`            | Renovaciones (prod)                                 |
+| `LIWA_FLOW_ID_B`               | `1782486171458`            | Reactivación / A-B                                  |
+| `LIWA_VIP_TAG`                 | `RENOVACION_VIP`           | Tag antes del flow                                  |
+| `LIWA_BLOCK_TEXT`              | unset                      | Si `1`, bloquea `send/text` salvo `LIWA_FORCE_TEXT` |
 
 Para pruebas con flujo copia LIWA, apuntar `LIWA_DEFAULT_FLOW_ID` al id de prueba (ej. `1784249919201`) **solo en ese entorno**.
 

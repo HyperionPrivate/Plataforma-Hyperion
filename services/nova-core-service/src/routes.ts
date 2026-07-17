@@ -1209,8 +1209,7 @@ export async function registerNovaRoutes(
       return reply.code(503).send(
         envelope(
           {
-            error:
-              "LIWA_WEBHOOK_SECRET required for lab simulate (or LIWA_WEBHOOK_ALLOW_INSECURE=1 in local/dev)"
+            error: "LIWA_WEBHOOK_SECRET required for lab simulate (or LIWA_WEBHOOK_ALLOW_INSECURE=1 in local/dev)"
           },
           request.id
         )
@@ -1238,8 +1237,7 @@ export async function registerNovaRoutes(
     }
 
     const body = (await upstream.json().catch(() => undefined)) as
-      | { data?: Record<string, unknown>; error?: string }
-      | undefined;
+      { data?: Record<string, unknown>; error?: string } | undefined;
     if (!upstream.ok) {
       return reply
         .code(upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502)
