@@ -9,11 +9,17 @@ Herramientas → Webhooks / nodos del flow **Renovaciones** (`1782399915832`).
 https://<tu-host-publico>/v1/liwa/webhooks
 ```
 
-Header obligatorio:
+Autenticación (cualquiera de estas):
 
 ```text
-X-LIWA-WEBHOOK-SECRET: <mismo valor que LIWA_WEBHOOK_SECRET en .env>
+Header: X-LIWA-WEBHOOK-SECRET: <mismo valor que LIWA_WEBHOOK_SECRET en .env>
+# o, si Tools→Webhooks no permite headers:
+URL: https://<host>/v1/liwa/webhooks?secret=<LIWA_WEBHOOK_SECRET>
 ```
+
+La URL con `?secret=` está en `docs/products/nova/LIWA-WEBHOOK-LIVE-URL.txt` (local, no commitear el secret).
+
+Fallback local (`HYPERION_ENVIRONMENT=local` + `LIWA_WEBHOOK_ALLOW_INSECURE=1`): acepta sin secret. Solo cutover.
 
 Lab local (mismo secret):
 
@@ -23,13 +29,22 @@ POST /v1/liwa/webhooks/simulate
 
 ## Túnel temporal (dev)
 
-Ejemplo Cloudflare quick tunnel hacia el api-gateway local (`8080`):
+1. Publicar LIWA (opcional) + gateway:
 
 ```bash
-cloudflared tunnel --url http://localhost:8080
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.liwa-tunnel.yml --env-file .env up -d api-gateway liwa-channel-service
 ```
 
-Usa la URL HTTPS resultante + path `/v1/liwa/webhooks`.
+2. Quick tunnel Cloudflare hacia el api-gateway (`8080`):
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8080
+```
+
+3. URL pública = `https://<subdominio>.trycloudflare.com/v1/liwa/webhooks`  
+   El gateway proxya a `liwa-channel-service` sin auth de sesión (solo header secret).
+
+Si el quick tunnel se reinicia, la URL cambia: actualiza el webhook en LIWA.
 
 ## Payload canónico (runbook piloto)
 

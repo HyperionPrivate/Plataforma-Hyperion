@@ -91,6 +91,22 @@ describe("HttpLiwaClient", () => {
     expect(calls).toContain("POST https://chat.liwa.co/api/contacts/contact-1/tags/562888");
   });
 
+  it("ensureContact reads nested data.id from LIWA create response", async () => {
+    const fetchImpl = mockFetch((url, init) => {
+      expect(url).toBe("https://chat.liwa.co/api/contacts");
+      expect(init?.method).toBe("POST");
+      return new Response(
+        JSON.stringify({ success: true, contact_created: false, data: { id: "573002555948" } }),
+        { status: 200 }
+      );
+    });
+
+    const client = new HttpLiwaClient("https://chat.liwa.co/api", "token-test", env, fetchImpl);
+    await expect(client.ensureContact("+573002555948", "Smoke")).resolves.toEqual({
+      contactId: "573002555948"
+    });
+  });
+
   it("lists flows and account me", async () => {
     const fetchImpl = mockFetch((url) => {
       if (url.endsWith("/accounts/me")) {

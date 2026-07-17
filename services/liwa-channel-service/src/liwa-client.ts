@@ -112,7 +112,10 @@ export class HttpLiwaClient implements LiwaClient {
     const body: Record<string, unknown> = { phone };
     if (firstName?.trim()) body.first_name = firstName.trim();
     const response = await this.request("POST", "/contacts", body);
-    const contactId = String(response.id ?? response.contact_id ?? response.contactId ?? "");
+    const nested = (response.data as Record<string, unknown> | undefined) ?? undefined;
+    const contactId = String(
+      nested?.id ?? nested?.contact_id ?? response.id ?? response.contact_id ?? response.contactId ?? ""
+    );
     if (!contactId) throw new Error("LIWA ensureContact did not return a contact id");
     return { contactId };
   }

@@ -516,6 +516,9 @@ services:
       LIWA_TO_NOVA_TOKEN: ${LIWA_TO_NOVA_TOKEN:?LIWA_TO_NOVA_TOKEN is required}
       LIWA_TO_AUDIT_TOKEN: ${LIWA_TO_AUDIT_TOKEN:?LIWA_TO_AUDIT_TOKEN is required}
       LIWA_WEBHOOK_SECRET: ${LIWA_WEBHOOK_SECRET:-}
+      # Local cutover only: Tools→Webhooks UI cannot send custom headers.
+      # Prefer ?secret= on the webhook URL; insecure=1 accepts missing secret when HYPERION_ENVIRONMENT=local.
+      LIWA_WEBHOOK_ALLOW_INSECURE: ${LIWA_WEBHOOK_ALLOW_INSECURE:-0}
       LIWA_BASE_URL: ${LIWA_BASE_URL:-https://chat.liwa.co/api}
       LIWA_API_TOKEN: ${LIWA_API_TOKEN:-}
       LIWA_ACCOUNT_ID: ${LIWA_ACCOUNT_ID:-1656233}

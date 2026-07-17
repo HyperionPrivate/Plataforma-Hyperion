@@ -15,3 +15,5 @@ Dockerfile.local
 logs-*.txt
 backups/
 tmp/
+# Local tunnel URL may include ?secret= — never commit
+docs/products/nova/LIWA-WEBHOOK-LIVE-URL.txt

@@ -143,20 +143,36 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
   const body =
     nested && !raw.event && !raw.type ? { ...raw, ...nested } : raw;
 
+  // LIWA Tools → Webhooks native shape: { user, tag? } without top-level event.
+  const userObj = body.user && typeof body.user === "object" ? (body.user as Record<string, unknown>) : {};
+  const tagObj = body.tag && typeof body.tag === "object" ? (body.tag as Record<string, unknown>) : {};
+  const tagName = String(tagObj.name ?? body.tag_name ?? "").trim();
+
   let event = String(body.event ?? body.type ?? body.event_type ?? body.action ?? "")
     .trim()
     .toLowerCase();
   event = EVENT_ALIASES[event] ?? event;
 
+  if (!event || event === "unknown") {
+    const inferred = inferToolsWebhookEvent(body, userObj, tagName);
+    if (inferred) event = inferred;
+  }
+
   const contactObj = body.contact && typeof body.contact === "object" ? (body.contact as Record<string, unknown>) : {};
   const fields = body.fields && typeof body.fields === "object" ? (body.fields as Record<string, unknown>) : {};
 
   const phoneRaw = String(
-    body.phone ?? body.telefono ?? body.msisdn ?? contactObj.phone ?? contactObj.telefono ?? ""
+    body.phone ??
+      body.telefono ??
+      body.msisdn ??
+      contactObj.phone ??
+      contactObj.telefono ??
+      userObj.phone ??
+      ""
   ).trim();
   const phone = normalizePhoneE164(phoneRaw) ?? phoneRaw;
 
-  const contactIdRaw = body.contact_id ?? body.user_id ?? contactObj.id;
+  const contactIdRaw = body.contact_id ?? body.user_id ?? contactObj.id ?? userObj.id;
   const contactId = contactIdRaw !== undefined && contactIdRaw !== null && String(contactIdRaw).trim() !== ""
     ? String(contactIdRaw).trim()
     : undefined;
@@ -173,14 +189,32 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
   }
 
   const name = String(
-    body.name ?? body.first_name ?? fields.nombre ?? fields.name ?? "Asociado"
+    body.name ??
+      body.first_name ??
+      userObj.full_name ??
+      userObj.first_name ??
+      fields.nombre ??
+      fields.name ??
+      "Asociado"
+  ).trim();
+
+  let tipificacion = String(body.tipificacion ?? body.disposition ?? "").trim() || undefined;
+  if (!tipificacion && event === "tipificacion" && tagName) {
+    tipificacion = fold(tagName).replace(/\s+/g, "_");
+  }
+
+  const tagId = String(tagObj.id ?? "").trim();
+  const tagExternalId =
+    tagId && contactId ? `liwa-tag:${contactId}:${tagId}:${Date.now()}` : randomUUID();
+  const externalId = String(
+    body.external_id ?? body.message_id ?? body.id ?? body.uuid ?? tagExternalId
   ).trim();
 
   return {
     event: (event || "unknown") as NormalizedLiwaEventKind,
     phone,
     contactId,
-    externalId: String(body.external_id ?? body.message_id ?? body.id ?? body.uuid ?? randomUUID()).trim(),
+    externalId,
     tenantIdHint: String(body.tenant_id ?? "").trim() || undefined,
     ciudad,
     agencia,
@@ -197,19 +231,76 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
     filename: String(body.filename ?? fields.filename ?? "documento_liwa.pdf"),
     kind: String(body.kind ?? fields.kind ?? "orden_matricula"),
     score,
-    tipificacion: String(body.tipificacion ?? body.disposition ?? "").trim() || undefined,
+    tipificacion,
     name,
-    motivo: String(body.motivo ?? body.reason ?? "Handoff desde flujo LIWA"),
+    motivo: String(
+      body.motivo ??
+        body.reason ??
+        (tagName ? `Tag LIWA: ${tagName}` : "Handoff desde flujo LIWA")
+    ),
     fields: Object.fromEntries(
       Object.entries({
         cedula: body.cedula ?? fields.cedula,
         direccion: body.direccion ?? fields.direccion,
         universidad: body.universidad ?? fields.universidad,
         programa: body.programa ?? fields.programa,
+        liwa_tag: tagName || undefined,
+        liwa_page_id: userObj.page_id ?? userObj.account_id,
         ...fields
       }).filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== "")
     )
   };
+}
+
+/** Infer canonical event from LIWA Tools webhook payloads that omit `event`. */
+function inferToolsWebhookEvent(
+  body: Record<string, unknown>,
+  userObj: Record<string, unknown>,
+  tagName: string
+): string | undefined {
+  const trigger = fold(
+    String(body.trigger ?? body.webhook_trigger ?? body.hook_name ?? body.name ?? "")
+  );
+
+  if (
+    trigger.includes("unsubscrib") ||
+    trigger.includes("opt_out") ||
+    trigger.includes("opt-out") ||
+    body.unsubscribed === true ||
+    String(userObj.subscribed ?? "") === "0"
+  ) {
+    // Only treat subscribed=0 as opt_out when this looks like an unsubscribe hook,
+    // not every tag payload that happens to include subscribed.
+    if (
+      trigger.includes("unsubscrib") ||
+      trigger.includes("opt") ||
+      body.unsubscribed === true ||
+      (!tagName && Object.keys(userObj).length > 0 && String(userObj.subscribed ?? "") === "0")
+    ) {
+      return "opt_out";
+    }
+  }
+
+  if (
+    trigger.includes("transfer") ||
+    trigger.includes("human") ||
+    trigger.includes("live_chat") ||
+    trigger.includes("handoff") ||
+    body.transferred_to_human === true ||
+    body.live_chat === true
+  ) {
+    return "handoff_requested";
+  }
+
+  if (tagName) {
+    const folded = fold(tagName);
+    if (folded.includes("renovacion_vip") || folded.includes("reactivacion_vip") || folded.endsWith("_vip")) {
+      return "tipificacion";
+    }
+    return "tipificacion";
+  }
+
+  return undefined;
 }
 
 export function mapEventKind(event: string): NormalizedLiwaEventKind {

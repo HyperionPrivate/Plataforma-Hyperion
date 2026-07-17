@@ -52,8 +52,9 @@ async function liwa(method, path, body) {
 
 console.log("1) ensure contact", phone);
 const contact = await liwa("POST", "/contacts", { phone, first_name: firstName });
-const contactId = String(contact.id ?? contact.contact_id ?? "");
-if (!contactId) throw new Error("ensureContact did not return id");
+const nested = contact?.data && typeof contact.data === "object" ? contact.data : {};
+const contactId = String(nested.id ?? nested.contact_id ?? contact.id ?? contact.contact_id ?? "");
+if (!contactId) throw new Error(`ensureContact did not return id: ${JSON.stringify(contact)}`);
 
 console.log("2) ensure/apply agency tag", agencyTag);
 const tags = await liwa("GET", "/accounts/tags");

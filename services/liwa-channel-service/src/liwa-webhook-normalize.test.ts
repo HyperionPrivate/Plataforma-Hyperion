@@ -49,6 +49,25 @@ describe("normalizeLiwaPayload", () => {
     expect(mapEventKind(parsed.event)).toBe("tipificacion");
     expect(parsed.tipificacion).toBe("interesado_wa");
   });
+
+  it("maps LIWA Tools tag-applied payload (user + tag, no event)", () => {
+    const parsed = normalizeLiwaPayload({
+      tag: { id: "906422", name: "RENOVACION_VIP" },
+      user: {
+        id: "573002555948",
+        phone: "+573002555948",
+        first_name: "Prueba",
+        page_id: "1656233",
+        account_id: "1656233",
+        subscribed: "1"
+      }
+    });
+    expect(mapEventKind(parsed.event)).toBe("tipificacion");
+    expect(parsed.phone).toBe("+573002555948");
+    expect(parsed.contactId).toBe("573002555948");
+    expect(parsed.tipificacion).toBe("renovacion_vip");
+    expect(parsed.name).toBe("Prueba");
+  });
 });
 
 describe("resolveAgencyFromGeo", () => {

@@ -177,7 +177,17 @@ export async function registerLiwaRoutes(
 
     const secret = process.env.LIWA_WEBHOOK_SECRET?.trim();
     const headerSecret = readHeader(request, "x-liwa-webhook-secret");
-    if (!secret || headerSecret !== secret) {
+    const querySecret = (() => {
+      const q = request.query as Record<string, unknown> | undefined;
+      const raw = q?.secret ?? q?.webhook_secret;
+      return typeof raw === "string" ? raw.trim() : "";
+    })();
+    const allowInsecure =
+      process.env.LIWA_WEBHOOK_ALLOW_INSECURE?.trim() === "1" &&
+      (process.env.HYPERION_ENVIRONMENT?.trim() === "local" ||
+        process.env.HYPERION_DEPLOYMENT_ENVIRONMENT?.trim() === "development");
+    const secretOk = Boolean(secret) && (headerSecret === secret || querySecret === secret);
+    if (!secretOk && !allowInsecure) {
       return reply.code(401).send(envelope({ error: "Invalid webhook secret" }, request.id));
     }
 
@@ -421,8 +431,15 @@ async function resolveWebhookTenant(
   raw: Record<string, unknown>,
   parsed: NormalizedLiwaPayload
 ): Promise<string | null> {
+  const userObj = raw.user && typeof raw.user === "object" ? (raw.user as Record<string, unknown>) : {};
   const accountId =
-    raw.account_id ?? raw.page_id ?? raw.liwa_account_id ?? process.env.LIWA_ACCOUNT_ID ?? "1656233";
+    raw.account_id ??
+    raw.page_id ??
+    raw.liwa_account_id ??
+    userObj.account_id ??
+    userObj.page_id ??
+    process.env.LIWA_ACCOUNT_ID ??
+    "1656233";
   if (accountId !== undefined && accountId !== null && String(accountId).trim() !== "") {
     const binding = await db.query<{ tenantId: string }>(
       `select tenant_id as "tenantId" from liwa.tenant_bindings where liwa_account_id = $1`,

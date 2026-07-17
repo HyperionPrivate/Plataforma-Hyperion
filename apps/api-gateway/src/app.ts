@@ -50,7 +50,11 @@ const HEALTH_CACHE_TTL_MS = 5_000;
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT";
 const NOVA_REQUEST_BODY_LIMIT_BYTES = 2_100_000;
 
-const PUBLIC_PATHS = new Set(["/v1/auth/login"]);
+const PUBLIC_PATHS = new Set([
+  "/v1/auth/login",
+  "/v1/liwa/webhooks",
+  "/v1/liwa/webhooks/simulate"
+]);
 
 let healthCache: { expiresAt: number; payload: PlatformHealth } | undefined;
 
@@ -244,6 +248,20 @@ export function createGatewayRoutes(overrides?: {
 
     app.get("/v1/liwa/health", async (request, reply) => {
       return proxyGet(request, reply, buildUpstreamUrl(urls.liwaChannel, request));
+    });
+
+    // Public LIWA provider webhooks (auth = X-LIWA-WEBHOOK-SECRET upstream).
+    app.post("/v1/liwa/webhooks", async (request, reply) => {
+      return proxyLiwaWebhook(request, reply, urls.liwaChannel, gatewayCredentials.liwa ?? null);
+    });
+    app.post("/v1/liwa/webhooks/simulate", async (request, reply) => {
+      return proxyLiwaWebhook(
+        request,
+        reply,
+        urls.liwaChannel,
+        gatewayCredentials.liwa ?? null,
+        "/v1/liwa/webhooks/simulate"
+      );
     });
 
     app.get("/v1/documents/health", async (request, reply) => {
@@ -810,6 +828,46 @@ async function proxyRaw(
       headers,
       body: new Uint8Array(body),
       signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(timeoutMs)])
+    });
+    const payload = await response.json();
+    return reply.code(response.status).send(payload);
+  } catch {
+    if (requestAbort.signal.aborted && reply.raw.destroyed) return undefined;
+    return reply.code(502).send(envelope({ error: "Upstream service unavailable" }, request.id));
+  } finally {
+    requestAbort.cleanup();
+  }
+}
+
+async function proxyLiwaWebhook(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  liwaBaseUrl: string,
+  gatewayCredential: string | null,
+  path = "/v1/liwa/webhooks"
+): Promise<unknown> {
+  const base = liwaBaseUrl.replace(/\/$/, "");
+  const url = `${base}${path}`;
+  const requestAbort = createRequestAbortSignal(request, reply);
+  try {
+    const headers: Record<string, string> = {
+      "x-request-id": request.id,
+      "content-type": "application/json"
+    };
+    const webhookSecret = request.headers["x-liwa-webhook-secret"];
+    if (typeof webhookSecret === "string" && webhookSecret.trim()) {
+      headers["x-liwa-webhook-secret"] = webhookSecret.trim();
+    }
+    // Optional edge identity; upstream webhook route does not require it.
+    if (gatewayCredential) {
+      Object.assign(headers, createInternalAuthorizationHeaders("api-gateway", gatewayCredential));
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(request.body ?? {}),
+      signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)])
     });
     const payload = await response.json();
     return reply.code(response.status).send(payload);

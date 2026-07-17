@@ -27,7 +27,12 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       return;
     }
 
-    if (request.routeOptions.url === "/v1/liwa/webhooks") return;
+    if (
+      request.routeOptions.url === "/v1/liwa/webhooks" ||
+      request.routeOptions.url === "/v1/liwa/webhooks/simulate"
+    ) {
+      return;
+    }
 
     if (!request.routeOptions.url?.startsWith("/v1/tenants/") && request.routeOptions.url !== "/v1/liwa/catalog") {
       return;
