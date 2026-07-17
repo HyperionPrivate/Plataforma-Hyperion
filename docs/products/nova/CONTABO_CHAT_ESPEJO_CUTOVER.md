@@ -1,13 +1,12 @@
 # Contabo / Hyperion — cutover chat espejo (LIWA → NOVA Conversaciones)
 
 **Repo correcto:** `AdministracionHyperion/Plataforma-Hyperion`  
-**Rama:** `interfaz-coopfuturo`  
-**UI producto:** `apps/web-console` (tabs NOVA — Conversaciones, Handoff, Lab, …)  
+**UI producto:** `apps/coopfuturo-console` (Next.js Ops UI PULSO/CoopFuturo — misma interfaz del monolito)  
+**Puerto Contabo:** `http://144.91.100.31:19001`  
 **Webhook path Hyperion:** `/v1/liwa/webhooks` (vía api-gateway)
 
-> **Nota de repos:** `CoopFuturo_` guarda el shell Ops legacy (`apps/web` Next en `:3004`).  
-> **Este** monorepo es la plataforma con lógica de producto (microservicios NOVA).  
-> El chat espejo y la UI de Conversaciones que deben operar en Contabo van aquí.
+> La UI visual vive en `apps/coopfuturo-console` (portada desde `CoopFuturo_/apps/web`).  
+> El BFF en `/pilot-core/*` traduce a las APIs NOVA del gateway. No usar `web-console` Vite para CoopFuturo.
 
 Relacionado: [LIWA-WEBHOOK-CUTOVER.md](LIWA-WEBHOOK-CUTOVER.md) · [CONTABO-TEST-WEBHOOK.md](CONTABO-TEST-WEBHOOK.md) · [POST-CALL-WHATSAPP.md](POST-CALL-WHATSAPP.md)
 

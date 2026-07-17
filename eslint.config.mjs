@@ -5,7 +5,14 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "**/coverage/**", "**/.vite/**"]
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/coverage/**",
+      "**/.vite/**",
+      // Standalone Next.js app: linted by its own toolchain, not the root config.
+      "apps/coopfuturo-console/**"
+    ]
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

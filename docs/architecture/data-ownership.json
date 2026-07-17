@@ -20,6 +20,7 @@
   "pathOwners": [
     { "prefix": "apps/api-gateway/", "owner": "edge-gateway" },
     { "prefix": "apps/web-console/", "owner": "web-console" },
+    { "prefix": "apps/coopfuturo-console/", "owner": "web-console" },
     { "prefix": "services/identity-service/", "owner": "access" },
     { "prefix": "services/tenant-service/", "owner": "access" },
     { "prefix": "services/agent-service/", "owner": "sofia-automation" },

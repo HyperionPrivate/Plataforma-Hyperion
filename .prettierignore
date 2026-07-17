@@ -3,3 +3,4 @@ dist/
 coverage/
 pnpm-lock.yaml
 tmp/
+apps/coopfuturo-console/

@@ -677,8 +677,8 @@ services:
       api-gateway:
         condition: service_healthy
 
-  # NOVA-only console build (Coopfuturo). Same source, product-scoped at build
-  # time so it never surfaces PULSO/LUMEN navigation.
+  # Legacy Vite NOVA-scoped console (kept for smoke/CI; Contabo CoopFuturo uses
+  # coopfuturo-console below on the same host port).
   web-console-nova:
     build:
       context: ..
@@ -688,6 +688,7 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
         VITE_PRODUCT: nova
         VITE_BRAND_LABEL: CoopFuturo
+    profiles: ["legacy-nova-console"]
     restart: unless-stopped
     ports:
       - "${WEB_CONSOLE_NOVA_HOST_PORT:-3001}:8080"
@@ -697,6 +698,40 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+
+  # Real CoopFuturo / PULSO Ops UI (Next.js from CoopFuturo_/apps/web).
+  # Serves on the same host port Contabo already uses for CoopFuturo (:19001).
+  coopfuturo-console:
+    build:
+      context: ../apps/coopfuturo-console
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_MODE: live
+        NEXT_PUBLIC_PILOT_CORE_URL: /pilot-core
+        NEXT_PUBLIC_REQUIRE_AUTH: "true"
+    restart: unless-stopped
+    environment:
+      HYPERION_GATEWAY_URL: http://api-gateway:8080
+      COOPFUTURO_TENANT_ID: ${COOPFUTURO_TENANT_ID:-787bc386-6d37-4c08-b929-5c8b9dc5ef40}
+    ports:
+      # Contabo already maps WEB_CONSOLE_NOVA_HOST_PORT=19001; reuse it so CoopFuturo
+      # keeps the same URL after swapping the Vite console for this Next UI.
+      - "${WEB_CONSOLE_NOVA_HOST_PORT:-3001}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
     depends_on:
       api-gateway:
         condition: service_healthy
