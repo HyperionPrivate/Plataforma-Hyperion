@@ -64,13 +64,13 @@ Aliases aceptados: `documento`, `asesor`, `nps`, `baja`, `tipify`, `mensaje`, `c
 
 Clon de chat en NOVA Conversaciones:
 
-| Evento LIWA | Efecto en NOVA |
-| --- | --- |
-| `document_received` | CRM documento + burbuja inbound (kind=document) |
-| `handoff_requested` | Handoff cola + burbuja system |
-| **`message` (+ `text`) — obligatorio para espejo** | Burbuja Asociado (texto libre) |
-| `bot_message` (opcional) | Burbuja Bot WhatsApp |
-| Reply asesor | Burbuja outbound + `send/text` LIWA |
+| Evento LIWA                                        | Efecto en NOVA                                  |
+| -------------------------------------------------- | ----------------------------------------------- |
+| `document_received`                                | CRM documento + burbuja inbound (kind=document) |
+| `handoff_requested`                                | Handoff cola + burbuja system                   |
+| **`message` (+ `text`) — obligatorio para espejo** | Burbuja Asociado (texto libre)                  |
+| `bot_message` (opcional)                           | Burbuja Bot WhatsApp                            |
+| Reply asesor                                       | Burbuja outbound + `send/text` LIWA             |
 
 Sin nodo External API `event=message` en el paso donde el usuario escribe, Conversaciones **no** ve el chat aunque WhatsApp funcione.  
 Cutover Contabo ordenado: [CONTABO_CHAT_ESPEJO_CUTOVER.md](CONTABO_CHAT_ESPEJO_CUTOVER.md).

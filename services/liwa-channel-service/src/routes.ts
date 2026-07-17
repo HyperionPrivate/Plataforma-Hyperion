@@ -711,11 +711,7 @@ async function emitNormalizedWebhookEvent(
 
   // Free-text chat clone (event=message) or unknown payloads that still carry user text.
   const chatText =
-    kind === "message"
-      ? parsed.text || parsed.motivo || parsed.name
-      : kind === "unknown"
-        ? parsed.text
-        : undefined;
+    kind === "message" ? parsed.text || parsed.motivo || parsed.name : kind === "unknown" ? parsed.text : undefined;
   if (chatText) {
     await emitWaMessageReceived(db, {
       tenantId,

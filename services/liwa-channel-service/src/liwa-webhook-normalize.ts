@@ -195,13 +195,7 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
   ).trim();
 
   const textRaw = String(
-    body.text ??
-      body.message ??
-      body.body ??
-      body.last_message ??
-      fields.text ??
-      fields.message ??
-      ""
+    body.text ?? body.message ?? body.body ?? body.last_message ?? fields.text ?? fields.message ?? ""
   ).trim();
   const text = textRaw.length > 0 ? textRaw.slice(0, 4000) : undefined;
 

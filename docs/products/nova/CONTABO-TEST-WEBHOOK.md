@@ -4,11 +4,11 @@ Entorno **solo pruebas** en el VPS Contabo, sin tocar lo que ya escucha en 80/44
 
 ## Inventario (17 jul 2026)
 
-| Puerto | Desde red externa | Notas |
-| --- | --- | --- |
-| 22 | Abierto | SSH solo `publickey` (password rechazado) |
-| 25384 | Cerrado / timeout | No usable desde esta red |
-| 80 / 443 | Abiertos | Ya hay algo en producción/piloto — **no pisar** |
+| Puerto   | Desde red externa | Notas                                           |
+| -------- | ----------------- | ----------------------------------------------- |
+| 22       | Abierto           | SSH solo `publickey` (password rechazado)       |
+| 25384    | Cerrado / timeout | No usable desde esta red                        |
+| 80 / 443 | Abiertos          | Ya hay algo en producción/piloto — **no pisar** |
 
 URL de prueba del webhook (cuando el stack `hyperion-test` esté up):
 
@@ -62,10 +62,10 @@ Luego en LIWA (flujo `1784249919201`): misma URL + header secret → **Probar Ah
 
 ## LIWA — nodos (tras smoke 200)
 
-| Nodo | event |
-| --- | --- |
+| Nodo               | event               |
+| ------------------ | ------------------- |
 | Documento (fase 2) | `document_received` |
-| Acciones (fase 4) | `handoff_requested` |
+| Acciones (fase 4)  | `handoff_requested` |
 
 No apuntar el flujo prod `1782399915832` a este puerto de prueba.
 

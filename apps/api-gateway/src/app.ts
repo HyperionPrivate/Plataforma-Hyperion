@@ -254,7 +254,10 @@ export function createGatewayRoutes(overrides?: {
     });
 
     // Public LIWA provider webhooks (auth = X-LIWA-WEBHOOK-SECRET upstream).
-    const liwaWebhookOk = async (request: { id: string }, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+    const liwaWebhookOk = async (
+      request: { id: string },
+      reply: { code: (n: number) => { send: (b: unknown) => unknown } }
+    ) =>
       reply.code(200).send(
         envelope(
           {
