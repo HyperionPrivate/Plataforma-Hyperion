@@ -32,7 +32,7 @@ const callCreateSchema = z.object({
 
 /** Time-of-day greeting in Colombia (America/Bogota) so the agent never says "buenos días" at night. */
 function colombianGreeting(now: Date = new Date()): string {
-  let hour = 12;
+  let hour: number;
   try {
     hour = Number(
       new Intl.DateTimeFormat("en-US", {
