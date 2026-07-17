@@ -77,9 +77,7 @@ function titleCaseName(raw: string): string {
   if (!cleaned) return "Asociado";
   // Prefer first given name(s); avoid shouting full legal names every turn.
   const parts = cleaned.split(" ").slice(0, 2);
-  return parts
-    .map((p) => p.charAt(0).toLocaleUpperCase("es-CO") + p.slice(1).toLocaleLowerCase("es-CO"))
-    .join(" ");
+  return parts.map((p) => p.charAt(0).toLocaleUpperCase("es-CO") + p.slice(1).toLocaleLowerCase("es-CO")).join(" ");
 }
 
 function isGenericSpokenValue(value: string): boolean {

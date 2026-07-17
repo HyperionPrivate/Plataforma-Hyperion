@@ -174,10 +174,9 @@ async function ensureSipPhone({ e164, label, agentId, trunk }) {
       found = findPhone(existing, e164);
       phoneNumberId = found ? phoneIdOf(found) : "";
       if (!phoneNumberId) {
-        throw new Error(
-          `Phone ${e164} reported as existing but not visible in GET /v1/convai/phone-numbers`,
-          { cause: err }
-        );
+        throw new Error(`Phone ${e164} reported as existing but not visible in GET /v1/convai/phone-numbers`, {
+          cause: err
+        });
       }
     }
     if (!phoneNumberId) {
@@ -213,8 +212,7 @@ function defaultCoopList() {
 async function main() {
   loadDotEnv();
 
-  const agentA =
-    process.env.ELEVENLABS_AGENT_ID?.trim() || process.env.DEMO_AGENT_ID?.trim() || "";
+  const agentA = process.env.ELEVENLABS_AGENT_ID?.trim() || process.env.DEMO_AGENT_ID?.trim() || "";
   const agentB = process.env.ELEVENLABS_AGENT_ID_B?.trim() || "";
   if (!agentA) throw new Error("ELEVENLABS_AGENT_ID (Flujo A) is required");
   if (splitAb && !agentB) throw new Error("ELEVENLABS_AGENT_ID_B (Flujo B) is required with --split-ab");

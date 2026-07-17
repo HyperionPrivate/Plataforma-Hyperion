@@ -57,7 +57,14 @@ for (const call of calls) {
   const duration = j.metadata?.call_duration_secs ?? 0;
   const turns = transcript.filter((t) => (t.message || t.text || "").trim()).length;
   if (duration >= 20 && turns >= 4) {
-    chosen = { ...call, duration, turns, termination: j.metadata?.termination_reason, analysis: j.analysis, agent_id: j.agent_id };
+    chosen = {
+      ...call,
+      duration,
+      turns,
+      termination: j.metadata?.termination_reason,
+      analysis: j.analysis,
+      agent_id: j.agent_id
+    };
     detail = j;
     break;
   }

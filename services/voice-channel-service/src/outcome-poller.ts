@@ -87,10 +87,7 @@ export function startOutcomePoller(options: OutcomePollerOptions): OutcomePoller
   };
 }
 
-async function pollDialerOutcomes(
-  options: OutcomePollerOptions,
-  fetchImpl: typeof fetch
-): Promise<number> {
+async function pollDialerOutcomes(options: OutcomePollerOptions, fetchImpl: typeof fetch): Promise<number> {
   let emitted = 0;
   const [calls, reconciliation] = await Promise.all([
     options.dialer.listCalls({ limit: 100 }),
@@ -133,11 +130,7 @@ async function pollDialerOutcomes(
     let intent: string | undefined;
     let transcriptExcerpt: string | undefined;
     if (row.conversation_id && options.elevenLabsApiKey) {
-      const conversation = await fetchElevenLabsConversation(
-        fetchImpl,
-        options.elevenLabsApiKey,
-        row.conversation_id
-      );
+      const conversation = await fetchElevenLabsConversation(fetchImpl, options.elevenLabsApiKey, row.conversation_id);
       intent = conversation.intent;
       transcriptExcerpt = conversation.transcriptExcerpt;
     }

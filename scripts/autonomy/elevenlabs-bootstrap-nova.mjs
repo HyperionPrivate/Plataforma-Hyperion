@@ -587,8 +587,7 @@ async function main() {
     agentPayload({
       name: nameA,
       prompt: PROMPT_RENOVACION,
-      firstMessage:
-        "{{saludo}}, le saluda Valerie, de Coopfuturo. ¿Hablo con {{nombre}}?",
+      firstMessage: "{{saludo}}, le saluda Valerie, de Coopfuturo. ¿Hablo con {{nombre}}?",
       voiceId: voiceA,
       kb,
       tags: ["nova", "coopfuturo", "renovacion", "crediestudio", "flujo-a", "valerie", "vip-2026"]

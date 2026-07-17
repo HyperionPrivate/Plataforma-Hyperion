@@ -335,14 +335,7 @@ export async function registerNovaRoutes(
                agency_code = coalesce(excluded.agency_code, nova.contacts.agency_code),
                segment = coalesce(excluded.segment, nova.contacts.segment),
                updated_at = now()`,
-          [
-            scope.tenantId,
-            resolvedId,
-            phone,
-            row.full_name ?? null,
-            row.agency_code ?? null,
-            row.segment ?? null
-          ]
+          [scope.tenantId, resolvedId, phone, row.full_name ?? null, row.agency_code ?? null, row.segment ?? null]
         );
 
         const productLine = row.product_line ?? productLineFromSegment(row.segment);

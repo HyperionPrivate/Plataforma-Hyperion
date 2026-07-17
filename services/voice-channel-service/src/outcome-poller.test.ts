@@ -22,9 +22,7 @@ function mockDb(stuckRows: Array<Record<string, unknown>> = []): DatabaseClient 
       }
       return { rows: [], rowCount: 0 };
     }),
-    transaction: vi.fn(async (fn: (tx: DatabaseClient) => Promise<unknown>) =>
-      fn(db as unknown as DatabaseClient)
-    ),
+    transaction: vi.fn(async (fn: (tx: DatabaseClient) => Promise<unknown>) => fn(db as unknown as DatabaseClient)),
     close: vi.fn(async () => undefined)
   };
   return db as unknown as DatabaseClient;
@@ -58,18 +56,19 @@ describe("isTerminalElevenLabsStatus", () => {
 
 describe("fetchElevenLabsConversation", () => {
   it("returns status, intent and transcript", async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          status: "done",
-          analysis: {
-            call_successful: "success",
-            data_collection_results: { intencion: { value: "pedir_whatsapp" } }
-          },
-          transcript: [{ message: "Sí mándeme por WhatsApp" }]
-        }),
-        { status: 200 }
-      )
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "done",
+            analysis: {
+              call_successful: "success",
+              data_collection_results: { intencion: { value: "pedir_whatsapp" } }
+            },
+            transcript: [{ message: "Sí mándeme por WhatsApp" }]
+          }),
+          { status: 200 }
+        )
     ) as unknown as typeof fetch;
 
     const snap = await fetchElevenLabsConversation(fetchImpl, "key", "conv_1");
@@ -93,15 +92,16 @@ describe("pollElevenLabsStuckCalls", () => {
 
   it("emits completed when ElevenLabs status is done", async () => {
     const db = mockDb([stuckCall]);
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          status: "done",
-          analysis: { data_collection_results: { intencion: "interesado" } },
-          transcript: [{ message: "Quiero renovar" }]
-        }),
-        { status: 200 }
-      )
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "done",
+            analysis: { data_collection_results: { intencion: "interesado" } },
+            transcript: [{ message: "Quiero renovar" }]
+          }),
+          { status: 200 }
+        )
     ) as unknown as typeof fetch;
 
     const options: OutcomePollerOptions = {
@@ -119,8 +119,8 @@ describe("pollElevenLabsStuckCalls", () => {
 
   it("does not emit when conversation is still in-progress", async () => {
     const db = mockDb([stuckCall]);
-    const fetchImpl = vi.fn(async () =>
-      new Response(JSON.stringify({ status: "in-progress", transcript: [] }), { status: 200 })
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ status: "in-progress", transcript: [] }), { status: 200 })
     ) as unknown as typeof fetch;
 
     const options: OutcomePollerOptions = {

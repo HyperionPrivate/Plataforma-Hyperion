@@ -130,16 +130,21 @@ https://<host-publico>/v1/liwa/webhooks
 2. **Mensajes del asociado:** en el trigger / paso donde el usuario escribe, agrega External Request → URL Hyperion webhook + header secret → body:
 
 ```json
-{"event":"message","phone":"{{phone}}","text":"{{text}}","external_id":"{{message_id}}"}
+{ "event": "message", "phone": "{{phone}}", "text": "{{text}}", "external_id": "{{message_id}}" }
 ```
 
 3. **Cada burbuja del bot:** inmediatamente después de cada nodo Message / Bot Message del flow, agrega External Request con el **texto literal** de esa burbuja (o variable si LIWA la expone):
 
 ```json
-{"event":"bot_message","phone":"{{phone}}","text":"Hola, soy el asistente de CoopFuturo. ¿En qué te ayudo?","external_id":"renov-bot-1"}
+{
+  "event": "bot_message",
+  "phone": "{{phone}}",
+  "text": "Hola, soy el asistente de CoopFuturo. ¿En qué te ayudo?",
+  "external_id": "renov-bot-1"
+}
 ```
 
-   Repite con `external_id` distinto por burbuja (`renov-bot-2`, …) para dedup en Hyperion.
+Repite con `external_id` distinto por burbuja (`renov-bot-2`, …) para dedup en Hyperion.
 
 4. Guarda el flow. **Probar Ahora** en cada nodo → HTTP 200.
 5. Smoke E2E: tipify / Lab envía flow → en Conversaciones aparece `Flujo <nombre> enviado` → el bot habla en WhatsApp → cada `bot_message` aparece como burbuja **Bot** con el texto exacto → el asociado responde → burbuja **Asociado** → reply asesor llega al celular.

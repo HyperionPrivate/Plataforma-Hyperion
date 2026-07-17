@@ -34,10 +34,13 @@ const q = [
 ].join(" ");
 
 const rows = sql(q);
-const calls = rows.split("\n").filter(Boolean).map((line) => {
-  const [call_id, status, phone, name, dialer_ref, conversation_id, created, updated] = line.split("|");
-  return { call_id, status, phone, name, dialer_ref, conversation_id, created, updated };
-});
+const calls = rows
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => {
+    const [call_id, status, phone, name, dialer_ref, conversation_id, created, updated] = line.split("|");
+    return { call_id, status, phone, name, dialer_ref, conversation_id, created, updated };
+  });
 
 console.log("=== voice.calls ===");
 console.log(JSON.stringify(calls, null, 2));
@@ -67,14 +70,19 @@ for (const c of items.slice(0, 12)) {
       status: c.status,
       when,
       duration: c.call_duration_secs || c.metadata?.call_duration_secs,
-      to: c.metadata?.phone_call?.external_number || c.metadata?.phone_call?.to_number || c.metadata?.phone_call?.agent_phone_number_id
+      to:
+        c.metadata?.phone_call?.external_number ||
+        c.metadata?.phone_call?.to_number ||
+        c.metadata?.phone_call?.agent_phone_number_id
     })
   );
 }
 
 for (const call of calls.slice(0, 5)) {
   if (!call.conversation_id) {
-    console.log(`\n[SIN CONV] ${call.created} ${call.phone} ${call.name} status=${call.status} dialer=${call.dialer_ref}`);
+    console.log(
+      `\n[SIN CONV] ${call.created} ${call.phone} ${call.name} status=${call.status} dialer=${call.dialer_ref}`
+    );
     continue;
   }
   const detail = await el(`/v1/convai/conversations/${call.conversation_id}`);
@@ -93,11 +101,10 @@ for (const call of calls.slice(0, 5)) {
 }
 
 try {
-  const logs = execFileSync(
-    "docker",
-    ["logs", "--since", "25m", "plataforma-hyperion-neutral-dialer-1"],
-    { encoding: "utf8", maxBuffer: 5_000_000 }
-  );
+  const logs = execFileSync("docker", ["logs", "--since", "25m", "plataforma-hyperion-neutral-dialer-1"], {
+    encoding: "utf8",
+    maxBuffer: 5_000_000
+  });
   const interesting = logs
     .split("\n")
     .filter((l) => /demo|initiate|error|429|failed|573002555948|phone_number|conversation/i.test(l))

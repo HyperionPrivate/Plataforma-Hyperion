@@ -33,10 +33,13 @@ LEFT JOIN nova.contacts ct ON ct.tenant_id=c.tenant_id AND ct.contact_id=c.conta
 ORDER BY c.created_at DESC LIMIT 3
 `);
 
-const calls = rows.split("\n").filter(Boolean).map((line) => {
-  const [call_id, status, phone, name, dialer_ref, conversation_id, created, updated] = line.split("|");
-  return { call_id, status, phone, name, dialer_ref, conversation_id, created, updated };
-});
+const calls = rows
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => {
+    const [call_id, status, phone, name, dialer_ref, conversation_id, created, updated] = line.split("|");
+    return { call_id, status, phone, name, dialer_ref, conversation_id, created, updated };
+  });
 
 console.log("=== Ultimas 3 llamadas ===");
 console.log(JSON.stringify(calls, null, 2));

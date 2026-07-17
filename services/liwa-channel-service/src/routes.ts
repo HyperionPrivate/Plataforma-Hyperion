@@ -131,9 +131,7 @@ export async function registerLiwaRoutes(
     }
 
     const flowLabel =
-      parsed.data.mode === "flow"
-        ? await resolveFlowSentLabel(dependencies.client, parsed.data.flow_id)
-        : undefined;
+      parsed.data.mode === "flow" ? await resolveFlowSentLabel(dependencies.client, parsed.data.flow_id) : undefined;
 
     await scope.db.transaction(async (tx) => {
       await upsertContactBinding(tx, {
