@@ -163,7 +163,17 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
   const fields = body.fields && typeof body.fields === "object" ? (body.fields as Record<string, unknown>) : {};
 
   const phoneRaw = String(
-    body.phone ?? body.telefono ?? body.msisdn ?? contactObj.phone ?? contactObj.telefono ?? userObj.phone ?? ""
+    body.phone ??
+      body.telefono ??
+      body.msisdn ??
+      body.from ??
+      body.wa_id ??
+      body.sender ??
+      contactObj.phone ??
+      contactObj.telefono ??
+      userObj.phone ??
+      userObj.from ??
+      ""
   ).trim();
   const phone = normalizePhoneE164(phoneRaw) ?? phoneRaw;
 
