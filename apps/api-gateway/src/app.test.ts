@@ -890,7 +890,7 @@ describe("api-gateway routes", () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.data.services).toHaveLength(11);
+    expect(body.data.services).toHaveLength(15);
     expect(body.meta.generatedAt).toBeTruthy();
   });
 
@@ -941,6 +941,6 @@ describe("api-gateway routes", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe("down");
-    expect(body.services).toHaveLength(10);
+    expect(body.services).toHaveLength(14);
   }, 15_000);
 });
