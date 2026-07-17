@@ -1521,9 +1521,12 @@ async def post_conversation_message(
             liwa_meta = liwa_res
             raw_entry = (liwa_res or {}).get("message")
             entry: dict[str, Any] = raw_entry if isinstance(raw_entry, dict) else {}
-            if liwa_res.get("ok") and entry.get("status") in {"sent", "accepted_pending"}:
+            # LIWA often returns HTTP 200 without receipt_id → accepted_pending.
+            # Success = status sent|accepted_pending (do not require ok flag alone).
+            wa_status = str(entry.get("status") or liwa_res.get("delivery") or "")
+            if wa_status in {"sent", "accepted_pending"}:
                 delivery = "liwa_whatsapp"
-                channel_acked = entry.get("status") == "sent"
+                channel_acked = wa_status == "sent"
                 receipt = entry.get("receipt_id")
                 if receipt is not None:
                     msg["receipt_id"] = str(receipt)

@@ -66,6 +66,35 @@ async def test_process_message_creates_thread() -> None:
     assert any("Ana" in str(t.get("name")) for t in threads)
 
 
+@pytest.mark.asyncio
+async def test_process_bot_message_appends_bot_role() -> None:
+    from pilot_core.modules.activity import conversation_id_for_phone
+
+    phone = "+573004445566"
+    res = await process_liwa_inbound(
+        {
+            "event": "bot_message",
+            "phone": phone,
+            "first_name": "BotAna",
+            "text": "Gracias, hemos recibido tu documento.",
+        }
+    )
+    assert res["ok"] is True
+    cid = str(res.get("conversation_id") or conversation_id_for_phone(phone))
+    msgs = ops_store.list_conversation_messages(cid)
+    assert any(
+        m.get("role") == "bot" and "documento" in str(m.get("text") or "").lower() for m in msgs
+    )
+
+
+def test_normalize_role_bot_on_message() -> None:
+    n = normalize_liwa_webhook(
+        {"event": "message", "phone": "573001112233", "text": "hola bot", "role": "bot"}
+    )
+    assert n["event"] == "bot_message"
+    assert n["msg_role"] == "bot"
+
+
 def test_webhook_http_ok() -> None:
     client = TestClient(app)
     r = client.post(

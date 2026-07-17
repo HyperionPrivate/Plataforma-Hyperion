@@ -51,6 +51,7 @@ function ConversacionesContent() {
   const [botActive, setBotActive] = useState(true);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingMsgs, setPendingMsgs] = useState<Msg[]>([]);
   const [query, setQuery] = useState("");
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>("all");
@@ -105,13 +106,19 @@ function ConversacionesContent() {
     }
   }, [selected?.id, selected?.botPaused, selected?.claimedBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    setPendingMsgs([]);
+    setDraft("");
+  }, [selected?.id]);
+
   const messages = useMemo(() => {
     if (!selected) return [];
-    return ((selected.messages ?? []) as Msg[]).map((m) => ({
+    const base = ((selected.messages ?? []) as Msg[]).map((m) => ({
       ...m,
       text: sanitizeOpsCopy(m.text),
     }));
-  }, [selected]);
+    return [...base, ...pendingMsgs];
+  }, [selected, pendingMsgs]);
 
   const displayTags = useMemo(
     () => sanitizeTags(selected?.tags),
@@ -141,14 +148,22 @@ function ConversacionesContent() {
 
   async function sendMessage() {
     if (!selected || botActive || !draft.trim() || busy) return;
+    const text = draft.trim();
+    const tempId = `tmp_${Date.now()}`;
+    // Optimistic: clear draft immediately so it doesn't look stuck.
+    setDraft("");
+    setPendingMsgs((prev) => [
+      ...prev,
+      { id: tempId, role: "bot", text, at: "enviando…", source: "advisor" },
+    ]);
     setBusy(true);
     try {
       const res = await sendConversationMessage({
         conversation_id: selected.id,
-        text: draft.trim(),
+        text,
         role: "advisor",
       });
-      setDraft("");
+      setPendingMsgs((prev) => prev.filter((m) => m.id !== tempId));
       if (res?.channel_acked) {
         toast.success("WhatsApp enviado");
       } else if (res?.delivery === "liwa_whatsapp") {
@@ -162,6 +177,8 @@ function ConversacionesContent() {
       }
       await refetch();
     } catch (err) {
+      setPendingMsgs((prev) => prev.filter((m) => m.id !== tempId));
+      setDraft(text);
       toast.error("No se pudo enviar", {
         description: err instanceof Error ? err.message : "Error",
       });
@@ -439,8 +456,17 @@ function ConversacionesContent() {
                       {m.role === "bot" && (
                         <span className="mb-1 flex items-center gap-1 text-[10px] text-[var(--muted)]">
                           <Bot className="size-3" strokeWidth={1.75} />{" "}
-                          {!botActive || m.source === "advisor" ? "Asesor" : "Asistente"}
+                          {m.source === "advisor"
+                            ? "Asesor"
+                            : m.source === "voz"
+                              ? "Sistema"
+                              : m.source === "liwa_bot" || m.source === "whatsapp"
+                                ? "Bot WhatsApp"
+                                : "Asistente"}
                         </span>
+                      )}
+                      {m.role === "user" && (
+                        <span className="mb-1 block text-[10px] text-[var(--muted)]">Asociado</span>
                       )}
                       <p>{m.text}</p>
                       {"attachment" in m && m.attachment && (

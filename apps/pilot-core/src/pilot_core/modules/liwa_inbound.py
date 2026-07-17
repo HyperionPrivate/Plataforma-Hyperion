@@ -25,6 +25,10 @@ _EVENT_ALIASES: dict[str, str] = {
     "inbound": "message",
     "user_message": "message",
     "mensaje": "message",
+    "bot_message": "bot_message",
+    "bot_msg": "bot_message",
+    "outbound_message": "bot_message",
+    "agent_message": "bot_message",
     "transfer": "handoff",
     "agencia": "handoff",
     "agency": "handoff",
@@ -142,6 +146,21 @@ def normalize_liwa_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         event = "opt_out"
 
     tenant_id = _pick_str(payload, "tenant_id", "tenant") or ""
+    role_hint = (_pick_str(payload, "role", "direction", "from", "sender") or "").lower()
+    # LIWA bot / flow outbound → Conversaciones bubble as role=bot
+    if event == "bot_message" or role_hint in {
+        "bot",
+        "agent",
+        "advisor",
+        "asesor",
+        "outbound",
+        "system",
+    }:
+        msg_role = "bot"
+        if event == "message":
+            event = "bot_message"
+    else:
+        msg_role = "user"
 
     return {
         "event": event,
@@ -155,6 +174,7 @@ def normalize_liwa_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         "file_url": file_url or None,
         "file_name": file_name,
         "tenant_id": tenant_id or None,
+        "msg_role": msg_role,
     }
 
 
@@ -421,14 +441,17 @@ async def process_liwa_inbound(payload: dict[str, Any]) -> dict[str, Any]:
             "normalized": n,
         }
 
-    # message / document
+    # message / bot_message / document
+    msg_role = "bot" if event == "bot_message" else str(n.get("msg_role") or "user")
+    if event == "document":
+        msg_role = "user"
     msg: dict[str, Any] = {
         "id": f"m_{uuid4().hex[:10]}",
-        "role": "user",
+        "role": msg_role if msg_role in {"user", "bot"} else "user",
         "text": (n["text"] or ("Documento recibido" if event == "document" else ""))[:500]
         or "(sin texto)",
         "at": "ahora",
-        "source": "liwa_inbound",
+        "source": "liwa_bot" if msg_role == "bot" else "liwa_inbound",
     }
     if event == "document" or n["file_url"]:
         validated = (
@@ -453,10 +476,13 @@ async def process_liwa_inbound(payload: dict[str, Any]) -> dict[str, Any]:
         crm_lead = _crm_to(phone=phone, column="documento", name=n["first_name"])
         actions.append("crm_documento")
 
-    # Ensure contactado at least on plain messages
-    if event == "message":
-        crm_lead = _crm_to(phone=phone, column="contactado", name=n["first_name"])
-        actions.append("crm_contactado")
+    # Ensure contactado at least on plain user messages
+    if event in {"message", "bot_message"}:
+        if event == "message":
+            crm_lead = _crm_to(phone=phone, column="contactado", name=n["first_name"])
+            actions.append("crm_contactado")
+        else:
+            actions.append("bot_message")
 
     ops_store.append_conversation_message(cid, msg)
     actions.append("message_appended")

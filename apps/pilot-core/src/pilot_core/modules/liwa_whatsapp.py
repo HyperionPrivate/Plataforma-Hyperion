@@ -252,8 +252,11 @@ class LiwaWhatsAppService:
             },
         )
         _audit(phone=phone, first_name=first_name, entry=entry)
+        # Align with send_flow: LIWA often returns HTTP 200 without receipt_id
+        # (accepted_pending). Treating that as ok=false caused Conversaciones
+        # reply to raise 502 even though WhatsApp delivered.
         return {
-            "ok": status == "sent",
+            "ok": status in {"sent", "accepted_pending"},
             "mock_commercial": False,
             "message": entry,
             "delivery": status,

@@ -2,124 +2,130 @@
 
 **Rama:** `interfaz-coopfuturo`  
 **Repo:** `AdministracionHyperion/CoopFuturo_`  
-**UI de referencia local:** `http://localhost:3004` (staging LIWA; API `127.0.0.1:8204`)  
-**Fecha:** 17 jul 2026
+**UI de referencia local:** `http://localhost:3004` (API `127.0.0.1:8204`)  
+**Actualizado:** 17 jul 2026
 
-## 1. Para el equipo — qué interfaz usar
+---
+
+## 1. Qué interfaz usar (evitar confusiones)
 
 | Qué | Dónde |
 |---|---|
-| **Ops UI CoopFuturo (esta rama)** | `apps/web` → Conversaciones, Handoff, Laboratorio, CRM, Revisión post-llamada |
-| **No confundir con** | Mock `Pulso/apps/web` ni consola Hyperion/NOVA (`version limpia`) |
-| **API Ops** | `apps/pilot-core` rutas `/ops/*` |
-| **Llamadas (voz)** | Microservicio / integración ElevenLabs + post-call; **independiente** del bug de Transferir |
-
-`main` ya es arquitectura de microservicios (`pilot-core`, adapters, Traefik, etc.). El problema de “chat duplicado al Transferir” era de **frontend + saga handoff en Ops**, no del dialer.
-
-### Cómo levantar la misma UI que localhost:3004
+| **Ops UI CoopFuturo (esta rama)** | `apps/web` — Conversaciones, Handoff, Lab, CRM, Revisión post-llamada |
+| **No confundir con** | Mock `Pulso/apps/web` ni Hyperion/NOVA (`version limpia`) |
+| **API Ops** | `apps/pilot-core` → `/ops/*` |
+| **Voz** | ElevenLabs SIP desde pilot-core (independiente del espejo de chat) |
 
 ```powershell
+# UI
 cd apps/web
-# .env.local (no commitear secretos):
-# NEXT_PUBLIC_API_MODE=live
-# NEXT_PUBLIC_PILOT_CORE_URL=http://127.0.0.1:8204
-# NEXT_PUBLIC_REQUIRE_AUTH=false
-npm install
+# .env.local: NEXT_PUBLIC_API_MODE=live, NEXT_PUBLIC_PILOT_CORE_URL=http://127.0.0.1:8204
 npm run dev -- --port 3004
-```
 
-API staging (ejemplo):
-
-```powershell
-cd apps/pilot-core
-# PULSO_DATA_DIR=...\CoopFuturo_repo\.data-liwa-local
-# AUTH_DISABLED=true
-# LIWA_MODE=mock|real
+# API (ejemplo staging)
+# PULSO_DATA_DIR=…\.data-liwa-local  AUTH_DISABLED=true  LIWA_MODE=real|mock
 uv run uvicorn pilot_core.main:app --host 127.0.0.1 --port 8204 --reload
 ```
 
 ---
 
-## 2. Arquitectura (main) — voz vs frontend Ops
+## 2. Empaquetado validado en esta rama (antes de Contabo)
 
-```text
-[Dialer / ElevenLabs]     → voz outbound + webhook/poller post-call
-        ↓
-[pilot-core /ops]         → tipify, CRM, Conversaciones, Handoff, LIWA HTTP
-        ↓
-[apps/web Ops UI]         ← ESTA interfaz (rama)
-        ↓
-[LIWA chat.liwa.co]       → flujo Renovaciones, bot, live chat, tags AG_*
+| Fix | Por qué |
+|---|---|
+| `saludo` + vars Flujo A (`lead_context` → ElevenLabs `dynamic_variables`) | Evita cuelgue ~1s / first_message sin `{{saludo}}` |
+| IDs EL `phnum_8201…`, `agent_0701…` / `agent_2901…` | Evita 404 SIP en workspace actual |
+| `accepted_pending` → reply HTTP 200 | Sin 502 falso al escribir el asesor (LIWA a menudo no manda `message_id`) |
+| UI draft optimista + labels **Asesor / Bot WhatsApp / Asociado / Sistema** | Conversaciones usable |
+| Webhook `bot_message` (+ role hints) | Bot LIWA aparece como bot en el hilo |
+| Transferir a asesor reusa `conversation_id` | No clona chats vacíos |
+| Cola handoff solo `queued`; Atender → `claimed` | Cola coherente |
+
+**No va en git:** `LIWA_API_TOKEN`, `ELEVENLABS_API_KEY`, secrets de webhook Contabo, SSH keys, `.data-liwa-local/`.
+
+---
+
+## 3. Conversaciones **no es** espejo de LIWA (lo que falta)
+
+**No es mentira del WhatsApp:** el celular puede estar perfecto y Conversaciones verse incompleto. Son dos sistemas.
+
+| En WhatsApp real | En Conversaciones PULSO |
+|---|---|
+| Plantillas “cupo preaprobado…”, “No olvides adjuntar…” | No llegan (LIWA no las notifica) |
+| Mensaje del usuario “Hola” | Solo si hay webhook `event=message` |
+| Texto enviado desde PULSO (asesor) | Sí |
+| Eventos cableados (documento / handoff / bot_message) | Sí, si LIWA hace el POST |
+
+### Por qué
+
+1. **LIWA no tiene API de historial** (no hay `GET` de mensajes del chat).  
+2. PULSO solo muestra: lo que **envía** desde Conversaciones, o lo que LIWA **avisa por webhook**.  
+3. Hoy el External API del flujo suele estar solo en pasos concretos (documento / handoff), **no** en cada texto del usuario.
+
+### Secret vs URL (dos problemas distintos)
+
+| Problema | Efecto |
+|---|---|
+| URL antigua Hyperion `…/v1/liwa/webhooks` + secret de otro stack | Apunta a otro servicio (o túnel muerto) → “Probar Ahora” falla |
+| External API solo en documento/handoff | Aunque el túnel PULSO esté bien, tu “Hola” **no dispara** nada hacia Conversaciones |
+
+El **secret** es solo la llave (`X-LIWA-WEBHOOK-SECRET`). Lo crítico es **en qué nodo** LIWA llama a PULSO y con **qué URL**.
+
+### Para que se vea el chat de verdad
+
+En LIWA, en el nodo donde el **usuario escribe texto** (no solo al guardar documento), External API / External Request:
+
+- **URL PULSO** (ejemplo local con túnel):  
+  `https://<tu-tunnel>/ops/webhooks/liwa`  
+  En Contabo: `https://<host-publico>/pilot-core/ops/webhooks/liwa`  
+  **No** usar la URL Hyperion `…/v1/liwa/webhooks` para este Ops.
+- **Header:** `X-LIWA-WEBHOOK-SECRET: <mismo que LIWA_WEBHOOK_SECRET del pilot-core>`  
+  (local staging suele ser `local-liwa-secret-test`; Contabo usa el secret del server).
+- **Body mínimo:**
+
+```json
+{
+  "event": "message",
+  "phone": "{{contact.phone}}",
+  "text": "{{message.text}}",
+  "tenant_id": "coopfuturo"
+}
 ```
 
-- **Voz** puede vivir / desplegarse aparte; tipificación entra por webhook o Laboratorio.
-- **WhatsApp** sale por `liwa_whatsapp` desde pilot-core (`LIWA_MODE=real` + token).
-- **Inbox humano en PULSO** = Conversaciones + Handoff (no es el panel LIWA).
+Opcional bot outbound: `"event": "bot_message"` o `"role": "bot"` para etiquetar **Bot WhatsApp**.
+
+Sin ese nodo `message`, Conversaciones **nunca** verá lo que escribes en WhatsApp, aunque el celular funcione.
+
+Nodos ya recomendados (C1–C5): `document_received`, `prequal_completed`, `handoff_requested`, `csat`, `opt_out` — ver también [Paso_a_paso en Pulso/documentacion](file:///c:/Users/qfue1/OneDrive/Desktop/ZELIO/Pulso/documentacion/Paso_a_paso_LIWA_PULSO.md) (copia local del equipo).
 
 ---
 
-## 3. Fix incluido: Transferir a asesor ya no clona chats
+## 4. Camino feliz ya validado (voz → WA)
 
-**Bug:** `Transferir a asesor` creaba un `cv_*` nuevo → al Atender se abría un chat vacío y la cola se llenaba de “Transferido desde Conversaciones”.
+```text
+Dispatch llamada (ElevenLabs SIP + saludo/vars)
+  → tipify interesado / pedir_whatsapp
+  → LIWA send flow Renovaciones (1782399915832)
+  → celular recibe plantilla
+  → (pendiente) webhooks message/bot → Conversaciones
+  → asesor claim + send/text (accepted_pending = OK)
+```
 
-**Fix (esta rama):**
-
-1. UI envía `conversation_id`, `phone`, `idempotency_key=handoff:{id}`.
-2. Backend reusa ese hilo (`botPaused`, tag Handoff); no inventa otro `cv_*`.
-3. Reusa handoff `queued` si el bridge LIWA ya lo creó.
-4. Cola solo lista `queued`; Atender marca `claimed`.
-
-Archivos: `apps/web/.../conversaciones/page.tsx`, `ops-client.ts`, `pilot_core/routers/ops.py`, `ops_store.py`, `tests/product/test_handoff_saga.py`.
-
----
-
-## 4. Estado WhatsApp (honesto — no 100%)
-
-| Capacidad | Estado |
-|---|---|
-| Post-llamada tipify → cola / envío flujo Renovaciones | Funciona (auto o revisión según `POST_CALL_WHATSAPP_AUTO_SEND`) |
-| Send flow LIWA (`1782399915832`) | Funciona con `LIWA_MODE=real` + token |
-| Reply asesor `send/text` tras claim | Funciona |
-| Un hilo por teléfono (voz + WA) | Funciona |
-| Transferir / Atender sin clonar | **Corregido en esta rama** |
-| Bridge `liwa-status` (live_chat + tags) | Parcial (estado, no historial) |
-| Webhook inbound LIWA → burbujas | Código listo; hace falta C1–C5 en flujo LIWA + URL Contabo |
-| Chat clon completo (historial bot) | **Pendiente** — LIWA no expone GET historial; depende de webhooks por mensaje |
-
-### Variables clave Contabo / staging
-
-| Variable | Nota |
-|---|---|
-| `LIWA_MODE` | `real` en prod |
-| `LIWA_API_TOKEN` | Cuenta comercial |
-| `LIWA_DEFAULT_FLOW_ID` | `1782399915832` Renovaciones |
-| `LIWA_WEBHOOK_SECRET` | Header `X-LIWA-WEBHOOK-SECRET` |
-| `POST_CALL_WHATSAPP_AUTO_SEND` | Default Contabo `false` (revisión) |
-
-### Nodos API externa en LIWA (solo C1–C5, no todas las fases)
-
-1. `document_received`  
-2. `prequal_completed`  
-3. `handoff_requested`  
-4. `csat`  
-5. `opt_out`  
-
-(+ opcional `message` para espejo completo).
+Flags: `LIWA_MODE=real`, token, `POST_CALL_WHATSAPP_AUTO_SEND` true/false según negocio.
 
 ---
 
-## 5. Prueba rápida en Laboratorio
+## 5. Pendiente explícito (no bloquea commit)
 
-1. Abrir `/laboratorio`  
-2. Teléfono de prueba + ciudad  
-3. Simular `document_received` → `handoff_requested`  
-4. CRM / Conversaciones / Handoff → Atender **mismo** `cv_*`  
-5. Transferir 2 veces → no debe aparecer chat vacío nuevo  
+1. Cablear External API `event=message` (y opcional `bot_message`) en flujo Renovaciones LIWA → URL/secret **PULSO**.  
+2. Deploy Contabo de esta rama cuando el VPS esté estable.  
+3. Chat clon “completo” = (1) + (2); sin GET historial LIWA no hay backfill de chats viejos.  
+4. Limpiar basura de pruebas de túnel en datos locales si molesta en demos.
 
 ---
 
-## 6. Fuera de esta PR
+## 6. Tests útiles
 
-- Deploy Contabo (VPS puede estar en recuperación).  
-- Cutover a Hyperion/NOVA (`Pulso/version limpia`).  
-- Configurar nodos API externa en panel LIWA (requiere admin LIWA).
+```powershell
+uv run pytest tests/product/test_handoff_saga.py tests/product/test_liwa_inbound_webhook.py tests/product/test_conversaciones_advisor_send.py -q
+```
