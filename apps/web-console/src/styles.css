@@ -3734,3 +3734,10 @@ a {
     transition: none;
   }
 }
+
+/* CoopFuturo build (VITE_PRODUCT=nova): green brand accent, scoped so the
+   shared console (VITE_PRODUCT=all) is never affected. */
+.brand-coopfuturo .sidebar-brand,
+.brand-coopfuturo .sidebar-brand svg {
+  color: #16a34a;
+}

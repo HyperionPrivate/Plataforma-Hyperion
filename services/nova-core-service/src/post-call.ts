@@ -58,6 +58,23 @@ const SUMMARY_STOP =
 const TRANSCRIPT_WHATSAPP =
   /\b(whats?\s*app|m[aá]ndeme.{0,40}whats|env[ií].{0,40}whats|por\s+wsp|por\s+wa\b|matr[ií]cula.{0,30}whats|whats.{0,30}matr[ií]cula)\b/i;
 
+/** Unwrap ElevenLabs data_collection `{ value: "..." }` or plain scalars. */
+export function coerceAnalysisValue(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
+    const text = String(raw).trim();
+    return text.length > 0 ? text : undefined;
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    for (const key of ["value", "result", "answer", "selected"]) {
+      const nested = coerceAnalysisValue(obj[key]);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
 export function normalizeIntent(raw: string | null | undefined): string {
   if (!raw) return "unknown";
   const value = raw.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
@@ -78,7 +95,10 @@ export function normalizeIntent(raw: string | null | undefined): string {
     wsp: "pedir_whatsapp",
     send_whatsapp: "pedir_whatsapp",
     whatsapp_request: "pedir_whatsapp",
-    whatsapp_followup: "pedir_whatsapp"
+    whatsapp_followup: "pedir_whatsapp",
+    enviar_wa: "pedir_whatsapp",
+    quiere_whatsapp: "pedir_whatsapp",
+    contactar_whatsapp: "pedir_whatsapp"
   };
   return aliases[value] ?? value;
 }
@@ -110,11 +130,17 @@ export function inferIntentFromPayload(payload: {
 
   const analysis = payload.analysis ?? {};
   const dataCollection = (analysis.data_collection_results as Record<string, unknown> | undefined) ?? {};
-  for (const key of ["intencion", "intent", "disposition", "quiere_renovar", "pedir_whatsapp"]) {
-    const value = dataCollection[key];
-    if (value !== undefined && value !== null && String(value).length > 0) {
-      return normalizeIntent(String(value));
-    }
+  for (const key of [
+    "intencion",
+    "intent",
+    "disposition",
+    "quiere_renovar",
+    "pedir_whatsapp",
+    "enviar_whatsapp",
+    "quiere_whatsapp"
+  ]) {
+    const value = coerceAnalysisValue(dataCollection[key]);
+    if (value) return normalizeIntent(value);
   }
 
   const transcript = payload.transcript_excerpt ?? "";

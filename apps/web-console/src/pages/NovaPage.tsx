@@ -18,7 +18,8 @@ import {
   NovaReviewsTab,
   NovaSegmentationTab,
   NOVA_TABS,
-  mapPlatformRole
+  mapPlatformRole,
+  type ChannelStatus
 } from "./nova/index.js";
 import type {
   AnalyticsDailyRow,
@@ -223,6 +224,18 @@ export function NovaPage() {
     await refresh();
   }
 
+  async function fetchConversationMessages(conversationId: string) {
+    return api.get<
+      Array<{
+        message_id: string;
+        direction: "inbound" | "outbound";
+        body: string;
+        kind: string;
+        created_at?: string;
+      }>
+    >(novaPath(tenant.id, `conversations/${conversationId}/messages`));
+  }
+
   async function decideReview(reviewId: string, decision: "approve" | "skip") {
     if (!canWriteOps) return;
     await api.post(novaPath(tenant.id, `reviews/${reviewId}/decide`), {
@@ -233,7 +246,7 @@ export function NovaPage() {
     await refresh();
   }
 
-  async function patchLead(leadId: string, body: { stage?: string; tipification?: string }) {
+  async function patchLead(leadId: string, body: { stage?: string; tipification?: string; product_line?: string }) {
     if (!canWriteOps) return;
     await api.patch(novaPath(tenant.id, `leads/${leadId}`), body);
     setNotice("Lead actualizado.");
@@ -258,6 +271,20 @@ export function NovaPage() {
 
   async function lookupAssociate(documentId: string) {
     return api.get(novaPath(tenant.id, `core/associates/${documentId}`));
+  }
+
+  async function simulateLiwaEvent(input: {
+    event: string;
+    phone: string;
+    ciudad?: string;
+    score?: number;
+    tipificacion?: string;
+  }) {
+    return api.post(novaPath(tenant.id, "lab/liwa-event"), input);
+  }
+
+  async function fetchChannelStatus(conversationId: string): Promise<ChannelStatus> {
+    return api.get<ChannelStatus>(novaPath(tenant.id, `conversations/${conversationId}/channel-status`));
   }
 
   return (
@@ -316,7 +343,13 @@ export function NovaPage() {
         ) : null}
 
         {!loading && !error && tab === "conversations" ? (
-          <NovaConversationsTab conversations={conversations} onClaim={claimConversation} onReply={replyConversation} />
+          <NovaConversationsTab
+            conversations={conversations}
+            onClaim={claimConversation}
+            onReply={replyConversation}
+            onChannelStatus={fetchChannelStatus}
+            onLoadMessages={fetchConversationMessages}
+          />
         ) : null}
 
         {!loading && !error && tab === "reviews" ? (
@@ -359,6 +392,7 @@ export function NovaPage() {
             onEligibility={eligibilityContact}
             onScore={scoreContact}
             onLookupAssociate={lookupAssociate}
+            onSimulateLiwa={simulateLiwaEvent}
           />
         ) : null}
 

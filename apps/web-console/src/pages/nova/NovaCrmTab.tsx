@@ -1,7 +1,38 @@
 import { useMemo, useState } from "react";
 import { Card, CardHead, EmptyState } from "../../components/ui.js";
-import type { LeadRow } from "./types.js";
-import { CRM_STAGE_LABELS, CRM_STAGES, DEFAULT_NEXT_STAGE } from "./types.js";
+import type { LeadRow, NovaProductLine } from "./types.js";
+import { CRM_STAGE_LABELS, CRM_STAGES, DEFAULT_NEXT_STAGE, PRODUCT_LINE_LABELS, PRODUCT_LINES } from "./types.js";
+
+const TIPIFICATION_PRESETS: Record<NovaProductLine, Array<{ value: string; label: string }>> = {
+  renovacion: [
+    { value: "renovado_ok", label: "Renovado OK" },
+    { value: "doc_solicitado", label: "Documento solicitado" },
+    { value: "callback", label: "Callback" },
+    { value: "ocupado", label: "Ocupado / no contesta" },
+    { value: "no_interes", label: "No interés" }
+  ],
+  reactivacion: [
+    { value: "reactivado_ok", label: "Reactivado OK" },
+    { value: "doc_solicitado", label: "Documento solicitado" },
+    { value: "callback", label: "Callback" },
+    { value: "ocupado", label: "Ocupado / no contesta" },
+    { value: "no_interes", label: "No interés" }
+  ],
+  nuevos: [
+    { value: "precalificado", label: "Precalificado" },
+    { value: "doc_solicitado", label: "Documento solicitado" },
+    { value: "no_califica", label: "No califica" },
+    { value: "callback", label: "Callback" },
+    { value: "no_interes", label: "No interés" }
+  ],
+  microcredito: [
+    { value: "aprobado", label: "Aprobado" },
+    { value: "rechazado", label: "Rechazado" },
+    { value: "doc_solicitado", label: "Documento solicitado" },
+    { value: "callback", label: "Callback" },
+    { value: "no_interes", label: "No interés" }
+  ]
+};
 
 export function NovaCrmTab({
   leads,
@@ -10,21 +41,31 @@ export function NovaCrmTab({
 }: {
   leads: LeadRow[];
   canWriteOps: boolean;
-  onPatchLead: (leadId: string, body: { stage?: string; tipification?: string }) => Promise<void>;
+  onPatchLead: (
+    leadId: string,
+    body: { stage?: string; tipification?: string; product_line?: string }
+  ) => Promise<void>;
 }) {
+  const [productLine, setProductLine] = useState<NovaProductLine>("renovacion");
   const [selectedId, setSelectedId] = useState<string>();
   const [tipification, setTipification] = useState("");
   const [busyId, setBusyId] = useState<string>();
+
+  const filteredLeads = useMemo(
+    () => leads.filter((lead) => (lead.product_line ?? "renovacion") === productLine),
+    [leads, productLine]
+  );
 
   const columns = useMemo(() => {
     return CRM_STAGES.map((stage) => ({
       id: stage,
       label: CRM_STAGE_LABELS[stage] ?? stage,
-      items: leads.filter((lead) => lead.stage === stage)
+      items: filteredLeads.filter((lead) => lead.stage === stage)
     }));
-  }, [leads]);
+  }, [filteredLeads]);
 
-  const selected = leads.find((lead) => lead.lead_id === selectedId);
+  const selected = filteredLeads.find((lead) => lead.lead_id === selectedId);
+  const presets = TIPIFICATION_PRESETS[productLine];
 
   async function move(lead: LeadRow, to: string, tip?: string) {
     if (!canWriteOps) return;
@@ -42,6 +83,32 @@ export function NovaCrmTab({
 
   return (
     <div className="col" style={{ gap: 16 }}>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        {PRODUCT_LINES.map((line) => {
+          const count = leads.filter((lead) => (lead.product_line ?? "renovacion") === line).length;
+          return (
+            <button
+              key={line}
+              type="button"
+              className={`chip${productLine === line ? " active" : ""}`}
+              onClick={() => {
+                setProductLine(line);
+                setSelectedId(undefined);
+                setTipification("");
+              }}
+            >
+              {PRODUCT_LINE_LABELS[line]} ({count})
+            </button>
+          );
+        })}
+      </div>
+
+      {(productLine === "nuevos" || productLine === "microcredito") && filteredLeads.length === 0 ? (
+        <p className="muted tiny">
+          Tablero listo (Alcances). Sin leads aún — el import puede setear <code>product_line</code> más adelante.
+        </p>
+      ) : null}
+
       <div className="row" style={{ gap: 12, overflowX: "auto", alignItems: "stretch", paddingBottom: 4 }}>
         {columns.map((column) => (
           <div key={column.id} style={{ minWidth: 200, flex: "0 0 220px" }}>
@@ -86,7 +153,7 @@ export function NovaCrmTab({
       </div>
 
       <Card>
-        <CardHead title="Tipificación" />
+        <CardHead title={`Tipificación · ${PRODUCT_LINE_LABELS[productLine]}`} />
         {!selected ? (
           <EmptyState label="Selecciona un lead del kanban." />
         ) : (
@@ -94,9 +161,24 @@ export function NovaCrmTab({
             <p>
               Lead <strong>{selected.lead_id}</strong> · etapa {CRM_STAGE_LABELS[selected.stage] ?? selected.stage}
             </p>
+            <label className="col" style={{ gap: 4 }}>
+              <span className="tiny muted">Preset</span>
+              <select
+                className="input"
+                value={presets.some((p) => p.value === tipification) ? tipification : ""}
+                onChange={(e) => setTipification(e.target.value)}
+              >
+                <option value="">Elegir tipificación…</option>
+                {presets.map((preset) => (
+                  <option key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <input
               className="input"
-              placeholder="Tipificación (ej. renovado_ok)"
+              placeholder="O texto libre (opcional)"
               value={tipification}
               onChange={(e) => setTipification(e.target.value)}
             />

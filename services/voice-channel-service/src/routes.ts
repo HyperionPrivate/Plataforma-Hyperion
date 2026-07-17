@@ -388,15 +388,146 @@ export async function registerVoiceRoutes(
   app.post("/v1/voice/webhooks/elevenlabs", async (request, reply) => {
     if (!context.db) return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
 
+    const verification = verifyElevenLabsWebhook(request, process.env);
+    if (!verification.accepted) {
+      return reply.code(verification.statusCode).send(envelope({ error: verification.message }, request.id));
+    }
+
     const payload = (request.body ?? {}) as Record<string, unknown>;
-    const externalId = String(payload.event_id ?? payload.conversation_id ?? randomUUID());
-    await context.db.query(
+    const data = (payload.data as Record<string, unknown> | undefined) ?? payload;
+    const conversationId = String(
+      data.conversation_id ?? data.conversationId ?? payload.conversation_id ?? payload.conversationId ?? ""
+    ).trim();
+    const externalId = String(payload.event_id ?? payload.eventId ?? (conversationId || randomUUID()));
+    const analysis = (data.analysis as Record<string, unknown> | undefined) ?? {};
+    const dataCollection = (analysis.data_collection_results as Record<string, unknown> | undefined) ?? {};
+    const intent =
+      readElevenLabsField(dataCollection.intencion) ||
+      readElevenLabsField(dataCollection.intent) ||
+      readElevenLabsField(dataCollection.disposition) ||
+      readElevenLabsField(dataCollection.pedir_whatsapp) ||
+      readElevenLabsField(dataCollection.quiere_whatsapp) ||
+      readElevenLabsField(data.intent) ||
+      readElevenLabsField(payload.intent) ||
+      undefined;
+
+    const insert = await context.db.query(
       `insert into voice.webhook_receipts (receipt_id, source, external_id, signature_valid, payload)
-       values ($1, 'elevenlabs', $2, true, $3::jsonb)
-       on conflict (source, external_id) do nothing`,
-      [randomUUID(), externalId, JSON.stringify(payload)]
+       values ($1, 'elevenlabs', $2, $3, $4::jsonb)
+       on conflict (source, external_id) do nothing
+       returning receipt_id`,
+      [randomUUID(), externalId, verification.signatureValid, JSON.stringify(payload)]
     );
-    return envelope({ accepted: true }, request.id);
+
+    if (!conversationId) {
+      return envelope(
+        {
+          accepted: true,
+          signature_valid: verification.signatureValid,
+          mode: "receipt_only",
+          reason: "no_conversation_id"
+        },
+        request.id
+      );
+    }
+
+    // Deduped receipt → still ok, but skip double tipify.
+    if (!insert.rowCount) {
+      return envelope(
+        {
+          accepted: true,
+          signature_valid: verification.signatureValid,
+          mode: "deduped",
+          conversation_id: conversationId
+        },
+        request.id
+      );
+    }
+
+    const call = await context.db.query<{
+      tenantId: string;
+      callId: string;
+      contactId: string | null;
+      campaignId: string | null;
+      enrollmentId: string | null;
+      status: string;
+    }>(
+      `select tenant_id as "tenantId", call_id as "callId", contact_id as "contactId",
+              campaign_ref as "campaignId", enrollment_id as "enrollmentId", status
+         from voice.calls
+        where provider_conversation_id = $1
+        order by updated_at desc
+        limit 1`,
+      [conversationId]
+    );
+
+    const row = call.rows[0];
+    if (!row?.contactId) {
+      return envelope(
+        {
+          accepted: true,
+          signature_valid: verification.signatureValid,
+          mode: "receipt_only",
+          reason: "call_not_matched",
+          conversation_id: conversationId
+        },
+        request.id
+      );
+    }
+
+    if (row.status === "completed" || row.status === "failed") {
+      return envelope(
+        {
+          accepted: true,
+          signature_valid: verification.signatureValid,
+          mode: "already_terminal",
+          call_id: row.callId
+        },
+        request.id
+      );
+    }
+
+    const correlationId = randomUUID();
+    await context.db.transaction(async (tx) => {
+      await tx.query(
+        `update voice.calls
+            set status = 'completed', updated_at = now()
+          where tenant_id = $1 and call_id = $2`,
+        [row.tenantId, row.callId]
+      );
+      await insertVoiceOutboxEvent(tx, {
+        eventId: randomUUID(),
+        eventType: "voice.call.completed",
+        tenantId: row.tenantId,
+        correlationId,
+        businessIdempotencyKey: `voice-el-webhook:${row.callId}`,
+        payload: voiceCallCompletedPayloadSchema.parse({
+          call_id: row.callId,
+          contact_id: row.contactId!,
+          campaign_id: row.campaignId && tenantIdSchema.safeParse(row.campaignId).success ? row.campaignId : undefined,
+          enrollment_id:
+            row.enrollmentId && tenantIdSchema.safeParse(row.enrollmentId).success ? row.enrollmentId : undefined,
+          status: "completed",
+          result_code: "elevenlabs_webhook",
+          intent,
+          disposition: intent,
+          provider_conversation_id: conversationId
+        }),
+        destination: novaDestination
+      });
+    });
+
+    return envelope(
+      {
+        accepted: true,
+        signature_valid: verification.signatureValid,
+        mode: "tipify",
+        call_id: row.callId,
+        contact_id: row.contactId,
+        intent
+      },
+      request.id
+    );
   });
 
   app.post("/v1/voice/internal/events", async (request, reply) => {
@@ -547,6 +678,57 @@ function verifyDialerWebhook(
   return validSignature
     ? { accepted: true, signatureValid: true, statusCode: 200 }
     : { accepted: false, signatureValid: false, statusCode: 401, message: "Invalid signature" };
+}
+
+/** ElevenLabs post-call webhook: HMAC optional locally; required in restricted envs. */
+function verifyElevenLabsWebhook(
+  request: FastifyRequest,
+  env: NodeJS.ProcessEnv
+): { accepted: boolean; signatureValid: boolean; statusCode: number; message?: string } {
+  const secret = env.ELEVENLABS_WEBHOOK_SECRET?.trim() || env.ELEVENLABS_WEBHOOK_HMAC_SECRET?.trim();
+  const signature =
+    readHeader(request, "x-elevenlabs-signature") ||
+    readHeader(request, "elevenlabs-signature") ||
+    readHeader(request, "x-webhook-signature");
+
+  if (!secret) {
+    if (isRestrictedDeploymentEnvironment(env)) {
+      return { accepted: false, signatureValid: false, statusCode: 401, message: "ElevenLabs webhook secret required" };
+    }
+    return { accepted: true, signatureValid: false, statusCode: 200 };
+  }
+
+  if (!signature) {
+    return { accepted: false, signatureValid: false, statusCode: 401, message: "Missing ElevenLabs webhook signature" };
+  }
+
+  const body = JSON.stringify(request.body ?? {});
+  const expected = createHmac("sha256", secret).update(body).digest("hex");
+  const normalized = signature.replace(/^sha256=/i, "");
+  if (normalized.length !== expected.length) {
+    return { accepted: false, signatureValid: false, statusCode: 401, message: "Invalid ElevenLabs signature" };
+  }
+  const validSignature = timingSafeEqual(Buffer.from(expected), Buffer.from(normalized));
+  return validSignature
+    ? { accepted: true, signatureValid: true, statusCode: 200 }
+    : { accepted: false, signatureValid: false, statusCode: 401, message: "Invalid ElevenLabs signature" };
+}
+
+/** Unwrap ElevenLabs data_collection `{ value: "..." }` or plain scalars. */
+function readElevenLabsField(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
+    const text = String(raw).trim();
+    return text.length > 0 ? text : undefined;
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    for (const key of ["value", "result", "answer", "selected"]) {
+      const nested = readElevenLabsField(obj[key]);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
 }
 
 function readHeader(request: FastifyRequest, name: string): string | undefined {

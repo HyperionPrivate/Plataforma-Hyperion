@@ -1,21 +1,47 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardHead, EmptyState } from "../../components/ui.js";
 import type { ConversationRow } from "./types.js";
+
+export interface ChannelStatus {
+  ok?: boolean;
+  phone?: string | null;
+  handoff_detected?: boolean;
+  agency_hint?: string | null;
+  handoff_tags?: string[];
+  inbox_url?: string;
+  mode?: string;
+  note?: string;
+}
+
+export interface ConversationMessage {
+  message_id: string;
+  direction: "inbound" | "outbound";
+  body: string;
+  kind: string;
+  created_at?: string;
+}
 
 export function NovaConversationsTab({
   conversations,
   onClaim,
-  onReply
+  onReply,
+  onChannelStatus,
+  onLoadMessages
 }: {
   conversations: ConversationRow[];
   onClaim: (conversationId: string) => Promise<void>;
   onReply: (conversationId: string, text: string) => Promise<void>;
+  onChannelStatus?: (conversationId: string) => Promise<ChannelStatus>;
+  onLoadMessages?: (conversationId: string) => Promise<ConversationMessage[]>;
 }) {
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [channel, setChannel] = useState<"all" | string>("all");
   const [busy, setBusy] = useState(false);
+  const [channelStatus, setChannelStatus] = useState<ChannelStatus | null>(null);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
 
   const filtered = useMemo(() => {
     return conversations.filter((row) => {
@@ -27,6 +53,46 @@ export function NovaConversationsTab({
   }, [channel, conversations, query]);
 
   const selected = filtered.find((row) => row.conversation_id === selectedId) ?? filtered[0] ?? undefined;
+
+  useEffect(() => {
+    if (!selected || !onChannelStatus) {
+      setChannelStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void onChannelStatus(selected.conversation_id)
+      .then((status) => {
+        if (!cancelled) setChannelStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setChannelStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onChannelStatus, selected?.conversation_id]);
+
+  useEffect(() => {
+    if (!selected || !onLoadMessages) {
+      setMessages([]);
+      return;
+    }
+    let cancelled = false;
+    setMessagesLoading(true);
+    void onLoadMessages(selected.conversation_id)
+      .then((rows) => {
+        if (!cancelled) setMessages(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setMessages([]);
+      })
+      .finally(() => {
+        if (!cancelled) setMessagesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onLoadMessages, selected?.conversation_id, selected?.last_message_at]);
 
   async function claim() {
     if (!selected) return;
@@ -45,6 +111,10 @@ export function NovaConversationsTab({
     try {
       await onReply(selected.conversation_id, draft.trim());
       setDraft("");
+      if (onLoadMessages) {
+        const rows = await onLoadMessages(selected.conversation_id);
+        setMessages(rows);
+      }
     } finally {
       setBusy(false);
     }
@@ -99,6 +169,85 @@ export function NovaConversationsTab({
               Canal {selected.channel} · sede {selected.agency_code ?? "—"} · estado {selected.status}
               {selected.claimed_by ? ` · claimed ${selected.claimed_by.slice(0, 8)}` : ""}
             </p>
+
+            {channelStatus ? (
+              <div className="card nested" style={{ padding: 12 }}>
+                <p className="tiny" style={{ marginBottom: 6 }}>
+                  Canal (webhook-first)
+                  {channelStatus.handoff_detected ? (
+                    <strong>
+                      {" "}
+                      · Handoff detectado{channelStatus.agency_hint ? ` · ${channelStatus.agency_hint}` : ""}
+                    </strong>
+                  ) : (
+                    " · sin handoff en cola"
+                  )}
+                </p>
+                {(channelStatus.handoff_tags ?? []).slice(0, 3).map((tag) => (
+                  <span key={tag} className="chip" style={{ marginRight: 4 }}>
+                    {tag}
+                  </span>
+                ))}
+                {channelStatus.phone ? (
+                  <p className="tiny muted" style={{ marginTop: 6 }}>
+                    Tel {channelStatus.phone}
+                  </p>
+                ) : null}
+                {channelStatus.inbox_url ? (
+                  <p style={{ marginTop: 8 }}>
+                    <a href={channelStatus.inbox_url} target="_blank" rel="noreferrer">
+                      Abrir inbox LIWA
+                    </a>
+                  </p>
+                ) : null}
+                {channelStatus.note ? <p className="tiny muted">{channelStatus.note}</p> : null}
+              </div>
+            ) : null}
+
+            <div
+              className="col"
+              style={{
+                gap: 8,
+                minHeight: 180,
+                maxHeight: 320,
+                overflow: "auto",
+                padding: 12,
+                border: "1px solid var(--border, #ddd)",
+                borderRadius: 8,
+                background: "var(--surface-2, #f7f7f7)"
+              }}
+            >
+              {messagesLoading ? (
+                <p className="tiny muted">Cargando mensajes…</p>
+              ) : messages.length === 0 ? (
+                <EmptyState label="Sin mensajes aún. Webhooks LIWA (documento / handoff / message) aparecen aquí." />
+              ) : (
+                messages.map((msg) => {
+                  const inbound = msg.direction === "inbound";
+                  return (
+                    <div
+                      key={msg.message_id}
+                      style={{
+                        alignSelf: inbound ? "flex-start" : "flex-end",
+                        maxWidth: "85%",
+                        padding: "8px 10px",
+                        borderRadius: 10,
+                        background: inbound ? "#fff" : "var(--accent-soft, #dbeafe)",
+                        border: "1px solid var(--border, #e5e5e5)"
+                      }}
+                    >
+                      <p className="tiny muted" style={{ marginBottom: 4 }}>
+                        {inbound ? "Contacto" : "Asesor"}
+                        {msg.kind !== "text" ? ` · ${msg.kind}` : ""}
+                        {msg.created_at ? ` · ${new Date(msg.created_at).toLocaleString()}` : ""}
+                      </p>
+                      <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{msg.body}</p>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
             <div className="row" style={{ gap: 8 }}>
               <button className="btn" type="button" disabled={busy} onClick={() => void claim()}>
                 Claim

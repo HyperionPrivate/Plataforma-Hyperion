@@ -14,18 +14,46 @@ export interface LiwaNamedResource {
   name: string;
 }
 
+export type LiwaSendStatus = "sent" | "accepted_pending";
+
+export interface LiwaSendResult {
+  providerRef: string;
+  status: LiwaSendStatus;
+}
+
 export interface LiwaClient {
   getAccountMe(): Promise<LiwaAccountMe>;
   listFlows(): Promise<LiwaNamedResource[]>;
   listTeams(): Promise<LiwaNamedResource[]>;
   ensureContact(phone: string, firstName?: string): Promise<{ contactId: string }>;
-  sendFlow(contactId: string, flowId: string): Promise<{ providerRef: string }>;
-  sendText(contactId: string, text: string): Promise<{ providerRef: string }>;
+  sendFlow(contactId: string, flowId: string): Promise<LiwaSendResult>;
+  sendText(contactId: string, text: string): Promise<LiwaSendResult>;
   listTags(): Promise<LiwaNamedResource[]>;
   ensureTag(name: string): Promise<string>;
   applyTag(contactId: string, tagId: string): Promise<void>;
   /** Agency handoff is tag-based on LIWA (no /handoff endpoint). */
   handoffToAgency(contactId: string, agencyTag: string, note?: string): Promise<void>;
+}
+
+/** AUD-016: LIWA often returns HTTP 200 + success without a delivery/message id. */
+export function extractLiwaProviderMessageId(response: Record<string, unknown>): string | undefined {
+  const nested = (response.data as Record<string, unknown> | undefined) ?? undefined;
+  for (const key of ["message_id", "messageId", "wa_message_id", "provider_message_id", "provider_ref", "id"]) {
+    const raw = nested?.[key] ?? response[key];
+    if (raw !== undefined && raw !== null && String(raw).trim()) {
+      const value = String(raw).trim();
+      // Ignore fabricated-looking empty successes; keep real ids.
+      if (value === "true" || value === "false") continue;
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export function toLiwaSendResult(response: Record<string, unknown>): LiwaSendResult {
+  const providerRef = extractLiwaProviderMessageId(response);
+  if (providerRef) return { providerRef, status: "sent" };
+  return { providerRef: "", status: "accepted_pending" };
 }
 
 /** Thrown when sendText is attempted outside the 24h WhatsApp session window. Cold outbound must use sendFlow. */
@@ -120,26 +148,29 @@ export class HttpLiwaClient implements LiwaClient {
     return { contactId };
   }
 
-  async sendFlow(contactId: string, flowId: string): Promise<{ providerRef: string }> {
+  async sendFlow(contactId: string, flowId: string): Promise<LiwaSendResult> {
     const response = await this.request(
       "POST",
       `/contacts/${encodeURIComponent(contactId)}/send/${encodeURIComponent(flowId)}`,
       {}
     );
-    return { providerRef: String(response.id ?? response.provider_ref ?? `liwa-flow-${Date.now()}`) };
+    return toLiwaSendResult(response);
   }
 
   /**
-   * Human inbox reply within the WhatsApp 24h session window.
-   * Set LIWA_FORCE_TEXT=1 to bypass the soft guard (e.g. integration tests).
-   * Cold outbound contacts must use sendFlow instead.
+   * Human inbox reply within the WhatsApp 24h session window (Ops Conversaciones).
+   * Cold outbound must use sendFlow — callers enforce mode=flow for first touch.
+   * Set LIWA_BLOCK_TEXT=1 only to force the soft guard (tests / emergency).
+   * LIWA_FORCE_TEXT=1 keeps the previous "always allow" override.
    */
-  async sendText(contactId: string, text: string): Promise<{ providerRef: string }> {
-    if (!this.env.LIWA_FORCE_TEXT?.trim()) {
+  async sendText(contactId: string, text: string): Promise<LiwaSendResult> {
+    const block = this.env.LIWA_BLOCK_TEXT?.trim() === "1";
+    const force = Boolean(this.env.LIWA_FORCE_TEXT?.trim());
+    if (block && !force) {
       throw new LiwaTextWindowError();
     }
     const response = await this.request("POST", `/contacts/${encodeURIComponent(contactId)}/send/text`, { text });
-    return { providerRef: String(response.id ?? response.provider_ref ?? `liwa-text-${Date.now()}`) };
+    return toLiwaSendResult(response);
   }
 
   async listTags(): Promise<LiwaNamedResource[]> {
@@ -211,10 +242,10 @@ export class UnconfiguredLiwaClient implements LiwaClient {
   ensureContact(): Promise<{ contactId: string }> {
     return this.fail();
   }
-  sendFlow(): Promise<{ providerRef: string }> {
+  sendFlow(): Promise<LiwaSendResult> {
     return this.fail();
   }
-  sendText(): Promise<{ providerRef: string }> {
+  sendText(): Promise<LiwaSendResult> {
     return this.fail();
   }
   listTags(): Promise<LiwaNamedResource[]> {

@@ -191,6 +191,7 @@
     "nova.leads": "nova-core",
     "nova.handoffs": "nova-core",
     "nova.conversations": "nova-core",
+    "nova.conversation_messages": "nova-core",
     "nova.outcomes": "nova-core",
     "nova.inbox_events": "nova-core",
     "nova.outbox_events": "nova-core",

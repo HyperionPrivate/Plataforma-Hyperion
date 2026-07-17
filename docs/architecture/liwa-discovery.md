@@ -72,7 +72,7 @@ flowchart LR
 ### Bot de flujos
 
 - Tras una llamada de voz exitosa, NOVA puede solicitar un flujo LIWA (`mode=flow`).
-- Cold outbound siempre usa flow; texto libre requiere sesión WhatsApp 24h (`LIWA_FORCE_TEXT` solo para tests).
+- Cold outbound siempre usa flow; texto libre (`send/text`) es para reply de asesor en ventana WhatsApp 24h. `LIWA_BLOCK_TEXT=1` reactiva el soft-guard; `LIWA_FORCE_TEXT=1` lo omite.
 
 ### Bandeja humana (inbox)
 

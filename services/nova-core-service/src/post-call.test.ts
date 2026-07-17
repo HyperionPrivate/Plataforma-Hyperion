@@ -78,6 +78,16 @@ describe("inferIntentFromPayload", () => {
       })
     ).toBe("quiere_renovar");
   });
+
+  it("unwraps ElevenLabs data_collection { value } objects", () => {
+    expect(
+      inferIntentFromPayload({
+        analysis: {
+          data_collection_results: { intencion: { value: "pedir_whatsapp" } }
+        }
+      })
+    ).toBe("pedir_whatsapp");
+  });
 });
 
 describe("stageFromPostCallIntent", () => {
