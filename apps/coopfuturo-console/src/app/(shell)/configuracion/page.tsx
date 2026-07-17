@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { fetchSettings, saveSettings } from "@/services/ops-client";
 
-const TABS = ["Canales", "Dialer", "Agentes", "Cumplimiento", "Privacidad"];
+const TABS = ["Canales", "Operación", "Dialer", "Agentes", "Cumplimiento", "Privacidad"];
 
 type Channels = {
   voz_enabled: boolean;
@@ -50,6 +50,7 @@ export default function ConfiguracionPage() {
   const [flujoA, setFlujoA] = useState<AgentFlow>({});
   const [flujoB, setFlujoB] = useState<AgentFlow>({});
   const [piiMasking, setPiiMasking] = useState(true);
+  const [metaContactosHoy, setMetaContactosHoy] = useState(0);
   const [waMode, setWaMode] = useState<"mock" | "real">("mock");
 
   useEffect(() => {
@@ -80,11 +81,14 @@ export default function ConfiguracionPage() {
         if (s.ui && typeof s.ui.pii_masking === "boolean") {
           setPiiMasking(s.ui.pii_masking);
         }
+        if (s.ui && typeof s.ui.meta_contactos_hoy === "number") {
+          setMetaContactosHoy(Math.max(0, Math.floor(s.ui.meta_contactos_hoy)));
+        }
         if (s.whatsapp?.mode === "real") setWaMode("real");
         else setWaMode("mock");
       } catch (err) {
         toast.error("No se pudo cargar configuración", {
-          description: err instanceof Error ? err.message : "¿API en :8201?",
+          description: err instanceof Error ? err.message : "¿API en :8203?",
         });
       } finally {
         if (!cancelled) setLoading(false);
@@ -105,7 +109,10 @@ export default function ConfiguracionPage() {
           flujo_a: flujoA,
           flujo_b: flujoB,
         },
-        ui: { pii_masking: piiMasking },
+        ui: {
+          pii_masking: piiMasking,
+          meta_contactos_hoy: Math.max(0, Math.floor(metaContactosHoy) || 0),
+        },
       });
       toast.success("Configuración guardada en SQLite");
     } catch (err) {
@@ -207,6 +214,40 @@ export default function ConfiguracionPage() {
             </ul>
           </ChartCard>
         </div>
+      )}
+
+      {tab === "Operación" && !loading && (
+        <ChartCard title="Meta del piloto">
+          <div className="space-y-3 p-1">
+            <label className="block text-sm">
+              Meta de contactos por día (voz + WhatsApp)
+              <input
+                type="number"
+                min={0}
+                step={1}
+                className="mt-1 w-full max-w-xs rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 tabular"
+                value={metaContactosHoy}
+                onChange={(e) => setMetaContactosHoy(Number(e.target.value) || 0)}
+              />
+            </label>
+            <p className="text-xs text-[var(--muted)]">
+              Se usa en Dashboard → Meta vs. resultado. Con periodo 7D / 30D se escala ×7 / ×30.
+              Pon <span className="text-[var(--text)]">0</span> si aún no defines meta (la barra
+              mostrará “sin meta”).
+            </p>
+            {metaContactosHoy > 0 ? (
+              <p className="text-sm">
+                Meta hoy:{" "}
+                <span className="font-semibold tabular text-[var(--accent)]">
+                  {metaContactosHoy.toLocaleString("es-CO")}
+                </span>{" "}
+                contactos
+              </p>
+            ) : (
+              <p className="text-sm text-[var(--muted)]">Sin meta configurada.</p>
+            )}
+          </div>
+        </ChartCard>
       )}
 
       {tab === "Dialer" && !loading && (

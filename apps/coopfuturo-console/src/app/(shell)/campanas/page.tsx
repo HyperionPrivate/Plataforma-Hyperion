@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -8,10 +9,8 @@ import { StatCard } from "@/components/data/stat-card";
 import { ChartCard } from "@/components/data/chart-card";
 import { ConversionHeatmap } from "@/components/charts";
 import { useCampaigns } from "@/hooks/use-pulso";
-import { createCampaign } from "@/services/ops-client";
 import { cn, formatNumber } from "@/lib/utils";
 import { Plus, Phone, MessageCircle } from "lucide-react";
-import { toast } from "sonner";
 
 const statusTone = {
   activa: "success" as const,
@@ -22,31 +21,6 @@ const statusTone = {
 export default function CampanasPage() {
   const { data, isLoading, isError, refetch } = useCampaigns();
   const [selectedId, setSelectedId] = useState<string>("c1");
-  const [retriesOn, setRetriesOn] = useState(true);
-  const [creating, setCreating] = useState(false);
-
-  async function onNuevaCampana() {
-    setCreating(true);
-    try {
-      const created = await createCampaign({
-        name: `Campana demo ${new Date().toLocaleTimeString("es-CO", { hour12: false })}`,
-        segment: "Renovacion",
-        channels: ["voz", "whatsapp"],
-        total: 100,
-      });
-      toast.success("Campaña creada", {
-        description: `${created.id} · ${created.name}`,
-      });
-      await refetch();
-      setSelectedId(created.id);
-    } catch (err) {
-      toast.error("No se pudo crear la campaña", {
-        description: err instanceof Error ? err.message : "Error desconocido",
-      });
-    } finally {
-      setCreating(false);
-    }
-  }
 
   if (isError) {
     return (
@@ -69,33 +43,25 @@ export default function CampanasPage() {
         title="Campañas"
         subtitle="Gestiona y monitorea tus campañas outbound."
         actions={
-          <Button onClick={onNuevaCampana} disabled={creating}>
-            <Plus className="size-[18px]" strokeWidth={1.75} />
-            {creating ? "Creando…" : "Nueva campaña"}
+          <Button asChild>
+            <Link href="/campanas/nueva">
+              <Plus className="size-[18px]" strokeWidth={1.75} />
+              Nueva campaña
+            </Link>
           </Button>
         }
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Llamadas hoy"
-          value={chips?.llamadasHoy ?? 0}
-          delta={12.4}
-          deltaUnit="%"
-          loading={isLoading}
-        />
+        <StatCard label="Llamadas hoy" value={chips?.llamadasHoy ?? 0} loading={isLoading} />
         <StatCard
           label="Msgs WhatsApp hoy"
           value={chips?.whatsappHoy ?? 0}
-          delta={8.7}
-          deltaUnit="%"
           loading={isLoading}
         />
         <StatCard
           label="Reintentos programados"
           value={chips?.reintentos ?? 0}
-          delta={5.3}
-          deltaUnit="%"
           loading={isLoading}
         />
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -103,9 +69,9 @@ export default function CampanasPage() {
           <p className="mt-2 text-2xl font-semibold tabular text-[var(--accent)]">
             {chips?.ventana ?? "—"}
           </p>
-          <Badge tone="success" className="mt-2">
-            Activa
-          </Badge>
+          <p className="mt-2 text-[10px] text-[var(--muted)]">
+            Configura cumplimiento en Configuración
+          </p>
         </div>
       </div>
 
@@ -212,7 +178,7 @@ export default function CampanasPage() {
             </ChartCard>
           )}
 
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 opacity-80">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-medium">Reintentos inteligentes</p>
@@ -223,26 +189,17 @@ export default function CampanasPage() {
               <button
                 type="button"
                 role="switch"
-                aria-checked={retriesOn}
-                onClick={() => {
-                  setRetriesOn((v) => !v);
-                  toast.success(retriesOn ? "Reintentos desactivados" : "Reintentos activados");
-                }}
-                className={cn(
-                  "relative h-7 w-12 shrink-0 rounded-full transition-colors",
-                  retriesOn ? "bg-[var(--accent)]" : "bg-white/15"
-                )}
+                aria-checked={false}
+                aria-disabled
+                disabled
+                title="Aún no hay endpoint para persistir este control"
+                className="relative h-7 w-12 shrink-0 cursor-not-allowed rounded-full bg-white/15 opacity-60"
               >
-                <span
-                  className={cn(
-                    "absolute top-0.5 size-6 rounded-full bg-white transition-transform",
-                    retriesOn ? "left-5" : "left-0.5"
-                  )}
-                />
+                <span className="absolute left-0.5 top-0.5 size-6 rounded-full bg-white" />
               </button>
             </div>
             <p className="mt-2 text-[10px] text-[var(--muted)]">
-              {retriesOn ? "Modelo activo · Última actualización: Hoy, 07:45" : "Modelo en pausa"}
+              Deshabilitado · sin API para guardar este toggle
             </p>
           </div>
         </div>

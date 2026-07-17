@@ -14,7 +14,13 @@ export function useCampaigns() {
 }
 
 export function useConversations() {
-  return useQuery({ queryKey: ["conversations"], queryFn: () => api.getConversations() });
+  return useQuery({
+    queryKey: ["conversations"],
+    queryFn: () => api.getConversations(),
+    // Near-live inbox for advisor replies / webhook events (when LIWA posts inbound).
+    refetchInterval: 3000,
+    refetchIntervalInBackground: false,
+  });
 }
 
 export function useCrm() {
