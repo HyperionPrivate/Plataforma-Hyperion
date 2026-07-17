@@ -45,12 +45,25 @@ try {
 }
 
 async function clearLumenDemo(tenantId: string): Promise<void> {
+  const encounter = await client.query<{ id: string }>(
+    `select id from lumen.encounters
+     where tenant_id = $1 and demo_key = 'lumen-demo-001' and is_demo
+       and coalesce(metadata->>'synthetic', 'false') = 'true'`,
+    [tenantId]
+  );
   await client.query(
     `delete from lumen.encounters
      where tenant_id = $1 and demo_key = 'lumen-demo-001' and is_demo
        and coalesce(metadata->>'synthetic', 'false') = 'true'`,
     [tenantId]
   );
+  if (encounter.rows[0]) {
+    await client.query(
+      `delete from lumen.encounter_reference_snapshots
+       where tenant_id = $1 and encounter_id = $2`,
+      [tenantId, encounter.rows[0].id]
+    );
+  }
   await client.query(
     `delete from pulso_iris.administrative_patients
      where tenant_id = $1 and metadata->>'lumenDemoKey' = 'lumen-demo-patient-001'
@@ -143,13 +156,114 @@ async function seedLumenDemo(tenantId: string): Promise<void> {
       [tenantId, patient.rows[0].id]
     );
   }
+
+  await client.query(
+    `insert into lumen.tenant_snapshots (
+       tenant_id, status, is_demo, is_active, source_version, source_updated_at, payload_hash
+     )
+     select tenant.id,
+            tenant.status,
+            true,
+            tenant.status = 'active',
+            greatest(1, floor(extract(epoch from tenant.updated_at) * 1000)::bigint),
+            tenant.updated_at,
+            encode(digest(concat_ws('|', tenant.id::text, tenant.status, 'true'), 'sha256'), 'hex')
+     from platform.tenants tenant
+     where tenant.id = $1
+     on conflict (tenant_id) do update set
+       status = excluded.status,
+       is_demo = true,
+       is_active = excluded.is_active,
+       source_version = greatest(lumen.tenant_snapshots.source_version, excluded.source_version),
+       source_updated_at = greatest(lumen.tenant_snapshots.source_updated_at, excluded.source_updated_at),
+       payload_hash = excluded.payload_hash,
+       updated_at = now()`,
+    [tenantId]
+  );
+
+  const encounterIdentity = await client.query<{ id: string }>(
+    `select id from lumen.encounters
+     where tenant_id = $1 and demo_key = 'lumen-demo-001'
+     union all
+     select gen_random_uuid() where not exists (
+       select 1 from lumen.encounters where tenant_id = $1 and demo_key = 'lumen-demo-001'
+     )
+     limit 1`,
+    [tenantId]
+  );
+  const encounterId = encounterIdentity.rows[0]?.id;
+  if (!encounterId) throw new Error("could not reserve the LUMEN demo encounter id");
+
+  await client.query(
+    `insert into lumen.encounter_reference_snapshots (
+       tenant_id, encounter_id, patient_id, site_id, professional_id,
+       patient_display_name, patient_age, payer, document_masked,
+       professional_name, subspecialty, site_name,
+       patient_is_demo, professional_is_demo,
+       source_version, source_updated_at, payload_hash
+     )
+     select $1::uuid,
+            $2::uuid,
+            patient.id,
+            site.id,
+            professional.id,
+            patient.full_name,
+            64,
+            'Sanitas',
+            patient.document_number_masked,
+            professional.name,
+            professional.subspecialty,
+            site.name,
+            true,
+            true,
+            greatest(
+              1,
+              floor(extract(epoch from greatest(patient.updated_at, professional.updated_at, site.updated_at)) * 1000)::bigint
+            ),
+            greatest(patient.updated_at, professional.updated_at, site.updated_at),
+            encode(
+              digest(
+                concat_ws('|', $1::text, $2::text, patient.id::text, site.id::text,
+                  professional.id::text, patient.full_name, patient.document_number_masked,
+                  professional.name, professional.subspecialty, site.name, 'true', 'true'),
+                'sha256'
+              ),
+              'hex'
+            )
+     from pulso_iris.administrative_patients patient
+     join pulso_iris.professionals professional
+       on professional.tenant_id = patient.tenant_id and professional.id = $4::uuid
+     join pulso_iris.sites site
+       on site.tenant_id = patient.tenant_id and site.id = $5::uuid
+     where patient.tenant_id = $1::uuid and patient.id = $3::uuid
+     on conflict (tenant_id, encounter_id) do update set
+       patient_id = excluded.patient_id,
+       site_id = excluded.site_id,
+       professional_id = excluded.professional_id,
+       patient_display_name = excluded.patient_display_name,
+       patient_age = excluded.patient_age,
+       payer = excluded.payer,
+       document_masked = excluded.document_masked,
+       professional_name = excluded.professional_name,
+       subspecialty = excluded.subspecialty,
+       site_name = excluded.site_name,
+       patient_is_demo = true,
+       professional_is_demo = true,
+       source_version = greatest(lumen.encounter_reference_snapshots.source_version, excluded.source_version),
+       source_updated_at = greatest(lumen.encounter_reference_snapshots.source_updated_at, excluded.source_updated_at),
+       payload_hash = excluded.payload_hash,
+       updated_at = now()
+     where lumen.encounter_reference_snapshots.frozen_at is null`,
+    [tenantId, encounterId, patient.rows[0]!.id, professional.rows[0]!.id, site.rows[0].id]
+  );
+
   const encounter = await client.query<{ id: string }>(
     `with inserted as (
        insert into lumen.encounters
-         (tenant_id, patient_id, professional_id, site_id, status, scheduled_at, is_demo, demo_key,
+         (id, tenant_id, patient_id, professional_id, site_id, status, scheduled_at, is_demo, demo_key,
           metadata)
        values (
-         $1, $2, $3, $4, 'in_progress', '2026-09-15T15:00:00Z',
+         $2, $1, $3, $4, $5, 'in_progress', '2026-09-15T15:00:00Z',
          true, 'lumen-demo-001',
          '{"synthetic":true,"visitReason":"Control de glaucoma; refiere visión borrosa ocasional OI.","appointmentSource":"SOFIA · PULSO IRIS","siteDisplayName":"Principal Sotomayor"}'::jsonb
        )
@@ -168,7 +282,7 @@ async function seedLumenDemo(tenantId: string): Promise<void> {
      union all
      select id from lumen.encounters where tenant_id = $1 and demo_key = 'lumen-demo-001'
      limit 1`,
-    [tenantId, patient.rows[0]!.id, professional.rows[0]!.id, site.rows[0].id]
+    [tenantId, encounterId, patient.rows[0]!.id, professional.rows[0]!.id, site.rows[0].id]
   );
 
   if (!encounter.rows[0]) throw new Error("approved LUMEN encounter cannot be reseeded");

@@ -6,7 +6,11 @@ const VARIABLE_NAMES = [
   "WHATSAPP_INBOUND_PERSIST_RETRY_BASE_DELAY_MS",
   "WHATSAPP_INBOUND_PERSIST_ATTEMPT_TIMEOUT_MS",
   "WHATSAPP_INBOUND_SPOOL_MAX_RECORDS",
-  "WHATSAPP_INBOUND_SPOOL_MAX_BYTES"
+  "WHATSAPP_INBOUND_SPOOL_MAX_BYTES",
+  "WHATSAPP_WEB_TEST_ENABLED",
+  "WHATSAPP_TEST_ALLOWED_NUMBERS",
+  "WHATSAPP_PHONE_HASH_KEY",
+  "INTERNAL_SERVICE_TOKEN"
 ] as const;
 
 const originalValues = new Map(VARIABLE_NAMES.map((name) => [name, process.env[name]]));
@@ -57,5 +61,23 @@ describe("WhatsApp durability configuration", () => {
     expect(() => readWhatsAppProviderConfig()).toThrow(
       "WHATSAPP_INBOUND_PERSIST_ATTEMPT_TIMEOUT_MS must be an integer between 10000 and 60000"
     );
+  });
+
+  it("requires a dedicated phone hash key and never falls back to an edge credential", () => {
+    process.env.WHATSAPP_WEB_TEST_ENABLED = "true";
+    process.env.WHATSAPP_TEST_ALLOWED_NUMBERS = "573001234567";
+    process.env.INTERNAL_SERVICE_TOKEN = "legacy-shared-token-that-must-not-be-used";
+    delete process.env.WHATSAPP_PHONE_HASH_KEY;
+
+    expect(() => readWhatsAppProviderConfig()).toThrow(
+      "WHATSAPP_PHONE_HASH_KEY is required when WHATSAPP_WEB_TEST_ENABLED=true"
+    );
+
+    process.env.WHATSAPP_PHONE_HASH_KEY = "short";
+    expect(() => readWhatsAppProviderConfig()).toThrow("between 32 and 512 safe characters");
+
+    const dedicatedKey = "channel-phone-hash-key-000000000001";
+    process.env.WHATSAPP_PHONE_HASH_KEY = dedicatedKey;
+    expect(readWhatsAppProviderConfig().phoneHashKey).toBe(dedicatedKey);
   });
 });

@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { computeChecksum, listMigrationFiles } from "./runner.js";
+import {
+  computeChecksum,
+  listMigrationFiles,
+  migrationRunsInTransaction,
+  readNonTransactionalStatements,
+  readMigrationExecutionOptions
+} from "./runner.js";
 
 describe("migrations runner", () => {
   it("computes the same checksum regardless of line endings", () => {
@@ -13,6 +19,75 @@ describe("migrations runner", () => {
 
   it("changes the checksum when content changes", () => {
     expect(computeChecksum("select 1")).not.toBe(computeChecksum("select 2"));
+  });
+
+  it("applies finite lock and statement budgets with validated overrides", () => {
+    expect(readMigrationExecutionOptions({})).toEqual({
+      lockTimeoutMs: 10_000,
+      statementTimeoutMs: 300_000
+    });
+    expect(
+      readMigrationExecutionOptions({
+        MIGRATION_LOCK_TIMEOUT_MS: "2500",
+        MIGRATION_STATEMENT_TIMEOUT_MS: "90000"
+      })
+    ).toEqual({ lockTimeoutMs: 2500, statementTimeoutMs: 90_000 });
+    expect(() => readMigrationExecutionOptions({ MIGRATION_LOCK_TIMEOUT_MS: "0" })).toThrow(
+      "MIGRATION_LOCK_TIMEOUT_MS must be a positive integer"
+    );
+  });
+
+  it("requires an explicit autocommit block for every non-transactional statement", () => {
+    expect(migrationRunsInTransaction("create table example(id int)")).toBe(true);
+    const migration = `-- hyperion:no-transaction
+-- recovery preamble
+-- hyperion:statement
+drop index concurrently if exists ix_example;
+-- hyperion:statement
+create index concurrently ix_example on example(id);
+-- hyperion:statement
+do $$
+begin
+  if false then raise exception 'invalid'; end if;
+end;
+$$;`;
+
+    expect(migrationRunsInTransaction(migration)).toBe(false);
+    expect(readNonTransactionalStatements(migration)).toEqual([
+      "drop index concurrently if exists ix_example;",
+      "create index concurrently ix_example on example(id);",
+      `do $$
+begin
+  if false then raise exception 'invalid'; end if;
+end;
+$$;`
+    ]);
+    expect(() =>
+      readNonTransactionalStatements("-- hyperion:no-transaction\ncreate index concurrently ix_example on example(id)")
+    ).toThrow("hyperion:statement marker per statement");
+    expect(() =>
+      readNonTransactionalStatements(
+        "-- hyperion:no-transaction\nselect 1;\n-- hyperion:statement\ncreate index concurrently ix_example on example(id)"
+      )
+    ).toThrow("preamble may only contain comments");
+  });
+
+  it("phases migration 021 and validates every concurrent index before ledger insertion", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/021-autonomous-event-flow.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+    const statements = readNonTransactionalStatements(migration);
+
+    expect(migrationRunsInTransaction(migration)).toBe(false);
+    expect(statements).toHaveLength(30);
+    expect(statements.filter((statement) => /^drop index concurrently/i.test(statement))).toHaveLength(8);
+    expect(statements.filter((statement) => /^create (unique )?index concurrently/i.test(statement))).toHaveLength(8);
+    expect(statements.some((statement) => /^create index if not exists/i.test(statement))).toBe(false);
+    expect(statements.at(-1)).toMatch(/^do\s+\$migration\$/i);
+    expect(statements.at(-1)).toContain("attribute.attnum between 1 and target.original_columns");
+    expect(statements.at(-1)).toContain("constraint_info.convalidated");
+    expect(statements.at(-1)).toContain("index_info.indisvalid");
+    expect(statements.at(-1)).toContain("index_info.indisready");
+    expect(statements.at(-1)).toContain("pg_get_indexdef(index_info.indexrelid)");
   });
 
   it("lists the repository migrations in order", async () => {
@@ -32,7 +107,235 @@ describe("migrations runner", () => {
     expect(files).toContain("018-lumen-clinical-demo.sql");
     expect(files).toContain("019-lumen-clinical-invariants.sql");
     expect(files).toContain("020-lumen-real-audio-pipeline.sql");
+    expect(files).toContain("020-service-role-nologin-fence.sql");
+    expect(files).toContain("021-autonomous-event-flow.sql");
+    expect(files).toContain("022-channel-inbound-outbox-fence.sql");
+    expect(files).toContain("023-channel-inbound-outbox-backfill.sql");
+    expect(files).toContain("024-service-database-roles.sql");
+    expect(files).toContain("024-service-role-membership-fence.sql");
+    expect(files).toContain("025-audit-ledger-autonomy.sql");
+    expect(files).toContain("026-audit-source-provenance.sql");
+    expect(files).toContain("027-audit-source-provenance-contract.sql");
+    expect(files).toContain("028-audit-source-provenance-index.sql");
     expect([...files].sort()).toEqual(files);
+    expect(files.indexOf("020-service-role-nologin-fence.sql")).toBeLessThan(
+      files.indexOf("021-autonomous-event-flow.sql")
+    );
+  });
+
+  it("commits the service-role fence before checking for sessions that must drain", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/020-service-role-nologin-fence.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+    const statements = readNonTransactionalStatements(migration);
+
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain("alter role %I nologin");
+    expect(statements[1]).toContain("from pg_stat_activity");
+    expect(statements[1]).toContain("drain all Hyperion service database sessions");
+  });
+
+  it("migrates Audit provenance without trusting the legacy SOFIA default", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/026-audit-source-provenance.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("alter column source_service drop default");
+    expect(migration).toContain("sofia.audit.event.record.v1");
+    expect(migration).toContain("lumen.audit.event.record.v1");
+    expect(migration).toContain("legacy-unknown");
+    expect(migration).toContain("contract_hash");
+    expect(migration).toContain("then 'sofia-automation'");
+    expect(migration).toContain("then 'lumen-service'");
+    expect(migration).not.toMatch(/source_service\s+text\s+not\s+null\s+default/i);
+    expect(migration).not.toContain("create index if not exists ix_audit_inbox_source_received");
+  });
+
+  it("phases durable PULSO/Channel audit outbox dedupe and the Audit inbox contract", async () => {
+    const expandPath = fileURLToPath(new URL("../sql/041-pulso-channel-audit-outbox.sql", import.meta.url));
+    const indexPath = fileURLToPath(new URL("../sql/042-pulso-channel-audit-outbox-indexes.sql", import.meta.url));
+    const contractPath = fileURLToPath(new URL("../sql/043-pulso-channel-audit-outbox-contract.sql", import.meta.url));
+    const [expand, indexes, contract] = await Promise.all([
+      readFile(expandPath, "utf8"),
+      readFile(indexPath, "utf8"),
+      readFile(contractPath, "utf8")
+    ]);
+
+    expect(expand).toContain("pulso.audit.event.record.v1");
+    expect(expand).toContain("channel.audit.event.record.v1");
+    expect(expand).toContain("pulso-iris-service");
+    expect(expand).toContain("whatsapp-channel-service");
+    expect(expand.match(/\)\s+not valid;/gi)).toHaveLength(3);
+    expect(expand).not.toMatch(/create\s+(unique\s+)?index/i);
+
+    expect(indexes.trimStart()).toMatch(/^-- hyperion:no-transaction/);
+    expect(indexes).toContain("drop index concurrently if exists pulso_iris.uq_pulso_outbox_dedupe");
+    expect(indexes).toContain("create unique index concurrently uq_pulso_outbox_dedupe");
+    expect(indexes).toContain("drop index concurrently if exists channel_runtime.uq_channel_outbox_dedupe");
+    expect(indexes).toContain("create unique index concurrently uq_channel_outbox_dedupe");
+    expect(indexes).toContain("index_info.indisvalid");
+    expect(indexes).toContain("pg_catalog.pg_get_indexdef(index_info.indexrelid)");
+    expect(readNonTransactionalStatements(indexes)).toHaveLength(5);
+
+    expect(contract).toContain("validate constraint ck_pulso_outbox_dedupe_key");
+    expect(contract).toContain("validate constraint ck_channel_outbox_dedupe_key");
+    expect(contract).toContain("validate constraint ck_audit_inbox_source_contract");
+  });
+
+  it("phases the durable Channel delivery inbox position contract after 043", async () => {
+    const expandPath = fileURLToPath(new URL("../sql/044-pulso-channel-delivery-inbox.sql", import.meta.url));
+    const indexPath = fileURLToPath(new URL("../sql/045-pulso-channel-delivery-inbox-index.sql", import.meta.url));
+    const contractPath = fileURLToPath(
+      new URL("../sql/046-pulso-channel-delivery-inbox-contract.sql", import.meta.url)
+    );
+    const [expand, indexes, contract] = await Promise.all([
+      readFile(expandPath, "utf8"),
+      readFile(indexPath, "utf8"),
+      readFile(contractPath, "utf8")
+    ]);
+
+    expect(migrationRunsInTransaction(expand)).toBe(true);
+    expect(expand).toContain("ck_pulso_channel_delivery_inbox_stream_position");
+    expect(expand).toContain("channel.delivery.updated.v1");
+    expect(expand).toContain("stream_id is not null");
+    expect(expand).toContain("stream_sequence is not null and stream_sequence > 0");
+    expect(expand.match(/\)\s+not valid;/gi)).toHaveLength(1);
+    expect(expand).not.toMatch(/create\s+(unique\s+)?index/i);
+
+    expect(migrationRunsInTransaction(indexes)).toBe(false);
+    expect(indexes.trimStart()).toMatch(/^-- hyperion:no-transaction/);
+    expect(indexes).toContain(
+      "drop index concurrently if exists pulso_iris.uq_pulso_channel_delivery_inbox_stream_sequence"
+    );
+    expect(indexes).toContain("create unique index concurrently uq_pulso_channel_delivery_inbox_stream_sequence");
+    expect(indexes).toContain("on pulso_iris.inbox_events(tenant_id, source_service, stream_id, stream_sequence)");
+    expect(indexes).toContain("event_type = 'channel.delivery.updated.v1'");
+    expect(indexes).toContain("index_info.indisvalid");
+    expect(indexes).toContain("index_info.indisready");
+    expect(indexes).toContain("pg_catalog.pg_get_indexdef(index_info.indexrelid)");
+    expect(readNonTransactionalStatements(indexes)).toHaveLength(3);
+
+    expect(migrationRunsInTransaction(contract)).toBe(true);
+    expect(contract).toContain("validate constraint ck_pulso_channel_delivery_inbox_stream_position");
+    expect(contract).toContain("constraint_info.convalidated");
+    expect(contract).toContain("udt_name = 'uuid'");
+    expect(contract).toContain("udt_name = 'int8'");
+
+    const sqlDir = fileURLToPath(new URL("../sql", import.meta.url));
+    const files = await listMigrationFiles(sqlDir);
+    const auditContract = files.indexOf("043-pulso-channel-audit-outbox-contract.sql");
+    const deliveryExpand = files.indexOf("044-pulso-channel-delivery-inbox.sql");
+    const deliveryIndex = files.indexOf("045-pulso-channel-delivery-inbox-index.sql");
+    const deliveryContract = files.indexOf("046-pulso-channel-delivery-inbox-contract.sql");
+
+    expect(auditContract).toBeGreaterThanOrEqual(0);
+    expect(deliveryExpand).toBe(auditContract + 1);
+    expect(deliveryIndex).toBe(deliveryExpand + 1);
+    expect(deliveryContract).toBe(deliveryIndex + 1);
+  });
+
+  it("contracts and indexes Audit provenance in bounded follow-up phases", async () => {
+    const contractPath = fileURLToPath(new URL("../sql/027-audit-source-provenance-contract.sql", import.meta.url));
+    const indexPath = fileURLToPath(new URL("../sql/028-audit-source-provenance-index.sql", import.meta.url));
+    const [contract, index] = await Promise.all([readFile(contractPath, "utf8"), readFile(indexPath, "utf8")]);
+
+    expect(contract).toContain("not valid");
+    expect(contract).toContain("validate constraint ck_audit_inbox_contract_hash");
+    expect(contract).toContain("alter column contract_hash set not null");
+    expect(contract).toContain("source_service = 'sofia-automation'");
+    expect(contract).toContain("source_service = 'lumen-service'");
+    expect(index.trimStart()).toMatch(/^-- hyperion:no-transaction/);
+    expect(index).toContain("drop index concurrently if exists audit_runtime.ix_audit_inbox_source_received");
+    expect(index).toContain("create index concurrently ix_audit_inbox_source_received");
+    expect(index).toContain("index_info.indisvalid");
+    expect(index).toContain("pg_catalog.pg_get_indexdef(index_info.indexrelid)");
+    expect(readNonTransactionalStatements(index)).toHaveLength(3);
+  });
+
+  it("keeps Audit tenant identifiers external and immutable across Access deletion", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/025-audit-ledger-autonomy.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("drop constraint if exists audit_events_tenant_id_fkey");
+    expect(migration).toContain("constraint_record.confrelid = 'platform.tenants'::regclass");
+    expect(migration).not.toMatch(/on\s+delete\s+set\s+null/i);
+  });
+
+  it("never records service role isolation as a conditional no-op", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/024-service-database-roles.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("create role %I with nologin nosuperuser");
+    expect(migration).toContain("grant connect on database %I to %I");
+    expect(migration).toContain("grant usage on schema lumen to hyperion_lumen");
+    expect(migration).not.toContain("skipping service privilege grants");
+  });
+
+  it("backfills only contract-valid legacy channel events and terminalizes missing identity", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/023-channel-inbound-outbox-backfill.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("from channel_runtime.inbound_events event");
+    expect(migration).toContain("join channel_runtime.thread_bindings binding");
+    expect(migration).toContain("on conflict (tenant_id, event_type, aggregate_id) do nothing");
+    expect(migration).toContain("legacy_inbound_binding_missing");
+    expect(migration).toContain("legacy_inbound_contract_invalid");
+    expect(migration).not.toContain("create trigger trg_channel_inbound_outbox_compat");
+    expect(migration).not.toContain("mirror_inbound_event_to_outbox");
+    expect(migration).not.toContain("references platform.");
+    expect(migration).not.toContain("references pulso_iris.");
+  });
+
+  it("installs the Channel writer fence and repairs missing outbox rows before historical 023", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/022-channel-inbound-outbox-fence.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+
+    expect(migration).toContain("create trigger trg_channel_inbound_outbox_compat");
+    expect(migration).toContain("mirror_inbound_event_to_outbox");
+    expect(migration).toContain("on conflict (tenant_id, event_type, aggregate_id) do nothing");
+    expect(migration).toContain("022-channel-inbound-outbox-fence.sql");
+  });
+
+  it("rebuilds and validates every Channel ordering index before ledger insertion", async () => {
+    const migrationPath = fileURLToPath(
+      new URL("../sql/031-channel-conversation-ordering-indexes.sql", import.meta.url)
+    );
+    const migration = await readFile(migrationPath, "utf8");
+    const statements = readNonTransactionalStatements(migration);
+
+    expect(statements).toHaveLength(7);
+    expect(statements.filter((statement) => /^drop index concurrently/i.test(statement))).toHaveLength(3);
+    expect(statements.filter((statement) => /^create (unique )?index concurrently/i.test(statement))).toHaveLength(3);
+    expect(statements.at(-1)).toContain("index_info.indisvalid");
+    expect(statements.at(-1)).toContain("index_info.indisready");
+    expect(statements.at(-1)).toContain("pg_catalog.pg_get_indexdef(index_info.indexrelid)");
+  });
+
+  it("backfills only the contiguous PULSO checkpoint instead of skipping historical holes", async () => {
+    const migrationPath = fileURLToPath(new URL("../sql/030-channel-conversation-ordering.sql", import.meta.url));
+    const migration = await readFile(migrationPath, "utf8");
+    const statements = readNonTransactionalStatements(migration);
+
+    expect(migration).toContain("row_number() over");
+    expect(migration).toContain("where stream_sequence = contiguous_rank");
+    expect(migrationRunsInTransaction(migration)).toBe(false);
+    expect(migration).toContain("not valid");
+    expect(migration).not.toContain("to hyperion_pulso");
+    expect(migration).not.toMatch(
+      /with processed_positions as \(\s*select tenant_id, stream_id, max\(stream_sequence\)/i
+    );
+    expect(statements.at(-1)).toMatch(/^do\s+\$migration\$/i);
+    expect(statements.at(-1)).toContain("Channel ordering backfill is incomplete");
+  });
+
+  it("validates Channel ordering constraints in a replayable contract phase", async () => {
+    const migrationPath = fileURLToPath(
+      new URL("../sql/034-channel-conversation-ordering-contract.sql", import.meta.url)
+    );
+    const migration = await readFile(migrationPath, "utf8");
+    const statements = readNonTransactionalStatements(migration);
+
+    expect(statements).toHaveLength(3);
+    expect(statements.filter((statement) => /validate constraint/i.test(statement))).toHaveLength(2);
+    expect(statements.at(-1)).toContain("not convalidated");
   });
 
   it("refuses duplicate WhatsApp source messages without deleting evidence", async () => {

@@ -109,7 +109,7 @@ const HOLD_COLUMNS = `
 export async function registerAppointmentRoutes(
   app: FastifyInstance,
   context: ServiceContext,
-  emitAudit: AuditEmitter = () => undefined
+  emitAudit: AuditEmitter = async () => undefined
 ): Promise<void> {
   const base = "/v1/tenants/:tenantId/pulso-iris";
 
@@ -149,16 +149,19 @@ export async function registerAppointmentRoutes(
     if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
     if (!(await validateBookableRequest(scope.db, scope.tenantId, input, settings, request, reply))) return;
 
-    const provider = new InternalAgendaProvider(scope.db);
     try {
-      const result = await provider.reserve({
-        ...input,
-        tenantId: scope.tenantId,
-        actorId: readOperatorId(request.headers as Record<string, unknown>),
-        holdDurationMinutes: settings.holdDurationMinutes
+      const result = await scope.db.transaction(async (tx) => {
+        const provider = new InternalAgendaProvider(asTransactionalDatabase(tx));
+        const reserved = await provider.reserve({
+          ...input,
+          tenantId: scope.tenantId,
+          actorId: readOperatorId(request.headers as Record<string, unknown>),
+          holdDurationMinutes: settings.holdDurationMinutes
+        });
+        await emitExpiredHolds(emitAudit, reserved.expiredHolds, tx);
+        if (!reserved.idempotent) await emitHoldCreated(emitAudit, reserved.hold, request, tx);
+        return reserved;
       });
-      emitExpiredHolds(emitAudit, result.expiredHolds);
-      if (!result.idempotent) emitHoldCreated(emitAudit, result.hold, request);
       return reply
         .code(result.idempotent ? 200 : 201)
         .send(envelope(pulsoIrisAppointmentHoldSchema.parse(result.hold), request.id));
@@ -206,12 +209,12 @@ export async function registerAppointmentRoutes(
     if (!input.idempotencyKey) {
       return reply.code(422).send(envelope({ error: "idempotencyKey is required" }, request.id));
     }
+    const appointmentIdempotencyKey = input.idempotencyKey;
 
     const settings = await loadActiveSettings(scope.db, scope.tenantId, request, reply);
     if (!settings) return;
     const operatorId = readOperatorId(request.headers as Record<string, unknown>);
     const operatorRole = readOperatorRole(request.headers as Record<string, unknown>);
-    const provider = new InternalAgendaProvider(scope.db);
     let holdId = input.holdId;
     let holdWasCreated = false;
 
@@ -262,58 +265,75 @@ export async function registerAppointmentRoutes(
       if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
       if (!(await validateBookableRequest(scope.db, scope.tenantId, holdInput, settings, request, reply))) return;
       try {
-        const reserved = await provider.reserve(holdInput);
-        emitExpiredHolds(emitAudit, reserved.expiredHolds);
+        const reserved = await scope.db.transaction(async (tx) => {
+          const provider = new InternalAgendaProvider(asTransactionalDatabase(tx));
+          const result = await provider.reserve(holdInput);
+          await emitExpiredHolds(emitAudit, result.expiredHolds, tx);
+          if (!result.idempotent) await emitHoldCreated(emitAudit, result.hold, request, tx);
+          return result;
+        });
         holdId = reserved.hold.id;
         holdWasCreated = !reserved.idempotent;
-        if (holdWasCreated) emitHoldCreated(emitAudit, reserved.hold, request);
       } catch (error) {
         return handleReservationError(error, scope.db, scope.tenantId, holdInput, settings, request, reply);
       }
     }
 
     try {
-      const result =
-        settings.mode === "internal"
-          ? await provider.verify({
+      const completed = await scope.db.transaction(async (tx) => {
+        const transactionalDb = asTransactionalDatabase(tx);
+        const provider = new InternalAgendaProvider(transactionalDb);
+        const result =
+          settings.mode === "internal"
+            ? await provider.verify({
+                tenantId: scope.tenantId,
+                holdId,
+                appointmentIdempotencyKey,
+                origin: input.origin ?? "advisor",
+                actorId: operatorId
+              })
+            : await submitHybridAppointment(transactionalDb, {
+                tenantId: scope.tenantId,
+                holdId,
+                idempotencyKey: appointmentIdempotencyKey,
+                origin: input.origin ?? "advisor",
+                actorId: operatorId,
+                externalSlaMinutes: settings.externalConfirmationSlaMinutes
+              });
+        const appointment = await findAppointment(transactionalDb, scope.tenantId, result.appointment.id);
+        if (!appointment) throw new Error("Appointment was not persisted");
+
+        if (!result.idempotent) {
+          await emitAudit(
+            {
               tenantId: scope.tenantId,
-              holdId,
-              appointmentIdempotencyKey: input.idempotencyKey,
-              origin: input.origin ?? "advisor",
-              actorId: operatorId
-            })
-          : await submitHybridAppointment(scope.db, {
-              tenantId: scope.tenantId,
-              holdId,
-              idempotencyKey: input.idempotencyKey,
-              origin: input.origin ?? "advisor",
               actorId: operatorId,
-              externalSlaMinutes: settings.externalConfirmationSlaMinutes
-            });
-      const appointment = await findAppointment(scope.db, scope.tenantId, result.appointment.id);
-      if (!appointment) throw new Error("Appointment was not persisted");
+              eventType:
+                settings.mode === "internal" ? "appointment.verified" : "appointment.pending_external_confirmation",
+              entityType: "appointment",
+              entityId: appointment.id,
+              metadata: { mode: settings.mode }
+            },
+            tx
+          );
+          await emitAudit(
+            {
+              tenantId: scope.tenantId,
+              actorId: operatorId,
+              eventType: "appointment.registered",
+              entityType: "appointment",
+              entityId: appointment.id,
+              metadata: { mode: settings.mode }
+            },
+            tx
+          );
+        }
+        return { appointment, result };
+      });
 
-      if (!result.idempotent) {
-        emitAudit({
-          tenantId: scope.tenantId,
-          actorId: operatorId,
-          eventType:
-            settings.mode === "internal" ? "appointment.verified" : "appointment.pending_external_confirmation",
-          entityType: "appointment",
-          entityId: appointment.id,
-          metadata: { mode: settings.mode }
-        });
-        emitAudit({
-          tenantId: scope.tenantId,
-          actorId: operatorId,
-          eventType: "appointment.registered",
-          entityType: "appointment",
-          entityId: appointment.id,
-          metadata: { mode: settings.mode }
-        });
-      }
-
-      return reply.code(result.idempotent && !holdWasCreated ? 200 : 201).send(envelope(appointment, request.id));
+      return reply
+        .code(completed.result.idempotent && !holdWasCreated ? 200 : 201)
+        .send(envelope(completed.appointment, request.id));
     } catch (error) {
       if (error instanceof AgendaProviderError && error.code === "hold_expired") {
         await expireAppointmentHolds(scope.db, emitAudit);
@@ -432,38 +452,48 @@ export async function registerAppointmentRoutes(
     if (!input) return;
 
     try {
-      const result = await scope.db.query(
-        `update pulso_iris.appointments a
-         set status = 'verified', verification_mode = 'manual_external',
-             external_reference = $3, legacy_reference = $3, external_system = $4,
-             external_note = $5, verified_at = now(), verified_by = $6, updated_at = now()
-         from pulso_iris.agenda_settings settings
-         where a.tenant_id = $1 and a.id = $2
-           and settings.tenant_id = a.tenant_id and settings.mode = 'hybrid_manual'
-           and a.status in ('pending_external_confirmation', 'deferred', 'verification_failed')
-         returning ${QUALIFIED_APPOINTMENT_COLUMNS}`,
-        [scope.tenantId, appointmentId, input.externalReference, input.externalSystem, input.note ?? null, operatorId]
-      );
-      const appointment = pulsoIrisAppointmentListSchema.parse(result.rows)[0];
+      const appointment = await scope.db.transaction(async (tx) => {
+        const result = await tx.query(
+          `update pulso_iris.appointments a
+           set status = 'verified', verification_mode = 'manual_external',
+               external_reference = $3, legacy_reference = $3, external_system = $4,
+               external_note = $5, verified_at = now(), verified_by = $6, updated_at = now()
+           from pulso_iris.agenda_settings settings
+           where a.tenant_id = $1 and a.id = $2
+             and settings.tenant_id = a.tenant_id and settings.mode = 'hybrid_manual'
+             and a.status in ('pending_external_confirmation', 'deferred', 'verification_failed')
+           returning ${QUALIFIED_APPOINTMENT_COLUMNS}`,
+          [scope.tenantId, appointmentId, input.externalReference, input.externalSystem, input.note ?? null, operatorId]
+        );
+        const updated = pulsoIrisAppointmentListSchema.parse(result.rows)[0];
+        if (!updated) return undefined;
+        await emitAudit(
+          {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: "appointment.manually_verified",
+            entityType: "appointment",
+            entityId: appointmentId,
+            metadata: { verificationMode: "manual_external" }
+          },
+          tx
+        );
+        await emitAudit(
+          {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: "appointment.verified",
+            entityType: "appointment",
+            entityId: appointmentId,
+            metadata: { verificationMode: "manual_external" }
+          },
+          tx
+        );
+        return updated;
+      });
       if (!appointment) {
         return reply.code(409).send(envelope({ error: "Appointment cannot be manually verified" }, request.id));
       }
-      emitAudit({
-        tenantId: scope.tenantId,
-        actorId: operatorId,
-        eventType: "appointment.manually_verified",
-        entityType: "appointment",
-        entityId: appointmentId,
-        metadata: { verificationMode: "manual_external" }
-      });
-      emitAudit({
-        tenantId: scope.tenantId,
-        actorId: operatorId,
-        eventType: "appointment.verified",
-        entityType: "appointment",
-        entityId: appointmentId,
-        metadata: { verificationMode: "manual_external" }
-      });
       return envelope(appointment, request.id);
     } catch (error) {
       return handleAppointmentError(error, request, reply);
@@ -479,24 +509,31 @@ export async function registerAppointmentRoutes(
     if (!appointmentId) return reply.code(400).send(envelope({ error: "appointmentId must be a UUID" }, request.id));
     const input = parseBody(pulsoIrisExternalRejectionInputSchema, request, reply);
     if (!input) return;
-    const result = await scope.db.query(
-      `update pulso_iris.appointments
-       set status = 'external_rejected', external_rejection_reason = $3,
-           external_rejected_at = now(), external_rejected_by = $4, updated_at = now()
-       where tenant_id = $1 and id = $2
-         and status in ('pending_external_confirmation', 'deferred', 'verification_failed')
-       returning ${APPOINTMENT_COLUMNS}`,
-      [scope.tenantId, appointmentId, input.reason, operatorId]
-    );
-    const appointment = pulsoIrisAppointmentListSchema.parse(result.rows)[0];
-    if (!appointment) return reply.code(409).send(envelope({ error: "Appointment cannot be rejected" }, request.id));
-    emitAudit({
-      tenantId: scope.tenantId,
-      actorId: operatorId,
-      eventType: "appointment.external_rejected",
-      entityType: "appointment",
-      entityId: appointmentId
+    const appointment = await scope.db.transaction(async (tx) => {
+      const result = await tx.query(
+        `update pulso_iris.appointments
+         set status = 'external_rejected', external_rejection_reason = $3,
+             external_rejected_at = now(), external_rejected_by = $4, updated_at = now()
+         where tenant_id = $1 and id = $2
+           and status in ('pending_external_confirmation', 'deferred', 'verification_failed')
+         returning ${APPOINTMENT_COLUMNS}`,
+        [scope.tenantId, appointmentId, input.reason, operatorId]
+      );
+      const updated = pulsoIrisAppointmentListSchema.parse(result.rows)[0];
+      if (!updated) return undefined;
+      await emitAudit(
+        {
+          tenantId: scope.tenantId,
+          actorId: operatorId,
+          eventType: "appointment.external_rejected",
+          entityType: "appointment",
+          entityId: appointmentId
+        },
+        tx
+      );
+      return updated;
     });
+    if (!appointment) return reply.code(409).send(envelope({ error: "Appointment cannot be rejected" }, request.id));
     return envelope(appointment, request.id);
   });
 
@@ -510,15 +547,22 @@ export async function registerAppointmentRoutes(
     const input = parseBody(pulsoIrisAppointmentCancellationInputSchema, request, reply);
     if (!input) return;
     try {
-      const provider = new InternalAgendaProvider(scope.db);
-      await provider.cancel({ tenantId: scope.tenantId, appointmentId, actorId: operatorId, reason: input.reason });
-      const appointment = await findAppointment(scope.db, scope.tenantId, appointmentId);
-      emitAudit({
-        tenantId: scope.tenantId,
-        actorId: operatorId,
-        eventType: "appointment.cancelled",
-        entityType: "appointment",
-        entityId: appointmentId
+      const appointment = await scope.db.transaction(async (tx) => {
+        const transactionalDb = asTransactionalDatabase(tx);
+        const provider = new InternalAgendaProvider(transactionalDb);
+        await provider.cancel({ tenantId: scope.tenantId, appointmentId, actorId: operatorId, reason: input.reason });
+        const cancelled = await findAppointment(transactionalDb, scope.tenantId, appointmentId);
+        await emitAudit(
+          {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: "appointment.cancelled",
+            entityType: "appointment",
+            entityId: appointmentId
+          },
+          tx
+        );
+        return cancelled;
       });
       return envelope(appointment, request.id);
     } catch (error) {
@@ -559,12 +603,15 @@ export async function registerAppointmentRoutes(
       return reply.code(409).send(envelope({ error: "Maximum reschedules reached" }, request.id));
     }
 
-    const provider = new InternalAgendaProvider(scope.db);
     let holdId = input.holdId;
     if (!holdId) {
       if (!input.siteId || !input.professionalId || !input.appointmentTypeId || !input.scheduledAt) {
         return reply.code(422).send(envelope({ error: "Replacement slot is required" }, request.id));
       }
+      const siteId = input.siteId;
+      const professionalId = input.professionalId;
+      const appointmentTypeId = input.appointmentTypeId;
+      const scheduledAt = input.scheduledAt;
       const invalidRef = await ensureTenantReferences(scope.db, scope.tenantId, [
         { id: input.siteId, table: "pulso_iris.sites", label: "siteId" },
         { id: input.professionalId, table: "pulso_iris.professionals", label: "professionalId" },
@@ -585,22 +632,26 @@ export async function registerAppointmentRoutes(
         return;
       }
       try {
-        const reserved = await provider.reserve({
-          tenantId: scope.tenantId,
-          patientId: current.patientId,
-          conversationId: current.conversationId,
-          siteId: input.siteId,
-          professionalId: input.professionalId,
-          payerId: input.payerId ?? current.payerId,
-          appointmentTypeId: input.appointmentTypeId,
-          scheduledAt: input.scheduledAt,
-          idempotencyKey: `reschedule-hold:${input.idempotencyKey}`,
-          actorId: operatorId,
-          holdDurationMinutes: settings.holdDurationMinutes
+        const reserved = await scope.db.transaction(async (tx) => {
+          const provider = new InternalAgendaProvider(asTransactionalDatabase(tx));
+          const result = await provider.reserve({
+            tenantId: scope.tenantId,
+            patientId: current.patientId,
+            conversationId: current.conversationId,
+            siteId,
+            professionalId,
+            payerId: input.payerId ?? current.payerId,
+            appointmentTypeId,
+            scheduledAt,
+            idempotencyKey: `reschedule-hold:${input.idempotencyKey}`,
+            actorId: operatorId,
+            holdDurationMinutes: settings.holdDurationMinutes
+          });
+          await emitExpiredHolds(emitAudit, result.expiredHolds, tx);
+          if (!result.idempotent) await emitHoldCreated(emitAudit, result.hold, request, tx);
+          return result;
         });
-        emitExpiredHolds(emitAudit, reserved.expiredHolds);
         holdId = reserved.hold.id;
-        if (!reserved.idempotent) emitHoldCreated(emitAudit, reserved.hold, request);
       } catch (error) {
         return handleReservationError(error, scope.db, scope.tenantId, input, settings, request, reply);
       }
@@ -616,7 +667,7 @@ export async function registerAppointmentRoutes(
     }
 
     try {
-      const replacement = await scope.db.transaction(async (tx) => {
+      const outcome = await scope.db.transaction(async (tx) => {
         const locked = await tx.query<{ status: string; origin: string; rescheduleCount: number }>(
           `select status, origin, reschedule_count as "rescheduleCount"
            from pulso_iris.appointments
@@ -626,82 +677,96 @@ export async function registerAppointmentRoutes(
         );
         const lockedCurrent = locked.rows[0];
         if (!lockedCurrent) throw new AgendaProviderError("invalid_transition", "Appointment not found");
+        let created: { appointment: { id: string }; idempotent: boolean } | undefined;
         if (lockedCurrent.status === "rescheduled") {
           const prior = await findRescheduleReplacement(tx, scope.tenantId, appointmentId, input.idempotencyKey);
-          if (prior) return { appointment: { id: prior.id }, idempotent: true };
-        }
-        if (
-          !["pending_external_confirmation", "verified", "confirmed", "deferred", "verification_failed"].includes(
-            lockedCurrent.status
-          )
-        ) {
-          throw new AgendaProviderError("invalid_transition", "Appointment cannot be rescheduled");
-        }
-        if (lockedCurrent.rescheduleCount >= settings.maxReschedules) {
-          throw new AgendaProviderError("invalid_transition", "Maximum reschedules reached");
+          if (prior) created = { appointment: { id: prior.id }, idempotent: true };
         }
 
         const transactionalDb = asTransactionalDatabase(tx);
         const transactionalProvider = new InternalAgendaProvider(transactionalDb);
-        const created =
-          settings.mode === "internal"
-            ? await transactionalProvider.verify({
-                tenantId: scope.tenantId,
-                holdId,
-                appointmentIdempotencyKey: input.idempotencyKey,
-                origin: lockedCurrent.origin,
-                actorId: operatorId,
-                previousAppointmentId: appointmentId,
-                rescheduleCount: lockedCurrent.rescheduleCount + 1
-              })
-            : await submitHybridAppointment(transactionalDb, {
-                tenantId: scope.tenantId,
-                holdId,
-                idempotencyKey: input.idempotencyKey,
-                origin: lockedCurrent.origin,
-                actorId: operatorId,
-                externalSlaMinutes: settings.externalConfirmationSlaMinutes,
-                previousAppointmentId: appointmentId,
-                rescheduleCount: lockedCurrent.rescheduleCount + 1
-              });
-        await transactionalProvider.reschedule({
-          tenantId: scope.tenantId,
-          appointmentId,
-          replacementAppointmentId: created.appointment.id,
-          actorId: operatorId,
-          reason: input.reason
-        });
-        return created;
+        if (!created) {
+          if (
+            !["pending_external_confirmation", "verified", "confirmed", "deferred", "verification_failed"].includes(
+              lockedCurrent.status
+            )
+          ) {
+            throw new AgendaProviderError("invalid_transition", "Appointment cannot be rescheduled");
+          }
+          if (lockedCurrent.rescheduleCount >= settings.maxReschedules) {
+            throw new AgendaProviderError("invalid_transition", "Maximum reschedules reached");
+          }
+
+          created =
+            settings.mode === "internal"
+              ? await transactionalProvider.verify({
+                  tenantId: scope.tenantId,
+                  holdId,
+                  appointmentIdempotencyKey: input.idempotencyKey,
+                  origin: lockedCurrent.origin,
+                  actorId: operatorId,
+                  previousAppointmentId: appointmentId,
+                  rescheduleCount: lockedCurrent.rescheduleCount + 1
+                })
+              : await submitHybridAppointment(transactionalDb, {
+                  tenantId: scope.tenantId,
+                  holdId,
+                  idempotencyKey: input.idempotencyKey,
+                  origin: lockedCurrent.origin,
+                  actorId: operatorId,
+                  externalSlaMinutes: settings.externalConfirmationSlaMinutes,
+                  previousAppointmentId: appointmentId,
+                  rescheduleCount: lockedCurrent.rescheduleCount + 1
+                });
+          await transactionalProvider.reschedule({
+            tenantId: scope.tenantId,
+            appointmentId,
+            replacementAppointmentId: created.appointment.id,
+            actorId: operatorId,
+            reason: input.reason
+          });
+        }
+
+        const fullReplacement = await findAppointment(transactionalDb, scope.tenantId, created.appointment.id);
+        if (!created.idempotent) {
+          await emitAudit(
+            {
+              tenantId: scope.tenantId,
+              actorId: operatorId,
+              eventType:
+                settings.mode === "internal" ? "appointment.verified" : "appointment.pending_external_confirmation",
+              entityType: "appointment",
+              entityId: created.appointment.id,
+              metadata: { mode: settings.mode, rescheduledFrom: appointmentId }
+            },
+            tx
+          );
+          await emitAudit(
+            {
+              tenantId: scope.tenantId,
+              actorId: operatorId,
+              eventType: "appointment.registered",
+              entityType: "appointment",
+              entityId: created.appointment.id,
+              metadata: { mode: settings.mode, rescheduledFrom: appointmentId }
+            },
+            tx
+          );
+        }
+        await emitAudit(
+          {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: "appointment.rescheduled",
+            entityType: "appointment",
+            entityId: appointmentId,
+            metadata: { replacementAppointmentId: created.appointment.id }
+          },
+          tx
+        );
+        return { replacement: created, fullReplacement };
       });
-      const fullReplacement = await findAppointment(scope.db, scope.tenantId, replacement.appointment.id);
-      if (!replacement.idempotent) {
-        emitAudit({
-          tenantId: scope.tenantId,
-          actorId: operatorId,
-          eventType:
-            settings.mode === "internal" ? "appointment.verified" : "appointment.pending_external_confirmation",
-          entityType: "appointment",
-          entityId: replacement.appointment.id,
-          metadata: { mode: settings.mode, rescheduledFrom: appointmentId }
-        });
-        emitAudit({
-          tenantId: scope.tenantId,
-          actorId: operatorId,
-          eventType: "appointment.registered",
-          entityType: "appointment",
-          entityId: replacement.appointment.id,
-          metadata: { mode: settings.mode, rescheduledFrom: appointmentId }
-        });
-      }
-      emitAudit({
-        tenantId: scope.tenantId,
-        actorId: operatorId,
-        eventType: "appointment.rescheduled",
-        entityType: "appointment",
-        entityId: appointmentId,
-        metadata: { replacementAppointmentId: replacement.appointment.id }
-      });
-      return reply.code(replacement.idempotent ? 200 : 201).send(envelope(fullReplacement, request.id));
+      return reply.code(outcome.replacement.idempotent ? 200 : 201).send(envelope(outcome.fullReplacement, request.id));
     } catch (error) {
       if (error instanceof AgendaProviderError && error.code === "hold_expired") {
         await expireAppointmentHolds(scope.db, emitAudit);
@@ -879,7 +944,7 @@ async function submitHybridAppointment(
 }
 
 async function findAppointment(
-  db: Database,
+  db: Pick<Database, "query">,
   tenantId: string,
   appointmentId: string
 ): Promise<PulsoIrisAppointment | undefined> {
@@ -939,26 +1004,41 @@ function requireCoordinator(request: FastifyRequest, reply: FastifyReply): strin
   return undefined;
 }
 
-function emitHoldCreated(emitAudit: AuditEmitter, hold: AgendaHold, request: FastifyRequest): void {
-  emitAudit({
-    tenantId: hold.tenantId,
-    actorId: readOperatorId(request.headers as Record<string, unknown>),
-    eventType: "appointment.hold.created",
-    entityType: "appointment_hold",
-    entityId: hold.id,
-    metadata: { expiresAt: hold.expiresAt }
-  });
+async function emitHoldCreated(
+  emitAudit: AuditEmitter,
+  hold: AgendaHold,
+  request: FastifyRequest,
+  tx: TransactionExecutor
+): Promise<void> {
+  await emitAudit(
+    {
+      tenantId: hold.tenantId,
+      actorId: readOperatorId(request.headers as Record<string, unknown>),
+      eventType: "appointment.hold.created",
+      entityType: "appointment_hold",
+      entityId: hold.id,
+      metadata: { expiresAt: hold.expiresAt }
+    },
+    tx
+  );
 }
 
-function emitExpiredHolds(emitAudit: AuditEmitter, holds: Array<{ id: string; tenantId: string }>): void {
+async function emitExpiredHolds(
+  emitAudit: AuditEmitter,
+  holds: Array<{ id: string; tenantId: string }>,
+  tx: TransactionExecutor
+): Promise<void> {
   for (const hold of holds) {
-    emitAudit({
-      tenantId: hold.tenantId,
-      actorId: "system",
-      eventType: "appointment.hold.expired",
-      entityType: "appointment_hold",
-      entityId: hold.id
-    });
+    await emitAudit(
+      {
+        tenantId: hold.tenantId,
+        actorId: "system",
+        eventType: "appointment.hold.expired",
+        entityType: "appointment_hold",
+        entityId: hold.id
+      },
+      tx
+    );
   }
 }
 

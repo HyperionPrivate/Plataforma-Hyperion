@@ -1,4 +1,22 @@
 import type { ServiceName } from "@hyperion/contracts";
+import { readDeploymentEnvironment } from "./deployment-environment.js";
+
+export {
+  HYPERION_DEPLOYMENT_ENVIRONMENTS,
+  isCiDeploymentEnvironment,
+  isRestrictedDeploymentEnvironment,
+  readDeploymentEnvironment,
+  type HyperionDeploymentEnvironment
+} from "./deployment-environment.js";
+
+export {
+  assertNoPlaceholderSecrets,
+  ENV_EXAMPLE_PLACEHOLDER_VALUES,
+  findPlaceholderSecretProblems,
+  isPlaceholderSecret,
+  REQUIRED_SECRET_ENV_KEYS,
+  shouldEnforcePlaceholderRejection
+} from "./secret-placeholders.js";
 
 export interface ServiceConfig {
   serviceName: ServiceName;
@@ -8,7 +26,6 @@ export interface ServiceConfig {
   serviceVersion: string;
   databaseUrl?: string;
   corsAllowedOrigins: string[];
-  internalServiceToken?: string;
 }
 
 export interface ServiceUrlMap {
@@ -41,13 +58,12 @@ const defaultPorts: Record<ServiceName, number> = {
 export function readServiceConfig(serviceName: ServiceName): ServiceConfig {
   return {
     serviceName,
-    environment: process.env.NODE_ENV ?? "development",
+    environment: readDeploymentEnvironment(process.env),
     host: process.env.HOST ?? "0.0.0.0",
     port: readNumber(process.env.PORT, defaultPorts[serviceName]),
     serviceVersion: process.env.SERVICE_VERSION ?? "0.1.0",
     databaseUrl: readOptional(process.env.DATABASE_URL),
-    corsAllowedOrigins: readCsv(process.env.CORS_ALLOWED_ORIGINS),
-    internalServiceToken: readOptional(process.env.INTERNAL_SERVICE_TOKEN)
+    corsAllowedOrigins: readCsv(process.env.CORS_ALLOWED_ORIGINS)
   };
 }
 

@@ -70,6 +70,8 @@ export interface WhatsAppSocket {
     };
   };
   sendMessage(address: string, content: { text: string }): Promise<{ key: { id?: string | null } } | undefined>;
+  /** Optional provider receipt ack; invoked only after durable spool fsync. */
+  readMessages?(keys: Array<{ remoteJid: string; id: string; fromMe?: boolean }>): Promise<void>;
   logout(): Promise<void>;
   end(error?: Error): void;
 }
@@ -129,6 +131,7 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
   private readonly captureBarriers = new Set<Promise<void>>();
   private readonly allowedPhoneHashes: ReadonlySet<string>;
   private eventSpool?: EncryptedChannelEventSpool;
+  private closePromise?: Promise<void>;
   private inboundHandler: (message: WhatsAppInboundText) => Promise<void> = async () => undefined;
   private statusHandler: (tenantId: string, status: WhatsAppConnectionStatus) => Promise<void> = async () => undefined;
   private deliveryHandler: (update: WhatsAppDeliveryUpdate) => Promise<boolean> = async () => true;
@@ -300,7 +303,12 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     return { providerMessageId, sentAt };
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closePromise ??= this.closeOnce();
+    return this.closePromise;
+  }
+
+  private async closeOnce(): Promise<void> {
     this.connectAttempts.clear();
     for (const [tenantId, connection] of this.connections) {
       if (connection.reconnectTimer) clearTimeout(connection.reconnectTimer);
@@ -311,8 +319,12 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
     this.connections.clear();
     this.rateWindows.clear();
     this.reconnectAfterSpool.clear();
-    await withTimeout(Promise.allSettled([...this.captureBarriers]), 5_000).catch(() => undefined);
-    await Promise.allSettled(this.statusProjectionTails.values());
+    // Accepted socket callbacks first reach the encrypted spool. Once all
+    // capture barriers settle, no retained event may still be projected after
+    // shutdown: drain both the spool and status tails before returning.
+    await settleUntilEmpty(() => [...this.captureBarriers]);
+    await settleUntilEmpty(() => [...this.spoolDrains.values()]);
+    await settleUntilEmpty(() => [...this.statusProjectionTails.values()]);
   }
 
   private async openSocket(tenantId: string, connection: TenantConnection): Promise<void> {
@@ -508,15 +520,16 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
       retained = false;
       this.reportIgnoredOnce(tenantId, "inbound_spool_unavailable", {});
     }
-    captureComplete();
     if (!retained) {
-      // Best effort only: without a successful fsync there is no crash-safe copy.
-      // The socket is latched degraded and requires an explicit reconnect after
-      // storage is repaired, regardless of whether this direct idempotent write wins.
+      // Do not acknowledge the provider until a crash-safe copy exists. Attempt a
+      // direct idempotent projection, then latch degraded (including dual failure).
+      captureComplete();
       await this.persistInboundBatchWithRetry(acceptedMessages);
       await this.recoverFromInboundPersistenceFailure(tenantId, connection, generation, "inbound_spool_unavailable");
       return;
     }
+    await this.acknowledgeProviderReceipts(connection, acceptedMessages);
+    captureComplete();
     const drain = await this.queueSpoolDrain(tenantId);
     if (!drain.inboundReady) {
       await this.recoverFromInboundPersistenceFailure(tenantId, connection, generation, "inbound_persistence_failed");
@@ -534,6 +547,25 @@ export class BaileysWhatsAppWebTestProvider implements WhatsAppProvider {
       lastError: undefined
     };
     await this.emitStatus(tenantId);
+  }
+
+  private async acknowledgeProviderReceipts(
+    connection: TenantConnection,
+    messages: WhatsAppInboundText[]
+  ): Promise<void> {
+    const socket = connection.socket;
+    if (!socket?.readMessages || messages.length === 0) return;
+    const keys = messages.map((message) => ({
+      remoteJid: message.providerAddress,
+      id: message.externalMessageId,
+      fromMe: false
+    }));
+    try {
+      await socket.readMessages(keys);
+    } catch {
+      // Receipt ack is best-effort after fsync; durable capture already succeeded.
+      this.reportIgnoredOnce(messages[0]!.tenantId, "provider_receipt_ack_failed", {});
+    }
   }
 
   private persistInboundBatchWithRetry(messages: WhatsAppInboundText[]): Promise<boolean> {
@@ -1032,6 +1064,14 @@ async function protectSessionDirectory(directory: string): Promise<void> {
       if (entry.isFile()) await chmod(path, 0o600).catch(() => undefined);
     })
   );
+}
+
+async function settleUntilEmpty(readOperations: () => Promise<unknown>[]): Promise<void> {
+  while (true) {
+    const operations = readOperations();
+    if (operations.length === 0) return;
+    await Promise.allSettled(operations);
+  }
 }
 
 async function wait(delayMs: number): Promise<void> {

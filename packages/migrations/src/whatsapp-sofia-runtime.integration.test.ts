@@ -295,7 +295,8 @@ describeIntegration("012 WhatsApp and SOFIA durable runtime migration", () => {
     expect(reconciliation.rows[0]).toEqual({
       status: "reconciliation_required",
       errorCode: "delivery_outcome_unknown",
-      deliveryStatus: "failed"
+      // Channel no longer mutates pulso_iris.messages (A-04); owner projection stays queued.
+      deliveryStatus: "queued"
     });
   });
 

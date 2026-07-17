@@ -28,6 +28,8 @@ export interface LlmCompletionInput {
   messages: LlmMessage[];
   tools: LlmToolDefinition[];
   toolChoice?: LlmToolChoice;
+  /** Cancels provider work when the owning runtime is shutting down. */
+  signal?: AbortSignal;
 }
 
 export interface LlmCompletion {

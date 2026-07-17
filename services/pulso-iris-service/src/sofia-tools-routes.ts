@@ -1,11 +1,11 @@
-import { timingSafeEqual } from "node:crypto";
 import { envelope } from "@hyperion/contracts";
 import type { DatabaseClient } from "@hyperion/database";
-import type { ServiceContext } from "@hyperion/service-runtime";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { readInternalCredential, validateInternalAuthorization, type ServiceContext } from "@hyperion/service-runtime";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AgendaProviderError } from "./agenda-provider.js";
 import type { AuditEmitter } from "./audit-client.js";
+import { createChannelThreadClient, type ChannelThreadClient } from "./channel-thread-client.js";
 import { InternalAgendaProvider } from "./internal-agenda-provider.js";
 import { listSlotAlternatives } from "./availability-engine.js";
 import { readTenantId } from "./shared.js";
@@ -96,10 +96,18 @@ type Database = NonNullable<ServiceContext["db"]>;
 export async function registerSofiaToolRoutes(
   app: FastifyInstance,
   context: ServiceContext,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  channelThreads: ChannelThreadClient = createChannelThreadClient({
+    channelServiceUrl: process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089",
+    credential: readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN") ?? ""
+  })
 ): Promise<void> {
+  const sofiaToken = readInternalCredential(process.env, "SOFIA_TO_PULSO_TOKEN");
   app.post("/internal/v1/tenants/:tenantId/pulso-iris/sofia/tools/:toolName", async (request, reply) => {
-    if (!authorizeInternal(request, reply, context.config.internalServiceToken)) return;
+    const authError = validateInternalAuthorization(request.headers, { "agent-service": sofiaToken });
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
     const tenantId = readTenantId(request.params);
     if (!tenantId) return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
     if (!context.db) return reply.code(503).send(envelope({ error: "Database unavailable" }, request.id));
@@ -119,14 +127,27 @@ export async function registerSofiaToolRoutes(
     }
 
     try {
-      const result = await executeTool(context.db, tenantId, toolName, parsed.data as never, emitAudit);
-      emitAudit({
-        tenantId,
-        actorId: "agent:SOFIA",
-        eventType: "agent.tool.executed",
-        entityType: "sofia_tool",
-        metadata: { tool: toolName }
-      });
+      const result =
+        toolName === "identify_patient_by_phone"
+          ? await identifyPatient(
+              context.db,
+              tenantId,
+              parsed.data as z.infer<(typeof toolSchemas)["identify_patient_by_phone"]>,
+              emitAudit,
+              channelThreads
+            )
+          : await context.db.transaction(async (tx) => {
+              const value = await executeTransactionalTool(
+                asTransactionalDatabase(tx),
+                tenantId,
+                toolName,
+                parsed.data as never,
+                emitAudit,
+                tx
+              );
+              await emitToolExecuted(tenantId, toolName, emitAudit, tx);
+              return value;
+            });
       return envelope(result, request.id);
     } catch (error) {
       if (error instanceof ToolError) {
@@ -144,48 +165,64 @@ export async function registerSofiaToolRoutes(
   });
 }
 
-async function executeTool(
+type TransactionalToolName = Exclude<ToolName, "identify_patient_by_phone">;
+
+async function executeTransactionalTool(
   db: Database,
   tenantId: string,
-  toolName: ToolName,
+  toolName: TransactionalToolName,
   input: never,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ): Promise<unknown> {
   switch (toolName) {
     case "get_catalog":
       return getCatalog(db, tenantId);
-    case "identify_patient_by_phone":
-      return identifyPatient(
-        db,
-        tenantId,
-        input as z.infer<(typeof toolSchemas)["identify_patient_by_phone"]>,
-        emitAudit
-      );
     case "update_patient_name":
       return updatePatientName(db, tenantId, input as z.infer<(typeof toolSchemas)["update_patient_name"]>);
     case "search_availability":
       return searchAvailability(db, tenantId, input as z.infer<(typeof toolSchemas)["search_availability"]>);
     case "create_appointment_hold":
-      return createHold(db, tenantId, input as z.infer<(typeof toolSchemas)["create_appointment_hold"]>, emitAudit);
+      return createHold(
+        db,
+        tenantId,
+        input as z.infer<(typeof toolSchemas)["create_appointment_hold"]>,
+        emitAudit,
+        auditTransaction
+      );
     case "book_appointment":
-      return bookAppointment(db, tenantId, input as z.infer<(typeof toolSchemas)["book_appointment"]>, emitAudit);
+      return bookAppointment(
+        db,
+        tenantId,
+        input as z.infer<(typeof toolSchemas)["book_appointment"]>,
+        emitAudit,
+        auditTransaction
+      );
     case "list_patient_appointments":
       return listAppointments(db, tenantId, input as z.infer<(typeof toolSchemas)["list_patient_appointments"]>);
     case "cancel_appointment":
-      return cancelAppointment(db, tenantId, input as z.infer<(typeof toolSchemas)["cancel_appointment"]>, emitAudit);
+      return cancelAppointment(
+        db,
+        tenantId,
+        input as z.infer<(typeof toolSchemas)["cancel_appointment"]>,
+        emitAudit,
+        auditTransaction
+      );
     case "reschedule_appointment":
       return rescheduleAppointment(
         db,
         tenantId,
         input as z.infer<(typeof toolSchemas)["reschedule_appointment"]>,
-        emitAudit
+        emitAudit,
+        auditTransaction
       );
     case "create_urgent_handoff":
       return createUrgentHandoff(
         db,
         tenantId,
         input as z.infer<(typeof toolSchemas)["create_urgent_handoff"]>,
-        emitAudit
+        emitAudit,
+        auditTransaction
       );
   }
 }
@@ -228,17 +265,20 @@ async function identifyPatient(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["identify_patient_by_phone"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  channelThreads: ChannelThreadClient
 ) {
-  return db.transaction(async (tx) => {
-    const binding = await tx.query<{ id: string; patientId?: string; conversationId?: string }>(
-      `select id, patient_id as "patientId", conversation_id as "conversationId"
-       from channel_runtime.thread_bindings where tenant_id = $1 and id = $2 for update`,
-      [tenantId, input.threadBindingId]
-    );
-    if (!binding.rows[0])
+  let binding: { id: string; patientId: string | null; conversationId: string | null };
+  try {
+    binding = await channelThreads.getThread(tenantId, input.threadBindingId);
+  } catch (error) {
+    if (error instanceof Error && error.message === "thread_binding_not_found") {
       throw new ToolError(422, "thread_binding_not_found", "Channel thread does not belong to tenant");
+    }
+    throw error;
+  }
 
+  const result = await db.transaction(async (tx) => {
     const patientResult = await tx.query<{ id: string; fullName?: string }>(
       `insert into pulso_iris.administrative_patients
          (tenant_id, status, preferred_channel, phone_e164_hash, phone_masked, metadata)
@@ -250,7 +290,7 @@ async function identifyPatient(
     );
     const patient = patientResult.rows[0]!;
 
-    let conversationId = binding.rows[0].conversationId;
+    let conversationId = binding.conversationId ?? undefined;
     if (conversationId) {
       const active = await tx.query<{ id: string }>(
         `select id from pulso_iris.conversations
@@ -291,29 +331,20 @@ async function identifyPatient(
           )
         ).rows[0]!;
 
-    await tx.query(
-      `update channel_runtime.thread_bindings
-       set patient_id = $3, conversation_id = $4, last_inbound_at = now(), updated_at = now()
-       where tenant_id = $1 and id = $2`,
-      [tenantId, input.threadBindingId, patient.id, conversationId]
-    );
-    await tx.query(
-      `update channel_runtime.inbound_events
-       set thread_binding_id = $3, message_id = $4, updated_at = now()
-       where tenant_id = $1 and external_message_id = $2 and provider = 'whatsapp_web_test'`,
-      [tenantId, input.externalMessageId, input.threadBindingId, existingMessage.id]
-    );
-
     if (insertedMessage.rows[0]) {
-      emitAudit({
-        tenantId,
-        actorId: "agent:SOFIA",
-        eventType: "channel.message.received",
-        entityType: "message",
-        entityId: existingMessage.id,
-        metadata: { provider: "whatsapp_web_test", channel: "whatsapp" }
-      });
+      await emitAudit(
+        {
+          tenantId,
+          actorId: "agent:SOFIA",
+          eventType: "channel.message.received",
+          entityType: "message",
+          entityId: existingMessage.id,
+          metadata: { provider: "whatsapp_web_test", channel: "whatsapp" }
+        },
+        tx
+      );
     }
+    await emitToolExecuted(tenantId, "identify_patient_by_phone", emitAudit, tx);
     return {
       patientId: patient.id,
       conversationId,
@@ -322,6 +353,22 @@ async function identifyPatient(
       idempotent: !insertedMessage.rows[0]
     };
   });
+
+  try {
+    await channelThreads.bindThread(tenantId, input.threadBindingId, {
+      patientId: result.patientId,
+      conversationId: result.conversationId,
+      externalMessageId: input.externalMessageId,
+      messageId: result.messageId
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "thread_binding_not_found") {
+      throw new ToolError(422, "thread_binding_not_found", "Channel thread does not belong to tenant");
+    }
+    throw error;
+  }
+
+  return result;
 }
 
 async function updatePatientName(
@@ -403,7 +450,8 @@ async function createHold(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["create_appointment_hold"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "book");
   const settings = await loadInternalSettings(db, tenantId);
@@ -422,16 +470,19 @@ async function createHold(
       actorId: "agent:SOFIA",
       holdDurationMinutes: settings.holdDurationMinutes
     });
-    emitExpiredHoldAudits(result.expiredHolds, emitAudit);
+    await emitExpiredHoldAudits(result.expiredHolds, emitAudit, auditTransaction);
     if (!result.idempotent) {
-      emitAudit({
-        tenantId,
-        actorId: "agent:SOFIA",
-        eventType: "appointment.hold.created",
-        entityType: "appointment_hold",
-        entityId: result.hold.id,
-        metadata: { expiresAt: result.hold.expiresAt, origin: "sofia_wa" }
-      });
+      await emitAudit(
+        {
+          tenantId,
+          actorId: "agent:SOFIA",
+          eventType: "appointment.hold.created",
+          entityType: "appointment_hold",
+          entityId: result.hold.id,
+          metadata: { expiresAt: result.hold.expiresAt, origin: "sofia_wa" }
+        },
+        auditTransaction
+      );
     }
     return result;
   } catch (error) {
@@ -456,7 +507,8 @@ async function bookAppointment(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["book_appointment"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "book");
   await assertHoldOwner(db, tenantId, input.holdId, input.patientId, input.conversationId);
@@ -468,22 +520,28 @@ async function bookAppointment(
     actorId: "agent:SOFIA"
   });
   if (!result.idempotent) {
-    emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.registered",
-      entityType: "appointment",
-      entityId: result.appointment.id,
-      metadata: { mode: "internal", origin: "sofia_wa" }
-    });
-    emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.verified",
-      entityType: "appointment",
-      entityId: result.appointment.id,
-      metadata: { verificationMode: "internal", origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.registered",
+        entityType: "appointment",
+        entityId: result.appointment.id,
+        metadata: { mode: "internal", origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.verified",
+        entityType: "appointment",
+        entityId: result.appointment.id,
+        metadata: { verificationMode: "internal", origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
   return { appointment: await findAppointmentView(db, tenantId, result.appointment.id), idempotent: result.idempotent };
 }
@@ -506,7 +564,8 @@ async function cancelAppointment(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["cancel_appointment"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "cancel");
   const result = await db.transaction(async (tx) => {
@@ -538,14 +597,17 @@ async function cancelAppointment(
     return false;
   });
   if (!result) {
-    emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.cancelled",
-      entityType: "appointment",
-      entityId: input.appointmentId,
-      metadata: { origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.cancelled",
+        entityType: "appointment",
+        entityId: input.appointmentId,
+        metadata: { origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
   return { appointment: await findAppointmentView(db, tenantId, input.appointmentId), idempotent: result };
 }
@@ -554,7 +616,8 @@ async function rescheduleAppointment(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["reschedule_appointment"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   await requireExplicitConfirmation(db, tenantId, input.conversationId, input.confirmationMessageId, "reschedule");
   const settings = await loadInternalSettings(db, tenantId);
@@ -600,16 +663,19 @@ async function rescheduleAppointment(
     actorId: "agent:SOFIA",
     holdDurationMinutes: settings.holdDurationMinutes
   });
-  emitExpiredHoldAudits(reservation.expiredHolds, emitAudit);
+  await emitExpiredHoldAudits(reservation.expiredHolds, emitAudit, auditTransaction);
   if (!reservation.idempotent) {
-    emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.hold.created",
-      entityType: "appointment_hold",
-      entityId: reservation.hold.id,
-      metadata: { expiresAt: reservation.hold.expiresAt, origin: "sofia_wa", operation: "reschedule" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.hold.created",
+        entityType: "appointment_hold",
+        entityId: reservation.hold.id,
+        metadata: { expiresAt: reservation.hold.expiresAt, origin: "sofia_wa", operation: "reschedule" }
+      },
+      auditTransaction
+    );
   }
 
   let outcome: { replacementId: string; idempotent: boolean };
@@ -673,30 +739,39 @@ async function rescheduleAppointment(
   }
 
   if (!outcome.idempotent) {
-    emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.registered",
-      entityType: "appointment",
-      entityId: outcome.replacementId,
-      metadata: { mode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
-    });
-    emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.verified",
-      entityType: "appointment",
-      entityId: outcome.replacementId,
-      metadata: { verificationMode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
-    });
-    emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "appointment.rescheduled",
-      entityType: "appointment",
-      entityId: input.appointmentId,
-      metadata: { replacementAppointmentId: outcome.replacementId, origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.registered",
+        entityType: "appointment",
+        entityId: outcome.replacementId,
+        metadata: { mode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
+      },
+      auditTransaction
+    );
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.verified",
+        entityType: "appointment",
+        entityId: outcome.replacementId,
+        metadata: { verificationMode: "internal", origin: "sofia_wa", rescheduledFrom: input.appointmentId }
+      },
+      auditTransaction
+    );
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "appointment.rescheduled",
+        entityType: "appointment",
+        entityId: input.appointmentId,
+        metadata: { replacementAppointmentId: outcome.replacementId, origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
   return {
     previousAppointment: await findAppointmentView(db, tenantId, input.appointmentId),
@@ -709,7 +784,8 @@ async function createUrgentHandoff(
   db: Database,
   tenantId: string,
   input: z.infer<(typeof toolSchemas)["create_urgent_handoff"]>,
-  emitAudit: AuditEmitter
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
 ) {
   const handoff = await db.transaction(async (tx) => {
     const existing = await tx.query<{ id: string }>(
@@ -738,14 +814,17 @@ async function createUrgentHandoff(
     return { ...created.rows[0]!, idempotent: false };
   });
   if (!handoff.idempotent) {
-    emitAudit({
-      tenantId,
-      actorId: "agent:SOFIA",
-      eventType: "handoff.assigned",
-      entityType: "handoff",
-      entityId: handoff.id,
-      metadata: { triggerCode: input.triggerCode, origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: "agent:SOFIA",
+        eventType: "handoff.assigned",
+        entityType: "handoff",
+        entityId: handoff.id,
+        metadata: { triggerCode: input.triggerCode, origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
   return handoff;
 }
@@ -797,16 +876,41 @@ function parseExplicitConfirmation(body: string): ConfirmationAction | undefined
   return "book";
 }
 
-function emitExpiredHoldAudits(expiredHolds: Array<{ id: string; tenantId: string }>, emitAudit: AuditEmitter): void {
+async function emitToolExecuted(
+  tenantId: string,
+  toolName: ToolName,
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
+): Promise<void> {
+  await emitAudit(
+    {
+      tenantId,
+      actorId: "agent:SOFIA",
+      eventType: "agent.tool.executed",
+      entityType: "sofia_tool",
+      metadata: { tool: toolName }
+    },
+    auditTransaction
+  );
+}
+
+async function emitExpiredHoldAudits(
+  expiredHolds: Array<{ id: string; tenantId: string }>,
+  emitAudit: AuditEmitter,
+  auditTransaction: TransactionExecutor
+): Promise<void> {
   for (const hold of expiredHolds) {
-    emitAudit({
-      tenantId: hold.tenantId,
-      actorId: "system:hold-expiration",
-      eventType: "appointment.hold.expired",
-      entityType: "appointment_hold",
-      entityId: hold.id,
-      metadata: { origin: "sofia_wa" }
-    });
+    await emitAudit(
+      {
+        tenantId: hold.tenantId,
+        actorId: "system:hold-expiration",
+        eventType: "appointment.hold.expired",
+        entityType: "appointment_hold",
+        entityId: hold.id,
+        metadata: { origin: "sofia_wa" }
+      },
+      auditTransaction
+    );
   }
 }
 
@@ -908,22 +1012,6 @@ function readToolName(params: unknown): ToolName | undefined {
       ? (params as { toolName?: unknown }).toolName
       : undefined;
   return typeof value === "string" && value in toolSchemas ? (value as ToolName) : undefined;
-}
-
-function authorizeInternal(request: FastifyRequest, reply: FastifyReply, token: string | undefined): boolean {
-  const authorization = request.headers.authorization;
-  const supplied = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
-  if (!token || !safeEqual(supplied, token)) {
-    void reply.code(401).send(envelope({ error: "Internal authentication required" }, request.id));
-    return false;
-  }
-  return true;
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 type TransactionExecutor = Parameters<Parameters<DatabaseClient["transaction"]>[0]>[0];

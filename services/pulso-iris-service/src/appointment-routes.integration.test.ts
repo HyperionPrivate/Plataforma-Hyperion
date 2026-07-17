@@ -29,6 +29,8 @@ const events: EmitAuditEventInput[] = [];
 const advisorOneHeaders = { "x-operator-id": "advisor-one", "x-operator-role": "advisor" };
 const advisorTwoHeaders = { "x-operator-id": "advisor-two", "x-operator-role": "advisor" };
 const coordinatorHeaders = { "x-operator-id": "coordinator-one", "x-operator-role": "coordinator" };
+let auditFailureEventType: EmitAuditEventInput["eventType"] | undefined;
+const auditExecutors: unknown[] = [];
 
 describeIntegration("pulso-iris appointment lifecycle", () => {
   beforeAll(async () => {
@@ -41,7 +43,11 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
       serviceName: "pulso-iris-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) => {
-        const emitAudit = (event: EmitAuditEventInput) => events.push(event);
+        const emitAudit = async (event: EmitAuditEventInput, executor?: unknown) => {
+          auditExecutors.push(executor);
+          if (event.eventType === auditFailureEventType) throw new Error("synthetic audit failure");
+          events.push(event);
+        };
         await registerConfigRoutes(serviceApp, context, emitAudit);
         await registerAppointmentRoutes(serviceApp, context, emitAudit);
         await registerAvailabilityRoutes(serviceApp, context);
@@ -124,7 +130,9 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
        where tenant_id = $1 and id = $2`,
       [tenantId, holdId]
     );
-    const expired = await expireAppointmentHolds(client as never, (event) => events.push(event));
+    const expired = await expireAppointmentHolds(transactionalClient(client) as never, async (event) => {
+      events.push(event);
+    });
     expect(expired).toBe(1);
     expect(events.some((event) => event.eventType === "appointment.hold.expired" && event.entityId === holdId)).toBe(
       true
@@ -217,6 +225,33 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
       "verified",
       "confirmed"
     ]);
+  });
+
+  it("rolls back a manual verification when its audit event fails", async () => {
+    const pending = await createHybridAppointment(15, "appointment-audit-rollback", advisorOneHeaders);
+    expect(pending.statusCode).toBe(201);
+    const appointmentId = pending.json().data.id as string;
+
+    auditFailureEventType = "appointment.manually_verified";
+    const failed = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${tenantId}/pulso-iris/appointments/${appointmentId}/manual-verify`,
+      headers: coordinatorHeaders,
+      payload: { externalReference: "EXT-ROLLBACK", externalSystem: "Sistema controlado" }
+    });
+    auditFailureEventType = undefined;
+
+    expect(failed.statusCode).toBe(500);
+    const persisted = await client.query<{ status: string; verificationMode: string | null }>(
+      `select status, verification_mode as "verificationMode"
+       from pulso_iris.appointments where tenant_id = $1 and id = $2`,
+      [tenantId, appointmentId]
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      status: "pending_external_confirmation",
+      verificationMode: null
+    });
+    expect(auditExecutors.at(-1)).toBeDefined();
   });
 
   it("rejects and cancels pending appointments with valid transitions", async () => {
@@ -634,6 +669,24 @@ async function createInternalAppointment(
       origin: "advisor"
     }
   });
+}
+
+function transactionalClient(databaseClient: pg.Client) {
+  return {
+    query: (text: string, params?: unknown[]) => databaseClient.query(text, params),
+    transaction: async (work: (executor: pg.Client) => Promise<unknown>) => {
+      await databaseClient.query("begin");
+      try {
+        const result = await work(databaseClient);
+        await databaseClient.query("commit");
+        return result;
+      } catch (error) {
+        await databaseClient.query("rollback");
+        throw error;
+      }
+    },
+    close: async () => undefined
+  };
 }
 
 function slotAt(index: number): string {

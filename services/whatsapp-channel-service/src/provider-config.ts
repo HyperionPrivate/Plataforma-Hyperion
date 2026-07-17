@@ -19,10 +19,11 @@ export interface WhatsAppProviderConfig {
 }
 
 export function readWhatsAppProviderConfig(): WhatsAppProviderConfig {
+  const enabled = process.env.WHATSAPP_WEB_TEST_ENABLED === "true";
   return {
-    enabled: process.env.WHATSAPP_WEB_TEST_ENABLED === "true",
+    enabled,
     allowedNumbers: new Set(readAllowedNumbers(process.env.WHATSAPP_TEST_ALLOWED_NUMBERS)),
-    phoneHashKey: process.env.WHATSAPP_PHONE_HASH_KEY?.trim() || process.env.INTERNAL_SERVICE_TOKEN?.trim(),
+    phoneHashKey: readPhoneHashKey(process.env.WHATSAPP_PHONE_HASH_KEY, enabled),
     sessionRoot: resolve(process.env.WHATSAPP_SESSION_DIR ?? "tmp/whatsapp-sessions"),
     maxMessageLength: readInteger("WHATSAPP_MAX_MESSAGE_LENGTH", 2_000, 1, 10_000),
     rateLimitMessages: readInteger("WHATSAPP_RATE_LIMIT_MESSAGES", 12, 1, 120),
@@ -41,6 +42,20 @@ export function readWhatsAppProviderConfig(): WhatsAppProviderConfig {
     maxReconnectAttempts: readInteger("WHATSAPP_MAX_RECONNECT_ATTEMPTS", 4, 0, 20),
     reconnectBaseDelayMs: readInteger("WHATSAPP_RECONNECT_BASE_DELAY_MS", 1_000, 100, 60_000)
   };
+}
+
+function readPhoneHashKey(value: string | undefined, required: boolean): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    if (required) {
+      throw new Error("WHATSAPP_PHONE_HASH_KEY is required when WHATSAPP_WEB_TEST_ENABLED=true");
+    }
+    return undefined;
+  }
+  if (!/^[A-Za-z][A-Za-z0-9._~-]{31,511}$/.test(normalized)) {
+    throw new Error("WHATSAPP_PHONE_HASH_KEY must contain between 32 and 512 safe characters");
+  }
+  return normalized;
 }
 
 export function normalizeAllowedNumber(value: string): string | undefined {

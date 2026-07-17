@@ -1,4 +1,5 @@
 import {
+  auditEventSchema,
   envelope,
   lumenClinicalRecordContentSchema,
   lumenClinicalRecordPatchSchema,
@@ -15,14 +16,14 @@ import {
   type LumenClinicalRecord,
   type LumenEncounterDetail,
   type LumenFieldEvidenceOrigin,
-  type LumenWorklistEntry
+  type LumenWorklistEntry,
+  type AuditEventInput
 } from "@hyperion/contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 import type { z } from "zod";
-import type { LumenAuditEmitter } from "./audit-client.js";
 import {
   changedLumenClinicalFields,
   clinicalEvidenceIssues,
@@ -46,7 +47,7 @@ import { decodeBase64SpeechToTextInput, type SpeechToTextProvider, type SpeechTo
 export interface LumenRouteDependencies {
   transcriber: SpeechToTextProvider;
   structurer: ClinicalStructurer;
-  emitAudit: LumenAuditEmitter;
+  audioCleanupOwner: string;
 }
 
 interface WorklistRow {
@@ -155,7 +156,8 @@ export async function registerLumenRoutes(
           actorId: operatorId,
           eventType: "lumen.encounter.started",
           entityType: "lumen_encounter",
-          entityId: encounterId
+          entityId: encounterId,
+          transitionVersion: "preconsultation-in_progress"
         });
       }
     });
@@ -208,7 +210,8 @@ export async function registerLumenRoutes(
           model: dependencies.transcriber.model,
           mimeType: prepared.mimeType,
           source: input.source,
-          durationSeconds: input.durationSeconds
+          durationSeconds: input.durationSeconds,
+          cleanupOwner: dependencies.audioCleanupOwner
         });
       });
       if (reservation.state === "not_found") {
@@ -228,7 +231,11 @@ export async function registerLumenRoutes(
       const requestAbort = createRequestAbortSignal(request, reply);
       let transcription: SpeechToTextResult | undefined;
       try {
-        transcription = await dependencies.transcriber.transcribe({ ...prepared, signal: requestAbort.signal });
+        transcription = await dependencies.transcriber.transcribe({
+          ...prepared,
+          cleanupKey: reservation.attemptId,
+          signal: requestAbort.signal
+        });
         throwIfRequestAborted(requestAbort.signal);
         const completedTranscription = transcription;
         const outcome = await scope.db.transaction(async (client) => {
@@ -284,6 +291,7 @@ export async function registerLumenRoutes(
             eventType: "lumen.dictation.transcribed",
             entityType: "lumen_dictation",
             entityId: dictation.id,
+            transitionVersion: reservation.attemptId,
             metadata: {
               encounterId,
               provider: completedTranscription.provider,
@@ -334,6 +342,7 @@ export async function registerLumenRoutes(
             eventType: cancelled ? "lumen.transcription.cancelled" : "lumen.transcription.failed",
             entityType: "lumen_processing_attempt",
             entityId: reservation.attemptId,
+            transitionVersion: "processing-terminal",
             metadata: {
               encounterId,
               provider: dependencies.transcriber.name,
@@ -469,6 +478,7 @@ export async function registerLumenRoutes(
             eventType: "lumen.dictation.reviewed",
             entityType: "lumen_dictation",
             entityId: requestedDictationId,
+            transitionVersion: reservation.attemptId,
             metadata: {
               encounterId,
               transcriptChanged: dictation.rows[0]!.transcript !== input.transcript,
@@ -494,6 +504,7 @@ export async function registerLumenRoutes(
             eventType: "lumen.dictation.reviewed",
             entityType: "lumen_dictation",
             entityId: dictationId,
+            transitionVersion: reservation.attemptId,
             metadata: {
               encounterId,
               transcriptChanged: false,
@@ -556,6 +567,7 @@ export async function registerLumenRoutes(
           eventType: "lumen.record.structured",
           entityType: "lumen_clinical_record",
           entityId: record.id,
+          transitionVersion: reservation.attemptId,
           metadata: {
             encounterId,
             dictationId,
@@ -621,6 +633,7 @@ export async function registerLumenRoutes(
           eventType: cancelled ? "lumen.structuring.cancelled" : "lumen.structuring.failed",
           entityType: "lumen_processing_attempt",
           entityId: reservation.attemptId,
+          transitionVersion: "processing-terminal",
           metadata: {
             encounterId,
             provider: dependencies.structurer.name,
@@ -704,28 +717,26 @@ export async function registerLumenRoutes(
       const reviewedSections = Object.keys(previousDocument).filter(
         (key) => JSON.stringify(previousDocument[key]) !== JSON.stringify(updatedDocument[key])
       );
-      await client.query(
-        `insert into platform.audit_events
-           (tenant_id, actor_id, event_type, entity_type, entity_id, metadata)
-         values ($1, $2, 'lumen.record.reviewed', 'lumen_clinical_record', $3, $4::jsonb)`,
-        [
-          scope.tenantId,
-          operatorId,
-          updated.id,
-          JSON.stringify({
-            encounterId,
-            previousUncertainties: previousContent.uncertainties.length,
-            remainingUncertainties: updated.content.uncertainties.length,
-            resolvedUncertainties: Math.max(
-              0,
-              previousContent.uncertainties.length - updated.content.uncertainties.length
-            ),
-            resolvedFields,
-            manualEvidenceFields: [...manualEvidenceFields],
-            reviewedSections
-          })
-        ]
-      );
+      await insertDurableAudit(client, {
+        tenantId: scope.tenantId,
+        actorId: operatorId,
+        eventType: "lumen.record.reviewed",
+        entityType: "lumen_clinical_record",
+        entityId: updated.id,
+        transitionVersion: timestampValue(updated.updatedAt)!,
+        metadata: {
+          encounterId,
+          previousUncertainties: previousContent.uncertainties.length,
+          remainingUncertainties: updated.content.uncertainties.length,
+          resolvedUncertainties: Math.max(
+            0,
+            previousContent.uncertainties.length - updated.content.uncertainties.length
+          ),
+          resolvedFields,
+          manualEvidenceFields: [...manualEvidenceFields],
+          reviewedSections
+        }
+      });
       return updated;
     });
     if (!record) {
@@ -855,29 +866,25 @@ async function fetchWorklist(
   const result = await db.query<WorklistRow>(
     `select e.id as "encounterId", e.tenant_id as "tenantId", e.patient_id as "patientId",
              e.site_id as "siteId",
-             coalesce(p.full_name, 'Paciente sin nombre') as "patientDisplayName",
-             case when (p.metadata->>'demoAge') ~ '^[0-9]+$' then (p.metadata->>'demoAge')::int else null end as "patientAge",
-             professional.name as "professionalName",
-             coalesce(nullif(e.metadata->>'siteDisplayName', ''),
-                      nullif(site.metadata->>'lumenDisplayName', ''), site.name) as "siteName",
+             reference.patient_display_name as "patientDisplayName",
+             reference.patient_age as "patientAge",
+             reference.professional_name as "professionalName",
+             reference.site_name as "siteName",
              e.scheduled_at as "scheduledAt", e.status, e.is_demo as "isDemo",
-             nullif(p.metadata->>'payer', '') as payer,
-             coalesce(nullif(p.document_number_masked, ''), nullif(p.metadata->>'documentMasked', ''))
-               as "documentMasked",
+             reference.payer,
+             reference.document_masked as "documentMasked",
              nullif(e.metadata->>'visitReason', '') as "visitReason",
-             coalesce(nullif(professional.metadata->>'subspecialty', ''), nullif(professional.subspecialty, ''))
-               as subspecialty
+             reference.subspecialty
      from lumen.encounters e
-     join pulso_iris.administrative_patients p
-       on p.tenant_id = e.tenant_id and p.id = e.patient_id
-     join pulso_iris.professionals professional
-       on professional.tenant_id = e.tenant_id and professional.id = e.professional_id
-     join pulso_iris.sites site
-       on site.tenant_id = e.tenant_id and site.id = e.site_id
+     join lumen.encounter_reference_snapshots reference
+       on reference.tenant_id = e.tenant_id and reference.encounter_id = e.id
+      and reference.patient_id = e.patient_id
+      and reference.professional_id = e.professional_id
+      and reference.site_id = e.site_id
      where e.tenant_id = $1
        and e.is_demo
-       and coalesce(p.metadata->>'is_demo', 'false') = 'true'
-       and coalesce(professional.metadata->>'is_demo', 'false') = 'true'
+       and reference.patient_is_demo
+       and reference.professional_is_demo
        and ($2::uuid is null or e.id = $2)
      order by e.scheduled_at asc
      limit 50`,
@@ -1079,22 +1086,27 @@ async function insertDurableAudit(
     actorId?: string;
     eventType: string;
     entityType: string;
-    entityId?: string;
+    entityId: string;
+    transitionVersion: string;
     metadata?: Record<string, unknown>;
   }
 ): Promise<void> {
+  const payload: AuditEventInput = auditEventSchema.parse({
+    tenantId: event.tenantId,
+    actorId: event.actorId,
+    eventType: event.eventType,
+    entityType: event.entityType,
+    entityId: event.entityId,
+    metadata: { producer: "lumen-service", ...(event.metadata ?? {}) }
+  });
+  const dedupeKey = `${event.entityType}:${event.entityId}:${event.eventType}:${event.transitionVersion}`;
   await db.query(
-    `insert into platform.audit_events
-       (tenant_id, actor_id, event_type, entity_type, entity_id, metadata)
-     values ($1, $2, $3, $4, $5, $6::jsonb)`,
-    [
-      event.tenantId,
-      event.actorId ?? null,
-      event.eventType,
-      event.entityType,
-      event.entityId ?? null,
-      JSON.stringify({ source: "lumen-service", ...(event.metadata ?? {}) })
-    ]
+    `insert into lumen.outbox_events (
+       tenant_id, event_type, event_version, aggregate_type, aggregate_id,
+       dedupe_key, payload, occurred_at
+     ) values ($1, 'lumen.audit.event.record.v1', 1, $2, $3, $4, $5::jsonb, now())
+     on conflict (tenant_id, dedupe_key) do nothing`,
+    [event.tenantId, event.entityType, event.entityId, dedupeKey, JSON.stringify(payload)]
   );
 }
 
@@ -1204,6 +1216,12 @@ function sendReservationConflict(
       .header("retry-after", "2")
       .code(409)
       .send(envelope({ error: "Clinical processing is already in progress" }, request.id));
+  }
+  if (reservation.state === "cleanup_pending") {
+    return reply
+      .header("retry-after", "5")
+      .code(409)
+      .send(envelope({ error: "Previous clinical processing is awaiting secure temporary-audio cleanup" }, request.id));
   }
   return reply
     .code(409)

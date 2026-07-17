@@ -1,13 +1,26 @@
-import { createService, type ServiceHandle } from "@hyperion/service-runtime";
+import {
+  OPERATOR_ASSERTION_HEADER,
+  createOperatorAssertion,
+  createService,
+  type ServiceHandle
+} from "@hyperion/service-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { registerRoutes } from "./app.js";
+import { readDurableOutboxConfiguration, registerRoutes } from "./app.js";
 
 const VALID_TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";
+const OTHER_TENANT_ID = "8e0b2b6f-2d3c-4a5b-8c9d-3e5f7a9b1c2d";
+const GATEWAY_TOKEN = "gateway-to-pulso-test-token";
+const SOFIA_TO_PULSO_TOKEN = "sofia-to-pulso-test-token";
+const ASSERTION_KEY = "gateway-operator-assertion-key-01";
+const OPERATOR_ID = "11111111-1111-4111-8111-111111111111";
 
 let app: ServiceHandle["app"];
 
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
+  process.env.GATEWAY_TO_PULSO_TOKEN = GATEWAY_TOKEN;
+  process.env.SOFIA_TO_PULSO_TOKEN = SOFIA_TO_PULSO_TOKEN;
+  process.env.GATEWAY_OPERATOR_ASSERTION_KEY = ASSERTION_KEY;
   const handle = await createService({
     serviceName: "pulso-iris-service",
     databaseRequired: true,
@@ -18,6 +31,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+  delete process.env.GATEWAY_TO_PULSO_TOKEN;
+  delete process.env.SOFIA_TO_PULSO_TOKEN;
+  delete process.env.GATEWAY_OPERATOR_ASSERTION_KEY;
 });
 
 describe("pulso-iris-service routes", () => {
@@ -42,7 +58,8 @@ describe("pulso-iris-service routes", () => {
   it("rejects tenant ids that are not UUIDs", async () => {
     const response = await app.inject({
       method: "GET",
-      url: "/v1/tenants/123/pulso-iris/conversations"
+      url: "/v1/tenants/123/pulso-iris/conversations",
+      headers: gatewayHeaders("123")
     });
 
     expect(response.statusCode).toBe(400);
@@ -51,7 +68,68 @@ describe("pulso-iris-service routes", () => {
   it("returns 503 for tenant data when the database is not configured", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`,
+      headers: gatewayHeaders(VALID_TENANT_ID)
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().data.error).toContain("DATABASE_URL");
+  });
+
+  it("rejects a valid edge token asserted by the wrong workload", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`,
+      headers: {
+        authorization: `Bearer ${GATEWAY_TOKEN}`,
+        "x-hyperion-caller": "agent-service"
+      }
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("rejects forged operator headers even with a valid gateway edge token", async () => {
+    const headers = gatewayHeaders(VALID_TENANT_ID, "advisor");
+    const forged = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`,
+      headers: { ...headers, "x-operator-role": "admin" }
+    });
+    const signed = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/overview`,
+      headers
+    });
+
+    expect(forged.statusCode).toBe(403);
+    expect(signed.statusCode).toBe(503);
+    expect(signed.json().data.error).toContain("DATABASE_URL");
+  });
+
+  it("protects decoded tenant routes and binds assertions to the routed tenant", async () => {
+    const encodedWithoutHeaders = await app.inject({
+      method: "GET",
+      url: `/v1/%74enants/${VALID_TENANT_ID}/pulso-iris/overview`
+    });
+    const wrongTenant = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${OTHER_TENANT_ID}/pulso-iris/overview`,
+      headers: gatewayHeaders(VALID_TENANT_ID)
+    });
+
+    expect(encodedWithoutHeaders.statusCode).toBe(401);
+    expect(wrongTenant.statusCode).toBe(403);
+  });
+
+  it("keeps tenant-scoped internal routes on their workload-specific identity gate", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/v1/tenants/${VALID_TENANT_ID}/pulso-message/11111111-1111-4111-8111-111111111112/stream-position`,
+      headers: {
+        authorization: `Bearer ${SOFIA_TO_PULSO_TOKEN}`,
+        "x-hyperion-caller": "agent-service"
+      }
     });
 
     expect(response.statusCode).toBe(503);
@@ -61,14 +139,15 @@ describe("pulso-iris-service routes", () => {
   it("reports readiness as down without a database", async () => {
     const response = await app.inject({ method: "GET", url: "/ready" });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(503);
     expect(response.json().status).toBe("down");
   });
 
   it("validates the tenant on config routes", async () => {
     const response = await app.inject({
       method: "GET",
-      url: "/v1/tenants/no-uuid/pulso-iris/config/sites"
+      url: "/v1/tenants/no-uuid/pulso-iris/config/sites",
+      headers: gatewayHeaders("no-uuid")
     });
 
     expect(response.statusCode).toBe(400);
@@ -78,6 +157,7 @@ describe("pulso-iris-service routes", () => {
     const response = await app.inject({
       method: "POST",
       url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/professionals`,
+      headers: gatewayHeaders(VALID_TENANT_ID),
       payload: { name: "Dra. Prueba", professionalType: "optometrist" }
     });
 
@@ -87,7 +167,8 @@ describe("pulso-iris-service routes", () => {
   it("returns 503 for availability rules when the database is not configured", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/availability-rules`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/availability-rules`,
+      headers: gatewayHeaders(VALID_TENANT_ID)
     });
 
     expect(response.statusCode).toBe(503);
@@ -96,7 +177,8 @@ describe("pulso-iris-service routes", () => {
   it("returns 503 for agenda blocks when the database is not configured", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/agenda-blocks`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/config/agenda-blocks`,
+      headers: gatewayHeaders(VALID_TENANT_ID)
     });
 
     expect(response.statusCode).toBe(503);
@@ -105,9 +187,100 @@ describe("pulso-iris-service routes", () => {
   it("returns 503 for availability slots when the database is not configured", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/availability/slots`
+      url: `/v1/tenants/${VALID_TENANT_ID}/pulso-iris/availability/slots`,
+      headers: gatewayHeaders(VALID_TENANT_ID)
     });
 
     expect(response.statusCode).toBe(503);
+  });
+});
+
+function gatewayHeaders(tenantId: string, role = "coordinator") {
+  return {
+    authorization: `Bearer ${GATEWAY_TOKEN}`,
+    "x-hyperion-caller": "api-gateway",
+    "x-operator-id": OPERATOR_ID,
+    "x-operator-role": role,
+    [OPERATOR_ASSERTION_HEADER]: createOperatorAssertion(
+      { operatorId: OPERATOR_ID, role, tenantId, expiresAtUnix: Math.floor(Date.now() / 1000) + 60 },
+      ASSERTION_KEY
+    )
+  };
+}
+
+describe("pulso-iris durable outbox configuration", () => {
+  const natsTestSecret = "nats-test-secret-with-24-characters";
+  it("keeps HTTP as the default and honors both disable switches", () => {
+    expect(readDurableOutboxConfiguration({})).toEqual({ transport: "http", enabled: true });
+    expect(readDurableOutboxConfiguration({ DURABLE_HTTP_OUTBOX_ENABLED: "false" })).toEqual({
+      transport: "http",
+      enabled: false
+    });
+    expect(readDurableOutboxConfiguration({ DURABLE_OUTBOX_ENABLED: "false" })).toEqual({
+      transport: "http",
+      enabled: false
+    });
+  });
+
+  it("requires explicit credential-separated JetStream configuration", () => {
+    expect(
+      readDurableOutboxConfiguration({
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://nats:4222",
+        NATS_AUTH_TOKEN: natsTestSecret
+      })
+    ).toEqual({
+      transport: "jetstream",
+      enabled: true,
+      natsUrl: "nats://nats:4222",
+      authentication: { authToken: natsTestSecret }
+    });
+    expect(() =>
+      readDurableOutboxConfiguration({
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://user:password@nats:4222",
+        NATS_AUTH_TOKEN: natsTestSecret
+      })
+    ).toThrow("must not contain credentials");
+    expect(() =>
+      readDurableOutboxConfiguration({
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://nats:4222"
+      })
+    ).toThrow("NATS authentication is required");
+  });
+
+  it("requires a per-service username identity in production", () => {
+    expect(() =>
+      readDurableOutboxConfiguration({
+        NODE_ENV: "test",
+        HYPERION_ENVIRONMENT: "production",
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: "nats://nats:4222",
+        NATS_AUTH_TOKEN: natsTestSecret
+      })
+    ).toThrow("token authentication is not allowed");
+  });
+
+  it("rejects unknown transports", () => {
+    expect(() => readDurableOutboxConfiguration({ DURABLE_EVENT_TRANSPORT: "unknown" })).toThrow(
+      "DURABLE_EVENT_TRANSPORT must be either http or jetstream"
+    );
+  });
+
+  it.each([
+    "https://nats:4222",
+    "nats://nats:4222/",
+    "nats://nats:4222/path",
+    "nats://nats:4222?token=unsafe",
+    "nats://nats:4222#fragment"
+  ])("rejects a non-NATS or component-bearing broker URL %s", (natsUrl) => {
+    expect(() =>
+      readDurableOutboxConfiguration({
+        DURABLE_EVENT_TRANSPORT: "jetstream",
+        NATS_URL: natsUrl,
+        NATS_AUTH_TOKEN: natsTestSecret
+      })
+    ).toThrow("NATS_URL");
   });
 });

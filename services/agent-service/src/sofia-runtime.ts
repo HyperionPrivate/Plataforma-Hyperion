@@ -1,6 +1,11 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "@hyperion/database";
-import type { RouteRegistrar } from "@hyperion/service-runtime";
+import {
+  createInternalAuthorizationHeaders,
+  isCiDeploymentEnvironment,
+  validateInternalAuthorization,
+  type RouteRegistrar
+} from "@hyperion/service-runtime";
 import { z } from "zod";
 import {
   extractAgendaRequestConstraints,
@@ -166,7 +171,12 @@ export interface SofiaRuntimeOptions {
   db: DatabaseClient;
   logger: { warn(message: string, metadata?: Record<string, unknown>): void };
   llm: LlmProvider;
-  internalServiceToken: string;
+  auditToken?: string;
+  channelToken?: string;
+  promptFlowToken?: string;
+  pulsoToken?: string;
+  /** Test-only compatibility; production never falls back to this shared credential. */
+  internalServiceToken?: string;
   channelUrl: string;
   promptFlowUrl: string;
   pulsoIrisUrl: string;
@@ -174,6 +184,7 @@ export interface SofiaRuntimeOptions {
   fetchImpl?: typeof fetch;
   workerId?: string;
   pollIntervalMs?: number;
+  inboundPollingEnabled?: boolean;
 }
 
 export class SofiaRuntime {
@@ -183,43 +194,73 @@ export class SofiaRuntime {
   private readonly pollIntervalMs: number;
   private ingestTimer?: NodeJS.Timeout;
   private jobTimer?: NodeJS.Timeout;
-  private ingesting = false;
-  private processing = false;
+  private acceptingWork = false;
+  private activeIngest?: Promise<void>;
+  private activeJob?: Promise<void>;
+  private stopPromise?: Promise<void>;
+  private readonly shutdownController = new AbortController();
+  private readonly credentials: {
+    channel: string;
+    promptFlow: string;
+    pulso: string;
+  };
 
   constructor(private readonly options: SofiaRuntimeOptions) {
+    const legacyTestToken = isCiDeploymentEnvironment(process.env) ? options.internalServiceToken : undefined;
+    this.credentials = {
+      channel: requireWorkloadCredential(options.channelToken ?? legacyTestToken, "SOFIA_TO_CHANNEL_TOKEN"),
+      promptFlow: requireWorkloadCredential(options.promptFlowToken ?? legacyTestToken, "SOFIA_TO_PROMPT_FLOW_TOKEN"),
+      pulso: requireWorkloadCredential(options.pulsoToken ?? legacyTestToken, "SOFIA_TO_PULSO_TOKEN")
+    };
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.workerId = options.workerId ?? `sofia-${randomUUID()}`;
     this.pollIntervalMs = options.pollIntervalMs ?? 750;
     this.tools = new SofiaToolClient({
       pulsoIrisUrl: options.pulsoIrisUrl,
-      internalServiceToken: options.internalServiceToken,
+      pulsoToken: this.credentials.pulso,
       db: options.db,
-      fetchImpl: this.fetchImpl
+      fetchImpl: this.fetchImpl,
+      signal: this.shutdownController.signal
     });
   }
 
   start(): void {
-    if (this.ingestTimer || this.jobTimer) return;
-    this.ingestTimer = setInterval(() => void this.ingestTick(), this.pollIntervalMs);
+    if (this.acceptingWork || this.stopPromise) return;
+    this.acceptingWork = true;
+    if (this.options.inboundPollingEnabled ?? true) {
+      this.ingestTimer = setInterval(() => void this.ingestTick(), this.pollIntervalMs);
+      this.ingestTimer.unref();
+      void this.ingestTick();
+    }
     this.jobTimer = setInterval(() => void this.jobTick(), this.pollIntervalMs);
-    this.ingestTimer.unref();
     this.jobTimer.unref();
-    void this.ingestTick();
     void this.jobTick();
   }
 
-  stop(): void {
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    this.acceptingWork = false;
+    this.shutdownController.abort(new SofiaShutdownError());
     if (this.ingestTimer) clearInterval(this.ingestTimer);
     if (this.jobTimer) clearInterval(this.jobTimer);
     this.ingestTimer = undefined;
     this.jobTimer = undefined;
+
+    const activeOperations = [this.activeIngest, this.activeJob].filter((operation): operation is Promise<void> =>
+      Boolean(operation)
+    );
+    this.stopPromise = Promise.all(activeOperations).then(() => undefined);
+    return this.stopPromise;
   }
 
   isRunning(): boolean {
-    return Boolean(this.ingestTimer && this.jobTimer);
+    return Boolean(
+      this.acceptingWork && this.jobTimer && (!(this.options.inboundPollingEnabled ?? true) || this.ingestTimer)
+    );
   }
 
   async ingestOnce(): Promise<number> {
+    if (this.shutdownController.signal.aborted) return 0;
     const payload = await this.callChannel("/internal/v1/whatsapp/inbound/claim", "POST", {
       workerId: this.workerId,
       limit: 5
@@ -227,6 +268,7 @@ export class SofiaRuntime {
     const events = z.object({ events: z.array(inboundEventSchema) }).parse(payload).events;
     for (const event of events) {
       try {
+        this.throwIfShuttingDown();
         const identity = await this.tools.identifyPatient({
           tenantId: event.tenantId,
           phoneHash: event.phoneHash,
@@ -255,15 +297,7 @@ export class SofiaRuntime {
           ]
         );
         if (insertedJob.rows[0]) {
-          await this.options.db.query(
-            `update pulso_iris.conversations
-             set metadata = metadata || jsonb_build_object(
-                   'sofiaStatus', 'queued',
-                   'lastSofiaActivityAt', now()
-                 ), updated_at = now()
-             where tenant_id = $1 and id = $2`,
-            [event.tenantId, identity.conversationId]
-          );
+          await this.setConversationRuntime(event.tenantId, identity.conversationId, "queued");
         }
         await this.callChannel(`/internal/v1/tenants/${event.tenantId}/whatsapp/inbound/${event.id}/complete`, "POST", {
           workerId: this.workerId
@@ -276,6 +310,7 @@ export class SofiaRuntime {
   }
 
   async processOne(): Promise<boolean> {
+    if (this.shutdownController.signal.aborted) return false;
     const recovered = await this.claimRecoverableConfirmationJob();
     const claimed = recovered
       ? undefined
@@ -289,6 +324,7 @@ export class SofiaRuntime {
     const job = recovered ?? claimed?.rows[0];
     if (!job) return false;
     try {
+      this.throwIfShuttingDown();
       await this.processJob(job);
     } catch (error) {
       await this.failJob(job, error);
@@ -316,6 +352,14 @@ export class SofiaRuntime {
            )
            and j.attempt_count >= j.max_attempts
            and j.attempt_count < 10
+           and not exists (
+             select 1
+             from agent_runtime.jobs predecessor
+             where predecessor.tenant_id = j.tenant_id
+               and predecessor.stream_id = j.stream_id
+               and predecessor.stream_sequence < j.stream_sequence
+               and predecessor.status <> 'completed'
+           )
            and btrim(regexp_replace(
                  translate(lower(patient.body), 'áéíóúüñ', 'aeiouun'),
                  '[^a-z0-9]+', ' ', 'g'
@@ -351,6 +395,14 @@ export class SofiaRuntime {
            )
            and j.attempt_count >= j.max_attempts
            and j.attempt_count < 10
+           and not exists (
+             select 1
+             from agent_runtime.jobs predecessor
+             where predecessor.tenant_id = j.tenant_id
+               and predecessor.stream_id = j.stream_id
+               and predecessor.stream_sequence < j.stream_sequence
+               and predecessor.status <> 'completed'
+           )
            and exists (
              select 1
              from pulso_iris.messages patient
@@ -384,33 +436,50 @@ export class SofiaRuntime {
     });
   }
 
-  private async ingestTick(): Promise<void> {
-    if (this.ingesting) return;
-    this.ingesting = true;
+  private ingestTick(): Promise<void> {
+    if (!this.acceptingWork) return Promise.resolve();
+    if (this.activeIngest) return this.activeIngest;
+
+    const operation = this.runIngestTick();
+    this.activeIngest = operation;
+    void operation.finally(() => {
+      if (this.activeIngest === operation) this.activeIngest = undefined;
+    });
+    return operation;
+  }
+
+  private async runIngestTick(): Promise<void> {
     try {
       await this.ingestOnce();
     } catch (error) {
       this.options.logger.warn("SOFIA inbound polling failed", { error: sanitizeError(error) });
-    } finally {
-      this.ingesting = false;
     }
   }
 
-  private async jobTick(): Promise<void> {
-    if (this.processing) return;
-    this.processing = true;
+  private jobTick(): Promise<void> {
+    if (!this.acceptingWork) return Promise.resolve();
+    if (this.activeJob) return this.activeJob;
+
+    const operation = this.runJobTick();
+    this.activeJob = operation;
+    void operation.finally(() => {
+      if (this.activeJob === operation) this.activeJob = undefined;
+    });
+    return operation;
+  }
+
+  private async runJobTick(): Promise<void> {
     try {
-      for (let index = 0; index < 5 && (await this.processOne()); index += 1) {
+      for (let index = 0; this.acceptingWork && index < 5 && (await this.processOne()); index += 1) {
         // Drain a bounded batch and yield to the event loop.
       }
     } catch (error) {
       this.options.logger.warn("SOFIA job polling failed", { error: sanitizeError(error) });
-    } finally {
-      this.processing = false;
     }
   }
 
   private async processJob(job: ClaimedJob): Promise<void> {
+    this.throwIfShuttingDown();
     const input = jobInputSchema.parse(job.input);
     const current = await this.options.db.query<{ body: string; conversationStatus: string }>(
       `select m.body, c.status as "conversationStatus"
@@ -461,6 +530,7 @@ export class SofiaRuntime {
             });
             toolNames.push("create_urgent_handoff");
           } catch (error) {
+            this.throwIfShuttingDown();
             executionStatus = "fallback";
             this.options.logger.warn("SOFIA urgency handoff could not be persisted", { error: sanitizeError(error) });
           }
@@ -627,6 +697,7 @@ export class SofiaRuntime {
           const completion = await this.options.llm.complete({
             messages,
             tools: SOFIA_TOOL_DEFINITIONS,
+            signal: this.shutdownController.signal,
             ...(round === 0 && freshAvailabilityRequired
               ? { toolChoice: { name: "search_availability" } as const }
               : {})
@@ -897,6 +968,7 @@ export class SofiaRuntime {
               : deterministicFallback();
       }
     } catch (error) {
+      this.throwIfShuttingDown();
       if (explicitConfirmation && job.attemptCount >= job.maxAttempts) {
         const confirmationContext = {
           tenantId: job.tenantId,
@@ -925,6 +997,7 @@ export class SofiaRuntime {
       }
     }
 
+    this.throwIfShuttingDown();
     const boundedResponse = boundText(responseText ?? deterministicFallback());
     const elapsedMs = Date.now() - new Date(input.occurredAt).getTime();
     const persistedResponse = await this.persistResponse(job, input, boundedResponse, {
@@ -933,6 +1006,7 @@ export class SofiaRuntime {
       toolNames,
       latencyMs: elapsedMs
     });
+    this.throwIfShuttingDown();
     await this.callChannel(`/internal/v1/tenants/${job.tenantId}/whatsapp/messages`, "POST", {
       threadBindingId: input.threadBindingId,
       messageId: persistedResponse.id,
@@ -963,17 +1037,41 @@ export class SofiaRuntime {
          where tenant_id = $1 and id = $2`,
         [job.tenantId, job.id]
       );
-    });
-    await this.setConversationRuntime(job.tenantId, job.conversationId, "responded", inferIntent(toolNames));
-    this.emitAudit(job.tenantId, "agent.execution.completed", "agent_execution", execution.rows[0]!.id, {
-      model,
-      toolNames: [...new Set(toolNames)],
-      latencyMs: totalLatencyMs,
-      fallback: executionStatus === "fallback"
-    });
-    this.emitAudit(job.tenantId, "agent.response.created", "message", persistedResponse.id, {
-      provider: "whatsapp_web_test",
-      latencyMs: elapsedMs
+      await tx.query(
+        `insert into agent_runtime.outbox_events (
+           tenant_id, event_type, event_version, aggregate_type, aggregate_id, payload
+         ) values
+           ($1, 'sofia.audit.event.record.v1', 1, 'agent_execution', $2, $4::jsonb),
+           ($1, 'sofia.audit.event.record.v1', 1, 'message', $3, $5::jsonb)
+         on conflict (tenant_id, event_type, aggregate_id) do nothing`,
+        [
+          job.tenantId,
+          execution.rows[0]!.id,
+          persistedResponse.id,
+          JSON.stringify({
+            tenantId: job.tenantId,
+            actorId: "agent:SOFIA",
+            eventType: "agent.execution.completed",
+            entityType: "agent_execution",
+            entityId: execution.rows[0]!.id,
+            metadata: {
+              model,
+              toolNames: [...new Set(toolNames)],
+              latencyMs: totalLatencyMs,
+              fallback: executionStatus === "fallback"
+            }
+          }),
+          JSON.stringify({
+            tenantId: job.tenantId,
+            actorId: "agent:SOFIA",
+            eventType: "agent.response.created",
+            entityType: "message",
+            entityId: persistedResponse.id,
+            metadata: { provider: "whatsapp_web_test", latencyMs: elapsedMs }
+          })
+        ]
+      );
+      await this.setConversationRuntime(job.tenantId, job.conversationId, "responded", inferIntent(toolNames));
     });
   }
 
@@ -1041,7 +1139,8 @@ export class SofiaRuntime {
   private async loadPrompt(tenantId: string): Promise<PromptFlow> {
     const payload = await this.callInternal(
       `${this.options.promptFlowUrl}/internal/v1/tenants/${tenantId}/prompt-flows/SOFIA/active`,
-      "GET"
+      "GET",
+      this.credentials.promptFlow
     );
     return z
       .object({
@@ -1060,17 +1159,18 @@ export class SofiaRuntime {
     metadata: Record<string, unknown>
   ): Promise<{ id: string; body: string }> {
     const externalId = `sofia-job:${job.id}`;
-    const inserted = await this.options.db.query<{ id: string; body: string }>(
-      `insert into pulso_iris.messages
-         (tenant_id, conversation_id, sender, body, provider, external_message_id, delivery_status, metadata)
-       values ($1, $2, 'sofia', $3, 'whatsapp_web_test', $4, 'queued', $5::jsonb)
-       on conflict (tenant_id, provider, external_message_id)
-         where provider is not null and external_message_id is not null
-       do update set body = pulso_iris.messages.body
-        returning id, body`,
-      [job.tenantId, job.conversationId, body, externalId, JSON.stringify(metadata)]
+    const payload = await this.callInternal(
+      `${this.options.pulsoIrisUrl}/internal/v1/tenants/${encodeURIComponent(job.tenantId)}/pulso-iris/messages/sofia-outbound`,
+      "POST",
+      this.credentials.pulso,
+      {
+        conversationId: job.conversationId,
+        body,
+        externalMessageId: externalId,
+        metadata
+      }
     );
-    return inserted.rows[0]!;
+    return z.object({ id: z.string().uuid(), body: z.string() }).parse(payload);
   }
 
   private async failInbound(tenantId: string, eventId: string, error: unknown): Promise<void> {
@@ -1086,8 +1186,13 @@ export class SofiaRuntime {
   }
 
   private async failJob(job: ClaimedJob, error: unknown): Promise<void> {
-    const terminal = job.attemptCount >= job.maxAttempts;
-    const errorCode = error instanceof RetryableSofiaError ? error.code : "job_failed";
+    const shutdownInterrupted = this.shutdownController.signal.aborted || error instanceof SofiaShutdownError;
+    const terminal = !shutdownInterrupted && job.attemptCount >= job.maxAttempts;
+    const errorCode = shutdownInterrupted
+      ? "shutdown_interrupted"
+      : error instanceof RetryableSofiaError
+        ? error.code
+        : "job_failed";
     await this.options.db.query(
       `update agent_runtime.executions
        set status = 'failed', error_code = $4, completed_at = now()
@@ -1097,62 +1202,97 @@ export class SofiaRuntime {
     await this.options.db.query(
       `update agent_runtime.jobs
        set status = $3, next_attempt_at = now() + interval '5 seconds',
+           attempt_count = case when $6::boolean then greatest(attempt_count - 1, 0) else attempt_count end,
            locked_at = null, locked_by = null, last_error_code = $5,
            last_error_message = $4, updated_at = now()
        where tenant_id = $1 and id = $2`,
-      [job.tenantId, job.id, terminal ? "dead_letter" : "retry_scheduled", sanitizeError(error), errorCode]
+      [
+        job.tenantId,
+        job.id,
+        shutdownInterrupted && job.attemptCount > job.maxAttempts
+          ? "dead_letter"
+          : terminal
+            ? "dead_letter"
+            : "retry_scheduled",
+        sanitizeError(error),
+        errorCode,
+        shutdownInterrupted
+      ]
     );
-    await this.setConversationRuntime(job.tenantId, job.conversationId, "failed");
-    this.options.logger.warn("SOFIA job failed", { jobId: job.id, terminal, error: sanitizeError(error) });
+    await this.setConversationRuntime(
+      job.tenantId,
+      job.conversationId,
+      shutdownInterrupted ? "queued" : "failed",
+      undefined,
+      {
+        allowDuringShutdown: true
+      }
+    );
+    this.options.logger.warn("SOFIA job failed", {
+      jobId: job.id,
+      terminal,
+      shutdownInterrupted,
+      error: sanitizeError(error)
+    });
   }
 
-  private async setConversationRuntime(tenantId: string, conversationId: string, status: string, intent?: string) {
-    await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = metadata || jsonb_build_object('sofiaStatus', $3::text, 'lastSofiaActivityAt', now()),
-           primary_intent = coalesce($4, primary_intent), updated_at = now()
-       where tenant_id = $1 and id = $2`,
-      [tenantId, conversationId, status, intent ?? null]
+  private async setConversationRuntime(
+    tenantId: string,
+    conversationId: string,
+    status: string,
+    intent?: string,
+    options: { allowDuringShutdown?: boolean } = {}
+  ) {
+    await this.callInternal(
+      `${this.options.pulsoIrisUrl}/internal/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/conversations/${encodeURIComponent(conversationId)}/sofia-runtime`,
+      "PATCH",
+      this.credentials.pulso,
+      { sofiaStatus: status, primaryIntent: intent },
+      options
     );
   }
 
   private async callChannel(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
-    return this.callInternal(`${this.options.channelUrl}${path}`, method, body);
+    return this.callInternal(`${this.options.channelUrl}${path}`, method, this.credentials.channel, body);
   }
 
   private async callPulsoTool(tenantId: string, toolName: string, body: unknown): Promise<unknown> {
     return this.callInternal(
       `${this.options.pulsoIrisUrl}/internal/v1/tenants/${tenantId}/pulso-iris/sofia/tools/${toolName}`,
       "POST",
+      this.credentials.pulso,
       body
     );
   }
 
-  private async callInternal(url: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
+  private async callInternal(
+    url: string,
+    method: "GET" | "POST" | "PATCH",
+    token: string,
+    body?: unknown,
+    options: { allowDuringShutdown?: boolean } = {}
+  ): Promise<unknown> {
+    if (!options.allowDuringShutdown) this.throwIfShuttingDown();
+    const timeoutSignal = AbortSignal.timeout(5_000);
     const response = await this.fetchImpl(url, {
       method,
-      headers: { authorization: `Bearer ${this.options.internalServiceToken}`, "content-type": "application/json" },
-      body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
-      signal: AbortSignal.timeout(5_000)
+      headers: {
+        ...createInternalAuthorizationHeaders("agent-service", token),
+        "content-type": "application/json"
+      },
+      body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
+      signal: options.allowDuringShutdown
+        ? timeoutSignal
+        : AbortSignal.any([this.shutdownController.signal, timeoutSignal])
     });
+    if (!options.allowDuringShutdown) this.throwIfShuttingDown();
     const payload = (await response.json()) as { data?: unknown };
     if (!response.ok) throw new Error(`Internal dependency returned status ${response.status}`);
     return payload.data;
   }
 
-  private emitAudit(
-    tenantId: string,
-    eventType: string,
-    entityType: string,
-    entityId: string,
-    metadata: Record<string, unknown>
-  ): void {
-    void this.fetchImpl(`${this.options.auditUrl}/v1/audit/events`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${this.options.internalServiceToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ tenantId, actorId: "agent:SOFIA", eventType, entityType, entityId, metadata }),
-      signal: AbortSignal.timeout(2_000)
-    }).catch(() => undefined);
+  private throwIfShuttingDown(): void {
+    this.shutdownController.signal.throwIfAborted();
   }
 }
 
@@ -1162,19 +1302,31 @@ class RetryableSofiaError extends Error {
   }
 }
 
+class SofiaShutdownError extends Error {
+  constructor() {
+    super("SOFIA runtime is shutting down");
+    this.name = "SofiaShutdownError";
+  }
+}
+
 export function registerSofiaReadinessRoute(
   app: Parameters<RouteRegistrar>[0],
   options: {
     db: DatabaseClient;
     llm: LlmProvider;
-    internalServiceToken: string;
+    integrationToken?: string;
+    /** Test-only compatibility; production never falls back to this shared credential. */
+    internalServiceToken?: string;
     workerEnabled: boolean;
     runtime: Pick<SofiaRuntime, "isRunning">;
   }
 ): void {
+  const integrationToken =
+    options.integrationToken ?? (isCiDeploymentEnvironment(process.env) ? options.internalServiceToken : undefined);
   app.get("/internal/v1/tenants/:tenantId/sofia/readiness", async (request, reply) => {
-    if (!hasInternalToken(request.headers.authorization, options.internalServiceToken)) {
-      return reply.code(401).send({ data: { error: "Internal authentication required" }, requestId: request.id });
+    const authError = validateInternalAuthorization(request.headers, { "integration-service": integrationToken });
+    if (authError) {
+      return reply.code(authError.statusCode).send({ data: { error: authError.message }, requestId: request.id });
     }
     const tenantId = z
       .string()
@@ -1847,9 +1999,7 @@ function sanitizeError(error: unknown): string {
     .slice(0, 200);
 }
 
-function hasInternalToken(authorization: string | undefined, expected: string): boolean {
-  if (!authorization?.startsWith("Bearer ")) return false;
-  const supplied = Buffer.from(authorization.slice(7).trim());
-  const target = Buffer.from(expected);
-  return supplied.length === target.length && timingSafeEqual(supplied, target);
+function requireWorkloadCredential(value: string | undefined, variableName: string): string {
+  if (!value) throw new Error(`${variableName} is required for the SOFIA runtime`);
+  return value;
 }

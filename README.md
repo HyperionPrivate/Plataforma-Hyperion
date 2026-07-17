@@ -1,73 +1,127 @@
 # Plataforma Hyperion
 
-Base de producto para Hyperion con arquitectura de microservicios. Esta carpeta es la superficie de desarrollo real; los documentos viejos quedan solo como referencia.
+Hyperion es una plataforma multiproducto para construir y operar soluciones de automatización, inteligencia
+artificial y gestión de procesos sobre un núcleo común. Su objetivo es que cada producto pueda evolucionar y
+desplegarse con contratos, datos y operación claramente delimitados, sin convertir la plataforma completa en un
+monolito.
 
-## Que contiene
+Este monorepo TypeScript es la fuente de verdad versionada para el código, la infraestructura local y las
+decisiones arquitectónicas de la plataforma.
 
-- Gateway HTTP para exponer la plataforma.
-- Servicios separados para identidad, tenants, agentes, flujos, conocimiento, integraciones y auditoria.
-- Contratos compartidos TypeScript/Zod.
-- PostgreSQL como almacenamiento inicial.
-- Consola web operativa para ver estado real de servicios.
-- Docker Compose listo para variables reales de produccion.
-- Canal temporal WhatsApp Web por QR y orquestacion durable de SOFIA sobre la agenda interna.
+## Propósito y productos
 
-## Comandos
+El núcleo de Hyperion proporciona acceso, tenants, gateway, auditoría, integraciones, conocimiento, flujos de
+prompts y una consola operativa compartida. Sobre ese núcleo viven dos productos de software con límites propios:
+
+- **PULSO IRIS**: agenda, conversaciones, operación y automatización para atención al cliente. **SOFÍA** es su
+  agente conversacional y de ejecución controlada; opera en un contexto técnico separado, pero no es un producto
+  comercial independiente.
+- **LUMEN**: flujos clínicos asistidos, con revisión humana y datos sintéticos en su demostración actual.
+
+Canales e integraciones son capacidades compartidas de la plataforma. La consultoría y otros servicios
+profesionales pertenecen al portafolio comercial, pero no se modelan como microservicios.
+
+La plataforma está diseñada para incorporar nuevos productos mediante contratos HTTP o eventos versionados,
+propiedad explícita de datos y despliegues por servicio.
+
+## Arquitectura actual
+
+- Gateway HTTP como entrada pública prevista, sin dependencia de arranque sobre los productos.
+- Diez runtimes de servicio y una consola web, con targets Docker independientes.
+- Contratos compartidos TypeScript/Zod, validaciones de contratos y controles arquitectónicos en CI.
+- PostgreSQL compartido como etapa de transición: las migraciones validan identidades `NOLOGIN` y privilegios
+  por contexto antes de que un bootstrap transaccional active los ocho roles de servicio.
+- Outbox/inbox en los handoffs durables implementados: mensajes inbound, resultados de entrega Channel → PULSO,
+  procesamiento PULSO → SOFÍA y auditorías de Channel, PULSO y SOFÍA → Audit. PULSO encola la auditoría
+  dentro de la misma transacción que la mutación relevante y Audit aplica el evento con inbox idempotente.
+- LUMEN con esquema, readiness, proyecciones, inbox y outbox propios, sin SQL de runtime sobre Access o PULSO.
+- Runtimes con readiness HTTP real, cierre drenado y confianza de proxy desactivada salvo IP/CIDR explícito.
+- Llamadas HTTP internas autenticadas por vínculo productor→consumidor: cada receptor valida conjuntamente la
+  identidad `x-hyperion-caller` y una credencial exclusiva de ese vínculo, sin token global reutilizable.
+- Barreras de CI sobre SQL literal de runtimes, claves foráneas, objetos declarados y acoplamientos de arranque, y
+  smokes del stack base y del overlay JetStream. Los cuerpos PL/pgSQL requieren revisión manual adicional.
+
+> **Madurez arquitectónica:** Hyperion está en una migración incremental hacia microservicios autónomos. El
+> clúster PostgreSQL y la cadena principal de migraciones todavía son compartidos, y existe deuda heredada
+> registrada en el baseline arquitectónico.
+
+El transporte predeterminado de eventos durables sigue siendo HTTP. El overlay JetStream es opt-in y actualmente
+se evalúa como piloto de un nodo; no representa alta disponibilidad ni debe habilitarse en producción sin
+réplicas, TLS interno, observabilidad, redrive auditado y recuperación probada. Esta limitación describe un
+componente concreto y no la finalidad general de la plataforma.
+
+## Estructura del repositorio
+
+| Ruta        | Responsabilidad                                       |
+| ----------- | ----------------------------------------------------- |
+| `apps/`     | Gateway y consola web.                                |
+| `services/` | Runtimes de dominio y adaptadores.                    |
+| `packages/` | Contratos y capacidades técnicas compartidas.         |
+| `infra/`    | Docker Compose, imágenes y configuración de NATS.     |
+| `scripts/`  | Controles arquitectónicos, pruebas E2E y operaciones. |
+| `docs/`     | Arquitectura, decisiones y procedimientos operativos. |
+
+## Desarrollo
+
+Requisitos:
+
+- Node.js 22 o superior.
+- pnpm 11.7 mediante Corepack.
+- Docker con Docker Compose para el stack completo.
 
 ```bash
-pnpm install
+corepack enable
+pnpm install --frozen-lockfile
 pnpm check
 pnpm dev:gateway
+pnpm dev:services
 pnpm dev:web
 ```
 
-Para levantar todo con contenedores:
+Para preparar el archivo local de entorno:
 
 ```bash
-copy .env.example .env
+# Bash
+cp .env.example .env
+```
+
+```powershell
+# PowerShell
+Copy-Item .env.example .env
+```
+
+Antes de iniciar Compose se deben sustituir todos los placeholders, incluidos el secreto administrador, las
+credenciales HTTP separadas por vínculo `*_TO_*_TOKEN`, `WHATSAPP_PHONE_HASH_KEY` y las contraseñas PostgreSQL
+de servicio. Ningún valor puede reutilizarse para otro propósito y las credenciales reales nunca se guardan en
+Git.
+
+```bash
 docker compose --env-file .env -f infra/docker-compose.yml up --build
 ```
 
-No se deben guardar credenciales reales en Git.
+Compose hace cumplir la secuencia `migrations` → `db-role-bootstrap` → runtimes con base de datos. El stack base
+usa el transporte HTTP reversible y no incluye NATS. La activación y el ensayo aislado de JetStream están
+documentados por separado; el overlay continúa siendo un piloto, aunque CI también comprueba que puede
+construirse y arrancar.
 
-## Piloto WhatsApp + SOFIA
+## Documentación
 
-El adaptador `whatsapp_web_test` esta deshabilitado por defecto. Requiere configurar fuera de Git
-`DEEPSEEK_API_KEY`, `WHATSAPP_TEST_ALLOWED_NUMBERS` e `INTERNAL_SERVICE_TOKEN`; el numero solo se
-acepta desde la allowlist. El QR existe exclusivamente en memoria y la sesion de Linked Devices se
-guarda en el volumen privado `whatsapp_sessions`. Antes de intentar PostgreSQL, cada inbound aceptado
-y cada receipt de entrega se retiene en una spool cifrada AES-256-GCM dentro del mismo volumen. La
-spool esta acotada por cantidad y bytes; nunca expone cuerpos en logs o telemetria y nunca los guarda
-sin cifrar. Conserva el `externalMessageId` para
-que el indice unico de PostgreSQL haga seguro el replay tras una caida o reinicio.
+- [Productos y estados de cobertura](docs/products/README.md)
+- [Especificación de PULSO IRIS y SOFÍA](docs/products/PULSO-IRIS.md)
+- [Especificación de LUMEN](docs/products/LUMEN.md)
+- [Matriz de trazabilidad de requisitos](docs/products/REQUIREMENTS-TRACEABILITY.md)
+- [Arquitectura general](docs/ARCHITECTURE.md)
+- [Evolución hacia microservicios autónomos](docs/architecture/AUTONOMOUS-MICROSERVICES.md)
+- [Decisiones arquitectónicas](docs/architecture/decisions/README.md)
+- [Roles PostgreSQL por contexto](docs/architecture/POSTGRESQL-SERVICE-ROLES.md)
+- [Operación y producción](docs/PRODUCTION.md)
+- [Aislamiento NATS y JetStream](infra/nats/README.md)
+- [Canal privado de WhatsApp](services/whatsapp-channel-service/README.md)
 
-La entrega no se presenta como exactamente-una-vez en el borde no oficial de WhatsApp: una vez que el
-evento entra en la spool, el canal lo reprocesa al menos una vez y PostgreSQL evita el doble efecto. Si
-la spool no puede retener un evento, el canal intenta una proyeccion directa idempotente y se degrada
-sin reconectar automaticamente. Si tambien falla PostgreSQL, no existe una copia recuperable tras
-reinicio; este borde se reporta como perdida potencial y no como entrega garantizada. Un outbound
-`sent` solo prueba que Baileys devolvio un identificador; cambia a
-`delivered` o `read` unicamente al recibir evidencia del proveedor.
+## Alcance operativo
 
-Los receipts que se adelantan a la asociacion del identificador quedan en una cuarentena PostgreSQL
-sin cuerpos (maximo 2000 identidades por tenant con todos sus estados, retencion de 7 dias desde la
-evidencia mas reciente) y se reconcilian atomicamente al marcar el outbound como enviado.
+El repositorio contiene software desplegable y procedimientos versionados, pero no demuestra por sí solo que un
+commit determinado esté activo en un ambiente. El estado de cada despliegue debe identificarse mediante su
+commit, imágenes y registro operativo correspondiente.
 
-Controles operativos (los valores son limites, no secretos):
-
-- `WHATSAPP_INBOUND_PERSIST_MAX_ATTEMPTS` y `WHATSAPP_INBOUND_PERSIST_RETRY_BASE_DELAY_MS` controlan
-  el reintento inmediato con el mismo evento.
-- `WHATSAPP_INBOUND_PERSIST_ATTEMPT_TIMEOUT_MS` impide que una proyeccion bloqueada deje el canal en
-  estado listo indefinidamente.
-- `WHATSAPP_INBOUND_SPOOL_MAX_RECORDS` y `WHATSAPP_INBOUND_SPOOL_MAX_BYTES` limitan la spool durable.
-- `WHATSAPP_PHONE_HASH_KEY` debe mantenerse estable mientras existan entradas pendientes, porque
-  tambien deriva la clave de cifrado de la spool.
-
-La consola usa estas rutas tenant-scoped:
-
-- `GET|POST /v1/tenants/:tenantId/integrations/whatsapp/...`
-- `GET /v1/tenants/:tenantId/pulso-iris/sofia/readiness`
-
-Solo `admin` conecta, consulta el QR o desconecta. `admin` y `coordinator` pueden leer estado y
-readiness. Para rollback, deshabilitar `WHATSAPP_WEB_TEST_ENABLED`, revocar/desconectar el dispositivo
-y detener solo `whatsapp-channel-service`; la agenda, conversaciones y auditoria permanecen intactas.
+No se versionan secretos, sesiones de proveedores, audio, datos clínicos reales ni backups.

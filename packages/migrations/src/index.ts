@@ -1,8 +1,11 @@
 import { fileURLToPath } from "node:url";
+import { assertNoPlaceholderSecrets } from "@hyperion/config";
 import { createLogger } from "@hyperion/logger";
 import { runMigrations } from "./runner.js";
 
 const logger = createLogger("migrations");
+
+assertNoPlaceholderSecrets(process.env);
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
 if (!databaseUrl) {

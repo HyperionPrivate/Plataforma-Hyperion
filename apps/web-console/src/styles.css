@@ -1,6 +1,5 @@
-/* Linea grafica CEDCO / PULSO IRIS (base_comun.md seccion 2):
-   fondo blanco, superficies gris muy claro, verde calido primario,
-   tipografia sans limpia, bordes 12px, sombras muy suaves. */
+/* Paleta de PULSO IRIS: fondo blanco, superficies gris muy claro,
+   verde calido primario, tipografia sans limpia, bordes 12px y sombras suaves. */
 :root {
   --green: #2f9e6e;
   --green-dark: #1e6b4a;

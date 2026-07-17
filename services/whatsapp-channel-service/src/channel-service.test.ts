@@ -21,6 +21,112 @@ import {
 const TENANT_ID = "00000000-0000-4000-8000-000000000001";
 
 describe("WhatsAppChannelService", () => {
+  it("drains an active outbound iteration, stops admission, and closes the provider once", async () => {
+    const repository = new MemoryRepository();
+    const provider = new FakeProvider();
+    const claimed = deferred<ClaimedOutboundMessage | undefined>();
+    const claimOutbound = vi.spyOn(repository, "claimOutbound").mockReturnValue(claimed.promise);
+    const close = vi.spyOn(provider, "close");
+    const service = new WhatsAppChannelService(provider, repository, 60_000);
+
+    const drain = service.drainOutbound();
+    expect(claimOutbound).toHaveBeenCalledTimes(1);
+    const firstStop = service.stop();
+    expect(service.stop()).toBe(firstStop);
+    let stopped = false;
+    void firstStop.then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(close).toHaveBeenCalledTimes(1);
+
+    claimed.resolve(outboundMessage("drained-before-close"));
+    await Promise.all([drain, firstStop]);
+
+    expect(repository.sent).toEqual(["drained-before-close"]);
+    expect(claimOutbound).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    await service.drainOutbound();
+    expect(claimOutbound).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for an active session restore before closing the provider", async () => {
+    const repository = new MemoryRepository();
+    const provider = new FakeProvider();
+    const restorableTenants = deferred<string[]>();
+    const restored = deferred<void>();
+    vi.spyOn(repository, "listRestorableTenantIds").mockReturnValue(restorableTenants.promise);
+    const restore = vi.spyOn(provider, "restore").mockReturnValue(restored.promise);
+    const close = vi.spyOn(provider, "close");
+    const service = new WhatsAppChannelService(provider, repository, 60_000);
+
+    const start = service.start();
+    const stop = service.stop();
+    expect(service.stop()).toBe(stop);
+    expect(close).toHaveBeenCalledTimes(1);
+
+    restorableTenants.resolve([TENANT_ID]);
+    await Promise.resolve();
+    expect(restore).toHaveBeenCalledWith([TENANT_ID]);
+    expect(close).toHaveBeenCalledTimes(1);
+
+    restored.resolve();
+    await Promise.all([start, stop]);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a provider send that does not settle during shutdown", async () => {
+    vi.useFakeTimers();
+    try {
+      const repository = new MemoryRepository();
+      const provider = new FakeProvider();
+      repository.claimedOutbound.push(outboundMessage("hung-provider-send"));
+      provider.sendText = vi.fn(() => new Promise<{ providerMessageId: string; sentAt: Date }>(() => undefined));
+      const service = new WhatsAppChannelService(provider, repository, 60_000, undefined, 5_000, 25);
+
+      const drain = service.drainOutbound();
+      await vi.waitFor(() => expect(provider.sendText).toHaveBeenCalledTimes(1));
+      const stopping = service.stop();
+      await vi.advanceTimersByTimeAsync(25);
+      await Promise.all([drain, stopping]);
+
+      expect(repository.uncertain).toEqual(["hung-provider-send"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for provider-triggered database projections before completing stop", async () => {
+    const repository = new MemoryRepository();
+    const provider = new FakeProvider();
+    const persisted = deferred<PersistInboundResult>();
+    vi.spyOn(repository, "persistInbound").mockReturnValue(persisted.promise);
+    const close = vi.spyOn(provider, "close");
+    const service = new WhatsAppChannelService(provider, repository, 60_000);
+    await service.start();
+
+    const receiving = provider.receive(inboundMessage());
+    const stopping = service.stop();
+    let stopped = false;
+    void stopping.then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(stopped).toBe(false);
+
+    persisted.resolve({
+      eventId: "inbound-projection",
+      threadBindingId: "00000000-0000-4000-8000-000000000002",
+      inserted: true
+    });
+    await Promise.all([receiving, stopping]);
+    expect(stopped).toBe(true);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates inbound provider redelivery through the durable repository", async () => {
     const repository = new MemoryRepository();
     const provider = new FakeProvider();
@@ -53,8 +159,7 @@ describe("WhatsAppChannelService", () => {
   it("retries only known pre-send failures and reconciles an uncertain provider outcome", async () => {
     const repository = new MemoryRepository();
     const provider = new FakeProvider();
-    const emitAudit = vi.fn();
-    const service = new WhatsAppChannelService(provider, repository, 60_000, emitAudit);
+    const service = new WhatsAppChannelService(provider, repository, 60_000);
     repository.claimedOutbound.push(outboundMessage("ok"), outboundMessage("retry"), outboundMessage("uncertain"));
     provider.sendText = vi
       .fn()
@@ -67,9 +172,6 @@ describe("WhatsAppChannelService", () => {
     expect(repository.sent).toEqual(["ok"]);
     expect(repository.failed).toEqual([{ id: "retry", code: "provider_not_ready" }]);
     expect(repository.uncertain).toEqual(["uncertain"]);
-    expect(emitAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: "channel.message.sent", entityId: "00000000-0000-4000-8000-000000000003" })
-    );
   });
 
   it("retries session restoration after a transient repository failure", async () => {
@@ -78,7 +180,7 @@ describe("WhatsAppChannelService", () => {
     const provider = new FakeProvider();
     const runtimeError = vi.fn();
     repository.restoreFailures = 1;
-    const service = new WhatsAppChannelService(provider, repository, 60_000, undefined, runtimeError, 25);
+    const service = new WhatsAppChannelService(provider, repository, 60_000, runtimeError, 25);
 
     await service.start();
     expect(provider.restoreCalls).toBe(0);
@@ -267,4 +369,12 @@ function outboundMessage(id: string): ClaimedOutboundMessage {
     maxAttempts: 3,
     workerId: "channel-test-worker"
   };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
 }

@@ -1,13 +1,33 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { envelope, tenantIdSchema } from "@hyperion/contracts";
-import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import {
+  HttpOutboxDispatcher,
+  JetStreamOutboxDispatcher,
+  readNatsAuthentication,
+  type NatsAuthentication
+} from "@hyperion/durable-events";
+import {
+  createInternalAuthorizationHeaders,
+  isRestrictedDeploymentEnvironment,
+  readInternalCredential,
+  validateInternalAuthorization,
+  type InternalCredentialMap,
+  type RouteRegistrar,
+  type ServiceContext
+} from "@hyperion/service-runtime";
 import QRCode from "qrcode";
 import { z } from "zod";
 import { BaileysWhatsAppWebTestProvider } from "./baileys-provider.js";
-import { PostgresChannelRepository } from "./channel-repository.js";
+import { PostgresChannelAuditOutbox } from "./channel-audit-outbox.js";
+import { PostgresChannelDeliveryOutbox } from "./channel-delivery-outbox.js";
+import { PostgresChannelOutbox } from "./channel-outbox.js";
+import { PostgresChannelRepository, OutboundEnqueueError } from "./channel-repository.js";
 import { WhatsAppChannelService } from "./channel-service.js";
+import { registerChannelEventPositionRoute } from "./event-position-routes.js";
+import { registerThreadBindRoutes } from "./thread-bind-routes.js";
 import { readWhatsAppProviderConfig } from "./provider-config.js";
 import { WhatsAppProviderDisabledError } from "./types.js";
+import { createPulsoDeliveryClient } from "./pulso-delivery-client.js";
 
 const tenantParamsSchema = z.object({ tenantId: tenantIdSchema });
 const eventParamsSchema = tenantParamsSchema.extend({ eventId: z.string().uuid() });
@@ -33,33 +53,33 @@ const failureSchema = completionSchema.extend({
 
 export interface ChannelRouteDependencies {
   channel?: WhatsAppChannelService;
-  internalServiceToken?: string;
+  integrationCredential?: string;
+  pulsoCredential?: string;
+  sofiaCredential?: string;
 }
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  const durableOutbox = readDurableOutboxConfiguration(process.env);
+  const channelToPulsoToken = readInternalCredential(process.env, "CHANNEL_TO_PULSO_TOKEN");
+  const channelToAuditToken = readInternalCredential(process.env, "CHANNEL_TO_AUDIT_TOKEN");
   const dependencies: ChannelRouteDependencies = {
-    internalServiceToken: context.config.internalServiceToken
+    integrationCredential: readInternalCredential(process.env, "INTEGRATION_TO_CHANNEL_TOKEN"),
+    pulsoCredential: readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN"),
+    sofiaCredential: readInternalCredential(process.env, "SOFIA_TO_CHANNEL_TOKEN")
   };
   if (context.db) {
     const provider = new BaileysWhatsAppWebTestProvider(readWhatsAppProviderConfig(), undefined, (reason, metadata) =>
       context.logger.info("whatsapp channel diagnostic", { reason, ...metadata })
     );
-    const repository = new PostgresChannelRepository(context.db);
-    const channel = new WhatsAppChannelService(
-      provider,
-      repository,
-      500,
-      (event) => {
-        const token = context.config.internalServiceToken;
-        if (!token) return;
-        void fetch(`${process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086"}/v1/audit/events`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-          body: JSON.stringify({ ...event, actorId: "agent:SOFIA" }),
-          signal: AbortSignal.timeout(2_000)
-        }).catch(() => context.logger.warn("whatsapp audit emission failed", { eventType: event.eventType }));
-      },
-      (errorCode) => context.logger.warn("whatsapp runtime operation deferred", { errorCode })
+    const repository = new PostgresChannelRepository(
+      context.db,
+      createPulsoDeliveryClient({
+        pulsoIrisUrl: process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088",
+        credential: channelToPulsoToken ?? ""
+      })
+    );
+    const channel = new WhatsAppChannelService(provider, repository, 500, (errorCode) =>
+      context.logger.warn("whatsapp runtime operation deferred", { errorCode })
     );
     dependencies.channel = channel;
     try {
@@ -70,9 +90,221 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       });
     }
     app.addHook("onClose", async () => channel.stop());
+
+    if (durableOutbox.transport === "jetstream" || channelToPulsoToken) {
+      const workerId = `channel-outbox-${randomUUID()}`;
+      const outbox = new PostgresChannelOutbox(
+        context.db,
+        workerId,
+        process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088"
+      );
+      if (durableOutbox.enabled) {
+        const dispatcher =
+          durableOutbox.transport === "jetstream"
+            ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+                workerId,
+                servers: durableOutbox.natsUrl,
+                ...durableOutbox.authentication,
+                connectionName: workerId,
+                subjectPrefix: "hyperion.events",
+                expectedStream: "HYPERION_EVENTS",
+                claim: (limit) => outbox.claim(limit),
+                complete: (eventId) => outbox.complete(eventId),
+                fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                connectTimeoutMs: 5_000,
+                publishTimeoutMs: 5_000
+              })
+            : new HttpOutboxDispatcher<Record<string, unknown>>({
+                workerId,
+                internalToken: channelToPulsoToken!,
+                fetch: createWorkloadFetch("whatsapp-channel-service", channelToPulsoToken!),
+                claim: (limit) => outbox.claim(limit),
+                complete: (eventId) => outbox.complete(eventId),
+                fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                timeoutMs: 5_000
+              });
+        app.addHook("onClose", async () => dispatcher.stop());
+        if (dispatcher instanceof JetStreamOutboxDispatcher) {
+          await dispatcher.initialize();
+          context.registerReadinessCheck?.({
+            name: "jetstream_channel_publisher",
+            check: () => dispatcher.checkReadiness()
+          });
+        }
+        dispatcher.start();
+      }
+    }
+
+    if (durableOutbox.transport === "jetstream" || channelToPulsoToken) {
+      const deliveryWorkerId = `channel-delivery-outbox-${randomUUID()}`;
+      const deliveryOutbox = new PostgresChannelDeliveryOutbox(
+        context.db,
+        deliveryWorkerId,
+        process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088"
+      );
+      if (durableOutbox.enabled) {
+        const deliveryDispatcher =
+          durableOutbox.transport === "jetstream"
+            ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+                workerId: deliveryWorkerId,
+                servers: durableOutbox.natsUrl,
+                ...durableOutbox.authentication,
+                connectionName: deliveryWorkerId,
+                subjectPrefix: "hyperion.events",
+                expectedStream: "HYPERION_EVENTS",
+                claim: (limit) => deliveryOutbox.claim(limit),
+                complete: (eventId) => deliveryOutbox.complete(eventId),
+                fail: (eventId, errorCode) => deliveryOutbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                connectTimeoutMs: 5_000,
+                publishTimeoutMs: 5_000
+              })
+            : new HttpOutboxDispatcher<Record<string, unknown>>({
+                workerId: deliveryWorkerId,
+                internalToken: channelToPulsoToken!,
+                fetch: createWorkloadFetch("whatsapp-channel-service", channelToPulsoToken!),
+                claim: (limit) => deliveryOutbox.claim(limit),
+                complete: (eventId) => deliveryOutbox.complete(eventId),
+                fail: (eventId, errorCode) => deliveryOutbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                timeoutMs: 5_000
+              });
+        app.addHook("onClose", async () => deliveryDispatcher.stop());
+        if (deliveryDispatcher instanceof JetStreamOutboxDispatcher) {
+          await deliveryDispatcher.initialize();
+          context.registerReadinessCheck?.({
+            name: "jetstream_channel_delivery_publisher",
+            check: () => deliveryDispatcher.checkReadiness()
+          });
+        }
+        deliveryDispatcher.start();
+      }
+    }
+
+    if (durableOutbox.transport === "jetstream" || channelToAuditToken) {
+      const auditWorkerId = `channel-audit-outbox-${randomUUID()}`;
+      const auditOutbox = new PostgresChannelAuditOutbox(
+        context.db,
+        auditWorkerId,
+        process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086"
+      );
+      if (durableOutbox.enabled) {
+        const auditDispatcher =
+          durableOutbox.transport === "jetstream"
+            ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+                workerId: auditWorkerId,
+                servers: durableOutbox.natsUrl,
+                ...durableOutbox.authentication,
+                connectionName: auditWorkerId,
+                subjectPrefix: "hyperion.events",
+                expectedStream: "HYPERION_EVENTS",
+                claim: (limit) => auditOutbox.claim(limit),
+                complete: (eventId) => auditOutbox.complete(eventId),
+                fail: (eventId, errorCode) => auditOutbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                connectTimeoutMs: 5_000,
+                publishTimeoutMs: 5_000
+              })
+            : new HttpOutboxDispatcher<Record<string, unknown>>({
+                workerId: auditWorkerId,
+                internalToken: channelToAuditToken!,
+                fetch: createWorkloadFetch("whatsapp-channel-service", channelToAuditToken!),
+                claim: (limit) => auditOutbox.claim(limit),
+                complete: (eventId) => auditOutbox.complete(eventId),
+                fail: (eventId, errorCode) => auditOutbox.fail(eventId, errorCode),
+                batchSize: 10,
+                intervalMs: 750,
+                timeoutMs: 5_000
+              });
+        app.addHook("onClose", async () => auditDispatcher.stop());
+        if (auditDispatcher instanceof JetStreamOutboxDispatcher) {
+          await auditDispatcher.initialize();
+          context.registerReadinessCheck?.({
+            name: "jetstream_channel_audit_publisher",
+            check: () => auditDispatcher.checkReadiness()
+          });
+        }
+        auditDispatcher.start();
+      }
+    }
   }
   registerChannelRoutes(app, dependencies, context);
+  registerChannelEventPositionRoute(app, context, dependencies.pulsoCredential);
+  registerThreadBindRoutes(app, context, dependencies.pulsoCredential);
 };
+
+type DurableOutboxConfiguration =
+  | { readonly transport: "http"; readonly enabled: boolean }
+  | {
+      readonly transport: "jetstream";
+      readonly enabled: boolean;
+      readonly natsUrl: string;
+      readonly authentication: NatsAuthentication;
+    };
+
+export function readDurableOutboxConfiguration(env: NodeJS.ProcessEnv): DurableOutboxConfiguration {
+  const transport = env.DURABLE_EVENT_TRANSPORT?.trim() || "http";
+  if (transport !== "http" && transport !== "jetstream") {
+    throw new Error("DURABLE_EVENT_TRANSPORT must be either http or jetstream");
+  }
+
+  const globallyEnabled = env.DURABLE_OUTBOX_ENABLED !== "false";
+  if (transport === "http") {
+    return {
+      transport,
+      enabled: globallyEnabled && env.DURABLE_HTTP_OUTBOX_ENABLED !== "false"
+    };
+  }
+
+  return {
+    transport,
+    enabled: globallyEnabled,
+    natsUrl: requireCredentialFreeNatsUrl(env.NATS_URL),
+    authentication: readNatsAuthentication(
+      { authToken: env.NATS_AUTH_TOKEN, username: env.NATS_USERNAME, password: env.NATS_PASSWORD },
+      {
+        required: true,
+        minimumSecretLength: 24,
+        serverConfigurationSafe: true,
+        allowToken: !isRestrictedDeploymentEnvironment(env)
+      }
+    )!
+  };
+}
+
+function requireCredentialFreeNatsUrl(value: string | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) {
+    throw new Error("NATS_URL is required when DURABLE_EVENT_TRANSPORT=jetstream");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error("NATS_URL must be a valid credential-free URL");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("NATS_URL must not contain credentials");
+  }
+  if (
+    (parsed.protocol !== "nats:" && parsed.protocol !== "tls:") ||
+    !parsed.hostname ||
+    parsed.pathname !== "" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("NATS_URL must be a nats: or tls: endpoint without path, query, or hash");
+  }
+  return normalized;
+}
 
 export function registerChannelRoutes(
   app: Parameters<RouteRegistrar>[0],
@@ -81,7 +313,10 @@ export function registerChannelRoutes(
 ): void {
   app.addHook("preHandler", async (request, reply) => {
     if (!request.url.startsWith("/internal/")) return;
-    const authError = validateInternalToken(dependencies.internalServiceToken, request.headers.authorization);
+    const authError = validateInternalAuthorization(
+      request.headers,
+      credentialsForChannelRoute(request.routeOptions.url, dependencies)
+    );
     if (authError) {
       await reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
     }
@@ -172,7 +407,19 @@ export function registerChannelRoutes(
         idempotencyKey: body.data.idempotencyKey
       });
       return reply.code(result.inserted ? 202 : 200).send(envelope(result, request.id));
-    } catch {
+    } catch (error) {
+      const reason =
+        error instanceof OutboundEnqueueError
+          ? error.reason
+          : error instanceof Error
+            ? error.message
+            : "outbound_enqueue_failed";
+      context?.logger.warn("whatsapp outbound enqueue rejected", {
+        tenantId: params.data.tenantId,
+        threadBindingId: body.data.threadBindingId,
+        messageId: body.data.messageId,
+        reason
+      });
       return reply.code(404).send(envelope({ error: "Thread or message not found" }, request.id));
     }
   });
@@ -222,22 +469,46 @@ export function registerChannelRoutes(
   });
 }
 
-function validateInternalToken(
-  configuredToken: string | undefined,
-  authorization: string | undefined
-): { statusCode: number; message: string } | undefined {
-  if (!configuredToken) return { statusCode: 503, message: "INTERNAL_SERVICE_TOKEN is required" };
-  const expected = `Bearer ${configuredToken}`;
-  if (!authorization || !constantTimeEquals(authorization, expected)) {
-    return { statusCode: 401, message: "Unauthorized" };
+function credentialsForChannelRoute(
+  routeUrl: string | undefined,
+  dependencies: ChannelRouteDependencies
+): InternalCredentialMap {
+  if (
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/messages" ||
+    routeUrl === "/internal/v1/whatsapp/inbound/claim" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/inbound/:eventId/complete" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/inbound/:eventId/fail"
+  ) {
+    return { "agent-service": dependencies.sofiaCredential };
   }
-  return undefined;
+  if (
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/status" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/connect" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/qr" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/disconnect"
+  ) {
+    return { "integration-service": dependencies.integrationCredential };
+  }
+  if (routeUrl === "/internal/v1/tenants/:tenantId/channel-inbound/:eventId/stream-position") {
+    return { "pulso-iris-service": dependencies.pulsoCredential };
+  }
+  if (
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/threads/:threadBindingId" ||
+    routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/threads/:threadBindingId/bind"
+  ) {
+    return { "pulso-iris-service": dependencies.pulsoCredential };
+  }
+  return {};
 }
 
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+function createWorkloadFetch(caller: string, token: string): typeof fetch {
+  return (input, init) => {
+    const headers = new Headers(init?.headers);
+    for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
+      headers.set(name, value);
+    }
+    return fetch(input, { ...init, headers });
+  };
 }
 
 function requireChannel(

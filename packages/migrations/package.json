@@ -6,12 +6,15 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "bootstrap:roles": "node dist/bootstrap-roles.js",
+    "lumen:n1-compat": "node dist/lumen-n-minus-one-compatibility.js",
     "migrate": "node dist/index.js",
     "seed:lumen-demo": "node dist/seed-lumen-demo.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@hyperion/config": "workspace:*",
     "@hyperion/logger": "workspace:*",
     "pg": "^8.14.0"
   }

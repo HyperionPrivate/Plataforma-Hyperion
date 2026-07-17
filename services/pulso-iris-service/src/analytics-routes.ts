@@ -2,8 +2,8 @@
 import type { RouteRegistrar } from "@hyperion/service-runtime";
 import { readUuidParam, requireTenantDb } from "./shared.js";
 
-// Parametros de negocio de referencia (base_comun.md): costo por interaccion
-// de call center vs costo operado por la plataforma. Se contrastan en Fase 0.
+// Parametros de referencia transitorios. Deben contrastarse y moverse a
+// configuracion por tenant antes de usarse como evidencia operacional.
 const BASELINE_COST_PER_INTERACTION_COP = 3500;
 const PLATFORM_COST_PER_INTERACTION_COP = 1899;
 const BASELINE_NO_SHOW_PCT = 18;

@@ -5,7 +5,14 @@ import {
   whatsappIntegrationStatusSchema,
   whatsappQrSchema
 } from "@hyperion/contracts";
-import type { RouteRegistrar } from "@hyperion/service-runtime";
+import {
+  createInternalAuthorizationHeaders,
+  readInternalCredential,
+  readOperatorAssertionKey,
+  validateOperatorAssertionContext,
+  validateInternalAuthorization,
+  type RouteRegistrar
+} from "@hyperion/service-runtime";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 const CHANNEL_TIMEOUT_MS = 5_000;
@@ -16,8 +23,14 @@ type OperatorRole = "admin" | "coordinator" | "advisor" | "auditor";
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const channelUrl = (process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089").replace(/\/$/, "");
   const agentUrl = (process.env.AGENT_SERVICE_URL ?? "http://localhost:8083").replace(/\/$/, "");
+  const channelToken = readInternalCredential(process.env, "INTEGRATION_TO_CHANNEL_TOKEN");
+  const sofiaToken = readInternalCredential(process.env, "INTEGRATION_TO_SOFIA_TOKEN");
+  const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_INTEGRATION_TOKEN");
+  const operatorAssertionKey = readOperatorAssertionKey(process.env);
 
-  app.get("/v1/integrations", async (request) => {
+  app.get("/v1/integrations", async (request, reply) => {
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    if (!requireOperatorRole(request, reply, ["admin"], operatorAssertionKey, null)) return;
     if (!context.db) return envelope([], request.id);
     const result = await context.db.query(`
       select id, tenant_id, provider, name, status, config, created_at, updated_at
@@ -29,12 +42,13 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.get("/v1/tenants/:tenantId/integrations/whatsapp/status", async (request, reply) => {
-    const tenantId = requireTenantAndRole(request, reply, ["admin", "coordinator"]);
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const tenantId = requireTenantAndRole(request, reply, ["admin", "coordinator"], operatorAssertionKey);
     if (!tenantId) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/status`,
       "GET",
-      context.config.internalServiceToken
+      channelToken
     );
     if (!response.ok) return sendUpstreamFailure(reply, request, response);
     const status = whatsappIntegrationStatusSchema.parse(response.data);
@@ -42,12 +56,13 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.post("/v1/tenants/:tenantId/integrations/whatsapp/connect", async (request, reply) => {
-    const tenantId = requireTenantAndRole(request, reply, ["admin"]);
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const tenantId = requireTenantAndRole(request, reply, ["admin"], operatorAssertionKey);
     if (!tenantId) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/connect`,
       "POST",
-      context.config.internalServiceToken
+      channelToken
     );
     if (!response.ok) return sendUpstreamFailure(reply, request, response);
     const status = whatsappIntegrationStatusSchema.parse(response.data);
@@ -55,7 +70,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.get("/v1/tenants/:tenantId/integrations/whatsapp/qr", async (request, reply) => {
-    const tenantId = requireTenantAndRole(request, reply, ["admin"]);
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const tenantId = requireTenantAndRole(request, reply, ["admin"], operatorAssertionKey);
     if (!tenantId) return;
     reply.header("cache-control", "no-store, private, max-age=0");
     reply.header("pragma", "no-cache");
@@ -63,19 +79,20 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/qr`,
       "GET",
-      context.config.internalServiceToken
+      channelToken
     );
     if (!response.ok) return sendUpstreamFailure(reply, request, response);
     return envelope(whatsappQrSchema.parse(response.data), request.id);
   });
 
   app.post("/v1/tenants/:tenantId/integrations/whatsapp/disconnect", async (request, reply) => {
-    const tenantId = requireTenantAndRole(request, reply, ["admin"]);
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const tenantId = requireTenantAndRole(request, reply, ["admin"], operatorAssertionKey);
     if (!tenantId) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/disconnect`,
       "POST",
-      context.config.internalServiceToken
+      channelToken
     );
     if (!response.ok) return sendUpstreamFailure(reply, request, response);
     const status = whatsappIntegrationStatusSchema.parse(response.data);
@@ -83,7 +100,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.get("/v1/tenants/:tenantId/pulso-iris/sofia/readiness", async (request, reply) => {
-    const tenantId = requireTenantAndRole(request, reply, ["admin", "coordinator"]);
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const tenantId = requireTenantAndRole(request, reply, ["admin", "coordinator"], operatorAssertionKey);
     if (!tenantId) return;
     if (!context.db) return reply.code(503).send(envelope({ error: "Database unavailable" }, request.id));
 
@@ -91,13 +109,13 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       callInternal(
         `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/status`,
         "GET",
-        context.config.internalServiceToken,
+        channelToken,
         READINESS_TIMEOUT_MS
       ),
       callInternal(
         `${agentUrl}/internal/v1/tenants/${tenantId}/sofia/readiness`,
         "GET",
-        context.config.internalServiceToken,
+        sofiaToken,
         READINESS_TIMEOUT_MS
       ),
       context.db.query<{
@@ -166,10 +184,18 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 };
 
+function requireGateway(request: FastifyRequest, reply: FastifyReply, token: string | undefined): boolean {
+  const failure = validateInternalAuthorization(request.headers, { "api-gateway": token });
+  if (!failure) return true;
+  void reply.code(failure.statusCode).send(envelope({ error: failure.message }, request.id));
+  return false;
+}
+
 function requireTenantAndRole(
   request: FastifyRequest,
   reply: FastifyReply,
-  allowedRoles: OperatorRole[]
+  allowedRoles: OperatorRole[],
+  operatorAssertionKey: string | undefined
 ): string | undefined {
   const params = request.params as { tenantId?: unknown };
   const tenantId = tenantIdSchema.safeParse(params.tenantId);
@@ -177,12 +203,28 @@ function requireTenantAndRole(
     void reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
     return undefined;
   }
+  if (!requireOperatorRole(request, reply, allowedRoles, operatorAssertionKey, tenantId.data)) return undefined;
+  return tenantId.data;
+}
+
+function requireOperatorRole(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  allowedRoles: OperatorRole[],
+  operatorAssertionKey: string | undefined,
+  expectedTenantId: string | null
+): OperatorRole | undefined {
+  const assertionFailure = validateOperatorAssertionContext(request.headers, operatorAssertionKey, expectedTenantId);
+  if (assertionFailure) {
+    void reply.code(assertionFailure.statusCode).send(envelope({ error: assertionFailure.message }, request.id));
+    return undefined;
+  }
   const role = readOperatorRole(request);
   if (!role || !allowedRoles.includes(role)) {
     void reply.code(403).send(envelope({ error: "Insufficient integration permissions" }, request.id));
     return undefined;
   }
-  return tenantId.data;
+  return role;
 }
 
 function readOperatorRole(request: FastifyRequest): OperatorRole | undefined {
@@ -207,7 +249,10 @@ async function callInternal(
   try {
     const response = await fetch(url, {
       method,
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      headers: {
+        ...createInternalAuthorizationHeaders("integration-service", token),
+        "content-type": "application/json"
+      },
       body: method === "POST" ? "{}" : undefined,
       signal: AbortSignal.timeout(timeoutMs)
     });

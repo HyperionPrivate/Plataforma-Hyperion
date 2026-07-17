@@ -7,7 +7,15 @@ import {
   operatorListSchema,
   operatorPatchSchema
 } from "@hyperion/contracts";
-import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import {
+  readInternalCredential,
+  readOperatorAssertionKey,
+  validateOperatorAssertionContext,
+  validateInternalAuthorization,
+  type RouteRegistrar,
+  type ServiceContext
+} from "@hyperion/service-runtime";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   generateSessionToken,
   hashPassword,
@@ -36,6 +44,9 @@ interface OperatorListRow {
 }
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_IDENTITY_TOKEN");
+  const operatorAssertionKey = readOperatorAssertionKey(process.env);
+
   if (context.db) {
     await ensureInitialAdmin(context);
   }
@@ -53,7 +64,10 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     );
   });
 
-  app.get("/v1/identity/operators", async (request) => {
+  app.get("/v1/identity/operators", async (request, reply) => {
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const auth = requireAdmin(request, operatorAssertionKey);
+    if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
     if (!context.db) {
       return envelope([], request.id);
     }
@@ -78,7 +92,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.post("/v1/identity/operators", async (request, reply) => {
-    const auth = requireAdmin(request.headers["x-operator-role"]);
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const auth = requireAdmin(request, operatorAssertionKey);
     if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
 
     if (!context.db) {
@@ -106,7 +121,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.patch("/v1/identity/operators/:operatorId", async (request, reply) => {
-    const auth = requireAdmin(request.headers["x-operator-role"]);
+    if (!requireGateway(request, reply, gatewayToken)) return;
+    const auth = requireAdmin(request, operatorAssertionKey);
     if (auth) return reply.code(auth.statusCode).send(envelope({ error: auth.message }, request.id));
 
     if (!context.db) {
@@ -260,6 +276,13 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 };
 
+function requireGateway(request: FastifyRequest, reply: FastifyReply, token: string | undefined): boolean {
+  const failure = validateInternalAuthorization(request.headers, { "api-gateway": token });
+  if (!failure) return true;
+  void reply.code(failure.statusCode).send(envelope({ error: failure.message }, request.id));
+  return false;
+}
+
 async function countOperators(context: ServiceContext): Promise<number> {
   if (!context.db) {
     return 0;
@@ -269,12 +292,22 @@ async function countOperators(context: ServiceContext): Promise<number> {
   return Number(result.rows[0]?.total ?? 0);
 }
 
-function requireAdmin(rawRole: string | string[] | undefined): { statusCode: number; message: string } | undefined {
-  const role = Array.isArray(rawRole) ? rawRole[0] : rawRole;
+function requireAdmin(
+  request: FastifyRequest,
+  assertionKey: string | undefined
+): { statusCode: number; message: string } | undefined {
+  if (assertionKey) {
+    const assertionFailure = validateOperatorAssertionContext(request.headers, assertionKey, null);
+    if (assertionFailure) return assertionFailure;
+  }
+
+  // Residual (documented): without GATEWAY_OPERATOR_ASSERTION_KEY, role headers
+  // remain forgeable by anyone holding GATEWAY_TO_IDENTITY_TOKEN.
+  const rawRole = request.headers["x-operator-role"];
+  const role = typeof rawRole === "string" ? rawRole : undefined;
   if (role !== "admin") {
     return { statusCode: 403, message: "Admin role required" };
   }
-
   return undefined;
 }
 

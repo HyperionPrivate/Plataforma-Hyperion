@@ -1,0 +1,69 @@
+# CI-only override for the final N-1 rollback rehearsal. It must never be used
+# for the initial N-1 boot because the service roles do not exist until the
+# current migrations and role bootstrap have completed.
+#
+# The old Compose model injected the PostgreSQL administrator URL into every
+# runtime. This override proves that the old images can at least start and
+# become ready with the current, workload-scoped identities instead.
+services:
+  identity-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_access:${ACCESS_DATABASE_PASSWORD:?ACCESS_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_access
+
+  tenant-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_access:${ACCESS_DATABASE_PASSWORD:?ACCESS_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_access
+
+  agent-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD:?SOFIA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_sofia
+
+  prompt-flow-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD:?SOFIA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_sofia
+
+  knowledge-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_knowledge:${KNOWLEDGE_DATABASE_PASSWORD:?KNOWLEDGE_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_knowledge
+
+  audit-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_audit:${AUDIT_DATABASE_PASSWORD:?AUDIT_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_audit
+
+  integration-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_integration:${INTEGRATION_DATABASE_PASSWORD:?INTEGRATION_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_integration
+
+  pulso-iris-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_pulso:${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_pulso
+
+  whatsapp-channel-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_channel:${CHANNEL_DATABASE_PASSWORD:?CHANNEL_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_channel
+
+  lumen-service:
+    environment:
+      DATABASE_URL: postgres://hyperion_lumen:${LUMEN_DATABASE_PASSWORD:?LUMEN_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+      EXPECTED_DATABASE_ROLE: hyperion_lumen
+      PGAPPNAME: ${LUMEN_N1_CLEANUP_SCOPE_ID:?LUMEN_N1_CLEANUP_SCOPE_ID is required}
+      ELEVENLABS_STT_TIMEOUT_MS: ${ELEVENLABS_STT_TIMEOUT_MS:-120000}
+      # The final rollback probe must enter the exact N-1 writer and remain
+      # in-flight without sending clinical or synthetic bytes to a provider.
+      # Use the same reviewed ESM preload as the current crash probe so both
+      # contracts attest the staged attempt before the CI script destroys the
+      # container/tmpfs with SIGKILL.
+      ELEVENLABS_API_KEY: ci-synthetic-key-never-transmitted
+      ELEVENLABS_ZERO_RETENTION_MODE: "true"
+      NODE_OPTIONS: --import=/app/ci/lumen-provider-network-block.mjs
+    volumes:
+      - ${HYPERION_REPOSITORY_ROOT:-..}/scripts/ci/lumen-provider-network-block.mjs:/app/ci/lumen-provider-network-block.mjs:ro

@@ -1,4 +1,5 @@
 import type { DatabaseClient } from "@hyperion/database";
+import { createInternalAuthorizationHeaders, isCiDeploymentEnvironment } from "@hyperion/service-runtime";
 import { z } from "zod";
 import type { LlmToolDefinition } from "./llm-provider.js";
 
@@ -238,15 +239,28 @@ export type SofiaConfirmationResult =
     };
 
 const CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
-const CONFIRMATION_EXECUTION_LEASE_MS = 5 * 60 * 1_000;
 
 export class SofiaToolClient {
   constructor(
     private readonly options: {
       pulsoIrisUrl: string;
-      internalServiceToken: string;
+      pulsoToken?: string;
+      /** Test-only compatibility; production never falls back to this shared credential. */
+      internalServiceToken?: string;
       db: DatabaseClient;
       fetchImpl?: typeof fetch;
+      signal?: AbortSignal;
+      /** Test-only owner transport that bypasses HTTP for confirmation-state CAS. */
+      ownerState?: {
+        load(
+          tenantId: string,
+          conversationId: string
+        ): Promise<{
+          state: unknown;
+          expiredAction?: { actionId: string; tool: ConfirmableToolName };
+        }>;
+        mutate(tenantId: string, conversationId: string, mutation: Record<string, unknown>): Promise<boolean>;
+      };
     }
   ) {}
 
@@ -258,11 +272,13 @@ export class SofiaToolClient {
     externalMessageId: string;
     body: string;
   }): Promise<{ patientId: string; conversationId: string; messageId: string }> {
+    this.options.signal?.throwIfAborted();
     const data = await this.call(input.tenantId, "identify_patient_by_phone", input);
     return z.object({ patientId: uuid, conversationId: uuid, messageId: uuid }).parse(data);
   }
 
   async confirmPendingAction(context: SofiaToolContext): Promise<SofiaConfirmationResult> {
+    this.options.signal?.throwIfAborted();
     const confirmationIntent = parseExplicitConfirmation(context.currentMessageBody);
     if (!confirmationIntent) {
       return {
@@ -389,6 +405,7 @@ export class SofiaToolClient {
     code: string,
     message: string
   ): Promise<SofiaConfirmationResult> {
+    this.options.signal?.throwIfAborted();
     const state = await this.loadConfirmationState(context.tenantId, context.conversationId);
     const existingReceipt = state.confirmationReceipts[context.currentMessageId];
     if (existingReceipt) return confirmationResultFromReceipt(existingReceipt, true);
@@ -450,6 +467,7 @@ export class SofiaToolClient {
   }
 
   async execute(name: string, rawArguments: string, context: SofiaToolContext): Promise<unknown> {
+    this.options.signal?.throwIfAborted();
     if (!(name in businessSchemas)) return { ok: false, code: "unknown_tool", message: "Herramienta no disponible" };
     const toolName = name as SofiaToolName;
     let toolArguments: Record<string, unknown>;
@@ -607,6 +625,7 @@ export class SofiaToolClient {
     try {
       data = await this.call(context.tenantId, toolName, payload);
     } catch (error) {
+      this.options.signal?.throwIfAborted();
       if (error instanceof ToolCallError) {
         return { ok: false, status: error.status, ...error.payload };
       }
@@ -645,29 +664,54 @@ export class SofiaToolClient {
     return { ok: true, data };
   }
 
+  private async mutateSofiaState(
+    tenantId: string,
+    conversationId: string,
+    mutation: Record<string, unknown>
+  ): Promise<boolean> {
+    if (this.options.ownerState) {
+      return this.options.ownerState.mutate(tenantId, conversationId, mutation);
+    }
+    const payload = await this.callOwner(
+      `/internal/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/conversations/${encodeURIComponent(conversationId)}/sofia-state/mutate`,
+      mutation
+    );
+    return z.object({ applied: z.boolean() }).parse(payload).applied;
+  }
+
+  private async callOwner(path: string, body: unknown): Promise<unknown> {
+    this.options.signal?.throwIfAborted();
+    const token =
+      this.options.pulsoToken ??
+      (isCiDeploymentEnvironment(process.env) ? this.options.internalServiceToken : undefined);
+    if (!token) throw new Error("SOFIA_TO_PULSO_TOKEN is required for SOFIA tools");
+    const timeoutSignal = AbortSignal.timeout(5_000);
+    const response = await (this.options.fetchImpl ?? fetch)(`${this.options.pulsoIrisUrl}${path}`, {
+      method: "POST",
+      headers: {
+        ...createInternalAuthorizationHeaders("agent-service", token),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: this.options.signal ? AbortSignal.any([this.options.signal, timeoutSignal]) : timeoutSignal
+    });
+    this.options.signal?.throwIfAborted();
+    const payload = (await response.json()) as { data?: unknown };
+    if (!response.ok) throw new Error(`SOFIA owner mutation failed with status ${response.status}`);
+    return payload.data;
+  }
+
   private async claimPendingAction(
     context: SofiaToolContext,
     pending: PendingAction,
     execution: ConfirmationExecution
   ): Promise<boolean> {
-    const result = await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
-         'sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb) || jsonb_build_object(
-           'pendingAction', null,
-           'confirmationGrant', null,
-           'confirmationExecution', $5::jsonb
-         )
-       ), updated_at = now()
-       where tenant_id = $1 and id = $2
-         and metadata #>> '{sofiaState,pendingAction,jobId}' = $3
-         and metadata #>> '{sofiaState,pendingAction,tool}' = $4
-         and coalesce(metadata #> '{sofiaState,confirmationExecution}', 'null'::jsonb) = 'null'::jsonb
-         and coalesce(metadata #> '{sofiaState,confirmationGrant}', 'null'::jsonb) = 'null'::jsonb`,
-      [context.tenantId, context.conversationId, pending.jobId, pending.tool, JSON.stringify(execution)]
-    );
-    return (result.rowCount ?? 0) > 0;
+    return this.mutateSofiaState(context.tenantId, context.conversationId, {
+      op: "claim_pending_action",
+      pendingJobId: pending.jobId,
+      pendingTool: pending.tool,
+      execution
+    });
   }
 
   private async resumeConfirmationExecution(
@@ -835,6 +879,7 @@ export class SofiaToolClient {
       });
       return { ok: true, data };
     } catch (error) {
+      this.options.signal?.throwIfAborted();
       if (error instanceof ToolCallError) return classifyToolCallFailure(error);
       return {
         ok: false,
@@ -850,30 +895,13 @@ export class SofiaToolClient {
     execution: ConfirmationExecution,
     grant: ConfirmationGrant
   ): Promise<boolean> {
-    const result = await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
-         'sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb) || jsonb_build_object(
-           'pendingAction', null,
-           'confirmationExecution', null,
-           'confirmationGrant', $6::jsonb
-         )
-       ), updated_at = now()
-       where tenant_id = $1 and id = $2
-         and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
-         and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
-         and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5`,
-      [
-        context.tenantId,
-        context.conversationId,
-        execution.actionId,
-        execution.confirmationMessageId,
-        execution.tool,
-        JSON.stringify(grant)
-      ]
-    );
-    return (result.rowCount ?? 0) > 0;
+    return this.mutateSofiaState(context.tenantId, context.conversationId, {
+      op: "move_execution_to_grant",
+      executionActionId: execution.actionId,
+      confirmationMessageId: execution.confirmationMessageId,
+      executionTool: execution.tool,
+      grant
+    });
   }
 
   private async finishTerminalExecution(
@@ -949,39 +977,13 @@ export class SofiaToolClient {
     execution: ConfirmationExecution,
     receipt: SofiaConfirmationReceipt
   ): Promise<boolean> {
-    const result = await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
-         'sofiaState',
-         (coalesce(metadata->'sofiaState', '{}'::jsonb)
-           - 'lastAvailability'
-           - 'lastAvailabilityAt'
-           - 'lastAvailabilitySchemaVersion'
-           - 'lastAvailabilityJobId'
-           - 'lastAvailabilityQuery')
-           || jsonb_build_object(
-                'pendingAction', null,
-                'confirmationExecution', null,
-                'confirmationGrant', null,
-                'confirmationReceipts',
-                  coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
-                    || jsonb_build_object($4::text, $6::jsonb)
-              )
-       ), updated_at = now()
-       where tenant_id = $1 and id = $2
-         and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
-         and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
-         and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5`,
-      [
-        context.tenantId,
-        context.conversationId,
-        execution.actionId,
-        execution.confirmationMessageId,
-        execution.tool,
-        JSON.stringify(receipt)
-      ]
-    );
-    return (result.rowCount ?? 0) > 0;
+    return this.mutateSofiaState(context.tenantId, context.conversationId, {
+      op: "store_execution_receipt",
+      executionActionId: execution.actionId,
+      confirmationMessageId: execution.confirmationMessageId,
+      executionTool: execution.tool,
+      receipt
+    });
   }
 
   private async storePendingReceipt(
@@ -989,38 +991,13 @@ export class SofiaToolClient {
     pending: PendingAction,
     receipt: SofiaConfirmationReceipt
   ): Promise<boolean> {
-    const result = await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
-         'sofiaState',
-         (coalesce(metadata->'sofiaState', '{}'::jsonb)
-           - 'lastAvailability'
-           - 'lastAvailabilityAt'
-           - 'lastAvailabilitySchemaVersion'
-           - 'lastAvailabilityJobId'
-           - 'lastAvailabilityQuery')
-           || jsonb_build_object(
-                'pendingAction', null,
-                'confirmationExecution', null,
-                'confirmationGrant', null,
-                'confirmationReceipts',
-                  coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
-                    || jsonb_build_object($4::text, $6::jsonb)
-              )
-       ), updated_at = now()
-       where tenant_id = $1 and id = $2
-         and metadata #>> '{sofiaState,pendingAction,jobId}' = $3
-         and metadata #>> '{sofiaState,pendingAction,tool}' = $5`,
-      [
-        context.tenantId,
-        context.conversationId,
-        pending.jobId,
-        context.currentMessageId,
-        pending.tool,
-        JSON.stringify(receipt)
-      ]
-    );
-    return (result.rowCount ?? 0) > 0;
+    return this.mutateSofiaState(context.tenantId, context.conversationId, {
+      op: "store_pending_receipt",
+      pendingJobId: pending.jobId,
+      pendingTool: pending.tool,
+      currentMessageId: context.currentMessageId,
+      receipt
+    });
   }
 
   private async storeGrantReceipt(
@@ -1028,42 +1005,14 @@ export class SofiaToolClient {
     grant: ConfirmationGrant,
     receipt: SofiaConfirmationReceipt
   ): Promise<boolean> {
-    const result = await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
-         'sofiaState',
-         (coalesce(metadata->'sofiaState', '{}'::jsonb)
-           - 'lastAvailability'
-           - 'lastAvailabilityAt'
-           - 'lastAvailabilitySchemaVersion'
-           - 'lastAvailabilityJobId'
-           - 'lastAvailabilityQuery')
-           || jsonb_build_object(
-                'pendingAction', null,
-                'confirmationExecution', null,
-                'confirmationGrant', null,
-                'confirmationReceipts',
-                  coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
-                    || jsonb_build_object($4::text, $6::jsonb)
-              )
-       ), updated_at = now()
-       where tenant_id = $1 and id = $2
-         and coalesce(metadata #>> '{sofiaState,confirmationGrant,actionId}',
-                      metadata #>> '{sofiaState,confirmationGrant,jobId}') = $3
-         and ($7::text is null
-              or metadata #>> '{sofiaState,confirmationGrant,confirmationMessageId}' = $7)
-         and metadata #>> '{sofiaState,confirmationGrant,holdId}' = $5`,
-      [
-        context.tenantId,
-        context.conversationId,
-        grant.actionId,
-        context.currentMessageId,
-        grant.holdId,
-        JSON.stringify(receipt),
-        grant.confirmationMessageId ?? null
-      ]
-    );
-    return (result.rowCount ?? 0) > 0;
+    return this.mutateSofiaState(context.tenantId, context.conversationId, {
+      op: "store_grant_receipt",
+      grantActionId: grant.actionId,
+      holdId: grant.holdId,
+      currentMessageId: context.currentMessageId,
+      confirmationMessageId: grant.confirmationMessageId ?? null,
+      receipt
+    });
   }
 
   private async readReceiptOrStateChanged(
@@ -1076,29 +1025,32 @@ export class SofiaToolClient {
   }
 
   private async call(tenantId: string, toolName: string, body: unknown): Promise<unknown> {
+    this.options.signal?.throwIfAborted();
+    const token =
+      this.options.pulsoToken ??
+      (isCiDeploymentEnvironment(process.env) ? this.options.internalServiceToken : undefined);
+    if (!token) throw new Error("SOFIA_TO_PULSO_TOKEN is required for SOFIA tools");
+    const timeoutSignal = AbortSignal.timeout(5_000);
     const response = await (this.options.fetchImpl ?? fetch)(
       `${this.options.pulsoIrisUrl}/internal/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/sofia/tools/${toolName}`,
       {
         method: "POST",
-        headers: { authorization: `Bearer ${this.options.internalServiceToken}`, "content-type": "application/json" },
+        headers: {
+          ...createInternalAuthorizationHeaders("agent-service", token),
+          "content-type": "application/json"
+        },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(5_000)
+        signal: this.options.signal ? AbortSignal.any([this.options.signal, timeoutSignal]) : timeoutSignal
       }
     );
+    this.options.signal?.throwIfAborted();
     const payload = (await response.json()) as { data?: unknown };
     if (!response.ok) throw new ToolCallError(response.status, isRecord(payload.data) ? payload.data : {});
     return payload.data;
   }
 
   private async saveConversationState(tenantId: string, conversationId: string, patch: Record<string, unknown>) {
-    await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb) || $3::jsonb),
-         updated_at = now()
-       where tenant_id = $1 and id = $2`,
-      [tenantId, conversationId, JSON.stringify(patch)]
-    );
+    await this.mutateSofiaState(tenantId, conversationId, { op: "save_conversation_state", patch });
   }
 
   private async saveAvailabilityState(
@@ -1119,37 +1071,15 @@ export class SofiaToolClient {
       lastAvailabilityJobId: context.jobId,
       lastAvailabilityQuery: query
     };
-    await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
-         'sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb)
-           || $3::jsonb
-           || jsonb_build_object(
-                'agendaSelection',
-                coalesce(metadata #> '{sofiaState,agendaSelection}', '{}'::jsonb) || $4::jsonb
-              )
-       ), updated_at = now()
-       where tenant_id = $1 and id = $2`,
-      [context.tenantId, context.conversationId, JSON.stringify(availabilityPatch), JSON.stringify(selection)]
-    );
+    await this.mutateSofiaState(context.tenantId, context.conversationId, {
+      op: "save_availability_state",
+      availabilityPatch,
+      selection
+    });
   }
 
   private async clearLastAvailability(tenantId: string, conversationId: string): Promise<void> {
-    await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
-         'sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb)
-           - 'lastAvailability'
-           - 'lastAvailabilityAt'
-           - 'lastAvailabilitySchemaVersion'
-           - 'lastAvailabilityJobId'
-           - 'lastAvailabilityQuery'
-       ), updated_at = now()
-       where tenant_id = $1 and id = $2`,
-      [tenantId, conversationId]
-    );
+    await this.mutateSofiaState(tenantId, conversationId, { op: "clear_last_availability" });
   }
 
   private async stagePendingAction(
@@ -1167,29 +1097,12 @@ export class SofiaToolClient {
       },
       confirmationGrant: null
     };
-    const updated = await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb) || $5::jsonb),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-         and coalesce(metadata #> '{sofiaState,confirmationExecution}', 'null'::jsonb) = 'null'::jsonb
-         and (($3::text is null
-               and coalesce(metadata #> '{sofiaState,pendingAction}', 'null'::jsonb) = 'null'::jsonb)
-              or metadata #>> '{sofiaState,pendingAction,jobId}' = $3)
-         and (($4::text is null
-               and coalesce(metadata #> '{sofiaState,confirmationGrant}', 'null'::jsonb) = 'null'::jsonb)
-              or coalesce(metadata #>> '{sofiaState,confirmationGrant,actionId}',
-                          metadata #>> '{sofiaState,confirmationGrant,jobId}') = $4)`,
-      [
-        context.tenantId,
-        context.conversationId,
-        expected.pendingAction?.jobId ?? null,
-        expected.confirmationGrant?.actionId ?? null,
-        JSON.stringify(patch)
-      ]
-    );
-    return (updated.rowCount ?? 0) > 0;
+    return this.mutateSofiaState(context.tenantId, context.conversationId, {
+      op: "stage_pending_action",
+      expectedPendingJobId: expected.pendingAction?.jobId ?? null,
+      expectedGrantActionId: expected.confirmationGrant?.actionId ?? null,
+      patch
+    });
   }
 
   private async replacePendingWithGrant(
@@ -1198,15 +1111,11 @@ export class SofiaToolClient {
     actionId: string,
     grant: ConfirmationGrant | null
   ): Promise<void> {
-    await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb) || $4::jsonb),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-         and metadata #>> '{sofiaState,pendingAction,jobId}' = $3`,
-      [tenantId, conversationId, actionId, JSON.stringify({ pendingAction: null, confirmationGrant: grant })]
-    );
+    await this.mutateSofiaState(tenantId, conversationId, {
+      op: "replace_pending_with_grant",
+      pendingJobId: actionId,
+      patch: { pendingAction: null, confirmationGrant: grant }
+    });
   }
 
   private async clearConfirmedGrant(
@@ -1215,156 +1124,42 @@ export class SofiaToolClient {
     actionId: string,
     holdId: string
   ): Promise<void> {
-    await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb)
-           || '{"pendingAction":null,"confirmationGrant":null}'::jsonb),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-         and coalesce(metadata #>> '{sofiaState,confirmationGrant,actionId}',
-                      metadata #>> '{sofiaState,confirmationGrant,jobId}') = $3
-         and metadata #>> '{sofiaState,confirmationGrant,holdId}' = $4`,
-      [tenantId, conversationId, actionId, holdId]
-    );
+    await this.mutateSofiaState(tenantId, conversationId, {
+      op: "clear_confirmed_grant",
+      actionId,
+      holdId
+    });
   }
 
   private async clearConfirmedPending(tenantId: string, conversationId: string, actionId: string): Promise<void> {
-    await this.options.db.query(
-      `update pulso_iris.conversations
-       set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
-         coalesce(metadata->'sofiaState', '{}'::jsonb)
-           || '{"pendingAction":null,"confirmationGrant":null}'::jsonb),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-         and metadata #>> '{sofiaState,pendingAction,jobId}' = $3`,
-      [tenantId, conversationId, actionId]
-    );
+    await this.mutateSofiaState(tenantId, conversationId, {
+      op: "clear_confirmed_pending",
+      actionId
+    });
   }
 
   private async loadConfirmationState(tenantId: string, conversationId: string) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const result = await this.options.db.query<{
-        state: unknown;
-        pendingExpired: boolean;
-        grantExpired: boolean;
-        executionExpired: boolean;
-      }>(
-        `select coalesce(metadata->'sofiaState', '{}'::jsonb) as state,
-                coalesce((metadata #>> '{sofiaState,pendingAction,stagedAt}')::timestamptz
-                  + interval '15 minutes' <= now(), false) as "pendingExpired",
-                coalesce((metadata #>> '{sofiaState,confirmationGrant,expiresAt}')::timestamptz
-                  <= now(), false) as "grantExpired",
-                coalesce((metadata #>> '{sofiaState,confirmationExecution,claimedAt}')::timestamptz
-                  + ($3::int * interval '1 millisecond') <= now(), false) as "executionExpired"
-         from pulso_iris.conversations
-         where tenant_id = $1 and id = $2`,
-        [tenantId, conversationId, CONFIRMATION_EXECUTION_LEASE_MS]
-      );
-      const row = result.rows[0];
-      const state = parseConfirmationState(row?.state);
-      const expiredExecution = row?.executionExpired ? state.confirmationExecution : undefined;
-      if (expiredExecution) {
-        const receipt = buildTerminalReceipt(
-          expiredExecution.confirmationMessageId,
-          expiredExecution.actionId,
-          confirmedActionForTool(expiredExecution.tool),
-          "confirmation_execution_expired",
-          "La operación quedó sin evidencia concluyente. Consulta el estado actual antes de intentar otra acción."
+    const payload = this.options.ownerState
+      ? await this.options.ownerState.load(tenantId, conversationId)
+      : await this.callOwner(
+          `/internal/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/conversations/${encodeURIComponent(conversationId)}/sofia-state/load`,
+          {}
         );
-        const clearedExecution = await this.options.db.query<{ state: unknown }>(
-          `/* sofia-confirmation:expire-execution */
-           update pulso_iris.conversations
-           set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
-             'sofiaState',
-             (coalesce(metadata->'sofiaState', '{}'::jsonb)
-               - 'lastAvailability'
-               - 'lastAvailabilityAt'
-               - 'lastAvailabilitySchemaVersion'
-               - 'lastAvailabilityJobId'
-               - 'lastAvailabilityQuery')
-               || jsonb_build_object(
-                    'confirmationExecution', null,
-                    'confirmationGrant', null,
-                    'confirmationReceipts',
-                      coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
-                        || jsonb_build_object($4::text, $8::jsonb)
-                  )
-           ), updated_at = now()
-           where tenant_id = $1 and id = $2
-             and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
-             and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
-             and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5
-             and metadata #>> '{sofiaState,confirmationExecution,claimedAt}' = $6
-             and (metadata #>> '{sofiaState,confirmationExecution,claimedAt}')::timestamptz
-               + ($7::int * interval '1 millisecond') <= now()
-           returning coalesce(metadata->'sofiaState', '{}'::jsonb) as state`,
-          [
-            tenantId,
-            conversationId,
-            expiredExecution.actionId,
-            expiredExecution.confirmationMessageId,
-            expiredExecution.tool,
-            expiredExecution.claimedAt,
-            CONFIRMATION_EXECUTION_LEASE_MS,
-            JSON.stringify(receipt)
-          ]
-        );
-        if (clearedExecution.rows[0]) return parseConfirmationState(clearedExecution.rows[0].state);
-        continue;
-      }
-      const expiredPending = row?.pendingExpired ? state.pendingAction : undefined;
-      const expiredGrant = row?.grantExpired ? state.confirmationGrant : undefined;
-      if (!expiredPending && !expiredGrant) return state;
-
-      const patch = {
-        ...(expiredPending ? { pendingAction: null } : {}),
-        ...(expiredGrant ? { confirmationGrant: null } : {})
-      };
-      const cleared = await this.options.db.query<{ state: unknown }>(
-        `update pulso_iris.conversations
-         set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
-           coalesce(metadata->'sofiaState', '{}'::jsonb) || $8::jsonb),
-           updated_at = now()
-         where tenant_id = $1 and id = $2
-           and ($3::text is null or (
-             metadata #>> '{sofiaState,pendingAction,jobId}' = $3
-             and metadata #>> '{sofiaState,pendingAction,stagedAt}' = $4
-             and (metadata #>> '{sofiaState,pendingAction,stagedAt}')::timestamptz
-               + interval '15 minutes' <= now()
-           ))
-           and ($5::text is null or (
-             coalesce(metadata #>> '{sofiaState,confirmationGrant,actionId}',
-                      metadata #>> '{sofiaState,confirmationGrant,jobId}') = $5
-             and metadata #>> '{sofiaState,confirmationGrant,holdId}' = $6
-             and metadata #>> '{sofiaState,confirmationGrant,expiresAt}' = $7
-             and (metadata #>> '{sofiaState,confirmationGrant,expiresAt}')::timestamptz <= now()
-           ))
-         returning coalesce(metadata->'sofiaState', '{}'::jsonb) as state`,
-        [
-          tenantId,
-          conversationId,
-          expiredPending?.jobId ?? null,
-          expiredPending?.stagedAt ?? null,
-          expiredGrant?.actionId ?? null,
-          expiredGrant?.holdId ?? null,
-          expiredGrant?.expiresAt ?? null,
-          JSON.stringify(patch)
-        ]
-      );
-      if (cleared.rows[0]) {
-        const clearedState = parseConfirmationState(cleared.rows[0].state);
-        return {
-          ...clearedState,
-          expiredAction: expiredPending
-            ? { actionId: expiredPending.jobId, tool: expiredPending.tool }
-            : expiredGrant
-              ? { actionId: expiredGrant.actionId, tool: "create_appointment_hold" as const }
-              : undefined
-        };
-      }
-    }
-    throw new Error("Confirmation state changed concurrently");
+    const parsed = z
+      .object({
+        state: z.unknown(),
+        expiredAction: z
+          .object({
+            actionId: z.string(),
+            tool: z.enum(["create_appointment_hold", "cancel_appointment", "reschedule_appointment"])
+          })
+          .optional()
+      })
+      .parse(payload);
+    return {
+      ...parseConfirmationState(parsed.state),
+      expiredAction: parsed.expiredAction
+    };
   }
 }
 

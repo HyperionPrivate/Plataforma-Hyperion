@@ -41,6 +41,40 @@ describe("SOFIA tool time contract", () => {
   });
 });
 
+describe("SOFIA tool cancellation", () => {
+  it("propagates shutdown to an in-flight PULSO request", async () => {
+    const controller = new AbortController();
+    const reason = new Error("controlled tool shutdown");
+    const fetchImpl = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        })
+    );
+    const client = new SofiaToolClient({
+      pulsoIrisUrl: "http://pulso.test",
+      internalServiceToken: "internal-test-token",
+      db: { query: vi.fn(), transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
+      fetchImpl: fetchImpl as typeof fetch,
+      signal: controller.signal
+    });
+
+    const identification = client.identifyPatient({
+      tenantId: context.tenantId,
+      phoneHash: "a".repeat(64),
+      phoneMasked: "+57******1234",
+      threadBindingId: "00000000-0000-4000-8000-000000000006",
+      externalMessageId: "provider-message-1",
+      body: "Hola"
+    });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    controller.abort(reason);
+
+    await expect(identification).rejects.toBe(reason);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("SOFIA tool confirmation barrier", () => {
   it("accepts only an explicit bounded confirmation", () => {
     expect(isExplicitConfirmation("CONFIRMO cancelar")).toBe(true);
@@ -59,12 +93,7 @@ describe("SOFIA tool confirmation barrier", () => {
       }
     );
     const fetchImpl = vi.fn();
-    const client = new SofiaToolClient({
-      pulsoIrisUrl: "http://pulso.test",
-      internalServiceToken: "internal-test-token",
-      db: { query, transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
-      fetchImpl: fetchImpl as typeof fetch
-    });
+    const client = createClient(query, fetchImpl);
     const result = await client.execute(
       "cancel_appointment",
       JSON.stringify({ appointmentId: "00000000-0000-4000-8000-000000000006", reason: "Solicitud del paciente" }),
@@ -228,6 +257,9 @@ describe("SOFIA tool confirmation barrier", () => {
     }));
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer internal-test-token");
+      expect(headers.get("x-hyperion-caller")).toBe("agent-service");
       expect(body).toMatchObject({
         patientId: context.patientId,
         conversationId: context.conversationId,
@@ -239,12 +271,7 @@ describe("SOFIA tool confirmation barrier", () => {
         headers: { "content-type": "application/json" }
       });
     });
-    const client = new SofiaToolClient({
-      pulsoIrisUrl: "http://pulso.test",
-      internalServiceToken: "internal-test-token",
-      db: { query, transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
-      fetchImpl: fetchImpl as typeof fetch
-    });
+    const client = createClient(query, fetchImpl as never);
     const result = await client.execute(
       "cancel_appointment",
       JSON.stringify({ appointmentId: "00000000-0000-4000-8000-000000000006", reason: "Solicitud del paciente" }),
@@ -274,12 +301,7 @@ describe("SOFIA tool confirmation barrier", () => {
       fields: []
     }));
     const fetchImpl = vi.fn();
-    const client = new SofiaToolClient({
-      pulsoIrisUrl: "http://pulso.test",
-      internalServiceToken: "internal-test-token",
-      db: { query, transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
-      fetchImpl: fetchImpl as typeof fetch
-    });
+    const client = createClient(query, fetchImpl);
     const result = await client.execute(
       "cancel_appointment",
       JSON.stringify({ appointmentId: "00000000-0000-4000-8000-000000000006", reason: "Solicitud del paciente" }),
@@ -1417,8 +1439,300 @@ function createClient(query: ReturnType<typeof vi.fn>, fetchImpl: ReturnType<typ
     pulsoIrisUrl: "http://pulso.test",
     internalServiceToken: "internal-test-token",
     db: { query, transaction: vi.fn(), close: vi.fn() } as unknown as DatabaseClient,
-    fetchImpl: fetchImpl as typeof fetch
+    fetchImpl: fetchImpl as typeof fetch,
+    ownerState: createOwnerStateBridge(query)
   });
+}
+
+function createOwnerStateBridge(query: ReturnType<typeof vi.fn>) {
+  return {
+    async load(tenantId: string, conversationId: string) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await query(
+          `select coalesce(metadata->'sofiaState', '{}'::jsonb) as state,
+                  coalesce((metadata #>> '{sofiaState,pendingAction,stagedAt}')::timestamptz
+                    + interval '15 minutes' <= now(), false) as "pendingExpired",
+                  coalesce((metadata #>> '{sofiaState,confirmationGrant,expiresAt}')::timestamptz
+                    <= now(), false) as "grantExpired",
+                  coalesce((metadata #>> '{sofiaState,confirmationExecution,claimedAt}')::timestamptz
+                    + ($3::int * interval '1 millisecond') <= now(), false) as "executionExpired"
+           from pulso_iris.conversations
+           where tenant_id = $1 and id = $2`,
+          [tenantId, conversationId, 5 * 60 * 1_000]
+        );
+        const row = result.rows[0] as
+          | {
+              state?: Record<string, unknown>;
+              pendingExpired?: boolean;
+              grantExpired?: boolean;
+              executionExpired?: boolean;
+            }
+          | undefined;
+        const state = (row?.state ?? {}) as Record<string, unknown>;
+        const execution = state.confirmationExecution as Record<string, unknown> | undefined;
+        if (row?.executionExpired && execution) {
+          const receipt = {
+            schemaVersion: 1,
+            confirmationMessageId: String(execution.confirmationMessageId ?? ""),
+            actionId: String(execution.actionId ?? ""),
+            action: "book",
+            outcome: "terminal_failure",
+            completedAt: new Date().toISOString(),
+            code: "confirmation_execution_expired",
+            message:
+              "La operación quedó sin evidencia concluyente. Consulta el estado actual antes de intentar otra acción."
+          };
+          const cleared = await query(
+            `/* sofia-confirmation:expire-execution */
+             update pulso_iris.conversations
+             set metadata = coalesce(metadata, '{}'::jsonb)
+             where tenant_id = $1 and id = $2
+               and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
+               and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
+               and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5
+               and metadata #>> '{sofiaState,confirmationExecution,claimedAt}' = $6
+             returning coalesce(metadata->'sofiaState', '{}'::jsonb) as state`,
+            [
+              tenantId,
+              conversationId,
+              execution.actionId,
+              execution.confirmationMessageId,
+              execution.tool,
+              execution.claimedAt,
+              5 * 60 * 1_000,
+              JSON.stringify(receipt)
+            ]
+          );
+          if (cleared.rows[0]) return { state: (cleared.rows[0] as { state: unknown }).state };
+          continue;
+        }
+        const pending = state.pendingAction as Record<string, unknown> | undefined;
+        const grant = state.confirmationGrant as Record<string, unknown> | undefined;
+        const expiredPending = row?.pendingExpired ? pending : undefined;
+        const expiredGrant = row?.grantExpired ? grant : undefined;
+        if (!expiredPending && !expiredGrant) return { state };
+        const patch = {
+          ...(expiredPending ? { pendingAction: null } : {}),
+          ...(expiredGrant ? { confirmationGrant: null } : {})
+        };
+        const cleared = await query(
+          `update pulso_iris.conversations
+           set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
+             coalesce(metadata->'sofiaState', '{}'::jsonb) || $8::jsonb),
+             updated_at = now()
+           where tenant_id = $1 and id = $2
+           returning coalesce(metadata->'sofiaState', '{}'::jsonb) as state`,
+          [
+            tenantId,
+            conversationId,
+            expiredPending?.jobId ?? null,
+            expiredPending?.stagedAt ?? null,
+            expiredGrant?.actionId ?? expiredGrant?.jobId ?? null,
+            expiredGrant?.holdId ?? null,
+            expiredGrant?.expiresAt ?? null,
+            JSON.stringify(patch)
+          ]
+        );
+        if (cleared.rows[0]) {
+          return {
+            state: (cleared.rows[0] as { state: unknown }).state,
+            expiredAction: expiredPending
+              ? {
+                  actionId: String(expiredPending.jobId),
+                  tool: expiredPending.tool as
+                    "create_appointment_hold" | "cancel_appointment" | "reschedule_appointment"
+                }
+              : expiredGrant
+                ? {
+                    actionId: String(expiredGrant.actionId ?? expiredGrant.jobId),
+                    tool: "create_appointment_hold" as const
+                  }
+                : undefined
+          };
+        }
+      }
+      return { state: {} };
+    },
+    async mutate(tenantId: string, conversationId: string, mutation: Record<string, unknown>) {
+      switch (mutation.op) {
+        case "claim_pending_action": {
+          const result = await query(
+            `update pulso_iris.conversations
+             set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+               'sofiaState',
+               coalesce(metadata->'sofiaState', '{}'::jsonb) || jsonb_build_object(
+                 'pendingAction', null,
+                 'confirmationGrant', null,
+                 'confirmationExecution', $5::jsonb
+               )
+             ), updated_at = now()
+             where tenant_id = $1 and id = $2
+               and metadata #>> '{sofiaState,pendingAction,jobId}' = $3
+               and metadata #>> '{sofiaState,pendingAction,tool}' = $4`,
+            [tenantId, conversationId, mutation.pendingJobId, mutation.pendingTool, JSON.stringify(mutation.execution)]
+          );
+          return (result.rowCount ?? 0) > 0;
+        }
+        case "move_execution_to_grant": {
+          const result = await query(
+            `update pulso_iris.conversations
+             set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+               'sofiaState',
+               coalesce(metadata->'sofiaState', '{}'::jsonb) || jsonb_build_object(
+                 'pendingAction', null,
+                 'confirmationExecution', null,
+                 'confirmationGrant', $6::jsonb
+               )
+             ), updated_at = now()
+             where tenant_id = $1 and id = $2
+               and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
+               and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
+               and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5`,
+            [
+              tenantId,
+              conversationId,
+              mutation.executionActionId,
+              mutation.confirmationMessageId,
+              mutation.executionTool,
+              JSON.stringify(mutation.grant)
+            ]
+          );
+          return (result.rowCount ?? 0) > 0;
+        }
+        case "store_execution_receipt":
+        case "store_pending_receipt":
+        case "store_grant_receipt": {
+          const receipt = mutation.receipt;
+          const messageId =
+            mutation.op === "store_execution_receipt" ? mutation.confirmationMessageId : mutation.currentMessageId;
+          const result = await query(
+            `update pulso_iris.conversations
+             set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+               'sofiaState',
+               (coalesce(metadata->'sofiaState', '{}'::jsonb)
+                 - 'lastAvailability')
+                 || jsonb_build_object(
+                      'pendingAction', null,
+                      'confirmationExecution', null,
+                      'confirmationGrant', null,
+                      'confirmationReceipts',
+                        coalesce(metadata #> '{sofiaState,confirmationReceipts}', '{}'::jsonb)
+                          || jsonb_build_object($4::text, $6::jsonb)
+                    )
+             ), updated_at = now()
+             where tenant_id = $1 and id = $2
+               and metadata #>> '{sofiaState,pendingAction,jobId}' = $3
+               and metadata #>> '{sofiaState,pendingAction,tool}' = $5
+               and metadata #>> '{sofiaState,confirmationExecution,actionId}' = $3
+               and metadata #>> '{sofiaState,confirmationExecution,confirmationMessageId}' = $4
+               and metadata #>> '{sofiaState,confirmationExecution,tool}' = $5
+               and coalesce(metadata #>> '{sofiaState,confirmationGrant,actionId}',
+                            metadata #>> '{sofiaState,confirmationGrant,jobId}') = $3
+               and metadata #>> '{sofiaState,confirmationGrant,holdId}' = $5`,
+            [
+              tenantId,
+              conversationId,
+              mutation.op === "store_execution_receipt"
+                ? mutation.executionActionId
+                : mutation.op === "store_pending_receipt"
+                  ? mutation.pendingJobId
+                  : mutation.grantActionId,
+              messageId,
+              mutation.op === "store_execution_receipt"
+                ? mutation.executionTool
+                : mutation.op === "store_pending_receipt"
+                  ? mutation.pendingTool
+                  : mutation.holdId,
+              JSON.stringify(receipt),
+              mutation.op === "store_grant_receipt" ? (mutation.confirmationMessageId ?? null) : null
+            ]
+          );
+          return (result.rowCount ?? 0) > 0;
+        }
+        case "save_conversation_state":
+        case "stage_pending_action":
+        case "replace_pending_with_grant": {
+          const patch = mutation.patch ?? {};
+          const result = await query(
+            `update pulso_iris.conversations
+             set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
+               coalesce(metadata->'sofiaState', '{}'::jsonb) || $5::jsonb),
+               updated_at = now()
+             where tenant_id = $1 and id = $2
+               and coalesce(metadata #> '{sofiaState,confirmationExecution}', 'null'::jsonb) = 'null'::jsonb
+               and (($3::text is null
+                     and coalesce(metadata #> '{sofiaState,pendingAction}', 'null'::jsonb) = 'null'::jsonb)
+                    or metadata #>> '{sofiaState,pendingAction,jobId}' = $3)
+               and (($4::text is null
+                     and coalesce(metadata #> '{sofiaState,confirmationGrant}', 'null'::jsonb) = 'null'::jsonb)
+                    or coalesce(metadata #>> '{sofiaState,confirmationGrant,actionId}',
+                                metadata #>> '{sofiaState,confirmationGrant,jobId}') = $4)`,
+            [
+              tenantId,
+              conversationId,
+              mutation.expectedPendingJobId ?? mutation.pendingJobId ?? null,
+              mutation.expectedGrantActionId ?? null,
+              JSON.stringify(patch)
+            ]
+          );
+          return mutation.op === "stage_pending_action" ? (result.rowCount ?? 0) > 0 : true;
+        }
+        case "save_availability_state": {
+          await query(
+            `update pulso_iris.conversations
+             set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+               'sofiaState',
+               coalesce(metadata->'sofiaState', '{}'::jsonb)
+                 || $3::jsonb
+                 || jsonb_build_object(
+                      'agendaSelection',
+                      coalesce(metadata #> '{sofiaState,agendaSelection}', '{}'::jsonb) || $4::jsonb
+                    )
+             ), updated_at = now()
+             where tenant_id = $1 and id = $2`,
+            [tenantId, conversationId, JSON.stringify(mutation.availabilityPatch), JSON.stringify(mutation.selection)]
+          );
+          return true;
+        }
+        case "clear_last_availability": {
+          await query(
+            `update pulso_iris.conversations
+             set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+               'sofiaState',
+               coalesce(metadata->'sofiaState', '{}'::jsonb)
+                 - 'lastAvailability'
+                 - 'lastAvailabilityAt'
+                 - 'lastAvailabilitySchemaVersion'
+                 - 'lastAvailabilityJobId'
+                 - 'lastAvailabilityQuery'
+             ), updated_at = now()
+             where tenant_id = $1 and id = $2`,
+            [tenantId, conversationId]
+          );
+          return true;
+        }
+        case "clear_confirmed_grant":
+        case "clear_confirmed_pending": {
+          await query(
+            `update pulso_iris.conversations
+             set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('sofiaState',
+               coalesce(metadata->'sofiaState', '{}'::jsonb)
+                 || '{"pendingAction":null,"confirmationGrant":null}'::jsonb),
+               updated_at = now()
+             where tenant_id = $1 and id = $2
+               and coalesce(metadata #>> '{sofiaState,confirmationGrant,actionId}',
+                            metadata #>> '{sofiaState,confirmationGrant,jobId}') = $3
+               and metadata #>> '{sofiaState,confirmationGrant,holdId}' = $4
+               and metadata #>> '{sofiaState,pendingAction,jobId}' = $3`,
+            [tenantId, conversationId, mutation.actionId, mutation.holdId ?? null]
+          );
+          return true;
+        }
+        default:
+          return false;
+      }
+    }
+  };
 }
 
 function queryResult(rows: unknown[]) {

@@ -25,10 +25,12 @@ describeIntegration("SOFIA internal agenda tools", () => {
   let conversationId = "";
   let messageId = "";
   const events: EmitAuditEventInput[] = [];
+  const auditAttempts: Array<{ event: EmitAuditEventInput; executor: object }> = [];
+  let rejectedAuditEventType: EmitAuditEventInput["eventType"] | undefined;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
-    process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
+    process.env.SOFIA_TO_PULSO_TOKEN = INTERNAL_TOKEN;
     client = new Client({ connectionString: TEST_DATABASE_URL });
     await client.connect();
     const fixtures = await createFixtures(client);
@@ -38,7 +40,63 @@ describeIntegration("SOFIA internal agenda tools", () => {
       serviceName: "pulso-iris-service",
       databaseRequired: true,
       registerRoutes: async (serviceApp, context) => {
-        await registerSofiaToolRoutes(serviceApp, context, (event) => events.push(event));
+        await registerSofiaToolRoutes(
+          serviceApp,
+          context,
+          async (event, executor) => {
+            auditAttempts.push({ event, executor });
+            if (event.eventType === rejectedAuditEventType) {
+              throw new Error(`controlled audit failure: ${event.eventType}`);
+            }
+            events.push(event);
+          },
+          {
+            async getThread(lookupTenantId, threadBindingId) {
+              const result = await client.query<{
+                id: string;
+                patientId: string | null;
+                conversationId: string | null;
+                status: string;
+              }>(
+                `select id, patient_id as "patientId", conversation_id as "conversationId", status
+                   from channel_runtime.thread_bindings
+                  where tenant_id = $1 and id = $2`,
+                [lookupTenantId, threadBindingId]
+              );
+              const row = result.rows[0];
+              if (!row) throw Object.assign(new Error("thread_binding_not_found"), { statusCode: 404 });
+              return row;
+            },
+            async bindThread(lookupTenantId, threadBindingId, input) {
+              await client.query("begin");
+              try {
+                const binding = await client.query(
+                  `select id from channel_runtime.thread_bindings where tenant_id = $1 and id = $2 for update`,
+                  [lookupTenantId, threadBindingId]
+                );
+                if (!binding.rows[0]) {
+                  throw Object.assign(new Error("thread_binding_not_found"), { statusCode: 404 });
+                }
+                await client.query(
+                  `update channel_runtime.thread_bindings
+                   set patient_id = $3, conversation_id = $4, last_inbound_at = now(), updated_at = now()
+                   where tenant_id = $1 and id = $2`,
+                  [lookupTenantId, threadBindingId, input.patientId, input.conversationId]
+                );
+                await client.query(
+                  `update channel_runtime.inbound_events
+                   set thread_binding_id = $3, message_id = $4, updated_at = now()
+                   where tenant_id = $1 and external_message_id = $2 and provider = 'whatsapp_web_test'`,
+                  [lookupTenantId, input.externalMessageId, threadBindingId, input.messageId]
+                );
+                await client.query("commit");
+              } catch (error) {
+                await client.query("rollback");
+                throw error;
+              }
+            }
+          }
+        );
       }
     });
     app = service.app;
@@ -52,7 +110,7 @@ describeIntegration("SOFIA internal agenda tools", () => {
       await client.end();
     }
     delete process.env.DATABASE_URL;
-    delete process.env.INTERNAL_SERVICE_TOKEN;
+    delete process.env.SOFIA_TO_PULSO_TOKEN;
   });
 
   it("creates one patient, conversation and message for a redelivered inbound event", async () => {
@@ -99,6 +157,52 @@ describeIntegration("SOFIA internal agenda tools", () => {
       tenantId,
       conversationId
     ]);
+  });
+
+  it("rolls back an audited mutation and reuses one transaction executor for its audit batch", async () => {
+    const auditStart = auditAttempts.length;
+    rejectedAuditEventType = "handoff.assigned";
+    try {
+      const failed = await callTool("create_urgent_handoff", {
+        patientId,
+        conversationId,
+        triggerCode: "symptom_or_urgency_signal"
+      });
+      expect(failed.statusCode).toBe(500);
+    } finally {
+      rejectedAuditEventType = undefined;
+    }
+
+    const rolledBack = await client.query<{ handoffs: number; status: string }>(
+      `select
+         (select count(*)::int from pulso_iris.handoffs
+          where tenant_id = $1 and conversation_id = $2 and trigger_code = 'symptom_or_urgency_signal') as handoffs,
+         (select status from pulso_iris.conversations where tenant_id = $1 and id = $2) as status`,
+      [tenantId, conversationId]
+    );
+    expect(rolledBack.rows[0]).toMatchObject({ handoffs: 0, status: "active" });
+    expect(auditAttempts.slice(auditStart).map(({ event }) => event.eventType)).toEqual(["handoff.assigned"]);
+
+    const succeeded = await callTool("create_urgent_handoff", {
+      patientId,
+      conversationId,
+      triggerCode: "symptom_or_urgency_signal"
+    });
+    expect(succeeded.statusCode).toBe(200);
+    const successfulAttempts = auditAttempts.slice(auditStart + 1);
+    expect(successfulAttempts.map(({ event }) => event.eventType)).toEqual(["handoff.assigned", "agent.tool.executed"]);
+    expect(successfulAttempts[0]?.executor).toBe(successfulAttempts[1]?.executor);
+
+    await client.query(`delete from pulso_iris.handoffs where tenant_id = $1 and conversation_id = $2`, [
+      tenantId,
+      conversationId
+    ]);
+    await client.query(
+      `update pulso_iris.conversations
+       set status = 'active', primary_intent = 'identifying', updated_at = now()
+       where tenant_id = $1 and id = $2`,
+      [tenantId, conversationId]
+    );
   });
 
   it("rejects cross-tenant thread binding and write without explicit confirmation", async () => {
@@ -493,7 +597,10 @@ describeIntegration("SOFIA internal agenda tools", () => {
 });
 
 function internalHeaders() {
-  return { authorization: `Bearer ${INTERNAL_TOKEN}` };
+  return {
+    authorization: `Bearer ${INTERNAL_TOKEN}`,
+    "x-hyperion-caller": "agent-service"
+  };
 }
 
 async function createFixtures(client: pg.Client) {

@@ -9,27 +9,98 @@
   pulsoIrisProductCode,
   pulsoIrisRpaActionListSchema
 } from "@hyperion/contracts";
-import type { RouteRegistrar, ServiceContext } from "@hyperion/service-runtime";
+import { randomUUID } from "node:crypto";
+import {
+  HttpOutboxDispatcher,
+  JetStreamOutboxDispatcher,
+  isHttpDurableEventIngressEnabled,
+  readNatsAuthentication,
+  type NatsAuthentication
+} from "@hyperion/durable-events";
+import {
+  createInternalAuthorizationHeaders,
+  isRestrictedDeploymentEnvironment,
+  readInternalCredential,
+  readOperatorAssertionKey,
+  validateOperatorAssertionContext,
+  validateInternalAuthorization,
+  type RouteRegistrar,
+  type ServiceContext
+} from "@hyperion/service-runtime";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
 import { registerAppointmentRoutes } from "./appointment-routes.js";
 import { startAppointmentHoldExpiration } from "./appointment-hold-expiration.js";
 import { startAppointmentVerificationSimulator } from "./appointment-verification-simulator.js";
 import { createAuditClient } from "./audit-client.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
+import { registerChannelDeliveryEventRoutes } from "./channel-delivery-events.js";
+import { startChannelDeliveryJetStreamConsumer } from "./channel-delivery-jetstream.js";
+import { createLegacyChannelPositionResolver } from "./channel-position-client.js";
+import {
+  readChannelInboundV1Compatibility,
+  registerChannelInboundEventRoutesWithCompatibility
+} from "./channel-inbound-events.js";
+import { startChannelInboundJetStreamConsumer } from "./channel-inbound-jetstream.js";
+import { createChannelThreadClient } from "./channel-thread-client.js";
 import { registerConfigRoutes } from "./config-routes.js";
+import { registerPulsoEventPositionRoute } from "./event-position-routes.js";
 import { registerOperationsRoutes } from "./operations-routes.js";
+import { PostgresPulsoAuditOutbox } from "./pulso-audit-outbox.js";
+import { PostgresPulsoOutbox } from "./pulso-outbox.js";
+import { registerChannelDeliveryRoutes } from "./channel-delivery-routes.js";
+import { registerSofiaOwnerRoutes } from "./sofia-owner-routes.js";
 import { registerSofiaToolRoutes } from "./sofia-tools-routes.js";
 import { readTenantId } from "./shared.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  const durableOutbox = readDurableOutboxConfiguration(process.env);
+  const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_PULSO_TOKEN");
+  const operatorAssertionKey = readOperatorAssertionKey(process.env);
+  const sofiaToken = readInternalCredential(process.env, "PULSO_TO_SOFIA_TOKEN");
+  const sofiaToPulsoToken = readInternalCredential(process.env, "SOFIA_TO_PULSO_TOKEN");
+  const channelToPulsoToken = readInternalCredential(process.env, "CHANNEL_TO_PULSO_TOKEN");
+  const pulsoToChannelToken = readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN");
+  const auditToken = readInternalCredential(process.env, "PULSO_TO_AUDIT_TOKEN");
+  const allowLegacyChannelInboundV1 = readChannelInboundV1Compatibility(process.env);
+  const channelServiceUrl = process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089";
+  const resolveLegacyChannelPosition = allowLegacyChannelInboundV1
+    ? createLegacyChannelPositionResolver({
+        channelServiceUrl,
+        credential: pulsoToChannelToken ?? ""
+      })
+    : undefined;
+  const channelThreads = pulsoToChannelToken
+    ? createChannelThreadClient({
+        channelServiceUrl,
+        credential: pulsoToChannelToken
+      })
+    : undefined;
+  if (allowLegacyChannelInboundV1) {
+    context.logger.warn("Channel inbound v1 compatibility window is enabled", {
+      compatibilityMode: "channel_inbound_v1",
+      targetContract: "channel.inbound.received.v2"
+    });
+  }
   if (context.db) {
     await verifyPulsoIrisSchema(context);
   }
 
   const emitAudit = createAuditClient({
-    auditServiceUrl: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
-    internalServiceToken: context.config.internalServiceToken,
     logger: context.logger
+  });
+
+  app.addHook("preHandler", async (request, reply) => {
+    if (!request.routeOptions.url?.startsWith("/v1/tenants/")) return;
+    const tenantId = readTenantParam(request.params);
+    if (tenantId === undefined) return;
+    const authError = validateInternalAuthorization(request.headers, { "api-gateway": gatewayToken });
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
+    const assertionError = validateOperatorAssertionContext(request.headers, operatorAssertionKey, tenantId);
+    if (assertionError) {
+      return reply.code(assertionError.statusCode).send(envelope({ error: assertionError.message }, request.id));
+    }
   });
 
   await registerConfigRoutes(app, context, emitAudit);
@@ -38,6 +109,139 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   await registerAvailabilityRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
   await registerSofiaToolRoutes(app, context, emitAudit);
+  registerSofiaOwnerRoutes(app, context, sofiaToPulsoToken);
+  registerChannelDeliveryRoutes(app, context, channelToPulsoToken);
+  registerPulsoEventPositionRoute(app, context, sofiaToPulsoToken);
+  if (isHttpDurableEventIngressEnabled(durableOutbox.transport)) {
+    registerChannelDeliveryEventRoutes(app, context, channelToPulsoToken);
+    await registerChannelInboundEventRoutesWithCompatibility(app, context, {
+      allowLegacyV1: allowLegacyChannelInboundV1,
+      resolveLegacyPosition: resolveLegacyChannelPosition,
+      channelThreads
+    });
+  }
+
+  if (context.db && durableOutbox.transport === "jetstream") {
+    const consumer = await startChannelInboundJetStreamConsumer((hook) => app.addHook("onClose", hook), context.db, {
+      natsUrl: durableOutbox.natsUrl,
+      allowLegacyV1: allowLegacyChannelInboundV1,
+      resolveLegacyPosition: resolveLegacyChannelPosition,
+      channelThreads,
+      ...durableOutbox.authentication
+    });
+    context.registerReadinessCheck?.({
+      name: "jetstream_channel_inbound_consumer",
+      check: () => consumer.checkReadiness()
+    });
+    const deliveryConsumer = await startChannelDeliveryJetStreamConsumer(
+      (hook) => app.addHook("onClose", hook),
+      context.db,
+      {
+        natsUrl: durableOutbox.natsUrl,
+        ...durableOutbox.authentication
+      }
+    );
+    context.registerReadinessCheck?.({
+      name: "jetstream_channel_delivery_consumer",
+      check: () => deliveryConsumer.checkReadiness()
+    });
+  }
+
+  if (context.db && (durableOutbox.transport === "jetstream" || sofiaToken)) {
+    const workerId = `pulso-outbox-${randomUUID()}`;
+    const outbox = new PostgresPulsoOutbox(
+      context.db,
+      workerId,
+      process.env.AGENT_SERVICE_URL ?? "http://localhost:8083"
+    );
+    if (durableOutbox.enabled) {
+      const dispatcher =
+        durableOutbox.transport === "jetstream"
+          ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+              workerId,
+              servers: durableOutbox.natsUrl,
+              ...durableOutbox.authentication,
+              connectionName: workerId,
+              subjectPrefix: "hyperion.events",
+              expectedStream: "HYPERION_EVENTS",
+              claim: (limit) => outbox.claim(limit),
+              complete: (eventId) => outbox.complete(eventId),
+              fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
+              batchSize: 10,
+              intervalMs: 750,
+              connectTimeoutMs: 5_000,
+              publishTimeoutMs: 5_000
+            })
+          : new HttpOutboxDispatcher<Record<string, unknown>>({
+              workerId,
+              internalToken: sofiaToken!,
+              fetch: createWorkloadFetch("pulso-iris-service", sofiaToken!),
+              claim: (limit) => outbox.claim(limit),
+              complete: (eventId) => outbox.complete(eventId),
+              fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
+              batchSize: 10,
+              intervalMs: 750,
+              timeoutMs: 5_000
+            });
+      app.addHook("onClose", async () => dispatcher.stop());
+      if (dispatcher instanceof JetStreamOutboxDispatcher) {
+        await dispatcher.initialize();
+        context.registerReadinessCheck?.({
+          name: "jetstream_pulso_publisher",
+          check: () => dispatcher.checkReadiness()
+        });
+      }
+      dispatcher.start();
+    }
+  }
+
+  if (context.db && (durableOutbox.transport === "jetstream" || auditToken)) {
+    const auditWorkerId = `pulso-audit-outbox-${randomUUID()}`;
+    const auditOutbox = new PostgresPulsoAuditOutbox(
+      context.db,
+      auditWorkerId,
+      process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086"
+    );
+    if (durableOutbox.enabled) {
+      const auditDispatcher =
+        durableOutbox.transport === "jetstream"
+          ? new JetStreamOutboxDispatcher<Record<string, unknown>>({
+              workerId: auditWorkerId,
+              servers: durableOutbox.natsUrl,
+              ...durableOutbox.authentication,
+              connectionName: auditWorkerId,
+              subjectPrefix: "hyperion.events",
+              expectedStream: "HYPERION_EVENTS",
+              claim: (limit) => auditOutbox.claim(limit),
+              complete: (eventId) => auditOutbox.complete(eventId),
+              fail: (eventId, errorCode) => auditOutbox.fail(eventId, errorCode),
+              batchSize: 10,
+              intervalMs: 750,
+              connectTimeoutMs: 5_000,
+              publishTimeoutMs: 5_000
+            })
+          : new HttpOutboxDispatcher<Record<string, unknown>>({
+              workerId: auditWorkerId,
+              internalToken: auditToken!,
+              fetch: createWorkloadFetch("pulso-iris-service", auditToken!),
+              claim: (limit) => auditOutbox.claim(limit),
+              complete: (eventId) => auditOutbox.complete(eventId),
+              fail: (eventId, errorCode) => auditOutbox.fail(eventId, errorCode),
+              batchSize: 10,
+              intervalMs: 750,
+              timeoutMs: 5_000
+            });
+      app.addHook("onClose", async () => auditDispatcher.stop());
+      if (auditDispatcher instanceof JetStreamOutboxDispatcher) {
+        await auditDispatcher.initialize();
+        context.registerReadinessCheck?.({
+          name: "jetstream_pulso_audit_publisher",
+          check: () => auditDispatcher.checkReadiness()
+        });
+      }
+      auditDispatcher.start();
+    }
+  }
 
   const stopSimulator = startAppointmentVerificationSimulator(context, emitAudit);
   const stopHoldExpiration = startAppointmentHoldExpiration(context, emitAudit);
@@ -258,6 +462,81 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 };
 
+function readTenantParam(params: unknown): string | undefined {
+  return typeof params === "object" &&
+    params !== null &&
+    "tenantId" in params &&
+    typeof (params as { tenantId?: unknown }).tenantId === "string"
+    ? (params as { tenantId: string }).tenantId
+    : undefined;
+}
+
+type DurableOutboxConfiguration =
+  | { readonly transport: "http"; readonly enabled: boolean }
+  | {
+      readonly transport: "jetstream";
+      readonly enabled: boolean;
+      readonly natsUrl: string;
+      readonly authentication: NatsAuthentication;
+    };
+
+export function readDurableOutboxConfiguration(env: NodeJS.ProcessEnv): DurableOutboxConfiguration {
+  const transport = env.DURABLE_EVENT_TRANSPORT?.trim() || "http";
+  if (transport !== "http" && transport !== "jetstream") {
+    throw new Error("DURABLE_EVENT_TRANSPORT must be either http or jetstream");
+  }
+
+  const globallyEnabled = env.DURABLE_OUTBOX_ENABLED !== "false";
+  if (transport === "http") {
+    return {
+      transport,
+      enabled: globallyEnabled && env.DURABLE_HTTP_OUTBOX_ENABLED !== "false"
+    };
+  }
+
+  return {
+    transport,
+    enabled: globallyEnabled,
+    natsUrl: requireCredentialFreeNatsUrl(env.NATS_URL),
+    authentication: readNatsAuthentication(
+      { authToken: env.NATS_AUTH_TOKEN, username: env.NATS_USERNAME, password: env.NATS_PASSWORD },
+      {
+        required: true,
+        minimumSecretLength: 24,
+        serverConfigurationSafe: true,
+        allowToken: !isRestrictedDeploymentEnvironment(env)
+      }
+    )!
+  };
+}
+
+function requireCredentialFreeNatsUrl(value: string | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) {
+    throw new Error("NATS_URL is required when DURABLE_EVENT_TRANSPORT=jetstream");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error("NATS_URL must be a valid credential-free URL");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("NATS_URL must not contain credentials");
+  }
+  if (
+    (parsed.protocol !== "nats:" && parsed.protocol !== "tls:") ||
+    !parsed.hostname ||
+    parsed.pathname !== "" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("NATS_URL must be a nats: or tls: endpoint without path, query, or hash");
+  }
+  return normalized;
+}
+
 // Schema is owned by @hyperion/migrations; the service only checks it is present.
 async function verifyPulsoIrisSchema(context: ServiceContext): Promise<void> {
   if (!context.db) {
@@ -277,4 +556,14 @@ async function verifyPulsoIrisSchema(context: ServiceContext): Promise<void> {
       error: error instanceof Error ? error.message : String(error)
     });
   }
+}
+
+function createWorkloadFetch(caller: string, token: string): typeof fetch {
+  return (input, init) => {
+    const headers = new Headers(init?.headers);
+    for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
+      headers.set(name, value);
+    }
+    return fetch(input, { ...init, headers });
+  };
 }

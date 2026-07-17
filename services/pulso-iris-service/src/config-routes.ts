@@ -51,6 +51,7 @@ import {
 } from "./shared.js";
 
 type Database = NonNullable<ServiceContext["db"]>;
+type TransactionExecutor = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 const SITE_COLUMNS = `
   id,
@@ -198,24 +199,28 @@ const relationPatchSchema = z.object({ status: pulsoIrisAgendaStatusSchema });
 export async function registerConfigRoutes(
   app: FastifyInstance,
   context: ServiceContext,
-  emitAudit: AuditEmitter = () => undefined
+  emitAudit: AuditEmitter = async () => undefined
 ): Promise<void> {
   const base = "/v1/tenants/:tenantId/pulso-iris/config";
 
-  const emitConfigUpdated = (
+  const emitConfigUpdated = async (
     request: { id: string; headers: Record<string, unknown> | { [key: string]: unknown } },
     tenantId: string,
     entityType: string,
-    entityId: string
+    entityId: string,
+    transaction: TransactionExecutor
   ) => {
-    emitAudit({
-      tenantId,
-      actorId: readOperatorId(request.headers as Record<string, unknown>),
-      eventType: "config.updated",
-      entityType,
-      entityId,
-      metadata: { requestId: request.id }
-    });
+    await emitAudit(
+      {
+        tenantId,
+        actorId: readOperatorId(request.headers as Record<string, unknown>),
+        eventType: "config.updated",
+        entityType,
+        entityId,
+        metadata: { requestId: request.id }
+      },
+      transaction
+    );
   };
 
   // ----- Configuracion general de agenda -----
@@ -254,50 +259,62 @@ export async function registerConfigRoutes(
     }
 
     const operatorId = readOperatorId(request.headers as Record<string, unknown>);
-    const result = await scope.db.query<AgendaSettingsRow>(
-      `update pulso_iris.agenda_settings set
-         mode = $3,
-         timezone = $4,
-         booking_horizon_days = $5,
-         hold_duration_minutes = $6,
-         max_alternatives = $7,
-         max_reschedules = $8,
-         external_confirmation_sla_minutes = $9,
-         external_reference_required = $10,
-         capacity_policy = $11,
-         status = $12,
-         updated_by = $2,
-         updated_at = now()
-       where tenant_id = $1
-       returning ${AGENDA_SETTINGS_COLUMNS}`,
-      [
-        scope.tenantId,
-        operatorId ?? null,
-        effective.mode,
-        effective.timezone,
-        effective.bookingHorizonDays,
-        effective.holdDurationMinutes,
-        effective.maxAlternatives,
-        effective.maxReschedules,
-        effective.externalConfirmationSlaMinutes,
-        effective.externalReferenceRequired,
-        effective.capacityPolicy,
-        effective.status
-      ]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const updateResult = await transaction.query<AgendaSettingsRow>(
+        `update pulso_iris.agenda_settings set
+           mode = $3,
+           timezone = $4,
+           booking_horizon_days = $5,
+           hold_duration_minutes = $6,
+           max_alternatives = $7,
+           max_reschedules = $8,
+           external_confirmation_sla_minutes = $9,
+           external_reference_required = $10,
+           capacity_policy = $11,
+           status = $12,
+           updated_by = $2,
+           updated_at = now()
+         where tenant_id = $1
+         returning ${AGENDA_SETTINGS_COLUMNS}`,
+        [
+          scope.tenantId,
+          operatorId ?? null,
+          effective.mode,
+          effective.timezone,
+          effective.bookingHorizonDays,
+          effective.holdDurationMinutes,
+          effective.maxAlternatives,
+          effective.maxReschedules,
+          effective.externalConfirmationSlaMinutes,
+          effective.externalReferenceRequired,
+          effective.capacityPolicy,
+          effective.status
+        ]
+      );
+      const updated = updateResult.rows[0];
+      if (updated) {
+        await emitAudit(
+          {
+            tenantId: scope.tenantId,
+            actorId: operatorId,
+            eventType: "agenda.settings.updated",
+            entityType: "agenda_settings",
+            entityId: scope.tenantId,
+            metadata: {
+              requestId: request.id,
+              mode: updated.mode,
+              status: updated.status
+            }
+          },
+          transaction
+        );
+      }
+      return updateResult;
+    });
     const updated = result.rows[0];
     if (!updated) {
       return reply.code(404).send(envelope({ error: "Agenda settings not found" }, request.id));
     }
-
-    emitAudit({
-      tenantId: scope.tenantId,
-      actorId: operatorId,
-      eventType: "agenda.settings.updated",
-      entityType: "agenda_settings",
-      entityId: scope.tenantId,
-      metadata: { requestId: request.id, mode: updated.mode, status: updated.status }
-    });
     return envelope(pulsoIrisAgendaSettingsSchema.parse(updated), request.id);
   });
 
@@ -329,14 +346,19 @@ export async function registerConfigRoutes(
     if (referenceError) return sendReferenceError(reply, request, referenceError.label);
 
     try {
-      const result = await scope.db.query(
-        `insert into pulso_iris.professional_sites (tenant_id, professional_id, site_id, status)
-         values ($1, $2, $3, coalesce($4, 'active'))
-         returning ${PROFESSIONAL_SITE_COLUMNS}`,
-        [scope.tenantId, input.professionalId, input.siteId, input.status ?? null]
-      );
-      const created = result.rows[0] as { id?: string } | undefined;
-      if (created?.id) emitConfigUpdated(request, scope.tenantId, "professional_site", created.id);
+      const result = await scope.db.transaction(async (transaction) => {
+        const insertResult = await transaction.query(
+          `insert into pulso_iris.professional_sites (tenant_id, professional_id, site_id, status)
+           values ($1, $2, $3, coalesce($4, 'active'))
+           returning ${PROFESSIONAL_SITE_COLUMNS}`,
+          [scope.tenantId, input.professionalId, input.siteId, input.status ?? null]
+        );
+        const created = insertResult.rows[0] as { id?: string } | undefined;
+        if (created?.id) {
+          await emitConfigUpdated(request, scope.tenantId, "professional_site", created.id, transaction);
+        }
+        return insertResult;
+      });
       return reply.code(201).send(envelope(pulsoIrisProfessionalSiteListSchema.parse(result.rows)[0], request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -351,17 +373,22 @@ export async function registerConfigRoutes(
     const input = parseBody(relationPatchSchema, request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `update pulso_iris.professional_sites
-       set status = $3, updated_at = now()
-       where tenant_id = $1 and id = $2
-       returning ${PROFESSIONAL_SITE_COLUMNS}`,
-      [scope.tenantId, relationId, input.status]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const updateResult = await transaction.query(
+        `update pulso_iris.professional_sites
+         set status = $3, updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${PROFESSIONAL_SITE_COLUMNS}`,
+        [scope.tenantId, relationId, input.status]
+      );
+      if (updateResult.rows.length > 0) {
+        await emitConfigUpdated(request, scope.tenantId, "professional_site", relationId, transaction);
+      }
+      return updateResult;
+    });
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Professional-site relation not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "professional_site", relationId);
     return envelope(pulsoIrisProfessionalSiteListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -391,15 +418,20 @@ export async function registerConfigRoutes(
     if (referenceError) return sendReferenceError(reply, request, referenceError.label);
 
     try {
-      const result = await scope.db.query(
-        `insert into pulso_iris.professional_appointment_types
-           (tenant_id, professional_id, appointment_type_id, status)
-         values ($1, $2, $3, coalesce($4, 'active'))
-         returning ${PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS}`,
-        [scope.tenantId, input.professionalId, input.appointmentTypeId, input.status ?? null]
-      );
-      const created = result.rows[0] as { id?: string } | undefined;
-      if (created?.id) emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", created.id);
+      const result = await scope.db.transaction(async (transaction) => {
+        const insertResult = await transaction.query(
+          `insert into pulso_iris.professional_appointment_types
+             (tenant_id, professional_id, appointment_type_id, status)
+           values ($1, $2, $3, coalesce($4, 'active'))
+           returning ${PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS}`,
+          [scope.tenantId, input.professionalId, input.appointmentTypeId, input.status ?? null]
+        );
+        const created = insertResult.rows[0] as { id?: string } | undefined;
+        if (created?.id) {
+          await emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", created.id, transaction);
+        }
+        return insertResult;
+      });
       return reply
         .code(201)
         .send(envelope(pulsoIrisProfessionalAppointmentTypeListSchema.parse(result.rows)[0], request.id));
@@ -416,17 +448,22 @@ export async function registerConfigRoutes(
     const input = parseBody(relationPatchSchema, request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `update pulso_iris.professional_appointment_types
-       set status = $3, updated_at = now()
-       where tenant_id = $1 and id = $2
-       returning ${PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS}`,
-      [scope.tenantId, relationId, input.status]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const updateResult = await transaction.query(
+        `update pulso_iris.professional_appointment_types
+         set status = $3, updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS}`,
+        [scope.tenantId, relationId, input.status]
+      );
+      if (updateResult.rows.length > 0) {
+        await emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", relationId, transaction);
+      }
+      return updateResult;
+    });
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Professional-appointment-type relation not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "professional_appointment_type", relationId);
     return envelope(pulsoIrisProfessionalAppointmentTypeListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -466,29 +503,35 @@ export async function registerConfigRoutes(
     const operatorId = readOperatorId(request.headers as Record<string, unknown>);
 
     try {
-      const applied = await applyAgendaImport({
-        db: scope.db,
-        tenantId: scope.tenantId,
-        resource,
-        csv: input.csv,
-        idempotencyKey: input.idempotencyKey,
-        operatorId
-      });
-      if (!applied.idempotent) {
-        emitAudit({
+      const applied = await scope.db.transaction(async (transaction) => {
+        const importResult = await applyAgendaImport({
+          db: asTransactionalDatabase(transaction),
           tenantId: scope.tenantId,
-          actorId: operatorId,
-          eventType: "agenda.configuration.imported",
-          entityType: "configuration_import",
-          entityId: applied.importId,
-          metadata: {
-            requestId: request.id,
-            resource,
-            applied: applied.applied,
-            rejected: applied.summary.rejected
-          }
+          resource,
+          csv: input.csv,
+          idempotencyKey: input.idempotencyKey,
+          operatorId
         });
-      }
+        if (!importResult.idempotent) {
+          await emitAudit(
+            {
+              tenantId: scope.tenantId,
+              actorId: operatorId,
+              eventType: "agenda.configuration.imported",
+              entityType: "configuration_import",
+              entityId: importResult.importId,
+              metadata: {
+                requestId: request.id,
+                resource,
+                applied: importResult.applied,
+                rejected: importResult.summary.rejected
+              }
+            },
+            transaction
+          );
+        }
+        return importResult;
+      });
       return reply
         .code(applied.idempotent ? 200 : 201)
         .send(envelope(pulsoIrisConfigurationImportApplyResultSchema.parse(applied), request.id));
@@ -524,14 +567,27 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisSiteInputSchema, request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `insert into pulso_iris.sites (tenant_id, name, city, address, phone, status)
-       values ($1, $2, $3, $4, $5, coalesce($6, 'active'))
-       returning ${SITE_COLUMNS}`,
-      [scope.tenantId, input.name, input.city ?? null, input.address ?? null, input.phone ?? null, input.status ?? null]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const insertResult = await transaction.query(
+        `insert into pulso_iris.sites (tenant_id, name, city, address, phone, status)
+         values ($1, $2, $3, $4, $5, coalesce($6, 'active'))
+         returning ${SITE_COLUMNS}`,
+        [
+          scope.tenantId,
+          input.name,
+          input.city ?? null,
+          input.address ?? null,
+          input.phone ?? null,
+          input.status ?? null
+        ]
+      );
+      const created = pulsoIrisSiteListSchema.parse(insertResult.rows)[0];
+      if (created) {
+        await emitConfigUpdated(request, scope.tenantId, "site", created.id, transaction);
+      }
+      return insertResult;
+    });
     const created = pulsoIrisSiteListSchema.parse(result.rows)[0];
-    if (created) emitConfigUpdated(request, scope.tenantId, "site", created.id);
     return reply.code(201).send(envelope(created, request.id));
   });
 
@@ -545,31 +601,36 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisSiteInputSchema.partial(), request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `update pulso_iris.sites set
-         name = coalesce($3, name),
-         city = coalesce($4, city),
-         address = coalesce($5, address),
-         phone = coalesce($6, phone),
-         status = coalesce($7, status),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-       returning ${SITE_COLUMNS}`,
-      [
-        scope.tenantId,
-        siteId,
-        input.name ?? null,
-        input.city ?? null,
-        input.address ?? null,
-        input.phone ?? null,
-        input.status ?? null
-      ]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const updateResult = await transaction.query(
+        `update pulso_iris.sites set
+           name = coalesce($3, name),
+           city = coalesce($4, city),
+           address = coalesce($5, address),
+           phone = coalesce($6, phone),
+           status = coalesce($7, status),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${SITE_COLUMNS}`,
+        [
+          scope.tenantId,
+          siteId,
+          input.name ?? null,
+          input.city ?? null,
+          input.address ?? null,
+          input.phone ?? null,
+          input.status ?? null
+        ]
+      );
+      if (updateResult.rows.length > 0) {
+        await emitConfigUpdated(request, scope.tenantId, "site", siteId, transaction);
+      }
+      return updateResult;
+    });
 
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Site not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "site", siteId);
     return envelope(pulsoIrisSiteListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -593,21 +654,27 @@ export async function registerConfigRoutes(
     if (!input) return;
 
     try {
-      const result = await scope.db.query(
-        `insert into pulso_iris.professionals (tenant_id, name, professional_type, subspecialty, is_pilot, status)
-         values ($1, $2, $3, $4, coalesce($5, false), coalesce($6, 'active'))
-         returning ${PROFESSIONAL_COLUMNS}`,
-        [
-          scope.tenantId,
-          input.name,
-          input.professionalType,
-          input.subspecialty ?? null,
-          input.isPilot ?? null,
-          input.status ?? null
-        ]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const insertResult = await transaction.query(
+          `insert into pulso_iris.professionals (tenant_id, name, professional_type, subspecialty, is_pilot, status)
+           values ($1, $2, $3, $4, coalesce($5, false), coalesce($6, 'active'))
+           returning ${PROFESSIONAL_COLUMNS}`,
+          [
+            scope.tenantId,
+            input.name,
+            input.professionalType,
+            input.subspecialty ?? null,
+            input.isPilot ?? null,
+            input.status ?? null
+          ]
+        );
+        const created = pulsoIrisProfessionalListSchema.parse(insertResult.rows)[0];
+        if (created) {
+          await emitConfigUpdated(request, scope.tenantId, "professional", created.id, transaction);
+        }
+        return insertResult;
+      });
       const created = pulsoIrisProfessionalListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "professional", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -625,31 +692,36 @@ export async function registerConfigRoutes(
     if (!input) return;
 
     try {
-      const result = await scope.db.query(
-        `update pulso_iris.professionals set
-           name = coalesce($3, name),
-           professional_type = coalesce($4, professional_type),
-           subspecialty = coalesce($5, subspecialty),
-           is_pilot = coalesce($6, is_pilot),
-           status = coalesce($7, status),
-           updated_at = now()
-         where tenant_id = $1 and id = $2
-         returning ${PROFESSIONAL_COLUMNS}`,
-        [
-          scope.tenantId,
-          professionalId,
-          input.name ?? null,
-          input.professionalType ?? null,
-          input.subspecialty ?? null,
-          input.isPilot ?? null,
-          input.status ?? null
-        ]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const updateResult = await transaction.query(
+          `update pulso_iris.professionals set
+             name = coalesce($3, name),
+             professional_type = coalesce($4, professional_type),
+             subspecialty = coalesce($5, subspecialty),
+             is_pilot = coalesce($6, is_pilot),
+             status = coalesce($7, status),
+             updated_at = now()
+           where tenant_id = $1 and id = $2
+           returning ${PROFESSIONAL_COLUMNS}`,
+          [
+            scope.tenantId,
+            professionalId,
+            input.name ?? null,
+            input.professionalType ?? null,
+            input.subspecialty ?? null,
+            input.isPilot ?? null,
+            input.status ?? null
+          ]
+        );
+        if (updateResult.rows.length > 0) {
+          await emitConfigUpdated(request, scope.tenantId, "professional", professionalId, transaction);
+        }
+        return updateResult;
+      });
 
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Professional not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "professional", professionalId);
       return envelope(pulsoIrisProfessionalListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -675,14 +747,20 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisPayerInputSchema, request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `insert into pulso_iris.payers (tenant_id, name, payer_group, requires_authorization, status)
-       values ($1, $2, $3, coalesce($4, false), coalesce($5, 'active'))
-       returning ${PAYER_COLUMNS}`,
-      [scope.tenantId, input.name, input.group, input.requiresAuthorization ?? null, input.status ?? null]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const insertResult = await transaction.query(
+        `insert into pulso_iris.payers (tenant_id, name, payer_group, requires_authorization, status)
+         values ($1, $2, $3, coalesce($4, false), coalesce($5, 'active'))
+         returning ${PAYER_COLUMNS}`,
+        [scope.tenantId, input.name, input.group, input.requiresAuthorization ?? null, input.status ?? null]
+      );
+      const created = pulsoIrisPayerListSchema.parse(insertResult.rows)[0];
+      if (created) {
+        await emitConfigUpdated(request, scope.tenantId, "payer", created.id, transaction);
+      }
+      return insertResult;
+    });
     const created = pulsoIrisPayerListSchema.parse(result.rows)[0];
-    if (created) emitConfigUpdated(request, scope.tenantId, "payer", created.id);
     return reply.code(201).send(envelope(created, request.id));
   });
 
@@ -696,29 +774,34 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisPayerInputSchema.partial(), request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `update pulso_iris.payers set
-         name = coalesce($3, name),
-         payer_group = coalesce($4, payer_group),
-         requires_authorization = coalesce($5, requires_authorization),
-         status = coalesce($6, status),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-       returning ${PAYER_COLUMNS}`,
-      [
-        scope.tenantId,
-        payerId,
-        input.name ?? null,
-        input.group ?? null,
-        input.requiresAuthorization ?? null,
-        input.status ?? null
-      ]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const updateResult = await transaction.query(
+        `update pulso_iris.payers set
+           name = coalesce($3, name),
+           payer_group = coalesce($4, payer_group),
+           requires_authorization = coalesce($5, requires_authorization),
+           status = coalesce($6, status),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${PAYER_COLUMNS}`,
+        [
+          scope.tenantId,
+          payerId,
+          input.name ?? null,
+          input.group ?? null,
+          input.requiresAuthorization ?? null,
+          input.status ?? null
+        ]
+      );
+      if (updateResult.rows.length > 0) {
+        await emitConfigUpdated(request, scope.tenantId, "payer", payerId, transaction);
+      }
+      return updateResult;
+    });
 
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Payer not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "payer", payerId);
     return envelope(pulsoIrisPayerListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -744,24 +827,30 @@ export async function registerConfigRoutes(
     const input = parseBody(pulsoIrisAppointmentTypeInputSchema, request, reply);
     if (!input) return;
 
-    const result = await scope.db.query(
-      `insert into pulso_iris.appointment_types
-         (tenant_id, name, category, duration_min, preparation_text, bookable_by_ia, slot_priority, status)
-       values ($1, $2, $3, coalesce($4, 20), $5, coalesce($6, true), coalesce($7, 50), coalesce($8, 'active'))
-       returning ${APPOINTMENT_TYPE_COLUMNS}`,
-      [
-        scope.tenantId,
-        input.name,
-        input.category,
-        input.durationMin ?? null,
-        input.preparationText ?? null,
-        input.bookableByIa ?? null,
-        input.slotPriority ?? null,
-        input.status ?? null
-      ]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const insertResult = await transaction.query(
+        `insert into pulso_iris.appointment_types
+           (tenant_id, name, category, duration_min, preparation_text, bookable_by_ia, slot_priority, status)
+         values ($1, $2, $3, coalesce($4, 20), $5, coalesce($6, true), coalesce($7, 50), coalesce($8, 'active'))
+         returning ${APPOINTMENT_TYPE_COLUMNS}`,
+        [
+          scope.tenantId,
+          input.name,
+          input.category,
+          input.durationMin ?? null,
+          input.preparationText ?? null,
+          input.bookableByIa ?? null,
+          input.slotPriority ?? null,
+          input.status ?? null
+        ]
+      );
+      const created = pulsoIrisAppointmentTypeListSchema.parse(insertResult.rows)[0];
+      if (created) {
+        await emitConfigUpdated(request, scope.tenantId, "appointment_type", created.id, transaction);
+      }
+      return insertResult;
+    });
     const created = pulsoIrisAppointmentTypeListSchema.parse(result.rows)[0];
-    if (created) emitConfigUpdated(request, scope.tenantId, "appointment_type", created.id);
     return reply.code(201).send(envelope(created, request.id));
   });
 
@@ -792,35 +881,40 @@ export async function registerConfigRoutes(
       }
     }
 
-    const result = await scope.db.query(
-      `update pulso_iris.appointment_types set
-         name = coalesce($3, name),
-         category = coalesce($4, category),
-         duration_min = coalesce($5, duration_min),
-         preparation_text = coalesce($6, preparation_text),
-         bookable_by_ia = coalesce($7, bookable_by_ia),
-         slot_priority = coalesce($8, slot_priority),
-         status = coalesce($9, status),
-         updated_at = now()
-       where tenant_id = $1 and id = $2
-       returning ${APPOINTMENT_TYPE_COLUMNS}`,
-      [
-        scope.tenantId,
-        appointmentTypeId,
-        input.name ?? null,
-        input.category ?? null,
-        input.durationMin ?? null,
-        input.preparationText ?? null,
-        input.bookableByIa ?? null,
-        input.slotPriority ?? null,
-        input.status ?? null
-      ]
-    );
+    const result = await scope.db.transaction(async (transaction) => {
+      const updateResult = await transaction.query(
+        `update pulso_iris.appointment_types set
+           name = coalesce($3, name),
+           category = coalesce($4, category),
+           duration_min = coalesce($5, duration_min),
+           preparation_text = coalesce($6, preparation_text),
+           bookable_by_ia = coalesce($7, bookable_by_ia),
+           slot_priority = coalesce($8, slot_priority),
+           status = coalesce($9, status),
+           updated_at = now()
+         where tenant_id = $1 and id = $2
+         returning ${APPOINTMENT_TYPE_COLUMNS}`,
+        [
+          scope.tenantId,
+          appointmentTypeId,
+          input.name ?? null,
+          input.category ?? null,
+          input.durationMin ?? null,
+          input.preparationText ?? null,
+          input.bookableByIa ?? null,
+          input.slotPriority ?? null,
+          input.status ?? null
+        ]
+      );
+      if (updateResult.rows.length > 0) {
+        await emitConfigUpdated(request, scope.tenantId, "appointment_type", appointmentTypeId, transaction);
+      }
+      return updateResult;
+    });
 
     if (result.rows.length === 0) {
       return reply.code(404).send(envelope({ error: "Appointment type not found" }, request.id));
     }
-    emitConfigUpdated(request, scope.tenantId, "appointment_type", appointmentTypeId);
     return envelope(pulsoIrisAppointmentTypeListSchema.parse(result.rows)[0], request.id);
   });
 
@@ -884,32 +978,38 @@ export async function registerConfigRoutes(
     }
 
     try {
-      const result = await scope.db.query(
-        `insert into pulso_iris.availability_rules
-           (tenant_id, site_id, professional_id, appointment_type_id, weekday, starts_at, ends_at,
-            slot_duration_min, capacity, timezone, effective_from, effective_to, status, notes)
-         values ($1, $2, $3, $4, $5, $6::time, $7::time, coalesce($8, 20), coalesce($9, 1),
-           coalesce($10, 'America/Bogota'), $11::date, $12::date, coalesce($13, 'active'), $14)
-         returning ${AVAILABILITY_RULE_COLUMNS}`,
-        [
-          scope.tenantId,
-          input.siteId,
-          input.professionalId,
-          input.appointmentTypeId,
-          input.weekday,
-          input.startsAt,
-          input.endsAt,
-          input.slotDurationMin ?? null,
-          input.capacity ?? null,
-          input.timezone ?? null,
-          input.effectiveFrom ?? null,
-          input.effectiveTo ?? null,
-          input.status ?? null,
-          input.notes ?? null
-        ]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const insertResult = await transaction.query(
+          `insert into pulso_iris.availability_rules
+             (tenant_id, site_id, professional_id, appointment_type_id, weekday, starts_at, ends_at,
+              slot_duration_min, capacity, timezone, effective_from, effective_to, status, notes)
+           values ($1, $2, $3, $4, $5, $6::time, $7::time, coalesce($8, 20), coalesce($9, 1),
+             coalesce($10, 'America/Bogota'), $11::date, $12::date, coalesce($13, 'active'), $14)
+           returning ${AVAILABILITY_RULE_COLUMNS}`,
+          [
+            scope.tenantId,
+            input.siteId,
+            input.professionalId,
+            input.appointmentTypeId,
+            input.weekday,
+            input.startsAt,
+            input.endsAt,
+            input.slotDurationMin ?? null,
+            input.capacity ?? null,
+            input.timezone ?? null,
+            input.effectiveFrom ?? null,
+            input.effectiveTo ?? null,
+            input.status ?? null,
+            input.notes ?? null
+          ]
+        );
+        const created = pulsoIrisAvailabilityRuleListSchema.parse(insertResult.rows)[0];
+        if (created) {
+          await emitConfigUpdated(request, scope.tenantId, "availability_rule", created.id, transaction);
+        }
+        return insertResult;
+      });
       const created = pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "availability_rule", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -971,47 +1071,52 @@ export async function registerConfigRoutes(
     }
 
     try {
-      const result = await scope.db.query(
-        `update pulso_iris.availability_rules set
-           site_id = coalesce($3, site_id),
-           professional_id = coalesce($4, professional_id),
-           appointment_type_id = coalesce($5, appointment_type_id),
-           weekday = coalesce($6, weekday),
-           starts_at = coalesce($7::time, starts_at),
-           ends_at = coalesce($8::time, ends_at),
-           slot_duration_min = coalesce($9, slot_duration_min),
-           capacity = coalesce($10, capacity),
-           timezone = coalesce($11, timezone),
-           effective_from = coalesce($12::date, effective_from),
-           effective_to = coalesce($13::date, effective_to),
-           status = coalesce($14, status),
-           notes = coalesce($15, notes),
-           updated_at = now()
-         where tenant_id = $1 and id = $2
-         returning ${AVAILABILITY_RULE_COLUMNS}`,
-        [
-          scope.tenantId,
-          ruleId,
-          input.siteId ?? null,
-          input.professionalId ?? null,
-          input.appointmentTypeId ?? null,
-          input.weekday ?? null,
-          input.startsAt ?? null,
-          input.endsAt ?? null,
-          input.slotDurationMin ?? null,
-          input.capacity ?? null,
-          input.timezone ?? null,
-          input.effectiveFrom ?? null,
-          input.effectiveTo ?? null,
-          input.status ?? null,
-          input.notes ?? null
-        ]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const updateResult = await transaction.query(
+          `update pulso_iris.availability_rules set
+             site_id = coalesce($3, site_id),
+             professional_id = coalesce($4, professional_id),
+             appointment_type_id = coalesce($5, appointment_type_id),
+             weekday = coalesce($6, weekday),
+             starts_at = coalesce($7::time, starts_at),
+             ends_at = coalesce($8::time, ends_at),
+             slot_duration_min = coalesce($9, slot_duration_min),
+             capacity = coalesce($10, capacity),
+             timezone = coalesce($11, timezone),
+             effective_from = coalesce($12::date, effective_from),
+             effective_to = coalesce($13::date, effective_to),
+             status = coalesce($14, status),
+             notes = coalesce($15, notes),
+             updated_at = now()
+           where tenant_id = $1 and id = $2
+           returning ${AVAILABILITY_RULE_COLUMNS}`,
+          [
+            scope.tenantId,
+            ruleId,
+            input.siteId ?? null,
+            input.professionalId ?? null,
+            input.appointmentTypeId ?? null,
+            input.weekday ?? null,
+            input.startsAt ?? null,
+            input.endsAt ?? null,
+            input.slotDurationMin ?? null,
+            input.capacity ?? null,
+            input.timezone ?? null,
+            input.effectiveFrom ?? null,
+            input.effectiveTo ?? null,
+            input.status ?? null,
+            input.notes ?? null
+          ]
+        );
+        if (updateResult.rows.length > 0) {
+          await emitConfigUpdated(request, scope.tenantId, "availability_rule", ruleId, transaction);
+        }
+        return updateResult;
+      });
 
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Availability rule not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "availability_rule", ruleId);
       return envelope(pulsoIrisAvailabilityRuleListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1055,25 +1160,31 @@ export async function registerConfigRoutes(
     }
 
     try {
-      const result = await scope.db.query(
-        `insert into pulso_iris.agenda_blocks
-           (tenant_id, site_id, professional_id, appointment_type_id, starts_at, ends_at, block_type, reason, status)
-         values ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, coalesce($7, 'block'), $8, coalesce($9, 'active'))
-         returning ${AGENDA_BLOCK_COLUMNS}`,
-        [
-          scope.tenantId,
-          input.siteId ?? null,
-          input.professionalId ?? null,
-          input.appointmentTypeId ?? null,
-          input.startsAt,
-          input.endsAt,
-          input.blockType ?? null,
-          input.reason,
-          input.status ?? null
-        ]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const insertResult = await transaction.query(
+          `insert into pulso_iris.agenda_blocks
+             (tenant_id, site_id, professional_id, appointment_type_id, starts_at, ends_at, block_type, reason, status)
+           values ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, coalesce($7, 'block'), $8, coalesce($9, 'active'))
+           returning ${AGENDA_BLOCK_COLUMNS}`,
+          [
+            scope.tenantId,
+            input.siteId ?? null,
+            input.professionalId ?? null,
+            input.appointmentTypeId ?? null,
+            input.startsAt,
+            input.endsAt,
+            input.blockType ?? null,
+            input.reason,
+            input.status ?? null
+          ]
+        );
+        const created = pulsoIrisAgendaBlockListSchema.parse(insertResult.rows)[0];
+        if (created) {
+          await emitConfigUpdated(request, scope.tenantId, "agenda_block", created.id, transaction);
+        }
+        return insertResult;
+      });
       const created = pulsoIrisAgendaBlockListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "agenda_block", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1117,37 +1228,42 @@ export async function registerConfigRoutes(
     }
 
     try {
-      const result = await scope.db.query(
-        `update pulso_iris.agenda_blocks set
-           site_id = coalesce($3, site_id),
-           professional_id = coalesce($4, professional_id),
-           appointment_type_id = coalesce($5, appointment_type_id),
-           starts_at = coalesce($6::timestamptz, starts_at),
-           ends_at = coalesce($7::timestamptz, ends_at),
-           block_type = coalesce($8, block_type),
-           reason = coalesce($9, reason),
-           status = coalesce($10, status),
-           updated_at = now()
-         where tenant_id = $1 and id = $2
-         returning ${AGENDA_BLOCK_COLUMNS}`,
-        [
-          scope.tenantId,
-          blockId,
-          input.siteId ?? null,
-          input.professionalId ?? null,
-          input.appointmentTypeId ?? null,
-          input.startsAt ?? null,
-          input.endsAt ?? null,
-          input.blockType ?? null,
-          input.reason ?? null,
-          input.status ?? null
-        ]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const updateResult = await transaction.query(
+          `update pulso_iris.agenda_blocks set
+             site_id = coalesce($3, site_id),
+             professional_id = coalesce($4, professional_id),
+             appointment_type_id = coalesce($5, appointment_type_id),
+             starts_at = coalesce($6::timestamptz, starts_at),
+             ends_at = coalesce($7::timestamptz, ends_at),
+             block_type = coalesce($8, block_type),
+             reason = coalesce($9, reason),
+             status = coalesce($10, status),
+             updated_at = now()
+           where tenant_id = $1 and id = $2
+           returning ${AGENDA_BLOCK_COLUMNS}`,
+          [
+            scope.tenantId,
+            blockId,
+            input.siteId ?? null,
+            input.professionalId ?? null,
+            input.appointmentTypeId ?? null,
+            input.startsAt ?? null,
+            input.endsAt ?? null,
+            input.blockType ?? null,
+            input.reason ?? null,
+            input.status ?? null
+          ]
+        );
+        if (updateResult.rows.length > 0) {
+          await emitConfigUpdated(request, scope.tenantId, "agenda_block", blockId, transaction);
+        }
+        return updateResult;
+      });
 
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Agenda block not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "agenda_block", blockId);
       return envelope(pulsoIrisAgendaBlockListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1177,14 +1293,20 @@ export async function registerConfigRoutes(
     if (!input) return;
 
     try {
-      const result = await scope.db.query(
-        `insert into pulso_iris.holidays (tenant_id, holiday_date, name, status)
-         values ($1, $2::date, $3, coalesce($4, 'active'))
-         returning ${HOLIDAY_COLUMNS}`,
-        [scope.tenantId, input.holidayDate, input.name, input.status ?? null]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const insertResult = await transaction.query(
+          `insert into pulso_iris.holidays (tenant_id, holiday_date, name, status)
+           values ($1, $2::date, $3, coalesce($4, 'active'))
+           returning ${HOLIDAY_COLUMNS}`,
+          [scope.tenantId, input.holidayDate, input.name, input.status ?? null]
+        );
+        const created = pulsoIrisHolidayListSchema.parse(insertResult.rows)[0];
+        if (created) {
+          await emitConfigUpdated(request, scope.tenantId, "holiday", created.id, transaction);
+        }
+        return insertResult;
+      });
       const created = pulsoIrisHolidayListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "holiday", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1202,21 +1324,26 @@ export async function registerConfigRoutes(
     if (!input) return;
 
     try {
-      const result = await scope.db.query(
-        `update pulso_iris.holidays set
-           holiday_date = coalesce($3::date, holiday_date),
-           name = coalesce($4, name),
-           status = coalesce($5, status),
-           updated_at = now()
-         where tenant_id = $1 and id = $2
-         returning ${HOLIDAY_COLUMNS}`,
-        [scope.tenantId, holidayId, input.holidayDate ?? null, input.name ?? null, input.status ?? null]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const updateResult = await transaction.query(
+          `update pulso_iris.holidays set
+             holiday_date = coalesce($3::date, holiday_date),
+             name = coalesce($4, name),
+             status = coalesce($5, status),
+             updated_at = now()
+           where tenant_id = $1 and id = $2
+           returning ${HOLIDAY_COLUMNS}`,
+          [scope.tenantId, holidayId, input.holidayDate ?? null, input.name ?? null, input.status ?? null]
+        );
+        if (updateResult.rows.length > 0) {
+          await emitConfigUpdated(request, scope.tenantId, "holiday", holidayId, transaction);
+        }
+        return updateResult;
+      });
 
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Holiday not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "holiday", holidayId);
       return envelope(pulsoIrisHolidayListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1254,15 +1381,21 @@ export async function registerConfigRoutes(
     }
 
     try {
-      const result = await scope.db.query(
-        `insert into pulso_iris.professional_payer_exclusions
-           (tenant_id, professional_id, payer_id, status)
-         values ($1, $2, $3, coalesce($4, 'active'))
-         returning ${PAYER_EXCLUSION_COLUMNS}`,
-        [scope.tenantId, input.professionalId, input.payerId, input.status ?? null]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const insertResult = await transaction.query(
+          `insert into pulso_iris.professional_payer_exclusions
+             (tenant_id, professional_id, payer_id, status)
+           values ($1, $2, $3, coalesce($4, 'active'))
+           returning ${PAYER_EXCLUSION_COLUMNS}`,
+          [scope.tenantId, input.professionalId, input.payerId, input.status ?? null]
+        );
+        const created = pulsoIrisPayerExclusionListSchema.parse(insertResult.rows)[0];
+        if (created) {
+          await emitConfigUpdated(request, scope.tenantId, "payer_exclusion", created.id, transaction);
+        }
+        return insertResult;
+      });
       const created = pulsoIrisPayerExclusionListSchema.parse(result.rows)[0];
-      if (created) emitConfigUpdated(request, scope.tenantId, "payer_exclusion", created.id);
       return reply.code(201).send(envelope(created, request.id));
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1288,21 +1421,26 @@ export async function registerConfigRoutes(
     }
 
     try {
-      const result = await scope.db.query(
-        `update pulso_iris.professional_payer_exclusions set
-           professional_id = coalesce($3, professional_id),
-           payer_id = coalesce($4, payer_id),
-           status = coalesce($5, status),
-           updated_at = now()
-         where tenant_id = $1 and id = $2
-         returning ${PAYER_EXCLUSION_COLUMNS}`,
-        [scope.tenantId, exclusionId, input.professionalId ?? null, input.payerId ?? null, input.status ?? null]
-      );
+      const result = await scope.db.transaction(async (transaction) => {
+        const updateResult = await transaction.query(
+          `update pulso_iris.professional_payer_exclusions set
+             professional_id = coalesce($3, professional_id),
+             payer_id = coalesce($4, payer_id),
+             status = coalesce($5, status),
+             updated_at = now()
+           where tenant_id = $1 and id = $2
+           returning ${PAYER_EXCLUSION_COLUMNS}`,
+          [scope.tenantId, exclusionId, input.professionalId ?? null, input.payerId ?? null, input.status ?? null]
+        );
+        if (updateResult.rows.length > 0) {
+          await emitConfigUpdated(request, scope.tenantId, "payer_exclusion", exclusionId, transaction);
+        }
+        return updateResult;
+      });
 
       if (result.rows.length === 0) {
         return reply.code(404).send(envelope({ error: "Payer exclusion not found" }, request.id));
       }
-      emitConfigUpdated(request, scope.tenantId, "payer_exclusion", exclusionId);
       return envelope(pulsoIrisPayerExclusionListSchema.parse(result.rows)[0], request.id);
     } catch (error) {
       return sendDatabaseConfigError(error, reply, request.id);
@@ -1325,6 +1463,25 @@ interface AgendaSettingsRow {
   updatedBy: string | null;
   createdAt: Date | string;
   updatedAt: Date | string;
+}
+
+function asTransactionalDatabase(transaction: TransactionExecutor): Database {
+  return {
+    query: (text, params) => transaction.query(text, params),
+    transaction: async (work) => {
+      await transaction.query("savepoint hyperion_config_import");
+      try {
+        const result = await work(transaction);
+        await transaction.query("release savepoint hyperion_config_import");
+        return result;
+      } catch (error) {
+        await transaction.query("rollback to savepoint hyperion_config_import");
+        await transaction.query("release savepoint hyperion_config_import");
+        throw error;
+      }
+    },
+    close: async () => undefined
+  };
 }
 
 async function ensureAgendaSettings(db: Database, tenantId: string): Promise<AgendaSettingsRow> {
