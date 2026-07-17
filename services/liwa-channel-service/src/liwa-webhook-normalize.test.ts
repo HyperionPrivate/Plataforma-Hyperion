@@ -39,6 +39,17 @@ describe("normalizeLiwaPayload", () => {
     expect(parsed.agencyCode).toBe("BAQ");
   });
 
+  it("maps WhatsApp-style from as phone for chat mirror", () => {
+    const parsed = normalizeLiwaPayload({
+      event: "message",
+      from: "573001112233",
+      text: "Hola espejo"
+    });
+    expect(mapEventKind(parsed.event)).toBe("message");
+    expect(parsed.phone).toBe("+573001112233");
+    expect(parsed.text).toBe("Hola espejo");
+  });
+
   it("maps tipificacion", () => {
     const parsed = normalizeLiwaPayload({
       event: "tipify",
