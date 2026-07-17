@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pilot_core import ops_store
 from pilot_core.phone import normalize_phone
+
+# Colombia observes UTC-5 year-round (no DST); avoid zoneinfo/tzdata dependency on Windows.
+_COT = timezone(timedelta(hours=-5))
+
+
+def greeting_cot(now: datetime | None = None) -> str:
+    """Buenos días/Buenas tardes/Buenas noches according to Colombia local time."""
+    local = now.astimezone(_COT) if now else datetime.now(_COT)
+    hour = local.hour
+    if 5 <= hour < 12:
+        return "Buenos días"
+    if 12 <= hour < 19:
+        return "Buenas tardes"
+    return "Buenas noches"
 
 _UNITS = (
     "cero",
@@ -210,11 +225,18 @@ def build_dynamic_variables(
     if notas:
         contexto = f"{contexto} Nota operativa: {notas}"
 
+    phone_n = normalize_phone(phone) or phone
+    first = nombre.split()[0].title() if nombre else "Asociado"
+    # Valerie Flujo A/B first_message requires {{saludo}} (+ other prompt placeholders).
+    # Missing keys → ElevenLabs "Conversation initialization failed" (≈1s hangup).
+    linea = producto or "Crediestudio"
     return {
-        "nombre": nombre.split()[0].title() if nombre else "Asociado",
-        "first_name": nombre.split()[0].title() if nombre else "Asociado",
+        "saludo": greeting_cot(),
+        "nombre": first,
+        "first_name": first,
         "nombre_completo": full_name.title(),
-        "phone": normalize_phone(phone) or phone,
+        "phone": phone_n,
+        "phone_e164": phone_n,
         "flujo": str(flow).upper(),
         "product_flow": str(flow).upper(),
         "segmento": segmento,
@@ -222,15 +244,25 @@ def build_dynamic_variables(
         "programa": programa or "por confirmar",
         "semestre": semestre or "por confirmar",
         "ciudad": ciudad or "",
-        "producto": producto or "",
-        "documento": documento,
+        "producto": linea,
+        "linea_credito": linea,
+        "documento": documento or "su documento",
         "obligacion": obligacion,
-        "agencia": agencia,
+        "agencia": agencia or "su agencia Coopfuturo",
         "cupo": cupo_txt,
         "cupo_preaprobado": cupo_txt,
-        "cuota": cuota_txt,
-        "cuota_actual": cuota_txt,
-        "saldo_total": saldo_txt,
+        "cupo_preaprobado_validado": "si" if cupo not in (None, "") else "no",
+        "cuota": cuota_txt or "su cuota",
+        "cuota_actual": cuota_txt or "su cuota",
+        "saldo_total": saldo_txt or "su saldo vigente",
+        "mora": _s(payload.get("mora"), "cero"),
+        "estado_cuenta": _s(payload.get("estado_cuenta"), "al día"),
+        "fecha_prox_pago": _s(
+            payload.get("fecha_prox_pago") or payload.get("fecha_proximo_pago"),
+            "la próxima fecha de pago",
+        ),
+        "plazo": _s(payload.get("plazo"), "su plazo"),
+        "disclosure_ai": "asistente de voz de Coopfuturo",
         "cupo_display": cupo_display,
         "cuota_display": cuota_display,
         "contexto_cliente": contexto,

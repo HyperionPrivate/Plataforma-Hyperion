@@ -93,6 +93,9 @@ export async function createHandoff(input: {
   motivo?: string;
   phone?: string;
   agency_tag?: string;
+  conversation_id?: string;
+  idempotency_key?: string;
+  priority?: string;
 }) {
   return postJson<Record<string, unknown>>("/ops/handoff", input);
 }

@@ -9,14 +9,15 @@ from pilot_core import ops_store
 # IDs from Hyperion ElevenLabs account — CoopFuturo SIP outbound (Telyaco).
 # Nombres en dashboard 11labs: "Valerie Coopfuturo - Flujo A/B" (legado de naming);
 # en PULSO los tratamos como agentes de Renovación / Reactivación.
+# IDs must belong to the same ElevenLabs workspace as ELEVENLABS_API_KEY.
+# Current workspace SIP: +573110456598 (Coopfuturo) → phnum_8201…
 _DEFAULT = {
     "flujo_a": {
         "name": "PULSO Renovación (Flujo A)",
         "segment": "Renovacion",
-        "agent_id": "agent_8301kwgmehx0eh9r0rr1rbt3ttj3",
-        # NextVoice SIP (voipcentral) — Telyaco IDs had signaling without RTP audio.
-        "phone_number_id": "phnum_0001kxk88197exs8dpam295z4rmb",
-        "from_number": "+573120500621",
+        "agent_id": "agent_0701kxpj03yjf2baxp3zvq7ncy6e",
+        "phone_number_id": "phnum_8201kxpqbx2tep8vs46t888y3gv8",
+        "from_number": "+573110456598",
         "channel": "voz",
         "provider": "elevenlabs_sip_trunk",
         "liwa_flow_id": "1782399915832",
@@ -26,9 +27,9 @@ _DEFAULT = {
     "flujo_b": {
         "name": "PULSO Reactivación (Flujo B)",
         "segment": "Reactivacion",
-        "agent_id": "agent_1401kwgmek4ff5hrkk6q27gvz7nd",
-        "phone_number_id": "phnum_0001kxk8j7t1ea6b4g8damnvkm0w",
-        "from_number": "+573120500501",
+        "agent_id": "agent_2901kxpj057rf8zbnm5gmey40fdn",
+        "phone_number_id": "phnum_8201kxpqbx2tep8vs46t888y3gv8",
+        "from_number": "+573110456598",
         "channel": "voz",
         "provider": "elevenlabs_sip_trunk",
         # Vacío: usa LIWA_FLOW_ID_B o cae al flujo Renovaciones hasta crear plantilla Reactivación.

@@ -377,20 +377,26 @@ async def process_liwa_inbound(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             actions.append("liwa_tag_skipped")
 
-        ops_store.insert_handoff(
-            {
-                "id": f"ho_{uuid4().hex[:10]}",
-                "name": n["first_name"],
-                "segment": "WhatsApp",
-                "motivo": n["text"] or f"Handoff {tag}",
-                "priority": "alta",
-                "agency_tag": tag,
-                "phone": phone,
-                "conversation_id": cid,
-                "status": "queued",
-            }
-        )
-        actions.append("handoff_queued")
+        existing_ho = ops_store.find_queued_handoff(conversation_id=cid, phone=phone)
+        ho_payload = {
+            "id": (existing_ho or {}).get("id") or f"ho_{uuid4().hex[:10]}",
+            "name": n["first_name"],
+            "segment": "WhatsApp",
+            "motivo": n["text"] or f"Handoff {tag}",
+            "priority": "alta",
+            "agency_tag": tag,
+            "phone": phone,
+            "conversationId": cid,
+            "conversation_id": cid,
+            "status": "queued",
+            "source": (existing_ho or {}).get("source") or "liwa_inbound",
+        }
+        if existing_ho:
+            ops_store.upsert_handoff(ho_payload)
+            actions.append("handoff_reused")
+        else:
+            ops_store.insert_handoff(ho_payload)
+            actions.append("handoff_queued")
         crm_lead = _crm_to(phone=phone, column="transferido", name=n["first_name"])
         actions.append("crm_transferido")
         actions.append("bot_paused")

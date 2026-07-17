@@ -197,10 +197,35 @@ function ConversacionesContent() {
     if (!selected || busy) return;
     setBusy(true);
     try {
+      const exp = selected.expediente as { phone?: string } | undefined;
+      const expPhone = typeof exp?.phone === "string" ? exp.phone.trim() : "";
+      const idDigits = selected.id.replace(/\D/g, "");
+      const phoneFromId =
+        idDigits.length >= 10
+          ? idDigits.startsWith("57")
+            ? `+${idDigits}`
+            : `+57${idDigits.slice(-10)}`
+          : "";
+      const phone = expPhone || liwaStatus?.phone || phoneFromId || undefined;
+      const agencyTag =
+        (selected.tags ?? []).find(
+          (t) =>
+            typeof t === "string" &&
+            (t.startsWith("AG_") ||
+              t.startsWith("RENOVACION_") ||
+              t.startsWith("REACTIVACION_")),
+        ) ||
+        liwaStatus?.handoff_tags?.[0] ||
+        undefined;
+
       const res = await createHandoff({
         name: selected.name,
         segment: selected.topic || "Renovacion",
         motivo: "Transferido desde Conversaciones",
+        conversation_id: selected.id,
+        phone,
+        agency_tag: agencyTag,
+        idempotency_key: `handoff:${selected.id}`,
       });
       toast.success("En cola de handoff", { description: String(res.id) });
       router.push("/handoff");

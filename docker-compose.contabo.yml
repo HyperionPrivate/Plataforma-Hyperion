@@ -89,7 +89,7 @@ services:
       <<: *oidc_env
       # Empty on purpose — Contabo PULSO must not route to /opt/coopfuturo dialer.
       DIALER_BASE_URL: ${DIALER_BASE_URL:-}
-      DIALER_DEFAULT_PHONE_NUMBER_ID: ${DIALER_DEFAULT_PHONE_NUMBER_ID:-phnum_0001kxk88197exs8dpam295z4rmb}
+      DIALER_DEFAULT_PHONE_NUMBER_ID: ${DIALER_DEFAULT_PHONE_NUMBER_ID:-phnum_8201kxpqbx2tep8vs46t888y3gv8}
       LIWA_MODE: ${LIWA_MODE:-mock}
       LIWA_BASE_URL: ${LIWA_BASE_URL:-https://chat.liwa.co/api}
       LIWA_API_TOKEN: ${LIWA_API_TOKEN:-}

@@ -1083,6 +1083,8 @@ def insert_handoff(entry: dict[str, Any]) -> dict[str, Any]:
     init_db()
     if "id" not in entry:
         entry["id"] = f"h_{uuid4().hex[:10]}"
+    if "status" not in entry:
+        entry["status"] = "queued"
     entry = _with_tenant_payload(entry, tid)
     with _LOCK:
         conn = _connect()
@@ -1097,20 +1099,114 @@ def insert_handoff(entry: dict[str, Any]) -> dict[str, Any]:
             conn.close()
 
 
-def list_handoffs(limit: int = 50) -> list[dict[str, Any]]:
+def upsert_handoff(entry: dict[str, Any]) -> dict[str, Any]:
+    """Insert or replace a handoff payload by id."""
+    tid = require_tenant()
+    init_db()
+    if "id" not in entry:
+        entry["id"] = f"h_{uuid4().hex[:10]}"
+    if "status" not in entry:
+        entry["status"] = "queued"
+    entry = _with_tenant_payload(entry, tid)
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO handoffs(tenant_id, id, payload) VALUES(?, ?, ?)
+                ON CONFLICT(tenant_id, id) DO UPDATE SET payload=excluded.payload
+                """,
+                (tid, entry["id"], json.dumps(entry, ensure_ascii=False)),
+            )
+            conn.commit()
+            return entry
+        finally:
+            conn.close()
+
+
+def _handoff_conversation_id(entry: dict[str, Any]) -> str:
+    return str(entry.get("conversationId") or entry.get("conversation_id") or "").strip()
+
+
+def _handoff_is_queued(entry: dict[str, Any]) -> bool:
+    status = str(entry.get("status") or "queued").strip().lower()
+    return status in {"", "queued"}
+
+
+def find_queued_handoff(
+    *,
+    conversation_id: str | None = None,
+    phone: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the newest queued handoff for conversation_id or phone, if any."""
+    cid = (conversation_id or "").strip()
+    phone_norm = (phone or "").strip()
+    if not cid and not phone_norm:
+        return None
+    phone_digits = "".join(ch for ch in phone_norm if ch.isdigit())
+    for entry in list_handoffs(limit=100, queued_only=False):
+        if not _handoff_is_queued(entry):
+            continue
+        entry_cid = _handoff_conversation_id(entry)
+        if cid and entry_cid and entry_cid == cid:
+            return entry
+        if phone_digits:
+            entry_phone = str(entry.get("phone") or "").strip()
+            info = entry.get("info") if isinstance(entry.get("info"), dict) else {}
+            info_phone = str(info.get("phone") or "").strip() if info else ""
+            for candidate in (entry_phone, info_phone):
+                cand_digits = "".join(ch for ch in candidate if ch.isdigit())
+                if cand_digits and cand_digits == phone_digits:
+                    return entry
+    return None
+
+
+def claim_handoffs_for_conversation(
+    conversation_id: str,
+    *,
+    advisor: str | None = None,
+) -> list[dict[str, Any]]:
+    """Mark queued handoffs linked to a conversation as claimed."""
+    cid = (conversation_id or "").strip()
+    if not cid:
+        return []
+    claimed: list[dict[str, Any]] = []
+    for entry in list_handoffs(limit=100, queued_only=False):
+        if not _handoff_is_queued(entry):
+            continue
+        if _handoff_conversation_id(entry) != cid:
+            continue
+        updated = {
+            **entry,
+            "status": "claimed",
+            "asesor": advisor or entry.get("asesor"),
+            "conversationId": cid,
+            "conversation_id": cid,
+        }
+        claimed.append(upsert_handoff(updated))
+    return claimed
+
+
+def list_handoffs(limit: int = 50, *, queued_only: bool = False) -> list[dict[str, Any]]:
     tid = require_tenant()
     init_db()
     with _LOCK:
         conn = _connect()
         try:
+            # Fetch a wider window when filtering queued so claimed rows do not
+            # starve the queue when mixed with recent claimed entries.
+            fetch_limit = max(limit * 5, limit) if queued_only else limit
             rows = conn.execute(
                 """
                 SELECT payload FROM handoffs
                 WHERE tenant_id=? ORDER BY created_at DESC LIMIT ?
                 """,
-                (tid, limit),
+                (tid, fetch_limit),
             ).fetchall()
-            return [json.loads(r["payload"]) for r in rows]
+            items = [json.loads(r["payload"]) for r in rows]
+            if queued_only:
+                items = [h for h in items if _handoff_is_queued(h)]
+            return items[:limit]
         finally:
             conn.close()
 

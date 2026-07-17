@@ -17,6 +17,7 @@ htmlcov/
 !.env.contabo.example
 !**/.env.example
 .local-secrets-tmp/
+.data-liwa-local/
 
 # IDE / OS
 .idea/

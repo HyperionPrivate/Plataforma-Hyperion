@@ -268,7 +268,8 @@ async def ops_crm(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, An
 @router.get("/handoff")
 async def ops_handoff(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, Any]:
     data = empty_handoff()
-    extra = ops_store.list_handoffs(20)
+    # Only queued handoffs — claimed/resolved must leave the advisor queue.
+    extra = ops_store.list_handoffs(20, queued_only=True)
     if extra:
         queue = []
         for h in extra:
@@ -280,10 +281,13 @@ async def ops_handoff(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str
                     "canal": "whatsapp" if h.get("phone") else "voz",
                     "phone": h.get("phone") or (info if isinstance(info, str) else ""),
                 }
+            conversation_id = (
+                h.get("conversationId") or h.get("conversation_id") or None
+            )
             queue.append(
                 {
                     "id": h.get("id"),
-                    "conversationId": h.get("conversationId") or h.get("id"),
+                    "conversationId": conversation_id or h.get("id"),
                     "priority": h.get("priority", "alta"),
                     "name": h.get("name", "Lead"),
                     "segment": h.get("segment", "Renovacion"),
@@ -297,7 +301,7 @@ async def ops_handoff(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str
             )
         data = {**data, "queue": [*queue, *data.get("queue", [])]}
     # Overlay KPI cola with merged queue length.
-    if ops_store.list_handoffs(1):
+    if ops_store.list_handoffs(1, queued_only=True):
         queue_len = len(data.get("queue") or [])
         kpis = []
         for k in data.get("kpis") or []:
@@ -333,6 +337,7 @@ class CreateHandoffBody(BaseModel):
     priority: str = "alta"
     phone: str | None = None
     agency_tag: str | None = None
+    conversation_id: str | None = Field(default=None, max_length=80)
     idempotency_key: str | None = Field(default=None, max_length=120)
 
 
@@ -407,15 +412,25 @@ async def create_handoff(
     body: CreateHandoffBody,
     _ctx: AuthContext = Depends(require_ops_roles(*OPS_OPERATE)),
 ) -> dict[str, Any]:
-    """AUD-021: durable handoff saga — claim → thread → LIWA → persist."""
+    """AUD-021: durable handoff saga — claim → thread → LIWA → persist.
+
+    When ``conversation_id`` is provided (Transferir desde Conversaciones), reuse
+    that thread instead of cloning a new ``cv_*`` inbox row.
+    """
     from pilot_core.modules.product_flow import resolve_product_flow
 
     flow_guess = "B" if "reactiva" in (body.segment or "").lower() else "A"
     product = resolve_product_flow(flow_guess)
     agency_tag = body.agency_tag or str(product["liwa_handoff_tag"])
-    idem = (body.idempotency_key or "").strip() or (
-        f"handoff:{(body.phone or '').strip()}:{agency_tag}:{body.segment}"
-    )
+    link_cid = (body.conversation_id or "").strip() or None
+    if (body.idempotency_key or "").strip():
+        idem = (body.idempotency_key or "").strip()
+    elif link_cid:
+        idem = f"handoff:{link_cid}"
+    elif (body.phone or "").strip():
+        idem = f"handoff:{(body.phone or '').strip()}:{agency_tag}"
+    else:
+        idem = f"handoff::{agency_tag}:{body.segment}"
     claimed, saga = ops_store.claim_saga(
         "handoff",
         idem,
@@ -435,45 +450,113 @@ async def create_handoff(
     assert saga is not None
     steps: dict[str, Any] = dict(saga.get("steps") or {})
     try:
-        cid = str(steps.get("conversation_id") or f"cv_{uuid4().hex[:10]}")
-        hid = str(steps.get("handoff_id") or f"h_{uuid4().hex[:10]}")
+        existing_queued = ops_store.find_queued_handoff(
+            conversation_id=link_cid,
+            phone=body.phone,
+        )
+        if existing_queued and not steps.get("handoff_id"):
+            steps["handoff_id"] = str(existing_queued.get("id"))
+            prior_cid = (
+                existing_queued.get("conversationId")
+                or existing_queued.get("conversation_id")
+            )
+            if prior_cid and not steps.get("conversation_id"):
+                steps["conversation_id"] = str(prior_cid)
+
+        if link_cid:
+            cid = str(steps.get("conversation_id") or link_cid)
+        else:
+            cid = str(steps.get("conversation_id") or f"cv_{uuid4().hex[:10]}")
+        hid = str(
+            steps.get("handoff_id")
+            or (existing_queued or {}).get("id")
+            or f"h_{uuid4().hex[:10]}"
+        )
         if not steps.get("thread_done"):
-            thread = {
-                "id": cid,
-                "name": body.name,
-                "topic": body.segment,
-                "snippet": body.motivo,
-                "sentiment": "neutral",
-                "tags": ["Handoff", body.segment],
-                "botActive": True,
-                "botPaused": False,
-                "messages": [
+            existing_thread = next(
+                (
+                    t
+                    for t in ops_store.list_conversation_threads()
+                    if t.get("id") == cid
+                ),
+                None,
+            )
+            if existing_thread is not None:
+                tags = list(existing_thread.get("tags") or [])
+                if "Handoff" not in tags:
+                    tags = ["Handoff", *tags]
+                if body.segment and body.segment not in tags:
+                    tags = [*tags, body.segment]
+                if agency_tag and agency_tag not in tags:
+                    tags = [agency_tag, *tags]
+                expediente = dict(existing_thread.get("expediente") or {})
+                if body.phone and not expediente.get("phone"):
+                    expediente["phone"] = body.phone
+                expediente["estadoCrm"] = "Handoff"
+                thread = {
+                    **existing_thread,
+                    "topic": existing_thread.get("topic") or body.segment,
+                    "snippet": body.motivo,
+                    "tags": tags,
+                    "botActive": False,
+                    "botPaused": True,
+                    "expediente": expediente,
+                    "aiSummary": {
+                        **(existing_thread.get("aiSummary") or {}),
+                        "text": body.motivo,
+                        "intencion": "handoff",
+                        "etapa": "asesor",
+                    },
+                }
+                ops_store.upsert_conversation_thread(thread)
+                ops_store.append_conversation_message(
+                    cid,
                     {
                         "id": f"m_{uuid4().hex[:8]}",
                         "role": "bot",
                         "text": f"Transferencia a asesor: {body.motivo}",
                         "at": "ahora",
-                    }
-                ],
-                "expediente": {
-                    "cedula": "-",
-                    "universidad": "-",
-                    "programa": "-",
-                    "semestre": "-",
-                    "cuotasPagadas": 0,
-                    "cuotasTotal": 1,
-                    "estadoCrm": "Handoff",
-                    "score": 70,
-                    "scoreLabel": "Media",
-                },
-                "aiSummary": {
-                    "text": body.motivo,
-                    "intencion": "handoff",
-                    "etapa": "asesor",
-                    "sentimiento": "neutral",
-                },
-            }
-            ops_store.upsert_conversation_thread(thread)
+                        "source": "ops_handoff",
+                    },
+                )
+            else:
+                thread = {
+                    "id": cid,
+                    "name": body.name,
+                    "topic": body.segment,
+                    "snippet": body.motivo,
+                    "sentiment": "neutral",
+                    "tags": ["Handoff", body.segment],
+                    "botActive": False,
+                    "botPaused": True,
+                    "messages": [
+                        {
+                            "id": f"m_{uuid4().hex[:8]}",
+                            "role": "bot",
+                            "text": f"Transferencia a asesor: {body.motivo}",
+                            "at": "ahora",
+                        }
+                    ],
+                    "expediente": {
+                        "cedula": "-",
+                        "universidad": "-",
+                        "programa": "-",
+                        "semestre": "-",
+                        "cuotasPagadas": 0,
+                        "cuotasTotal": 1,
+                        "estadoCrm": "Handoff",
+                        "score": 70,
+                        "scoreLabel": "Media",
+                        "phone": body.phone or "",
+                    },
+                    "aiSummary": {
+                        "text": body.motivo,
+                        "intencion": "handoff",
+                        "etapa": "asesor",
+                        "sentimiento": "neutral",
+                    },
+                }
+                ops_store.upsert_conversation_thread(thread)
             steps["thread_done"] = True
             steps["conversation_id"] = cid
             steps["handoff_id"] = hid
@@ -539,35 +622,60 @@ async def create_handoff(
             )
 
         if not steps.get("persisted"):
+            base_entry: dict[str, Any] = dict(existing_queued) if existing_queued else {}
             entry: dict[str, Any] = {
+                **base_entry,
                 "id": hid,
                 "conversationId": cid,
+                "conversation_id": cid,
                 "name": body.name,
                 "segment": body.segment,
                 "motivo": body.motivo,
                 "priority": body.priority,
-                "phone": body.phone,
-                "expedientePct": 85,
-                "tiempoCola": "0h 01m",
+                "phone": body.phone or base_entry.get("phone"),
+                "status": "queued",
+                "expedientePct": base_entry.get("expedientePct", 85),
+                "tiempoCola": base_entry.get("tiempoCola", "0h 01m"),
                 "asesor": None,
-                "aiSummary": "Creado desde laboratorio/API",
+                "aiSummary": body.motivo or base_entry.get("aiSummary") or "Creado desde laboratorio/API",
                 "liwa": liwa_meta,
                 "info": {
-                    "universidad": "-",
-                    "programa": "-",
+                    **(
+                        base_entry.get("info")
+                        if isinstance(base_entry.get("info"), dict)
+                        else {}
+                    ),
+                    "universidad": (
+                        (base_entry.get("info") or {}).get("universidad")
+                        if isinstance(base_entry.get("info"), dict)
+                        else "-"
+                    )
+                    or "-",
+                    "programa": (
+                        (base_entry.get("info") or {}).get("programa")
+                        if isinstance(base_entry.get("info"), dict)
+                        else "-"
+                    )
+                    or "-",
                     "canal": "whatsapp" if body.phone else "voz",
                     "phone": body.phone or "",
-                    "liwa_tag": liwa_meta.get("tag_name"),
+                    "liwa_tag": liwa_meta.get("tag_name") or agency_tag,
                     "liwa_contact_id": liwa_meta.get("contact_id"),
                 },
                 "saga_id": saga.get("id"),
+                "source": base_entry.get("source") or ("conversations" if link_cid else "api"),
             }
             try:
-                entry = ops_store.insert_handoff(entry)
+                if existing_queued:
+                    entry = ops_store.upsert_handoff(entry)
+                else:
+                    entry = ops_store.insert_handoff(entry)
             except Exception:  # noqa: BLE001 — resume if row already exists
                 prior_ho = steps.get("handoff")
                 if isinstance(prior_ho, dict):
                     entry = prior_ho
+                else:
+                    entry = ops_store.upsert_handoff(entry)
             steps["persisted"] = True
             steps["handoff"] = entry
             saga["steps"] = steps
@@ -1232,21 +1340,40 @@ async def conversation_liwa_status(
         ops_store.upsert_conversation_thread(thread)
         actions.append("thread_handoff_synced")
         if not already:
-            ops_store.insert_handoff(
-                {
-                    "id": f"ho_{uuid4().hex[:10]}",
-                    "name": first_name,
-                    "segment": "WhatsApp",
-                    "motivo": snippet,
-                    "priority": "alta",
-                    "agency_tag": handoff_tag or agency_hint or "LIWA_LIVE",
-                    "phone": phone,
-                    "conversation_id": conversation_id,
-                    "status": "queued",
-                    "source": "liwa_bridge_poll",
-                }
+            existing_ho = ops_store.find_queued_handoff(
+                conversation_id=conversation_id,
+                phone=phone,
             )
-            actions.append("handoff_queued")
+            ho_payload = {
+                "id": (existing_ho or {}).get("id") or f"ho_{uuid4().hex[:10]}",
+                "name": first_name,
+                "segment": "WhatsApp",
+                "motivo": snippet,
+                "priority": "alta",
+                "agency_tag": handoff_tag or agency_hint or "LIWA_LIVE",
+                "phone": phone,
+                "conversationId": conversation_id,
+                "conversation_id": conversation_id,
+                "status": "queued",
+                "source": (existing_ho or {}).get("source") or "liwa_bridge_poll",
+                "aiSummary": snippet,
+                "info": {
+                    **(
+                        (existing_ho or {}).get("info")
+                        if isinstance((existing_ho or {}).get("info"), dict)
+                        else {}
+                    ),
+                    "canal": "whatsapp",
+                    "phone": phone,
+                    "liwa_tag": handoff_tag or agency_hint,
+                },
+            }
+            if existing_ho:
+                ops_store.upsert_handoff(ho_payload)
+                actions.append("handoff_reused")
+            else:
+                ops_store.insert_handoff(ho_payload)
+                actions.append("handoff_queued")
             crm = _crm_to(phone=phone, column="transferido", name=first_name)
             actions.append("crm_transferido")
             ops_store.append_conversation_message(
@@ -1313,7 +1440,12 @@ async def claim_conversation(
         "owner_subject": ctx.subject,
         "status": "human_control",
     }
-    return ops_store.upsert_conversation_claim(claim)
+    result = ops_store.upsert_conversation_claim(claim)
+    claimed_handoffs = ops_store.claim_handoffs_for_conversation(
+        body.conversation_id,
+        advisor=body.advisor or ctx.subject,
+    )
+    return {**result, "handoffs_claimed": len(claimed_handoffs)}
 
 
 class ConversationReleaseBody(BaseModel):

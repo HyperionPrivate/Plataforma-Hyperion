@@ -11,7 +11,7 @@ class Settings(PlatformSettings):
     auth_disabled: bool = True
     # Dialer HTTP (microservicio externo). Vacío = intentar ElevenLabs SIP directo.
     dialer_base_url: str = ""
-    dialer_default_phone_number_id: str = "phnum_0001kxk88197exs8dpam295z4rmb"
+    dialer_default_phone_number_id: str = "phnum_8201kxpqbx2tep8vs46t888y3gv8"
     # ElevenLabs — outbound SIP trunk directo (PULSO).
     elevenlabs_api_key: str = ""
     # LIWA WhatsApp — real solo con token en env (nunca en git).
