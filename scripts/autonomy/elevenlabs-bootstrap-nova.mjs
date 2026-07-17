@@ -180,9 +180,7 @@ function agentPayload({ name, prompt, firstMessage, voiceId, tags, kb }) {
     }
   };
   if (kb?.id) {
-    promptConfig.knowledge_base = [
-      { type: "file", name: kb.name, id: kb.id, usage_mode: "auto" }
-    ];
+    promptConfig.knowledge_base = [{ type: "file", name: kb.name, id: kb.id, usage_mode: "auto" }];
     promptConfig.rag = {
       enabled: true,
       embedding_model: "multilingual_e5_large_instruct",
@@ -587,8 +585,7 @@ async function main() {
     agentPayload({
       name: nameB,
       prompt: PROMPT_REACTIVACION,
-      firstMessage:
-        "{{saludo}}, le saluda Valerie, de Coopfuturo. ¿Hablo con {{nombre}}?",
+      firstMessage: "{{saludo}}, le saluda Valerie, de Coopfuturo. ¿Hablo con {{nombre}}?",
       voiceId: voiceB,
       kb,
       tags: ["nova", "coopfuturo", "reactivacion", "crediestudio", "flujo-b", "valerie"]
