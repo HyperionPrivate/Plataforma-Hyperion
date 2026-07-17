@@ -170,6 +170,7 @@ export function NovaCampaignsTab({
 
         {step === 3 ? (
           <div className="col" style={{ gap: 12 }}>
+            <p className="muted tiny">preview UI · no se persisten en API</p>
             <label className="col" style={{ gap: 4 }}>
               <span className="tiny muted">Reintentos (preview)</span>
               <input
@@ -178,12 +179,21 @@ export function NovaCampaignsTab({
                 min={0}
                 max={5}
                 value={retries}
+                disabled
+                aria-disabled="true"
                 onChange={(e) => setRetries(Number(e.target.value) || 0)}
               />
             </label>
             <label className="col" style={{ gap: 4 }}>
               <span className="tiny muted">Nota de guion</span>
-              <textarea className="input" rows={3} value={scriptNote} onChange={(e) => setScriptNote(e.target.value)} />
+              <textarea
+                className="input"
+                rows={3}
+                value={scriptNote}
+                disabled
+                aria-disabled="true"
+                onChange={(e) => setScriptNote(e.target.value)}
+              />
             </label>
           </div>
         ) : null}

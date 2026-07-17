@@ -19,6 +19,8 @@ export interface DashboardSummary {
   handoffsQueued: number;
   leads: number;
   openConversations: number;
+  /** Meta diaria de contactos (0 = sin meta). */
+  meta_contactos_hoy?: number;
 }
 
 export interface AnalyticsDailyRow {
@@ -72,12 +74,24 @@ export interface CallRow {
   contact_phone_e164: string;
 }
 
+export type NovaProductLine = "renovacion" | "reactivacion" | "nuevos" | "microcredito";
+
+export const PRODUCT_LINES: NovaProductLine[] = ["renovacion", "reactivacion", "nuevos", "microcredito"];
+
+export const PRODUCT_LINE_LABELS: Record<NovaProductLine, string> = {
+  renovacion: "Renovación",
+  reactivacion: "Reactivación",
+  nuevos: "Nuevos",
+  microcredito: "Microcrédito"
+};
+
 export interface LeadRow {
   lead_id: string;
   contact_id?: string;
   stage: string;
   tipification?: string;
   agency_code?: string;
+  product_line?: NovaProductLine | string;
 }
 
 export interface ReviewRow {

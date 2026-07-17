@@ -19,6 +19,7 @@ interface ComplianceSettings {
   max_attempts_per_contact?: number;
   min_hours_between_attempts?: number;
   respect_holidays?: boolean;
+  meta_contactos_hoy?: number;
 }
 
 interface AgentConfig {
@@ -73,9 +74,10 @@ export function NovaConfigTab({ tenantId }: { tenantId: string }) {
         whatsapp_enabled: Boolean(compliance.whatsapp_enabled ?? true),
         max_attempts_per_contact: Number(compliance.max_attempts_per_contact ?? 3),
         min_hours_between_attempts: Number(compliance.min_hours_between_attempts ?? 24),
-        respect_holidays: Boolean(compliance.respect_holidays ?? true)
+        respect_holidays: Boolean(compliance.respect_holidays ?? true),
+        meta_contactos_hoy: Math.max(0, Math.floor(Number(compliance.meta_contactos_hoy ?? 0)) || 0)
       });
-      setMessage("Compliance guardado");
+      setMessage("Compliance y operación guardados");
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -124,6 +126,28 @@ export function NovaConfigTab({ tenantId }: { tenantId: string }) {
           <li>Primer tenant: {catalog?.product?.firstTenant ?? "coopfuturo"}</li>
           <li>Roles: {(catalog?.roles ?? []).join(", ") || "admin / supervisor / asesor"}</li>
         </ul>
+      </Card>
+
+      <Card>
+        <CardHead title="Operación" />
+        <label>
+          Meta de contactos por día
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={compliance.meta_contactos_hoy ?? 0}
+            onChange={(e) =>
+              setCompliance((c) => ({
+                ...c,
+                meta_contactos_hoy: Math.max(0, Math.floor(Number(e.target.value) || 0))
+              }))
+            }
+          />
+        </label>
+        <p className="tiny muted" style={{ marginTop: 8 }}>
+          0 = sin meta. El Dashboard muestra Meta vs. resultado (voz + WhatsApp del periodo analytics).
+        </p>
       </Card>
 
       <Card>
@@ -198,7 +222,7 @@ export function NovaConfigTab({ tenantId }: { tenantId: string }) {
           Gate WhatsApp: auto-send apagado por defecto (`POST_CALL_WHATSAPP_AUTO_SEND=true` para omitir revisión).
         </p>
         <button className="btn" style={{ marginTop: 12 }} disabled={saving} onClick={() => void saveCompliance()}>
-          Guardar compliance
+          Guardar operación + compliance
         </button>
       </Card>
 

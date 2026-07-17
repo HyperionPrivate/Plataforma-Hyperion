@@ -254,10 +254,31 @@ export async function registerLiwaRoutes(
 
     const payload = waSendRequestedPayloadSchema.parse(parsed.payload);
     const correlationId = parsed.correlation_id ?? randomUUID();
-    let providerRef: string;
 
+    // Anti double-WA: already terminal for this message_id → no re-send / no redrive.
+    const existing = await context.db.query<{ status: string; provider_ref: string | null }>(
+      `select status, payload->>'provider_ref' as provider_ref
+         from liwa.messages
+        where tenant_id = $1 and message_id = $2
+          and status in ('sent', 'accepted_pending', 'delivered')
+        limit 1`,
+      [parsed.tenant_id, payload.message_id]
+    );
+    if (existing.rowCount && existing.rows[0]) {
+      return envelope(
+        {
+          status: existing.rows[0].status,
+          message_id: payload.message_id,
+          provider_ref: existing.rows[0].provider_ref ?? "",
+          deduped: true
+        },
+        request.id
+      );
+    }
+
+    let sendResult: { providerRef: string; status: "sent" | "accepted_pending" };
     try {
-      providerRef = await dispatchOutboundMessage(dependencies.client, {
+      sendResult = await dispatchOutboundMessage(dependencies.client, {
         contact_ref: payload.contact_ref,
         contact_id: payload.contact_id,
         mode: payload.mode,
@@ -285,16 +306,17 @@ export async function registerLiwaRoutes(
       await tx.query(
         `insert into liwa.messages (
            tenant_id, message_id, contact_ref, direction, kind, status, flow_id, agency_tag, payload, correlation_id
-         ) values ($1, $2, $3, 'outbound', $4, 'sent', $5, $6, $7::jsonb, $8)
+         ) values ($1, $2, $3, 'outbound', $4, $5, $6, $7, $8::jsonb, $9)
          on conflict (tenant_id, message_id) do nothing`,
         [
           parsed.tenant_id,
           payload.message_id,
           payload.contact_ref,
           payload.mode,
+          sendResult.status,
           payload.flow_id ?? null,
           payload.agency_tag ?? null,
-          JSON.stringify({ text: payload.text, provider_ref: providerRef }),
+          JSON.stringify({ text: payload.text, provider_ref: sendResult.providerRef, send_status: sendResult.status }),
           correlationId
         ]
       );
@@ -308,14 +330,21 @@ export async function registerLiwaRoutes(
           message_id: payload.message_id,
           contact_id: payload.contact_id,
           contact_ref: payload.contact_ref,
-          provider_ref: providerRef,
+          provider_ref: sendResult.providerRef || `accepted_pending:${payload.message_id}`,
           mode: payload.mode
         }),
         destination: novaDestination
       });
     });
 
-    return envelope({ status: "accepted", message_id: payload.message_id }, request.id);
+    return envelope(
+      {
+        status: sendResult.status,
+        message_id: payload.message_id,
+        provider_ref: sendResult.providerRef
+      },
+      request.id
+    );
   });
 
   app.post("/v1/tenants/:tenantId/liwa/conversations/:id/reply", async (request, reply) => {
@@ -342,18 +371,24 @@ export async function registerLiwaRoutes(
     await scope.db.query(
       `insert into liwa.messages (
          tenant_id, message_id, contact_ref, direction, kind, status, payload, correlation_id
-       ) values ($1, $2, $3, 'outbound', 'text', 'sent', $4::jsonb, $5)`,
+       ) values ($1, $2, $3, 'outbound', 'text', $4, $5::jsonb, $6)`,
       [
         scope.tenantId,
         messageId,
         conversationId,
-        JSON.stringify({ text: parsed.data.text, provider_ref: sent.providerRef }),
+        sent.status,
+        JSON.stringify({ text: parsed.data.text, provider_ref: sent.providerRef, send_status: sent.status }),
         randomUUID()
       ]
     );
 
     return envelope(
-      { conversation_id: conversationId, message_id: messageId, provider_ref: sent.providerRef },
+      {
+        conversation_id: conversationId,
+        message_id: messageId,
+        provider_ref: sent.providerRef,
+        status: sent.status
+      },
       request.id
     );
   });
@@ -373,7 +408,10 @@ interface OutboundSendInputExtended extends OutboundSendInput {
   product_flow?: "renovacion" | "reactivacion";
 }
 
-async function dispatchOutboundMessage(client: LiwaClient, input: OutboundSendInputExtended): Promise<string> {
+async function dispatchOutboundMessage(
+  client: LiwaClient,
+  input: OutboundSendInputExtended
+): Promise<{ providerRef: string; status: "sent" | "accepted_pending" }> {
   const { contactId } = await client.ensureContact(input.contact_ref, input.first_name);
 
   if (input.mode === "flow" && input.flow_id) {
@@ -388,13 +426,11 @@ async function dispatchOutboundMessage(client: LiwaClient, input: OutboundSendIn
     } catch {
       // VIP tag may not exist yet; agency tag is enough for queue routing
     }
-    const sent = await client.sendFlow(contactId, input.flow_id);
-    return sent.providerRef;
+    return client.sendFlow(contactId, input.flow_id);
   }
 
   if (input.mode === "text" && input.text) {
-    const sent = await client.sendText(contactId, input.text);
-    return sent.providerRef;
+    return client.sendText(contactId, input.text);
   }
 
   throw new Error("Invalid outbound message payload");

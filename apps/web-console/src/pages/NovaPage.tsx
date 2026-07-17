@@ -233,7 +233,10 @@ export function NovaPage() {
     await refresh();
   }
 
-  async function patchLead(leadId: string, body: { stage?: string; tipification?: string }) {
+  async function patchLead(
+    leadId: string,
+    body: { stage?: string; tipification?: string; product_line?: string }
+  ) {
     if (!canWriteOps) return;
     await api.patch(novaPath(tenant.id, `leads/${leadId}`), body);
     setNotice("Lead actualizado.");
@@ -258,6 +261,20 @@ export function NovaPage() {
 
   async function lookupAssociate(documentId: string) {
     return api.get(novaPath(tenant.id, `core/associates/${documentId}`));
+  }
+
+  async function simulateLiwaEvent(input: {
+    event: string;
+    phone: string;
+    ciudad?: string;
+    score?: number;
+    tipificacion?: string;
+  }) {
+    return api.post(novaPath(tenant.id, "lab/liwa-event"), input);
+  }
+
+  async function fetchChannelStatus(conversationId: string) {
+    return api.get(novaPath(tenant.id, `conversations/${conversationId}/channel-status`));
   }
 
   return (
@@ -316,7 +333,12 @@ export function NovaPage() {
         ) : null}
 
         {!loading && !error && tab === "conversations" ? (
-          <NovaConversationsTab conversations={conversations} onClaim={claimConversation} onReply={replyConversation} />
+          <NovaConversationsTab
+            conversations={conversations}
+            onClaim={claimConversation}
+            onReply={replyConversation}
+            onChannelStatus={fetchChannelStatus}
+          />
         ) : null}
 
         {!loading && !error && tab === "reviews" ? (
@@ -359,6 +381,7 @@ export function NovaPage() {
             onEligibility={eligibilityContact}
             onScore={scoreContact}
             onLookupAssociate={lookupAssociate}
+            onSimulateLiwa={simulateLiwaEvent}
           />
         ) : null}
 

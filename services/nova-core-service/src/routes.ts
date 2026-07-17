@@ -39,6 +39,7 @@ import { extractMultipartFile, isCsvFilename, parseContactsCsv, type ContactImpo
 import { createCoreAdapter, type CoreAdapter } from "./core-adapter.js";
 import { insertNovaOutboxEvent, listNovaOutboxDlq, redriveNovaOutboxDlq } from "./outbox.js";
 import { canTransitionCrm, inferIntentFromPayload, stageFromPostCallIntent, type CrmStage } from "./post-call.js";
+import { resolveLiwaFlowId, resolveProductFlowForContact } from "./resolve-liwa-flow.js";
 
 const contactImportSchema = z.object({
   contacts: z
@@ -87,9 +88,12 @@ const CRM_STAGES = [
 
 const TERMINAL_CRM_STAGES = new Set<string>(["renovado", "no_interes", "won", "lost"]);
 
+const productLineSchema = z.enum(["renovacion", "reactivacion", "nuevos", "microcredito"]);
+
 const leadPatchSchema = z.object({
   stage: z.enum(CRM_STAGES).optional(),
-  tipification: z.string().max(80).optional()
+  tipification: z.string().max(80).optional(),
+  product_line: productLineSchema.optional()
 });
 
 const complianceSettingsSchema = z.object({
@@ -99,7 +103,25 @@ const complianceSettingsSchema = z.object({
   whatsapp_enabled: z.boolean(),
   max_attempts_per_contact: z.number().int().min(1).max(20),
   min_hours_between_attempts: z.number().int().min(0).max(720),
-  respect_holidays: z.boolean()
+  respect_holidays: z.boolean(),
+  meta_contactos_hoy: z.number().int().min(0).max(1_000_000).optional().default(0)
+});
+
+const labLiwaEventSchema = z.object({
+  event: z.enum([
+    "document_received",
+    "prequal_completed",
+    "handoff_requested",
+    "csat",
+    "opt_out",
+    "tipificacion",
+    "message"
+  ]),
+  phone: z.string().min(8).max(20),
+  ciudad: z.string().max(80).optional(),
+  score: z.number().int().min(1).max(5).optional(),
+  tipificacion: z.string().max(80).optional(),
+  full_name: z.string().max(160).optional()
 });
 
 const productFlowSchema = z.enum(["renovacion", "reactivacion"]);
@@ -176,13 +198,15 @@ export async function registerNovaRoutes(
       leads: string;
       handoffs: string;
       conversations: string;
+      meta_contactos_hoy: string | null;
     }>(
       `select
          (select count(*)::text from nova.contacts where tenant_id = $1) as contacts,
          (select count(*)::text from nova.campaigns where tenant_id = $1) as campaigns,
          (select count(*)::text from nova.leads where tenant_id = $1) as leads,
          (select count(*)::text from nova.handoffs where tenant_id = $1 and status = 'queued') as handoffs,
-         (select count(*)::text from nova.conversations where tenant_id = $1 and status <> 'closed') as conversations`,
+         (select count(*)::text from nova.conversations where tenant_id = $1 and status <> 'closed') as conversations,
+         (select meta_contactos_hoy::text from nova.compliance_settings where tenant_id = $1) as meta_contactos_hoy`,
       [scope.tenantId]
     );
 
@@ -193,7 +217,8 @@ export async function registerNovaRoutes(
         campaigns: Number(row.campaigns),
         leads: Number(row.leads),
         handoffsQueued: Number(row.handoffs),
-        openConversations: Number(row.conversations)
+        openConversations: Number(row.conversations),
+        meta_contactos_hoy: row.meta_contactos_hoy != null ? Number(row.meta_contactos_hoy) : 0
       },
       request.id
     );
@@ -383,10 +408,12 @@ export async function registerNovaRoutes(
       max_attempts_per_contact: number;
       min_hours_between_attempts: number;
       respect_holidays: boolean;
+      meta_contactos_hoy: number;
       updated_at: Date;
     }>(
       `select window_start_hour, window_end_hour, voice_enabled, whatsapp_enabled,
-              max_attempts_per_contact, min_hours_between_attempts, respect_holidays, updated_at
+              max_attempts_per_contact, min_hours_between_attempts, respect_holidays,
+              coalesce(meta_contactos_hoy, 0) as meta_contactos_hoy, updated_at
          from nova.compliance_settings where tenant_id = $1`,
       [scope.tenantId]
     );
@@ -401,6 +428,7 @@ export async function registerNovaRoutes(
           max_attempts_per_contact: DEFAULT_COMPLIANCE.maxAttemptsPerContact,
           min_hours_between_attempts: DEFAULT_COMPLIANCE.minHoursBetweenAttempts,
           respect_holidays: DEFAULT_COMPLIANCE.respectHolidays,
+          meta_contactos_hoy: 0,
           source: "defaults"
         },
         request.id
@@ -428,8 +456,8 @@ export async function registerNovaRoutes(
     await scope.db.query(
       `insert into nova.compliance_settings (
          tenant_id, window_start_hour, window_end_hour, voice_enabled, whatsapp_enabled,
-         max_attempts_per_contact, min_hours_between_attempts, respect_holidays, updated_at
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, now())
+         max_attempts_per_contact, min_hours_between_attempts, respect_holidays, meta_contactos_hoy, updated_at
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
        on conflict (tenant_id) do update set
          window_start_hour = excluded.window_start_hour,
          window_end_hour = excluded.window_end_hour,
@@ -438,6 +466,7 @@ export async function registerNovaRoutes(
          max_attempts_per_contact = excluded.max_attempts_per_contact,
          min_hours_between_attempts = excluded.min_hours_between_attempts,
          respect_holidays = excluded.respect_holidays,
+         meta_contactos_hoy = excluded.meta_contactos_hoy,
          updated_at = now()`,
       [
         scope.tenantId,
@@ -447,7 +476,8 @@ export async function registerNovaRoutes(
         parsed.data.whatsapp_enabled,
         parsed.data.max_attempts_per_contact,
         parsed.data.min_hours_between_attempts,
-        parsed.data.respect_holidays
+        parsed.data.respect_holidays,
+        parsed.data.meta_contactos_hoy ?? 0
       ]
     );
 
@@ -833,11 +863,18 @@ export async function registerNovaRoutes(
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
 
-    const result = await scope.db.query(
-      `select lead_id, contact_id, stage, tipification, agency_code, owner_operator_id, created_at, updated_at
-       from nova.leads where tenant_id = $1 order by updated_at desc`,
-      [scope.tenantId]
-    );
+    const productLine = readQueryString(request.query, "product_line");
+    const result = productLine
+      ? await scope.db.query(
+          `select lead_id, contact_id, stage, tipification, agency_code, product_line, owner_operator_id, created_at, updated_at
+             from nova.leads where tenant_id = $1 and product_line = $2 order by updated_at desc`,
+          [scope.tenantId, productLine]
+        )
+      : await scope.db.query(
+          `select lead_id, contact_id, stage, tipification, agency_code, product_line, owner_operator_id, created_at, updated_at
+             from nova.leads where tenant_id = $1 order by updated_at desc`,
+          [scope.tenantId]
+        );
     return envelope(result.rows, request.id);
   });
 
@@ -850,14 +887,21 @@ export async function registerNovaRoutes(
     if (!leadId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
 
     const parsed = leadPatchSchema.safeParse(request.body);
-    if (!parsed.success || (!parsed.data.stage && parsed.data.tipification === undefined)) {
-      return reply.code(400).send(envelope({ error: "stage or tipification required" }, request.id));
+    if (
+      !parsed.success ||
+      (!parsed.data.stage && parsed.data.tipification === undefined && parsed.data.product_line === undefined)
+    ) {
+      return reply.code(400).send(envelope({ error: "stage, tipification or product_line required" }, request.id));
     }
 
-    const existing = await scope.db.query<{ stage: string; tipification: string | null }>(
-      `select stage, tipification from nova.leads where tenant_id = $1 and lead_id = $2`,
-      [scope.tenantId, leadId]
-    );
+    const existing = await scope.db.query<{
+      stage: string;
+      tipification: string | null;
+      product_line: string | null;
+    }>(`select stage, tipification, product_line from nova.leads where tenant_id = $1 and lead_id = $2`, [
+      scope.tenantId,
+      leadId
+    ]);
     if (existing.rowCount === 0) {
       return reply.code(404).send(envelope({ error: "Lead not found" }, request.id));
     }
@@ -883,10 +927,17 @@ export async function registerNovaRoutes(
           `update nova.leads
            set stage = coalesce($3, stage),
                tipification = coalesce($4, tipification),
+               product_line = coalesce($5, product_line),
                updated_at = now()
            where tenant_id = $1 and lead_id = $2
            returning contact_id as "contactId", stage, tipification`,
-          [scope.tenantId, leadId, parsed.data.stage ?? null, parsed.data.tipification ?? null]
+          [
+            scope.tenantId,
+            leadId,
+            parsed.data.stage ?? null,
+            parsed.data.tipification ?? null,
+            parsed.data.product_line ?? null
+          ]
         );
         if (result.rowCount === 0) throw new Error("lead_not_found");
 
@@ -1118,6 +1169,178 @@ export async function registerNovaRoutes(
     return reply.code(201).send(envelope({ outcome_id: outcomeId }, request.id));
   });
 
+  /** Ops Lab: simula webhook LIWA vía canal (secret server-side; no exponer en el browser). */
+  app.post("/v1/tenants/:tenantId/nova/lab/liwa-event", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const parsed = labLiwaEventSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send(envelope({ error: "Invalid lab LIWA event", issues: parsed.error.issues }, request.id));
+    }
+
+    const phone = parsed.data.phone.trim().startsWith("+")
+      ? parsed.data.phone.trim()
+      : `+${parsed.data.phone.trim().replace(/\D/g, "")}`;
+    const payload: Record<string, unknown> = {
+      event: parsed.data.event,
+      tenant_id: scope.tenantId,
+      phone,
+      phone_e164: phone,
+      ciudad: parsed.data.ciudad,
+      score: parsed.data.score,
+      tipificacion: parsed.data.tipificacion,
+      full_name: parsed.data.full_name ?? "Lab Demo",
+      external_id: `lab-${randomUUID()}`
+    };
+
+    const secret = process.env.LIWA_WEBHOOK_SECRET?.trim() ?? "";
+    const allowInsecure =
+      process.env.LIWA_WEBHOOK_ALLOW_INSECURE?.trim() === "1" &&
+      (process.env.HYPERION_ENVIRONMENT?.trim() === "local" ||
+        process.env.HYPERION_DEPLOYMENT_ENVIRONMENT?.trim() === "development");
+    if (!secret && !allowInsecure) {
+      return reply.code(503).send(
+        envelope(
+          {
+            error:
+              "LIWA_WEBHOOK_SECRET required for lab simulate (or LIWA_WEBHOOK_ALLOW_INSECURE=1 in local/dev)"
+          },
+          request.id
+        )
+      );
+    }
+
+    const url = `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/webhooks/simulate`;
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "x-request-id": request.id
+    };
+    if (secret) headers["x-liwa-webhook-secret"] = secret;
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8_000)
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "LIWA simulate upstream unreachable";
+      return reply.code(502).send(envelope({ error: message }, request.id));
+    }
+
+    const body = (await upstream.json().catch(() => undefined)) as
+      | { data?: Record<string, unknown>; error?: string }
+      | undefined;
+    if (!upstream.ok) {
+      return reply
+        .code(upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502)
+        .send(
+          envelope(
+            { error: body?.data?.error ?? body?.error ?? `LIWA simulate failed (${upstream.status})` },
+            request.id
+          )
+        );
+    }
+
+    return envelope(
+      {
+        ok: true,
+        forwarded: true,
+        ...(body?.data ?? body ?? {})
+      },
+      request.id
+    );
+  });
+
+  /**
+   * Estado de canal por conversación (webhook-first).
+   * No hace poll a LIWA API; refleja handoff/CRM ya persistido en NOVA + link inbox.
+   */
+  app.get("/v1/tenants/:tenantId/nova/conversations/:conversationId/channel-status", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const conversationId = readUuid(request.params, "conversationId");
+    if (!conversationId) {
+      return reply.code(400).send(envelope({ error: "conversationId must be a UUID" }, request.id));
+    }
+
+    const conv = await scope.db.query<{
+      conversation_id: string;
+      contact_id: string | null;
+      agency_code: string | null;
+      status: string;
+      channel: string;
+      claimed_by: string | null;
+    }>(
+      `select conversation_id, contact_id, agency_code, status, channel, claimed_by
+         from nova.conversations
+        where tenant_id = $1 and conversation_id = $2`,
+      [scope.tenantId, conversationId]
+    );
+    if (conv.rowCount === 0) {
+      return reply.code(404).send(envelope({ error: "Conversation not found" }, request.id));
+    }
+    const row = conv.rows[0]!;
+
+    let phone: string | null = null;
+    let handoffTag: string | null = null;
+    if (row.contact_id) {
+      const contact = await scope.db.query<{ phone_e164: string; agency_code: string | null }>(
+        `select phone_e164, agency_code from nova.contacts where tenant_id = $1 and contact_id = $2`,
+        [scope.tenantId, row.contact_id]
+      );
+      phone = contact.rows[0]?.phone_e164 ?? null;
+      const agency = row.agency_code ?? contact.rows[0]?.agency_code ?? null;
+      if (agency) {
+        handoffTag = agencyTagFromCode(agency) ?? `AG_${agency}`;
+      }
+    }
+
+    const handoff = row.contact_id
+      ? await scope.db.query<{ handoff_id: string; status: string; agency_code: string }>(
+          `select handoff_id, status, agency_code from nova.handoffs
+            where tenant_id = $1 and contact_id = $2
+            order by created_at desc nulls last limit 1`,
+          [scope.tenantId, row.contact_id]
+        )
+      : { rows: [] as Array<{ handoff_id: string; status: string; agency_code: string }>, rowCount: 0 };
+
+    const handoffRow = handoff.rows[0];
+    const handoffDetected = Boolean(handoffRow && ["queued", "claimed"].includes(handoffRow.status));
+    const accountId = process.env.LIWA_ACCOUNT_ID?.trim() || "1656233";
+
+    return envelope(
+      {
+        ok: true,
+        conversation_id: row.conversation_id,
+        contact_id: row.contact_id,
+        phone,
+        status: row.status,
+        channel: row.channel,
+        claimed_by: row.claimed_by,
+        handoff_detected: handoffDetected,
+        handoff_id: handoffRow?.handoff_id,
+        agency_code: handoffRow?.agency_code ?? row.agency_code,
+        agency_hint: handoffTag,
+        handoff_tags: handoffTag ? [handoffTag] : [],
+        live_chat: handoffDetected,
+        mode: "nova_db",
+        poll_liwa: false,
+        inbox_url: `https://chat.liwa.co/?acc=${accountId}`,
+        note: "Webhook-first: estado desde NOVA (no poll LIWA). Configure POST /v1/liwa/webhooks para sync en vivo."
+      },
+      request.id
+    );
+  });
+
   app.post("/v1/tenants/:tenantId/nova/bootstrap", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
@@ -1190,7 +1413,6 @@ export async function registerNovaRoutes(
     if (!parsed.success) return reply.code(400).send(envelope({ error: "Invalid review decision" }, request.id));
 
     const liwaDestination = `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/internal/events`;
-    const autoFlow = parsed.data.flow_id ?? process.env.LIWA_DEFAULT_FLOW_ID ?? "1782399915832";
 
     try {
       await scope.db.transaction(async (tx) => {
@@ -1221,6 +1443,10 @@ export async function registerNovaRoutes(
           return;
         }
 
+        const productFlow = await resolveProductFlowForContact(tx, scope.tenantId, review.contactId);
+        const autoFlow = await resolveLiwaFlowId(tx, scope.tenantId, productFlow, {
+          explicitFlowId: parsed.data.flow_id
+        });
         const messageId = randomUUID();
         const agencyTag = agencyTagFromCode(review.agencyCode);
         await insertNovaOutboxEvent(tx, {
@@ -1433,7 +1659,8 @@ async function processInboundEvent(
         );
         const row = contact.rows[0];
         if (row) {
-          const flowId = process.env.LIWA_DEFAULT_FLOW_ID ?? "1782399915832";
+          const productFlow = await resolveProductFlowForContact(db, tenantId, parsed.contact_id);
+          const flowId = await resolveLiwaFlowId(db, tenantId, productFlow);
           await insertNovaOutboxEvent(db, {
             eventId: randomUUID(),
             eventType: "wa.send.requested",

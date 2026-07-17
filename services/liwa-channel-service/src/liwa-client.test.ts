@@ -3,7 +3,9 @@ import {
   assertLiwaBaseUrlAllowed,
   createLiwaClient,
   DEFAULT_LIWA_BASE_URL,
+  extractLiwaProviderMessageId,
   HttpLiwaClient,
+  toLiwaSendResult,
   UnconfiguredLiwaClient
 } from "./liwa-client.js";
 
@@ -126,5 +128,32 @@ describe("HttpLiwaClient", () => {
       name: "Coopfuturo 2026 Cta Comercial"
     });
     await expect(client.listFlows()).resolves.toEqual([{ id: "1782399915832", name: "Renovaciones" }]);
+  });
+
+  it("sendFlow marks accepted_pending when LIWA returns 200 without message id", async () => {
+    const fetchImpl = mockFetch(() => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    const client = new HttpLiwaClient("https://chat.liwa.co/api", "token-test", env, fetchImpl);
+    await expect(client.sendFlow("c1", "1782399915832")).resolves.toEqual({
+      providerRef: "",
+      status: "accepted_pending"
+    });
+  });
+
+  it("sendFlow marks sent when LIWA returns a provider message id", async () => {
+    const fetchImpl = mockFetch(
+      () => new Response(JSON.stringify({ success: true, message_id: "msg-99" }), { status: 200 })
+    );
+    const client = new HttpLiwaClient("https://chat.liwa.co/api", "token-test", env, fetchImpl);
+    await expect(client.sendFlow("c1", "1782399915832")).resolves.toEqual({
+      providerRef: "msg-99",
+      status: "sent"
+    });
+  });
+});
+
+describe("extractLiwaProviderMessageId / toLiwaSendResult", () => {
+  it("reads nested data.id", () => {
+    expect(extractLiwaProviderMessageId({ success: true, data: { id: "nested-1" } })).toBe("nested-1");
+    expect(toLiwaSendResult({ success: true })).toEqual({ providerRef: "", status: "accepted_pending" });
   });
 });

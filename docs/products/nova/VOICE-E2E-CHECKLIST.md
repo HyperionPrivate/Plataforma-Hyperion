@@ -2,6 +2,13 @@
 
 Código listo (adapter real + outcome poller). Las llamadas reales requieren **API key + agente Conversational AI + DDI** (Twilio/SIP importado en ElevenLabs).
 
+**Ingesta de outcomes**
+
+| Vía | Rol |
+| --- | --- |
+| Dialer outcome poller | **Primario** — pacing/estado de llamada vía Neutral Dialer |
+| `POST /v1/voice/webhooks/elevenlabs` | **Respaldo tipify** — HMAC (`ELEVENLABS_WEBHOOK_SECRET`); emite `voice.call.completed` si hay `provider_conversation_id` matched |
+
 ## Fase A — Key + agentes (sin DDI → sin llamadas)
 
 Bootstrap de agentes NOVA (idempotente):
