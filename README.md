@@ -26,7 +26,8 @@ npm run dev
 http://localhost:3000 — ver [apps/web/ARCHITECTURE.md](apps/web/ARCHITECTURE.md) y [apps/web/README.md](apps/web/README.md).
 
 **Interfaz CoopFuturo + estado WhatsApp/LIWA (rama `interfaz-coopfuturo`):**  
-[docs/ops/INTERFAZ_COOPFUTURO_WHATSAPP.md](docs/ops/INTERFAZ_COOPFUTURO_WHATSAPP.md) — UI Ops (`localhost:3004` staging), fix Transferir-sin-clon, qué está listo vs pendiente en WA.
+[docs/ops/INTERFAZ_COOPFUTURO_WHATSAPP.md](docs/ops/INTERFAZ_COOPFUTURO_WHATSAPP.md) — UI Ops, qué está listo vs pendiente.  
+**Cutover Contabo (chat espejo):** [docs/ops/CONTABO_CHAT_ESPEJO_CUTOVER.md](docs/ops/CONTABO_CHAT_ESPEJO_CUTOVER.md) — deploy, env, nodos LIWA `message`, smoke.
 
 Con Traefik (compose): `http://127.0.0.1:8088/dashboard` tras `docker compose -f docker-compose.dev.yml up`.
 

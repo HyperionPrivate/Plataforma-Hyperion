@@ -115,12 +115,20 @@ Flags: `LIWA_MODE=real`, token, `POST_CALL_WHATSAPP_AUTO_SEND` true/false según
 
 ---
 
-## 5. Pendiente explícito (no bloquea commit)
+## 5. Pendiente para chat espejo en Contabo (configuración, no código)
 
-1. Cablear External API `event=message` (y opcional `bot_message`) en flujo Renovaciones LIWA → URL/secret **PULSO**.  
-2. Deploy Contabo de esta rama cuando el VPS esté estable.  
-3. Chat clon “completo” = (1) + (2); sin GET historial LIWA no hay backfill de chats viejos.  
-4. Limpiar basura de pruebas de túnel en datos locales si molesta en demos.
+Runbook ordenado (SSH, env, nodos LIWA, smoke, checklist):  
+**[CONTABO_CHAT_ESPEJO_CUTOVER.md](CONTABO_CHAT_ESPEJO_CUTOVER.md)**
+
+Resumen:
+
+1. Deploy rama + rebuild `pilot-core` / `web`.  
+2. `.env.contabo` con LIWA real + secret completo + EL IDs nuevos.  
+3. LIWA External API → **solo** `https://<host>/pilot-core/ops/webhooks/liwa` (prohibido Hyperion `/v1/…` y trycloudflare).  
+4. Nodo obligatorio `event=message` (+ documento / handoff / bot opcional).  
+5. Smoke E2E y apagar túneles locales.
+
+Sin nodo `message`, Conversaciones no ve lo que escribe el asociado aunque WhatsApp funcione.
 
 ---
 
