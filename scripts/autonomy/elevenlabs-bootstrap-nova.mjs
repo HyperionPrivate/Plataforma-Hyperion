@@ -18,12 +18,12 @@ const BASE = "https://api.elevenlabs.io";
 const VOICE_RENOVACION = {
   voiceId: "NyQ87MpRGbszyh7rZLXM", // Fernanda — Warm & Natural (es)
   publicOwnerId: "909042158451df29bd1cad6a1a599e0fe5d3dedb5969181ff78406db3dcfcd5a",
-  libraryName: "NOVA Fernanda ES",
+  libraryName: "NOVA Fernanda ES"
 };
 const VOICE_REACTIVACION = {
   voiceId: "OgAcRHdVLdLpidpAVSz8", // Veronica — Calm & Friendly (es)
   publicOwnerId: "c5c9f609b3c693a05eb394e5eca23dc5c1f90d0590f06563af9c743d0a324a88",
-  libraryName: "NOVA Veronica ES",
+  libraryName: "NOVA Veronica ES"
 };
 
 function loadDotEnv() {
@@ -33,10 +33,7 @@ function loadDotEnv() {
     if (!m) continue;
     const key = m[1];
     let val = m[2] ?? "";
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1);
     }
     if (process.env[key] === undefined) process.env[key] = val;
@@ -60,7 +57,14 @@ function upsertEnv(pairs) {
   for (const [k, v] of Object.entries(pairs)) {
     if (!seen.has(k)) out.push(`${k}=${v}`);
   }
-  writeFileSync(ENV_PATH, `${out.filter((l, i) => !(l === "" && out[i - 1] === "")).join("\n").replace(/\n*$/, "\n")}`, "utf8");
+  writeFileSync(
+    ENV_PATH,
+    `${out
+      .filter((l, i) => !(l === "" && out[i - 1] === ""))
+      .join("\n")
+      .replace(/\n*$/, "\n")}`,
+    "utf8"
+  );
 }
 
 async function el(path, { method = "GET", body } = {}) {
@@ -71,9 +75,9 @@ async function el(path, { method = "GET", body } = {}) {
     headers: {
       "xi-api-key": key,
       "Content-Type": "application/json",
-      Accept: "application/json",
+      Accept: "application/json"
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body ? JSON.stringify(body) : undefined
   });
   const text = await res.text();
   let json;
@@ -100,7 +104,7 @@ function agentPayload({ name, prompt, firstMessage, voiceId, tags }) {
       tts: {
         model_id: "eleven_flash_v2_5",
         voice_id: voiceId,
-        agent_output_audio_format: "pcm_16000",
+        agent_output_audio_format: "pcm_16000"
       },
       conversation: { text_only: false, max_duration_seconds: 600 },
       agent: {
@@ -109,9 +113,9 @@ function agentPayload({ name, prompt, firstMessage, voiceId, tags }) {
         prompt: {
           prompt,
           llm: "gemini-2.0-flash",
-          temperature: 0.4,
-        },
-      },
+          temperature: 0.4
+        }
+      }
     },
     platform_settings: {
       data_collection: {},
@@ -120,12 +124,12 @@ function agentPayload({ name, prompt, firstMessage, voiceId, tags }) {
           agent: {
             first_message: true,
             language: true,
-            prompt: { prompt: true },
+            prompt: { prompt: true }
           },
-          tts: { voice_id: true },
-        },
-      },
-    },
+          tts: { voice_id: true }
+        }
+      }
+    }
   };
 }
 
@@ -162,7 +166,7 @@ async function ensureSharedVoice({ voiceId, publicOwnerId, libraryName }) {
   if (list.some((v) => v.voice_id === voiceId)) return voiceId;
   await el(`/v1/voices/add/${publicOwnerId}/${voiceId}`, {
     method: "POST",
-    body: { new_name: libraryName },
+    body: { new_name: libraryName }
   });
   return voiceId;
 }
@@ -170,9 +174,7 @@ async function ensureSharedVoice({ voiceId, publicOwnerId, libraryName }) {
 async function findOrCreate(name, payload, { preferredId, legacyNames = [] } = {}) {
   const list = await el("/v1/convai/agents");
   const agents = Array.isArray(list?.agents) ? list.agents : Array.isArray(list) ? list : [];
-  const byId = preferredId
-    ? agents.find((a) => String(a.agent_id || "").trim() === preferredId)
-    : null;
+  const byId = preferredId ? agents.find((a) => String(a.agent_id || "").trim() === preferredId) : null;
   const byName = agents.find((a) => {
     const n = String(a.name || "").trim();
     return n === name || legacyNames.includes(n);
@@ -215,12 +217,12 @@ async function main() {
       firstMessage:
         "Buenos días, le habla Valerie de Coopfuturo. ¿Me confirma si hablo con el asociado o la asociada de la cuenta?",
       voiceId: voiceA,
-      tags: ["nova", "coopfuturo", "renovacion", "flujo-a", "valerie"],
+      tags: ["nova", "coopfuturo", "renovacion", "flujo-a", "valerie"]
     }),
     {
       preferredId: process.env.ELEVENLABS_AGENT_ID?.trim() || process.env.DEMO_AGENT_ID?.trim() || "",
-      legacyNames: ["NOVA Renovacion Coopfuturo"],
-    },
+      legacyNames: ["NOVA Renovacion Coopfuturo"]
+    }
   );
 
   const react = await findOrCreate(
@@ -231,23 +233,23 @@ async function main() {
       firstMessage:
         "Buenos días, le habla Valerie de Coopfuturo. Quería saludarle para retomar el contacto con la cooperativa. ¿Me confirma si es un buen momento?",
       voiceId: voiceB,
-      tags: ["nova", "coopfuturo", "reactivacion", "flujo-b", "valerie"],
+      tags: ["nova", "coopfuturo", "reactivacion", "flujo-b", "valerie"]
     }),
     {
       preferredId: process.env.ELEVENLABS_AGENT_ID_B?.trim() || "",
-      legacyNames: ["NOVA Reactivacion Coopfuturo"],
-    },
+      legacyNames: ["NOVA Reactivacion Coopfuturo"]
+    }
   );
 
   const phones = await el("/v1/convai/phone-numbers");
-  const phoneList = Array.isArray(phones) ? phones : phones?.phone_numbers ?? [];
+  const phoneList = Array.isArray(phones) ? phones : (phones?.phone_numbers ?? []);
   let ddi = process.env.DEMO_DDI_PHONE_NUMBER_ID?.trim() || "";
   if (!ddi && phoneList.length > 0) {
     ddi = String(phoneList[0].phone_number_id || "");
     if (ddi) {
       await el(`/v1/convai/phone-numbers/${ddi}`, {
         method: "PATCH",
-        body: { agent_id: renov.agent_id },
+        body: { agent_id: renov.agent_id }
       });
     }
   }
@@ -255,7 +257,7 @@ async function main() {
   const pairs = {
     ELEVENLABS_AGENT_ID: renov.agent_id,
     ELEVENLABS_AGENT_ID_B: react.agent_id,
-    DEMO_AGENT_ID: renov.agent_id,
+    DEMO_AGENT_ID: renov.agent_id
   };
   if (ddi) pairs.DEMO_DDI_PHONE_NUMBER_ID = ddi;
 
@@ -273,7 +275,7 @@ async function main() {
 
   if (!ddi) {
     console.log(
-      "DDI_PENDING=1 import a Twilio/SIP number via POST /v1/convai/phone-numbers then re-run with --write-env",
+      "DDI_PENDING=1 import a Twilio/SIP number via POST /v1/convai/phone-numbers then re-run with --write-env"
     );
   }
 }

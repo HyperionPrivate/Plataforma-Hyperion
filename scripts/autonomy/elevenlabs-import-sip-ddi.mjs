@@ -29,10 +29,7 @@ function loadDotEnv() {
     if (!m) continue;
     const key = m[1];
     let val = m[2] ?? "";
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
     }
     if (process.env[key] === undefined) process.env[key] = val;
@@ -67,9 +64,9 @@ async function el(path, { method = "GET", body } = {}) {
     headers: {
       "xi-api-key": key,
       "Content-Type": "application/json",
-      Accept: "application/json",
+      Accept: "application/json"
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body ? JSON.stringify(body) : undefined
   });
   const text = await res.text();
   let json;
@@ -87,7 +84,9 @@ async function el(path, { method = "GET", body } = {}) {
 }
 
 function normalizeE164(raw) {
-  let n = String(raw || "").trim().replace(/[\s()-]/g, "");
+  let n = String(raw || "")
+    .trim()
+    .replace(/[\s()-]/g, "");
   if (!n) return "";
   if (!n.startsWith("+")) {
     if (n.startsWith("57") && n.length >= 12) n = `+${n}`;
@@ -133,10 +132,10 @@ async function ensureSipPhone({ e164, label, agentId, trunk }) {
           transport: trunk.transport,
           credentials: {
             username: trunk.username,
-            password: trunk.password,
-          },
-        },
-      },
+            password: trunk.password
+          }
+        }
+      }
     });
     phoneNumberId = phoneIdOf(createdRow);
     created = true;
@@ -148,7 +147,7 @@ async function ensureSipPhone({ e164, label, agentId, trunk }) {
   if (agentId) {
     await el(`/v1/convai/phone-numbers/${phoneNumberId}`, {
       method: "PATCH",
-      body: { agent_id: agentId },
+      body: { agent_id: agentId }
     });
   }
 
@@ -165,7 +164,7 @@ async function main() {
     address: process.env.SIP_TRUNK_ADDRESS?.trim() || "sip.voipcentral.net",
     username: process.env.SIP_TRUNK_USERNAME?.trim() || "",
     password: process.env.SIP_TRUNK_PASSWORD?.trim() || "",
-    transport: process.env.SIP_TRUNK_TRANSPORT?.trim() || "tcp",
+    transport: process.env.SIP_TRUNK_TRANSPORT?.trim() || "tcp"
   };
   if (!trunk.username || !trunk.password) {
     throw new Error("SIP_TRUNK_USERNAME and SIP_TRUNK_PASSWORD are required");
@@ -191,7 +190,7 @@ async function main() {
         e164: result.e164,
         phone_number_id: result.phoneNumberId,
         created: result.created,
-        agent_id: agentId,
+        agent_id: agentId
       })
     );
   }
