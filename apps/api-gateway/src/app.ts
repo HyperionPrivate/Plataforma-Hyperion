@@ -43,6 +43,8 @@ declare module "fastify" {
 }
 
 const UPSTREAM_TIMEOUT_MS = 2_500;
+/** Real dialer/SIP placement regularly exceeds the default edge timeout. */
+const VOICE_UPSTREAM_TIMEOUT_MS = 30_000;
 const LUMEN_AI_TIMEOUT_MS = 130_000;
 const LUMEN_REQUEST_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const HEALTH_CACHE_TTL_MS = 5_000;
@@ -499,7 +501,7 @@ export function createGatewayRoutes(overrides?: {
           buildUpstreamUrl(urls.voiceChannel, request, true),
           method,
           method === "GET" ? undefined : request.body,
-          UPSTREAM_TIMEOUT_MS,
+          VOICE_UPSTREAM_TIMEOUT_MS,
           undefined,
           gatewayCredentials.voice ?? null
         );

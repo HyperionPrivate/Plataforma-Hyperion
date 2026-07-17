@@ -677,6 +677,30 @@ services:
       api-gateway:
         condition: service_healthy
 
+  # NOVA-only console build (Coopfuturo). Same source, product-scoped at build
+  # time so it never surfaces PULSO/LUMEN navigation.
+  web-console-nova:
+    build:
+      context: ..
+      dockerfile: infra/docker/node-service.Dockerfile
+      target: web-console
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+        VITE_PRODUCT: nova
+        VITE_BRAND_LABEL: NOVA
+    restart: unless-stopped
+    ports:
+      - "${WEB_CONSOLE_NOVA_HOST_PORT:-3001}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   whatsapp_sessions:
