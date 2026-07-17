@@ -38,9 +38,28 @@ service_roles=(
   documents-service:hyperion_documents
 )
 
+# N-1 / older compose stacks may omit newer owners (nova/voice/liwa/documents).
+# Only probe identities for services that are currently running in the project.
+mapfile -t running_services < <("${compose[@]}" ps --services --status running)
+
+service_is_running() {
+  local candidate=$1
+  local running
+  for running in "${running_services[@]}"; do
+    if [[ "$running" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 for service_and_role in "${service_roles[@]}"; do
   service=${service_and_role%%:*}
   expected_role=${service_and_role##*:}
+  if ! service_is_running "$service"; then
+    echo "skipping ${service} PostgreSQL identity (not running in ${project_name})"
+    continue
+  fi
   echo "checking ${service} PostgreSQL identity"
   "${compose[@]}" exec -T "$service" \
     node --input-type=module -e "$database_identity_probe" "$expected_role"
