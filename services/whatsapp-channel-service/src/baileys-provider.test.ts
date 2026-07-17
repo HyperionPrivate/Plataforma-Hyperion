@@ -281,6 +281,9 @@ describe("BaileysWhatsAppWebTestProvider", () => {
   });
 
   it("retains an exhausted inbound and reconnects only after PostgreSQL recovery", async () => {
+    // Pin timers so the 25ms spool retry cannot race the post-upsert assertions
+    // (that flake turned main red after PR #18 despite a green PR check).
+    vi.useFakeTimers();
     const { runtime, createSocket } = createFakeRuntime(true);
     const failedSocket = createFakeSocket();
     const replacementSocket = createFakeSocket();
@@ -320,6 +323,7 @@ describe("BaileysWhatsAppWebTestProvider", () => {
     expect(createSocket).toHaveBeenCalledTimes(1);
 
     storageAvailable = true;
+    await vi.advanceTimersByTimeAsync(25);
     await vi.waitFor(() => expect(createSocket).toHaveBeenCalledTimes(2));
     expect(inbound).toHaveBeenCalledTimes(2);
     expect(inbound.mock.calls.map(([message]) => message.externalMessageId)).toEqual([

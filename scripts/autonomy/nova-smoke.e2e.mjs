@@ -107,7 +107,7 @@ console.log(
       contactId,
       callId,
       correlatedContactId,
-      reviewsCount: Array.isArray(reviews.data) ? reviews.data.length : reviews.data?.items?.length ?? 0,
+      reviewsCount: Array.isArray(reviews.data) ? reviews.data.length : (reviews.data?.items?.length ?? 0),
       analyticsStatus: analytics.status,
       dashboard: dashboard.data
     },

@@ -72,10 +72,7 @@ const inventory = {
   },
   recommended: {
     LIWA_ACCOUNT_ID: String(me.page_id ?? ""),
-    LIWA_DEFAULT_FLOW_ID:
-      flows.find((f) => String(f.name) === "Renovaciones")?.id ??
-      renovacionFlows[0]?.id ??
-      null,
+    LIWA_DEFAULT_FLOW_ID: flows.find((f) => String(f.name) === "Renovaciones")?.id ?? renovacionFlows[0]?.id ?? null,
     LIWA_FLOW_ID_B: flows.find((f) => String(f.name).includes("RENOVACION_FLOR"))?.id ?? null
   },
   agency_tags: agencyTags.map((t) => ({ id: String(t.id), name: String(t.name) })),

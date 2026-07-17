@@ -95,10 +95,9 @@ describe("HttpLiwaClient", () => {
     const fetchImpl = mockFetch((url, init) => {
       expect(url).toBe("https://chat.liwa.co/api/contacts");
       expect(init?.method).toBe("POST");
-      return new Response(
-        JSON.stringify({ success: true, contact_created: false, data: { id: "573002555948" } }),
-        { status: 200 }
-      );
+      return new Response(JSON.stringify({ success: true, contact_created: false, data: { id: "573002555948" } }), {
+        status: 200
+      });
     });
 
     const client = new HttpLiwaClient("https://chat.liwa.co/api", "token-test", env, fetchImpl);

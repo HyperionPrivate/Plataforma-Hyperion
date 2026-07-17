@@ -71,7 +71,7 @@ export function assertLiwaBaseUrlAllowed(baseUrl: string, env: NodeJS.ProcessEnv
 function asNamedList(response: Record<string, unknown>): LiwaNamedResource[] {
   const rows = Array.isArray(response)
     ? response
-    : (response.items as unknown[]) ?? (response.data as unknown[]) ?? (response.tags as unknown[]) ?? [];
+    : ((response.items as unknown[]) ?? (response.data as unknown[]) ?? (response.tags as unknown[]) ?? []);
   return (rows as Record<string, unknown>[])
     .map((row) => ({
       id: String(row.id ?? row.tag_id ?? row.team_id ?? ""),
@@ -160,10 +160,7 @@ export class HttpLiwaClient implements LiwaClient {
   }
 
   async applyTag(contactId: string, tagId: string): Promise<void> {
-    await this.request(
-      "POST",
-      `/contacts/${encodeURIComponent(contactId)}/tags/${encodeURIComponent(tagId)}`
-    );
+    await this.request("POST", `/contacts/${encodeURIComponent(contactId)}/tags/${encodeURIComponent(tagId)}`);
   }
 
   async handoffToAgency(contactId: string, agencyTag: string, _note?: string): Promise<void> {

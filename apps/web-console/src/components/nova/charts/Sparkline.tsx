@@ -13,7 +13,11 @@ export function Sparkline({
   const gradientId = `nova-spark-${Math.abs(color.split("").reduce((a, c) => a + c.charCodeAt(0), 0))}`;
 
   if (chartData.length === 0) {
-    return <div className="muted tiny" style={{ height }}>Sin serie</div>;
+    return (
+      <div className="muted tiny" style={{ height }}>
+        Sin serie
+      </div>
+    );
   }
 
   return (

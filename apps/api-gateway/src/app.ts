@@ -50,11 +50,7 @@ const HEALTH_CACHE_TTL_MS = 5_000;
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT";
 const NOVA_REQUEST_BODY_LIMIT_BYTES = 2_100_000;
 
-const PUBLIC_PATHS = new Set([
-  "/v1/auth/login",
-  "/v1/liwa/webhooks",
-  "/v1/liwa/webhooks/simulate"
-]);
+const PUBLIC_PATHS = new Set(["/v1/auth/login", "/v1/liwa/webhooks", "/v1/liwa/webhooks/simulate"]);
 
 let healthCache: { expiresAt: number; payload: PlatformHealth } | undefined;
 
@@ -439,7 +435,11 @@ export function createGatewayRoutes(overrides?: {
         }
         const method = request.method as "GET" | "POST" | "PATCH" | "PUT";
         const contentType = request.headers["content-type"] ?? "";
-        if (method !== "GET" && contentType.toLowerCase().includes("multipart/form-data") && Buffer.isBuffer(request.body)) {
+        if (
+          method !== "GET" &&
+          contentType.toLowerCase().includes("multipart/form-data") &&
+          Buffer.isBuffer(request.body)
+        ) {
           return proxyRaw(
             request,
             reply,

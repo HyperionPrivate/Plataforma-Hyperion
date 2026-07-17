@@ -35,12 +35,7 @@ import {
   scoreContact,
   type ComplianceSettings
 } from "./domain.js";
-import {
-  extractMultipartFile,
-  isCsvFilename,
-  parseContactsCsv,
-  type ContactImportRow
-} from "./contact-import-file.js";
+import { extractMultipartFile, isCsvFilename, parseContactsCsv, type ContactImportRow } from "./contact-import-file.js";
 import { createCoreAdapter, type CoreAdapter } from "./core-adapter.js";
 import { insertNovaOutboxEvent, listNovaOutboxDlq, redriveNovaOutboxDlq } from "./outbox.js";
 import { canTransitionCrm, inferIntentFromPayload, stageFromPostCallIntent, type CrmStage } from "./post-call.js";
@@ -266,7 +261,9 @@ export async function registerNovaRoutes(
 
     const parsed = contactImportSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send(envelope({ error: "Invalid import payload", issues: parsed.error.issues }, request.id));
+      return reply
+        .code(400)
+        .send(envelope({ error: "Invalid import payload", issues: parsed.error.issues }, request.id));
     }
 
     const imported: Array<{ contact_id: string; phone_e164: string; created: boolean }> = [];
@@ -322,60 +319,56 @@ export async function registerNovaRoutes(
     return reply.code(201).send(envelope({ imported }, request.id));
   });
 
-  app.post(
-    "/v1/tenants/:tenantId/nova/contacts/import/file",
-    { bodyLimit: 2_100_000 },
-    async (request, reply) => {
-      const scope = requireTenantDb(context, request, reply);
-      if (!scope) return;
-      if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+  app.post("/v1/tenants/:tenantId/nova/contacts/import/file", { bodyLimit: 2_100_000 }, async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
 
-      const body = Buffer.isBuffer(request.body)
-        ? request.body
-        : typeof request.body === "string"
-          ? Buffer.from(request.body)
-          : null;
-      if (!body) {
-        return reply.code(400).send(envelope({ error: "multipart file required" }, request.id));
-      }
-
-      const extracted = extractMultipartFile(request.headers["content-type"], body);
-      if ("error" in extracted) {
-        return reply.code(400).send(envelope({ error: extracted.error }, request.id));
-      }
-      if (!isCsvFilename(extracted.filename)) {
-        return reply
-          .code(415)
-          .send(envelope({ error: "csv_only", detail: "XLSX not supported; upload CSV" }, request.id));
-      }
-
-      const parsed = parseContactsCsv(extracted.content.toString("utf8"));
-      if (parsed.rows.length === 0 && parsed.errors.length > 0 && parsed.errors[0]?.row === 0) {
-        return reply.code(400).send(envelope({ imported: 0, errors: parsed.errors }, request.id));
-      }
-
-      const importedIds: string[] = [];
-      const errors = [...parsed.errors];
-
-      await scope.db.transaction(async (tx) => {
-        for (const row of parsed.rows) {
-          const contactId = await upsertImportedContact(tx, scope.tenantId, row, serviceUrls.audit);
-          importedIds.push(contactId);
-        }
-      });
-
-      return reply.code(201).send(
-        envelope(
-          {
-            imported: importedIds.length,
-            contact_ids: importedIds,
-            errors
-          },
-          request.id
-        )
-      );
+    const body = Buffer.isBuffer(request.body)
+      ? request.body
+      : typeof request.body === "string"
+        ? Buffer.from(request.body)
+        : null;
+    if (!body) {
+      return reply.code(400).send(envelope({ error: "multipart file required" }, request.id));
     }
-  );
+
+    const extracted = extractMultipartFile(request.headers["content-type"], body);
+    if ("error" in extracted) {
+      return reply.code(400).send(envelope({ error: extracted.error }, request.id));
+    }
+    if (!isCsvFilename(extracted.filename)) {
+      return reply
+        .code(415)
+        .send(envelope({ error: "csv_only", detail: "XLSX not supported; upload CSV" }, request.id));
+    }
+
+    const parsed = parseContactsCsv(extracted.content.toString("utf8"));
+    if (parsed.rows.length === 0 && parsed.errors.length > 0 && parsed.errors[0]?.row === 0) {
+      return reply.code(400).send(envelope({ imported: 0, errors: parsed.errors }, request.id));
+    }
+
+    const importedIds: string[] = [];
+    const errors = [...parsed.errors];
+
+    await scope.db.transaction(async (tx) => {
+      for (const row of parsed.rows) {
+        const contactId = await upsertImportedContact(tx, scope.tenantId, row, serviceUrls.audit);
+        importedIds.push(contactId);
+      }
+    });
+
+    return reply.code(201).send(
+      envelope(
+        {
+          imported: importedIds.length,
+          contact_ids: importedIds,
+          errors
+        },
+        request.id
+      )
+    );
+  });
 
   app.get("/v1/tenants/:tenantId/nova/compliance/settings", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
@@ -424,7 +417,9 @@ export async function registerNovaRoutes(
 
     const parsed = complianceSettingsSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send(envelope({ error: "Invalid compliance settings", issues: parsed.error.issues }, request.id));
+      return reply
+        .code(400)
+        .send(envelope({ error: "Invalid compliance settings", issues: parsed.error.issues }, request.id));
     }
     if (parsed.data.window_start_hour >= parsed.data.window_end_hour) {
       return reply.code(400).send(envelope({ error: "window_start_hour must be < window_end_hour" }, request.id));
@@ -640,10 +635,10 @@ export async function registerNovaRoutes(
     );
     const settings: ComplianceSettings = settingsRow.rows[0] ?? DEFAULT_COMPLIANCE;
 
-    const optOut = await scope.db.query(
-      `select 1 from nova.opt_outs where tenant_id = $1 and phone_e164 = $2`,
-      [scope.tenantId, contact.rows[0]!.phone]
-    );
+    const optOut = await scope.db.query(`select 1 from nova.opt_outs where tenant_id = $1 and phone_e164 = $2`, [
+      scope.tenantId,
+      contact.rows[0]!.phone
+    ]);
     const holiday = await scope.db.query(
       `select 1 from nova.holidays where holiday_date = (timezone('America/Bogota', now()))::date`
     );
@@ -868,8 +863,7 @@ export async function registerNovaRoutes(
     }
 
     const nextStage = parsed.data.stage ?? existing.rows[0]!.stage;
-    const nextTipification =
-      parsed.data.tipification ?? existing.rows[0]!.tipification ?? undefined;
+    const nextTipification = parsed.data.tipification ?? existing.rows[0]!.tipification ?? undefined;
     if (TERMINAL_CRM_STAGES.has(nextStage) && !nextTipification?.trim()) {
       return reply.code(400).send(
         envelope(
@@ -1161,14 +1155,16 @@ export async function registerNovaRoutes(
       }
     });
 
-    return reply
-      .code(201)
-      .send(
-        envelope(
-          { tenant_id: parsed.data.tenant_id, display_name: parsed.data.display_name, agencies: buildAgencySeedList().length },
-          request.id
-        )
-      );
+    return reply.code(201).send(
+      envelope(
+        {
+          tenant_id: parsed.data.tenant_id,
+          display_name: parsed.data.display_name,
+          agencies: buildAgencySeedList().length
+        },
+        request.id
+      )
+    );
   });
 
   app.get("/v1/tenants/:tenantId/nova/reviews", async (request, reply) => {
@@ -1194,10 +1190,7 @@ export async function registerNovaRoutes(
     if (!parsed.success) return reply.code(400).send(envelope({ error: "Invalid review decision" }, request.id));
 
     const liwaDestination = `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/internal/events`;
-    const autoFlow =
-      parsed.data.flow_id ??
-      process.env.LIWA_DEFAULT_FLOW_ID ??
-      "1782399915832";
+    const autoFlow = parsed.data.flow_id ?? process.env.LIWA_DEFAULT_FLOW_ID ?? "1782399915832";
 
     try {
       await scope.db.transaction(async (tx) => {
@@ -1257,7 +1250,8 @@ export async function registerNovaRoutes(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message === "not_found") return reply.code(404).send(envelope({ error: "Review not found" }, request.id));
-      if (message === "not_pending") return reply.code(409).send(envelope({ error: "Review is not pending" }, request.id));
+      if (message === "not_pending")
+        return reply.code(409).send(envelope({ error: "Review is not pending" }, request.id));
       throw error;
     }
 
@@ -1287,14 +1281,15 @@ export async function registerNovaRoutes(
 
     const parsed = novaIngressEventSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send(envelope({ error: "Invalid event envelope", issues: parsed.error.issues }, request.id));
+      return reply
+        .code(400)
+        .send(envelope({ error: "Invalid event envelope", issues: parsed.error.issues }, request.id));
     }
 
     const event = parsed.data;
-    const duplicate = await context.db.query(
-      `select event_id from nova.inbox_events where event_id = $1`,
-      [event.event_id]
-    );
+    const duplicate = await context.db.query(`select event_id from nova.inbox_events where event_id = $1`, [
+      event.event_id
+    ]);
     if ((duplicate.rowCount ?? 0) > 0) {
       return envelope({ status: "duplicate", event_id: event.event_id }, request.id);
     }
@@ -1411,11 +1406,7 @@ async function processInboundEvent(
 
     if (parsed.campaign_id) {
       const enrollmentStatus =
-        parsed.status === "failed"
-          ? "failed"
-          : stageInfo.stage === "renovado"
-            ? "converted"
-            : "reached";
+        parsed.status === "failed" ? "failed" : stageInfo.stage === "renovado" ? "converted" : "reached";
       await db.query(
         `update nova.campaign_enrollments
             set status = $4, updated_at = now()

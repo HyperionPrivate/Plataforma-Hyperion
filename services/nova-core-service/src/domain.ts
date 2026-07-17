@@ -4,11 +4,7 @@ const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
 const BOGOTA_TIMEZONE = "America/Bogota";
 
 export type EligibilityDecision =
-  | "eligible"
-  | "blocked_window"
-  | "blocked_opt_out"
-  | "blocked_policy"
-  | "blocked_frequency";
+  "eligible" | "blocked_window" | "blocked_opt_out" | "blocked_policy" | "blocked_frequency";
 
 export interface EligibilityResult {
   eligibility: EligibilityDecision;
@@ -101,10 +97,7 @@ export function decideEligibility(input: {
     };
   }
 
-  if (
-    typeof input.attemptCount === "number" &&
-    input.attemptCount >= settings.maxAttemptsPerContact
-  ) {
+  if (typeof input.attemptCount === "number" && input.attemptCount >= settings.maxAttemptsPerContact) {
     return { eligibility: "blocked_frequency", reason: "max_attempts_reached" };
   }
 

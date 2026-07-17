@@ -111,7 +111,9 @@ export function createObjectStore(env: NodeJS.ProcessEnv = process.env): ObjectS
     const accessKeyId = env.DOCUMENTS_S3_ACCESS_KEY?.trim();
     const secretAccessKey = env.DOCUMENTS_S3_SECRET_KEY?.trim();
     if (!accessKeyId || !secretAccessKey) {
-      throw new Error("DOCUMENTS_S3_ACCESS_KEY and DOCUMENTS_S3_SECRET_KEY are required when DOCUMENTS_S3_BUCKET is set");
+      throw new Error(
+        "DOCUMENTS_S3_ACCESS_KEY and DOCUMENTS_S3_SECRET_KEY are required when DOCUMENTS_S3_BUCKET is set"
+      );
     }
     return new S3ObjectStore({
       bucket,

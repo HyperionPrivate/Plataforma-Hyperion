@@ -49,9 +49,7 @@ export function NovaSegmentationTab({
       try {
         const params = new URLSearchParams({ limit: "50" });
         if (query.trim()) params.set("q", query.trim());
-        const data = await api.get<{ items: ContactRow[] }>(
-          `${novaPath(tenantId, "contacts")}?${params.toString()}`
-        );
+        const data = await api.get<{ items: ContactRow[] }>(`${novaPath(tenantId, "contacts")}?${params.toString()}`);
         if (!cancelled) setContacts(data.items ?? []);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -144,7 +142,10 @@ export function NovaSegmentationTab({
         ) : contacts.length === 0 ? (
           <EmptyState label="Sin contactos. Importa CSV/JSON primero." />
         ) : (
-          <ul className="col tiny" style={{ gap: 4, listStyle: "none", padding: 0, margin: 0, maxHeight: 220, overflow: "auto" }}>
+          <ul
+            className="col tiny"
+            style={{ gap: 4, listStyle: "none", padding: 0, margin: 0, maxHeight: 220, overflow: "auto" }}
+          >
             {contacts.map((c) => (
               <li key={c.contact_id}>
                 <button
@@ -177,7 +178,12 @@ export function NovaSegmentationTab({
               <option key={id} value={id} />
             ))}
           </datalist>
-          <button className="btn btn-primary" type="button" disabled={!canWriteOps || busy} onClick={() => void scoreOne(contactId)}>
+          <button
+            className="btn btn-primary"
+            type="button"
+            disabled={!canWriteOps || busy}
+            onClick={() => void scoreOne(contactId)}
+          >
             Score
           </button>
           <button
@@ -189,7 +195,11 @@ export function NovaSegmentationTab({
             Score listado (máx. 10)
           </button>
         </div>
-        {error ? <div className="banner" style={{ marginTop: 8 }}>{error}</div> : null}
+        {error ? (
+          <div className="banner" style={{ marginTop: 8 }}>
+            {error}
+          </div>
+        ) : null}
       </Card>
 
       <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>

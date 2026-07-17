@@ -156,11 +156,7 @@ export async function listNovaOutboxDlq(
   return result.rows;
 }
 
-export async function redriveNovaOutboxDlq(
-  db: DatabaseClient,
-  tenantId: string,
-  eventId: string
-): Promise<boolean> {
+export async function redriveNovaOutboxDlq(db: DatabaseClient, tenantId: string, eventId: string): Promise<boolean> {
   return db.transaction(async (tx) => {
     const dlq = await tx.query<{ eventId: string }>(
       `update nova.outbox_dlq

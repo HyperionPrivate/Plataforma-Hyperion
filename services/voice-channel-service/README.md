@@ -17,12 +17,12 @@ Hyperion no reimplementa pacing, AMD, rotación DDI ni reconciliación: delega e
 
 Variables relevantes:
 
-| Variable | Uso |
-|---|---|
-| `VOICE_MODE` | `mock` (default) o `dialer` |
-| `DIALER_BASE_URL` | Base URL del dialer (SSRF guard: solo este host) |
-| `VOICE_TO_DIALER_TOKEN` | Bearer JWT hacia el dialer |
-| `DIALER_WEBHOOK_HMAC_SECRET` | Validación de webhooks entrantes |
+| Variable                     | Uso                                              |
+| ---------------------------- | ------------------------------------------------ |
+| `VOICE_MODE`                 | `mock` (default) o `dialer`                      |
+| `DIALER_BASE_URL`            | Base URL del dialer (SSRF guard: solo este host) |
+| `VOICE_TO_DIALER_TOKEN`      | Bearer JWT hacia el dialer                       |
+| `DIALER_WEBHOOK_HMAC_SECRET` | Validación de webhooks entrantes                 |
 
 En `mock`, las llamadas se completan localmente y se publican eventos hacia `nova-core-service`.
 

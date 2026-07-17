@@ -156,11 +156,7 @@ export async function listVoiceOutboxDlq(
   return result.rows;
 }
 
-export async function redriveVoiceOutboxDlq(
-  db: DatabaseClient,
-  tenantId: string,
-  eventId: string
-): Promise<boolean> {
+export async function redriveVoiceOutboxDlq(db: DatabaseClient, tenantId: string, eventId: string): Promise<boolean> {
   return db.transaction(async (tx) => {
     const dlq = await tx.query<{ eventId: string }>(
       `update voice.outbox_dlq

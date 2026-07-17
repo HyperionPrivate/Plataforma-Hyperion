@@ -35,7 +35,9 @@ export function NovaImportTab({
   onImportFile
 }: {
   canWriteOps: boolean;
-  onImportJson: (contacts: Array<{ phone_e164: string; full_name?: string; agency_code?: string }>) => Promise<ImportedContact[]>;
+  onImportJson: (
+    contacts: Array<{ phone_e164: string; full_name?: string; agency_code?: string }>
+  ) => Promise<ImportedContact[]>;
   onImportFile?: (file: File) => Promise<ImportedContact[] | null>;
 }) {
   const [mode, setMode] = useState<"lines" | "csv">("lines");
@@ -146,7 +148,12 @@ export function NovaImportTab({
           <CardHead title="Importar contactos E.164" />
           <p className="muted tiny">Formato: telefono,nombre,codigo_agencia (una línea por contacto).</p>
           <textarea className="input" rows={8} value={importText} onChange={(e) => setImportText(e.target.value)} />
-          <button className="btn btn-primary" type="button" disabled={!canWriteOps || busy} onClick={() => void importLines()}>
+          <button
+            className="btn btn-primary"
+            type="button"
+            disabled={!canWriteOps || busy}
+            onClick={() => void importLines()}
+          >
             Importar JSON
           </button>
         </Card>
@@ -156,11 +163,7 @@ export function NovaImportTab({
           <p className="muted tiny">
             Intenta `import/file` si existe; si no, mapea columnas y envía a `contacts/import`.
           </p>
-          <input
-            type="file"
-            accept=".csv,text/csv"
-            onChange={(e) => void onFile(e.target.files?.[0] ?? null)}
-          />
+          <input type="file" accept=".csv,text/csv" onChange={(e) => void onFile(e.target.files?.[0] ?? null)} />
           {fileName ? <p className="tiny muted">Archivo: {fileName}</p> : null}
           {headers.length > 0 ? (
             <div className="col" style={{ gap: 8, marginTop: 12 }}>

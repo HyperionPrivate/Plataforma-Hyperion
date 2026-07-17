@@ -42,10 +42,7 @@ export function NovaCrmTab({
 
   return (
     <div className="col" style={{ gap: 16 }}>
-      <div
-        className="row"
-        style={{ gap: 12, overflowX: "auto", alignItems: "stretch", paddingBottom: 4 }}
-      >
+      <div className="row" style={{ gap: 12, overflowX: "auto", alignItems: "stretch", paddingBottom: 4 }}>
         {columns.map((column) => (
           <div key={column.id} style={{ minWidth: 200, flex: "0 0 220px" }}>
             <Card>

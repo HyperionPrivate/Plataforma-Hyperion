@@ -60,7 +60,7 @@ const TRANSCRIPT_WHATSAPP =
 
 export function normalizeIntent(raw: string | null | undefined): string {
   if (!raw) return "unknown";
-  let value = raw.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
+  const value = raw.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
   const aliases: Record<string, string> = {
     interested: "interesado",
     interest: "interesado",
@@ -133,13 +133,7 @@ export function inferIntentFromPayload(payload: {
 }
 
 export type CrmStage =
-  | "pendiente"
-  | "contactado"
-  | "interesado"
-  | "documento"
-  | "transferido"
-  | "renovado"
-  | "no_interes";
+  "pendiente" | "contactado" | "interesado" | "documento" | "transferido" | "renovado" | "no_interes";
 
 const CRM_TRANSITIONS: Record<CrmStage, CrmStage[]> = {
   pendiente: ["contactado", "no_interes"],
@@ -156,7 +150,11 @@ export function canTransitionCrm(from: CrmStage, to: CrmStage): boolean {
   return CRM_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
-export function stageFromPostCallIntent(intent: string): { stage: CrmStage; tipification?: string; wantsWhatsapp: boolean } {
+export function stageFromPostCallIntent(intent: string): {
+  stage: CrmStage;
+  tipification?: string;
+  wantsWhatsapp: boolean;
+} {
   const normalized = normalizeIntent(intent);
   if (intentWantsWhatsapp(normalized)) {
     return { stage: "interesado", tipification: normalized, wantsWhatsapp: true };

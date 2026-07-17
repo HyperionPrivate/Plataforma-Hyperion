@@ -11,18 +11,18 @@ Auth: header `X-ACCESS-TOKEN` (no Bearer).
 
 Cuenta descubierta con el token de integración:
 
-| Campo | Valor |
-|---|---|
-| `page_id` / `LIWA_ACCOUNT_ID` | `1656233` |
-| Nombre | Coopfuturo 2026 Cta Comercial |
-| Activa | sí |
+| Campo                         | Valor                         |
+| ----------------------------- | ----------------------------- |
+| `page_id` / `LIWA_ACCOUNT_ID` | `1656233`                     |
+| Nombre                        | Coopfuturo 2026 Cta Comercial |
+| Activa                        | sí                            |
 
 ### Flows relevantes (`GET /accounts/flows`)
 
-| Nombre | Flow ID | Uso en NOVA |
-|---|---|---|
-| Renovaciones | `1782399915832` | `LIWA_DEFAULT_FLOW_ID` (producto renovación) |
-| RENOVACION_FLOR_25062026 | `1782486171458` | `LIWA_FLOW_ID_B` (A/B / Floridablanca) |
+| Nombre                   | Flow ID         | Uso en NOVA                                  |
+| ------------------------ | --------------- | -------------------------------------------- |
+| Renovaciones             | `1782399915832` | `LIWA_DEFAULT_FLOW_ID` (producto renovación) |
+| RENOVACION_FLOR_25062026 | `1782486171458` | `LIWA_FLOW_ID_B` (A/B / Floridablanca)       |
 
 También existen flujos AccesoDirecto_AgBucaramanga, Bienvenida, etc.  
 **No hay un flow llamado "reactivacion"** en la cuenta; hasta que exista, renovación usa `1782399915832`.
@@ -57,17 +57,17 @@ flowchart LR
 
 ### Paths del adaptador Hyperion
 
-| Operación | Endpoint real |
-|---|---|
-| Cuenta | `GET /accounts/me` |
-| Tags | `GET\|POST /accounts/tags` |
-| Aplicar tag | `POST /contacts/{id}/tags/{tag_id}` |
-| Flows | `GET /accounts/flows` |
-| Teams | `GET /accounts/teams` |
-| Ensure contact | `POST /contacts` |
-| Enviar flow | `POST /contacts/{id}/send/{flow_id}` |
-| Texto (ventana 24h) | `POST /contacts/{id}/send/text` |
-| Handoff a sede | **aplicar tag `AG_*`** (no existe `/handoff` en Swagger) |
+| Operación           | Endpoint real                                            |
+| ------------------- | -------------------------------------------------------- |
+| Cuenta              | `GET /accounts/me`                                       |
+| Tags                | `GET\|POST /accounts/tags`                               |
+| Aplicar tag         | `POST /contacts/{id}/tags/{tag_id}`                      |
+| Flows               | `GET /accounts/flows`                                    |
+| Teams               | `GET /accounts/teams`                                    |
+| Ensure contact      | `POST /contacts`                                         |
+| Enviar flow         | `POST /contacts/{id}/send/{flow_id}`                     |
+| Texto (ventana 24h) | `POST /contacts/{id}/send/text`                          |
+| Handoff a sede      | **aplicar tag `AG_*`** (no existe `/handoff` en Swagger) |
 
 ### Bot de flujos
 
@@ -87,22 +87,22 @@ Los webhooks **no se listan ni configuran por API** (ausentes en Swagger). Se co
 
 `liwa-channel-service` valida ese secret y normaliza:
 
-| Evento LIWA | Evento hacia NOVA |
-|---|---|
-| `document_received` | `document.received` |
+| Evento LIWA         | Evento hacia NOVA                       |
+| ------------------- | --------------------------------------- |
+| `document_received` | `document.received`                     |
 | `prequal_completed` | `wa.prequal.completed` / CRM interesado |
-| `handoff_requested` | `handoff.requested` |
-| `csat` | store CSAT / outcome |
-| `opt_out` | compliance suppress + CRM no_interes |
+| `handoff_requested` | `handoff.requested`                     |
+| `csat`              | store CSAT / outcome                    |
+| `opt_out`           | compliance suppress + CRM no_interes    |
 
 Binding de tenant: `liwa.tenant_bindings.liwa_account_id = 1656233`.
 
 ## Modos de despliegue
 
-| Config | Comportamiento |
-|---|---|
+| Config                   | Comportamiento                                                       |
+| ------------------------ | -------------------------------------------------------------------- |
 | Token ausente (local/ci) | `UnconfiguredLiwaClient` — el servicio arranca; las ops fallan claro |
-| `LIWA_API_TOKEN` set | Cliente HTTP real contra `LIWA_BASE_URL` |
+| `LIWA_API_TOKEN` set     | Cliente HTTP real contra `LIWA_BASE_URL`                             |
 
 ## Discovery en runtime / CLI
 

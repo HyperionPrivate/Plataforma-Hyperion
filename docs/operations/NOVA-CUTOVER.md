@@ -4,15 +4,15 @@ Activación de integraciones reales detrás de flags, con smoke de paridad contr
 
 ## Flags
 
-| Variable | Default | Real |
-|---|---|---|
-| `VOICE_MODE` | `mock` | `dialer` (o `elevenlabs_sip` solo demo) |
-| `LIWA_MODE` | `mock` | `live` |
-| `DIALER_BASE_URL` | vacío | URL HTTPS del Neutral Dialer v3 |
-| `VOICE_TO_DIALER_TOKEN` | placeholder | JWT del dialer |
-| `DIALER_WEBHOOK_HMAC_SECRET` | placeholder | HMAC compartido |
-| `LIWA_BASE_URL` | `https://chat.liwa.co` | mismo |
-| `LIWA_WEBHOOK_SECRET` | placeholder | rotado (credencial comprometida del piloto) |
+| Variable                     | Default                | Real                                        |
+| ---------------------------- | ---------------------- | ------------------------------------------- |
+| `VOICE_MODE`                 | `mock`                 | `dialer` (o `elevenlabs_sip` solo demo)     |
+| `LIWA_MODE`                  | `mock`                 | `live`                                      |
+| `DIALER_BASE_URL`            | vacío                  | URL HTTPS del Neutral Dialer v3             |
+| `VOICE_TO_DIALER_TOKEN`      | placeholder            | JWT del dialer                              |
+| `DIALER_WEBHOOK_HMAC_SECRET` | placeholder            | HMAC compartido                             |
+| `LIWA_BASE_URL`              | `https://chat.liwa.co` | mismo                                       |
+| `LIWA_WEBHOOK_SECRET`        | placeholder            | rotado (credencial comprometida del piloto) |
 
 ## Bloqueadores externos
 

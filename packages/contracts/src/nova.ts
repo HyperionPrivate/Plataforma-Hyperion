@@ -253,17 +253,7 @@ export const handoffRequestedEventSchema = envelopeEvent("handoff.requested", ha
 export const leadQualifiedEventSchema = envelopeEvent("lead.qualified", leadQualifiedPayloadSchema);
 export const coreOutcomeRecordedEventSchema = envelopeEvent("core.outcome.recorded", coreOutcomeRecordedPayloadSchema);
 
-export const novaAgencyCodes = [
-  "BAQ",
-  "BGA",
-  "CUC",
-  "FDS",
-  "PDC",
-  "SGL",
-  "BMB",
-  "VUP",
-  "VVC"
-] as const;
+export const novaAgencyCodes = ["BAQ", "BGA", "CUC", "FDS", "PDC", "SGL", "BMB", "VUP", "VVC"] as const;
 
 export const novaAgencyTagByCode: Record<(typeof novaAgencyCodes)[number], string> = {
   BAQ: "AG_BARRANQUILLA",

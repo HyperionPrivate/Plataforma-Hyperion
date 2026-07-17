@@ -118,7 +118,7 @@ function createNovaOutboxFetch(options: {
   return (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     let token = options.auditToken;
-    let caller = "nova-core-service";
+    const caller = "nova-core-service";
 
     if (url.startsWith(voiceBase)) {
       token = options.voiceToken;

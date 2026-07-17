@@ -95,11 +95,16 @@ export class HttpDialerAdapter implements DialerAdapter {
   }
 
   async createCampaign(input: DialerCampaignInput): Promise<{ campaignRef: string }> {
-    const response = await this.requestJson("POST", "/api/campaigns/", {
-      name: input.name,
-      agent_id: input.agentId,
-      target_calls: input.targetCalls ?? 0
-    }, { idempotencyKey: input.idempotencyKey });
+    const response = await this.requestJson(
+      "POST",
+      "/api/campaigns/",
+      {
+        name: input.name,
+        agent_id: input.agentId,
+        target_calls: input.targetCalls ?? 0
+      },
+      { idempotencyKey: input.idempotencyKey }
+    );
     return { campaignRef: String(response.id ?? response.campaign_id) };
   }
 
@@ -179,13 +184,15 @@ export class HttpDialerAdapter implements DialerAdapter {
     if (query.status) params.set("status", query.status);
     params.set("limit", String(query.limit ?? 100));
     const body = await this.requestJson("GET", `/api/calls/?${params.toString()}`);
-    const rows = Array.isArray(body) ? body : (body.items as unknown[]) ?? (body.calls as unknown[]) ?? [];
+    const rows = Array.isArray(body) ? body : ((body.items as unknown[]) ?? (body.calls as unknown[]) ?? []);
     return rows as DialerCallRow[];
   }
 
   async listReconciliation(): Promise<DialerCallRow[]> {
     const body = await this.requestJson("GET", "/api/calls/reconciliation");
-    const rows = Array.isArray(body) ? body : (body.items as unknown[]) ?? (body.needs_reconciliation as unknown[]) ?? [];
+    const rows = Array.isArray(body)
+      ? body
+      : ((body.items as unknown[]) ?? (body.needs_reconciliation as unknown[]) ?? []);
     return rows as DialerCallRow[];
   }
 

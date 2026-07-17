@@ -1,12 +1,4 @@
-export function GaugeChart({
-  value,
-  label,
-  size = 140
-}: {
-  value: number;
-  label?: string;
-  size?: number;
-}) {
+export function GaugeChart({ value, label, size = 140 }: { value: number; label?: string; size?: number }) {
   const clamped = Math.min(100, Math.max(0, value));
   const r = 52;
   const c = 2 * Math.PI * r;

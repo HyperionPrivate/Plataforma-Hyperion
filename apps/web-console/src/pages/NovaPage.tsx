@@ -84,9 +84,7 @@ export function NovaPage() {
       }
 
       try {
-        const recon = await api.get<{ needs_reconciliation: CallRow[] }>(
-          voicePath(tenant.id, "calls/reconciliation")
-        );
+        const recon = await api.get<{ needs_reconciliation: CallRow[] }>(voicePath(tenant.id, "calls/reconciliation"));
         setCalls(recon.needs_reconciliation ?? []);
       } catch {
         setCalls([]);
@@ -141,8 +139,7 @@ export function NovaPage() {
     });
     if (response.status === 404 || response.status === 405) return null;
     const payload = (await response.json().catch(() => undefined)) as
-      | { data?: { imported?: ImportedContact[]; error?: string } }
-      | undefined;
+      { data?: { imported?: ImportedContact[]; error?: string } } | undefined;
     if (!response.ok) {
       throw new ApiError(response.status, payload?.data?.error ?? response.statusText);
     }
@@ -319,11 +316,7 @@ export function NovaPage() {
         ) : null}
 
         {!loading && !error && tab === "conversations" ? (
-          <NovaConversationsTab
-            conversations={conversations}
-            onClaim={claimConversation}
-            onReply={replyConversation}
-          />
+          <NovaConversationsTab conversations={conversations} onClaim={claimConversation} onReply={replyConversation} />
         ) : null}
 
         {!loading && !error && tab === "reviews" ? (
@@ -334,17 +327,10 @@ export function NovaPage() {
           <NovaCrmTab leads={leads} canWriteOps={canWriteOps} onPatchLead={patchLead} />
         ) : null}
 
-        {!loading && !error && tab === "handoff" ? (
-          <NovaHandoffTab handoffs={handoffs} onClaim={claimHandoff} />
-        ) : null}
+        {!loading && !error && tab === "handoff" ? <NovaHandoffTab handoffs={handoffs} onClaim={claimHandoff} /> : null}
 
         {!loading && !error && tab === "segmentation" ? (
-          <NovaSegmentationTab
-            tenantId={tenant.id}
-            leads={leads}
-            canWriteOps={canWriteOps}
-            onScore={scoreContact}
-          />
+          <NovaSegmentationTab tenantId={tenant.id} leads={leads} canWriteOps={canWriteOps} onScore={scoreContact} />
         ) : null}
 
         {!loading && !error && tab === "import" ? (

@@ -19,12 +19,12 @@ de campañas de contacto proactivo (voz + WhatsApp). Nombre de trabajo: **NOVA**
 1. **NOVA es un producto de software** en Hyperion, distinto de PULSO IRIS y LUMEN.
 2. Contextos técnicos del producto y capacidades compartidas nuevas:
 
-   | Contexto / servicio | Owner | Responsabilidad |
-   |---|---|---|
-   | `nova-core` → `nova-core-service` | `nova-core` | Contactos, campañas, compliance, segmentación, CRM, handoff por sede, orquestación, analytics |
-   | `documents` → `documents-service` | `documents` | Metadatos y object storage de documentos |
-   | `voice-channel` → `voice-channel-service` | `voice` | Capacidad compartida de voz; único cliente del Neutral Dialer v3 |
-   | `liwa-channel` → `liwa-channel-service` | `liwa` | Capacidad compartida WhatsApp vía LIWA (bot de flujos) |
+   | Contexto / servicio                       | Owner       | Responsabilidad                                                                               |
+   | ----------------------------------------- | ----------- | --------------------------------------------------------------------------------------------- |
+   | `nova-core` → `nova-core-service`         | `nova-core` | Contactos, campañas, compliance, segmentación, CRM, handoff por sede, orquestación, analytics |
+   | `documents` → `documents-service`         | `documents` | Metadatos y object storage de documentos                                                      |
+   | `voice-channel` → `voice-channel-service` | `voice`     | Capacidad compartida de voz; único cliente del Neutral Dialer v3                              |
+   | `liwa-channel` → `liwa-channel-service`   | `liwa`      | Capacidad compartida WhatsApp vía LIWA (bot de flujos)                                        |
 
 3. **Base lógica propia por contexto desde el día 1**, sin FKs cruzadas a `platform.tenants`.
    `tenant_id` es identificador lógico opaco. Cada contexto tiene esquema, rol PostgreSQL,

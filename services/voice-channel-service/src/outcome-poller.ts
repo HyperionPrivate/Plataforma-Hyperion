@@ -191,11 +191,7 @@ async function fetchElevenLabsConversation(
   const dataCollection = (analysis.data_collection_results as Record<string, unknown> | undefined) ?? {};
   const intent =
     String(
-      dataCollection.intencion ??
-        dataCollection.intent ??
-        dataCollection.disposition ??
-        analysis.call_successful ??
-        ""
+      dataCollection.intencion ?? dataCollection.intent ?? dataCollection.disposition ?? analysis.call_successful ?? ""
     ) || undefined;
   const transcript = Array.isArray(body.transcript)
     ? body.transcript

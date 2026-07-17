@@ -136,9 +136,9 @@ export async function registerVoiceRoutes(
         )
       );
     } catch (error) {
-      return reply.code(502).send(
-        envelope({ error: error instanceof Error ? error.message : "Dialer placeCall failed" }, request.id)
-      );
+      return reply
+        .code(502)
+        .send(envelope({ error: error instanceof Error ? error.message : "Dialer placeCall failed" }, request.id));
     }
   });
 
@@ -170,9 +170,9 @@ export async function registerVoiceRoutes(
         .code(201)
         .send(envelope({ campaign_id: campaignId, dialer_campaign_ref: dialer.campaignRef }, request.id));
     } catch (error) {
-      return reply.code(502).send(
-        envelope({ error: error instanceof Error ? error.message : "Dialer createCampaign failed" }, request.id)
-      );
+      return reply
+        .code(502)
+        .send(envelope({ error: error instanceof Error ? error.message : "Dialer createCampaign failed" }, request.id));
     }
   });
 
@@ -204,9 +204,9 @@ export async function registerVoiceRoutes(
       const stats = await dependencies.dialer.getCampaign(ref);
       return envelope({ campaign_id: campaignId, dialer_campaign_ref: ref, stats }, request.id);
     } catch (error) {
-      return reply.code(502).send(
-        envelope({ error: error instanceof Error ? error.message : "Dialer stats failed" }, request.id)
-      );
+      return reply
+        .code(502)
+        .send(envelope({ error: error instanceof Error ? error.message : "Dialer stats failed" }, request.id));
     }
   });
 
@@ -295,13 +295,7 @@ export async function registerVoiceRoutes(
             set status = 'completed', result_code = $3, intent = $4, disposition = $5,
                 completed_at = now(), updated_at = now()
           where tenant_id = $1 and call_id = $2`,
-        [
-          scope.tenantId,
-          callId,
-          parsed.data.result_code,
-          parsed.data.intent ?? null,
-          parsed.data.disposition ?? null
-        ]
+        [scope.tenantId, callId, parsed.data.result_code, parsed.data.intent ?? null, parsed.data.disposition ?? null]
       );
 
       await insertVoiceOutboxEvent(tx, {
@@ -432,9 +426,9 @@ export async function registerVoiceRoutes(
         request.id
       );
     } catch (error) {
-      return reply.code(502).send(
-        envelope({ error: error instanceof Error ? error.message : "Dialer placeCall failed" }, request.id)
-      );
+      return reply
+        .code(502)
+        .send(envelope({ error: error instanceof Error ? error.message : "Dialer placeCall failed" }, request.id));
     }
   });
 

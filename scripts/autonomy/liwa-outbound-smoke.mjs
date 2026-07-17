@@ -58,7 +58,7 @@ if (!contactId) throw new Error(`ensureContact did not return id: ${JSON.stringi
 
 console.log("2) ensure/apply agency tag", agencyTag);
 const tags = await liwa("GET", "/accounts/tags");
-const tagList = Array.isArray(tags) ? tags : tags.items ?? [];
+const tagList = Array.isArray(tags) ? tags : (tags.items ?? []);
 let agency = tagList.find((t) => String(t.name).toUpperCase() === agencyTag.toUpperCase());
 if (!agency) {
   agency = await liwa("POST", "/accounts/tags", { name: agencyTag });

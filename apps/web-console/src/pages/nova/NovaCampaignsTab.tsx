@@ -2,13 +2,7 @@ import { useState } from "react";
 import { Card, CardHead, EmptyState } from "../../components/ui.js";
 import type { CampaignRow } from "./types.js";
 
-const WIZARD_STEPS = [
-  "Información básica",
-  "Audiencia",
-  "Canales",
-  "Guion y reintentos",
-  "Revisar y lanzar"
-] as const;
+const WIZARD_STEPS = ["Información básica", "Audiencia", "Canales", "Guion y reintentos", "Revisar y lanzar"] as const;
 
 export function NovaCampaignsTab({
   campaigns,
@@ -39,9 +33,7 @@ export function NovaCampaignsTab({
   const [audienceSize, setAudienceSize] = useState(100);
   const [segmentFilter, setSegmentFilter] = useState("score>=70");
   const [retries, setRetries] = useState(2);
-  const [scriptNote, setScriptNote] = useState(
-    "Saludo CoopFuturo → cupo preaprobado → agendar o enviar WhatsApp."
-  );
+  const [scriptNote, setScriptNote] = useState("Saludo CoopFuturo → cupo preaprobado → agendar o enviar WhatsApp.");
   const [contactIdsText, setContactIdsText] = useState("");
   const [draftCampaignId, setDraftCampaignId] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -101,11 +93,7 @@ export function NovaCampaignsTab({
         <ol className="row" style={{ gap: 8, flexWrap: "wrap", listStyle: "none", padding: 0, margin: "0 0 16px" }}>
           {WIZARD_STEPS.map((label, index) => (
             <li key={label}>
-              <button
-                type="button"
-                className={`chip${step === index ? " active" : ""}`}
-                onClick={() => setStep(index)}
-              >
+              <button type="button" className={`chip${step === index ? " active" : ""}`} onClick={() => setStep(index)}>
                 {index + 1}. {label}
               </button>
             </li>
@@ -152,11 +140,7 @@ export function NovaCampaignsTab({
             </label>
             <label className="col" style={{ gap: 4 }}>
               <span className="tiny muted">Filtro / regla (no persistido)</span>
-              <input
-                className="input"
-                value={segmentFilter}
-                onChange={(e) => setSegmentFilter(e.target.value)}
-              />
+              <input className="input" value={segmentFilter} onChange={(e) => setSegmentFilter(e.target.value)} />
             </label>
             <label className="col" style={{ gap: 4 }}>
               <span className="tiny muted">Contact IDs para enroll (UUID, separados)</span>
@@ -231,7 +215,12 @@ export function NovaCampaignsTab({
         ) : null}
 
         <div className="row" style={{ gap: 8, marginTop: 16, justifyContent: "space-between" }}>
-          <button className="btn" type="button" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>
+          <button
+            className="btn"
+            type="button"
+            disabled={step === 0}
+            onClick={() => setStep((s) => Math.max(0, s - 1))}
+          >
             Atrás
           </button>
           <button
@@ -252,7 +241,11 @@ export function NovaCampaignsTab({
         ) : (
           <ul className="col" style={{ gap: 8, listStyle: "none", padding: 0, margin: 0 }}>
             {campaigns.map((campaign) => (
-              <li key={campaign.campaign_id} className="row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <li
+                key={campaign.campaign_id}
+                className="row"
+                style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}
+              >
                 <span>
                   {campaign.name} · {campaign.product_flow} · {campaign.channel} · {campaign.status}
                 </span>

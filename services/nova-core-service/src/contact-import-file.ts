@@ -220,16 +220,12 @@ function resolveAgencyCode(agencyRaw?: string, ciudad?: string): string | undefi
     const upper = agencyRaw.trim().toUpperCase();
     const byCode = novaCatalog.agencies.find((agency) => agency.code === upper);
     if (byCode) return byCode.code;
-    const byCity = novaCatalog.agencies.find(
-      (agency) => normalizeHeader(agency.city) === normalizeHeader(agencyRaw)
-    );
+    const byCity = novaCatalog.agencies.find((agency) => normalizeHeader(agency.city) === normalizeHeader(agencyRaw));
     if (byCity) return byCity.code;
     if (/^[A-Z]{2,8}$/.test(upper)) return upper;
   }
   if (ciudad) {
-    const byCity = novaCatalog.agencies.find(
-      (agency) => normalizeHeader(agency.city) === normalizeHeader(ciudad)
-    );
+    const byCity = novaCatalog.agencies.find((agency) => normalizeHeader(agency.city) === normalizeHeader(ciudad));
     return byCity?.code;
   }
   return undefined;
@@ -243,7 +239,10 @@ function parseBoolean(raw: string): boolean | undefined {
 }
 
 function parseNumber(raw: string): number | undefined {
-  const cleaned = raw.replace(/[$\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
+  const cleaned = raw
+    .replace(/[$\s]/g, "")
+    .replace(/\.(?=\d{3}(\D|$))/g, "")
+    .replace(",", ".");
   const value = Number(cleaned);
   return Number.isFinite(value) ? value : undefined;
 }

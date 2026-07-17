@@ -35,13 +35,7 @@ const CITY_TAG: Record<string, string> = {
 };
 
 export type NormalizedLiwaEventKind =
-  | "document_received"
-  | "prequal_completed"
-  | "handoff_requested"
-  | "csat"
-  | "opt_out"
-  | "tipificacion"
-  | "unknown";
+  "document_received" | "prequal_completed" | "handoff_requested" | "csat" | "opt_out" | "tipificacion" | "unknown";
 
 export interface NormalizedLiwaPayload {
   event: NormalizedLiwaEventKind | string;
@@ -80,12 +74,7 @@ export function normalizePhoneE164(raw: string | null | undefined): string | nul
 }
 
 function fold(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
-    .replace(/\s+/g, " ");
+  return text.trim().toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").replace(/\s+/g, " ");
 }
 
 export function resolveAgencyFromGeo(input: {
@@ -140,8 +129,7 @@ function codeFromTag(tag: string): string | undefined {
 
 export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLiwaPayload {
   const nested = raw.data && typeof raw.data === "object" ? (raw.data as Record<string, unknown>) : undefined;
-  const body =
-    nested && !raw.event && !raw.type ? { ...raw, ...nested } : raw;
+  const body = nested && !raw.event && !raw.type ? { ...raw, ...nested } : raw;
 
   // LIWA Tools → Webhooks native shape: { user, tag? } without top-level event.
   const userObj = body.user && typeof body.user === "object" ? (body.user as Record<string, unknown>) : {};
@@ -162,20 +150,15 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
   const fields = body.fields && typeof body.fields === "object" ? (body.fields as Record<string, unknown>) : {};
 
   const phoneRaw = String(
-    body.phone ??
-      body.telefono ??
-      body.msisdn ??
-      contactObj.phone ??
-      contactObj.telefono ??
-      userObj.phone ??
-      ""
+    body.phone ?? body.telefono ?? body.msisdn ?? contactObj.phone ?? contactObj.telefono ?? userObj.phone ?? ""
   ).trim();
   const phone = normalizePhoneE164(phoneRaw) ?? phoneRaw;
 
   const contactIdRaw = body.contact_id ?? body.user_id ?? contactObj.id ?? userObj.id;
-  const contactId = contactIdRaw !== undefined && contactIdRaw !== null && String(contactIdRaw).trim() !== ""
-    ? String(contactIdRaw).trim()
-    : undefined;
+  const contactId =
+    contactIdRaw !== undefined && contactIdRaw !== null && String(contactIdRaw).trim() !== ""
+      ? String(contactIdRaw).trim()
+      : undefined;
 
   const ciudad = String(body.ciudad ?? body.city ?? fields.ciudad ?? fields.city ?? "").trim() || undefined;
   const agencia = String(body.agencia ?? fields.agencia ?? "").trim() || undefined;
@@ -204,11 +187,8 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
   }
 
   const tagId = String(tagObj.id ?? "").trim();
-  const tagExternalId =
-    tagId && contactId ? `liwa-tag:${contactId}:${tagId}:${Date.now()}` : randomUUID();
-  const externalId = String(
-    body.external_id ?? body.message_id ?? body.id ?? body.uuid ?? tagExternalId
-  ).trim();
+  const tagExternalId = tagId && contactId ? `liwa-tag:${contactId}:${tagId}:${Date.now()}` : randomUUID();
+  const externalId = String(body.external_id ?? body.message_id ?? body.id ?? body.uuid ?? tagExternalId).trim();
 
   return {
     event: (event || "unknown") as NormalizedLiwaEventKind,
@@ -233,11 +213,7 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
     score,
     tipificacion,
     name,
-    motivo: String(
-      body.motivo ??
-        body.reason ??
-        (tagName ? `Tag LIWA: ${tagName}` : "Handoff desde flujo LIWA")
-    ),
+    motivo: String(body.motivo ?? body.reason ?? (tagName ? `Tag LIWA: ${tagName}` : "Handoff desde flujo LIWA")),
     fields: Object.fromEntries(
       Object.entries({
         cedula: body.cedula ?? fields.cedula,
@@ -258,9 +234,7 @@ function inferToolsWebhookEvent(
   userObj: Record<string, unknown>,
   tagName: string
 ): string | undefined {
-  const trigger = fold(
-    String(body.trigger ?? body.webhook_trigger ?? body.hook_name ?? body.name ?? "")
-  );
+  const trigger = fold(String(body.trigger ?? body.webhook_trigger ?? body.hook_name ?? body.name ?? ""));
 
   if (
     trigger.includes("unsubscrib") ||

@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildAgencySeedList,
-  decideEligibility,
-  DEFAULT_COMPLIANCE,
-  normalizeE164,
-  scoreContact
-} from "./domain.js";
+import { buildAgencySeedList, decideEligibility, DEFAULT_COMPLIANCE, normalizeE164, scoreContact } from "./domain.js";
 
 describe("normalizeE164", () => {
   it("accepts canonical E.164", () => {

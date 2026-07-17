@@ -107,12 +107,7 @@ export function NovaConfigTab({ tenantId }: { tenantId: string }) {
 
   if (loading) return <LoadingState label="Cargando configuración NOVA…" />;
 
-  const flows = agentConfigs.length
-    ? agentConfigs
-    : [
-        { product_flow: "renovacion" },
-        { product_flow: "reactivacion" }
-      ];
+  const flows = agentConfigs.length ? agentConfigs : [{ product_flow: "renovacion" }, { product_flow: "reactivacion" }];
 
   return (
     <div className="col" style={{ gap: 16 }}>

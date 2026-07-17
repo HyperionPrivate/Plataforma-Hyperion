@@ -200,7 +200,12 @@ export async function registerLiwaRoutes(
       `insert into liwa.webhook_receipts (receipt_id, external_id, event_name, payload)
        values ($1, $2, $3, $4::jsonb)
        on conflict (external_id) do nothing`,
-      [randomUUID(), externalId, kind, JSON.stringify({ ...raw, _normalized: parsed, simulate: Boolean(opts?.simulate) })]
+      [
+        randomUUID(),
+        externalId,
+        kind,
+        JSON.stringify({ ...raw, _normalized: parsed, simulate: Boolean(opts?.simulate) })
+      ]
     );
 
     const tenantId = await resolveWebhookTenant(context.db, raw, parsed);
@@ -262,9 +267,9 @@ export async function registerLiwaRoutes(
       });
     } catch (error) {
       if (error instanceof LiwaTextWindowError) {
-        return reply.code(422).send(
-          envelope({ error: error.message, code: error.code, message_id: payload.message_id }, request.id)
-        );
+        return reply
+          .code(422)
+          .send(envelope({ error: error.message, code: error.code, message_id: payload.message_id }, request.id));
       }
       throw error;
     }
@@ -347,7 +352,10 @@ export async function registerLiwaRoutes(
       ]
     );
 
-    return envelope({ conversation_id: conversationId, message_id: messageId, provider_ref: sent.providerRef }, request.id);
+    return envelope(
+      { conversation_id: conversationId, message_id: messageId, provider_ref: sent.providerRef },
+      request.id
+    );
   });
 }
 
@@ -416,13 +424,7 @@ async function upsertContactBinding(
          phone_e164 = coalesce(excluded.phone_e164, liwa.contact_bindings.phone_e164),
          agency_tag = coalesce(excluded.agency_tag, liwa.contact_bindings.agency_tag),
          updated_at = now()`,
-    [
-      input.tenantId,
-      input.contactRef,
-      input.contactId ?? null,
-      input.phoneE164 ?? null,
-      input.agencyTag ?? null
-    ]
+    [input.tenantId, input.contactRef, input.contactId ?? null, input.phoneE164 ?? null, input.agencyTag ?? null]
   );
 }
 
@@ -649,7 +651,7 @@ async function resolveOrBindContact(
   tenantId: string,
   input: { phone?: string; liwaContactId?: string; agencyTag?: string }
 ): Promise<string | undefined> {
-  const phone = input.phone ? normalizePhoneE164(input.phone) ?? input.phone : undefined;
+  const phone = input.phone ? (normalizePhoneE164(input.phone) ?? input.phone) : undefined;
   const refs = [phone, input.liwaContactId].filter(Boolean) as string[];
 
   for (const ref of refs) {

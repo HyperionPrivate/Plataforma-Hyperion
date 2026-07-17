@@ -26,8 +26,7 @@ export function NovaConversationsTab({
     });
   }, [channel, conversations, query]);
 
-  const selected =
-    filtered.find((row) => row.conversation_id === selectedId) ?? filtered[0] ?? undefined;
+  const selected = filtered.find((row) => row.conversation_id === selectedId) ?? filtered[0] ?? undefined;
 
   async function claim() {
     if (!selected) return;
@@ -56,12 +55,7 @@ export function NovaConversationsTab({
       <Card>
         <CardHead title="Bandeja" />
         <div className="col" style={{ gap: 8, marginBottom: 12 }}>
-          <input
-            className="input"
-            placeholder="Buscar…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+          <input className="input" placeholder="Buscar…" value={query} onChange={(e) => setQuery(e.target.value)} />
           <select className="input" value={channel} onChange={(e) => setChannel(e.target.value)}>
             <option value="all">Todos los canales</option>
             <option value="whatsapp">WhatsApp</option>
@@ -71,7 +65,10 @@ export function NovaConversationsTab({
         {filtered.length === 0 ? (
           <EmptyState label="Sin conversaciones. Los webhooks LIWA crearán entradas aquí." />
         ) : (
-          <ul className="col" style={{ gap: 6, listStyle: "none", padding: 0, margin: 0, maxHeight: 480, overflow: "auto" }}>
+          <ul
+            className="col"
+            style={{ gap: 6, listStyle: "none", padding: 0, margin: 0, maxHeight: 480, overflow: "auto" }}
+          >
             {filtered.map((conversation) => (
               <li key={conversation.conversation_id}>
                 <button
@@ -111,7 +108,12 @@ export function NovaConversationsTab({
               <span className="tiny muted">Responder (ventana 24h / LIWA)</span>
               <textarea className="input" rows={4} value={draft} onChange={(e) => setDraft(e.target.value)} />
             </label>
-            <button className="btn btn-primary" type="button" disabled={busy || !draft.trim()} onClick={() => void reply()}>
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={busy || !draft.trim()}
+              onClick={() => void reply()}
+            >
               Enviar reply
             </button>
           </div>

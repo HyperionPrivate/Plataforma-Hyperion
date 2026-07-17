@@ -12,10 +12,10 @@ node scripts/autonomy/elevenlabs-bootstrap-nova.mjs --write-env
 
 Crea/actualiza:
 
-| Agente (ElevenLabs) | Rol | Env |
-|---|---|---|
+| Agente (ElevenLabs)          | Rol               | Env                                     |
+| ---------------------------- | ----------------- | --------------------------------------- |
 | Valerie Coopfuturo - Flujo A | Renovación (CDAT) | `ELEVENLABS_AGENT_ID` / `DEMO_AGENT_ID` |
-| Valerie Coopfuturo - Flujo B | Reactivación | `ELEVENLABS_AGENT_ID_B` |
+| Valerie Coopfuturo - Flujo B | Reactivación      | `ELEVENLABS_AGENT_ID_B`                 |
 
 También añade voces ES compartidas a la librería (Fernanda / Veronica), ASR `scribe_realtime`, idioma `es`.
 

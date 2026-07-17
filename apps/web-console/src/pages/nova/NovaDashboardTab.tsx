@@ -74,7 +74,13 @@ export function NovaDashboardTab({
     const wa = totals.waSent;
     const total = voice + wa || 1;
     return [
-      { key: "voice", label: "Voz completadas", count: voice, pct: Math.round((voice / total) * 100), color: "success" },
+      {
+        key: "voice",
+        label: "Voz completadas",
+        count: voice,
+        pct: Math.round((voice / total) * 100),
+        color: "success"
+      },
       { key: "wa", label: "WhatsApp enviados", count: wa, pct: Math.round((wa / total) * 100), color: "info" }
     ];
   }, [totals]);
