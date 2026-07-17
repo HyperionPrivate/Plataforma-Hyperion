@@ -14,7 +14,7 @@ import {
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { useConsole } from "../lib/context.js";
-import { brandLabel, productEnabled, type ProductScope } from "../lib/product.js";
+import { activeProduct, brandLabel, productEnabled, type ProductScope } from "../lib/product.js";
 import { can, type Capability } from "../lib/rbac.js";
 
 const NAV = [
@@ -56,8 +56,10 @@ export function Layout({
 }) {
   const { session, tenant, sites, activeSiteId, setActiveSiteId, logout } = useConsole();
 
+  const brandClass = activeProduct === "nova" ? " brand-coopfuturo" : "";
+
   return (
-    <div className={`app${className ? ` ${className}` : ""}`}>
+    <div className={`app${brandClass}${className ? ` ${className}` : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-brand">
           <Eye size={22} aria-hidden="true" />

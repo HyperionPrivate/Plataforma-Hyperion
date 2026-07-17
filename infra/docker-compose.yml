@@ -687,7 +687,7 @@ services:
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
         VITE_PRODUCT: nova
-        VITE_BRAND_LABEL: NOVA
+        VITE_BRAND_LABEL: CoopFuturo
     restart: unless-stopped
     ports:
       - "${WEB_CONSOLE_NOVA_HOST_PORT:-3001}:8080"
