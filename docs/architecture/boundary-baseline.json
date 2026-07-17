@@ -204,10 +204,6 @@
       "count": 1
     },
     {
-      "id": "sql-access|services/agent-service/src/app.ts|sofia-automation->access|read|table|platform.products",
-      "count": 1
-    },
-    {
       "id": "sql-access|services/agent-service/src/sofia-runtime.ts|sofia-automation->channel|read|table|channel_runtime.outbound_messages",
       "count": 2
     },

@@ -11,7 +11,11 @@ export const serviceNameSchema = z.enum([
   "integration-service",
   "pulso-iris-service",
   "whatsapp-channel-service",
-  "lumen-service"
+  "lumen-service",
+  "nova-core-service",
+  "voice-channel-service",
+  "liwa-channel-service",
+  "documents-service"
 ]);
 
 export type ServiceName = z.infer<typeof serviceNameSchema>;
@@ -52,6 +56,54 @@ export const productStatusSchema = z.enum(["foundation", "building", "active", "
 export const pulsoIrisProductCode = "PULSO_IRIS" as const;
 export const pulsoIrisAgentCode = "SOFIA" as const;
 export const lumenProductCode = "LUMEN" as const;
+export {
+  novaProductCode,
+  novaCatalog,
+  novaProductRoleSchema,
+  durableEventEnvelopeSchema,
+  novaIngressEventSchema,
+  envelopeEvent,
+  contactImportedPayloadSchema,
+  contactScoredPayloadSchema,
+  contactEligibilityDecidedPayloadSchema,
+  voiceCallRequestedPayloadSchema,
+  voiceCallDispatchedPayloadSchema,
+  voiceCallCompletedPayloadSchema,
+  waSendRequestedPayloadSchema,
+  waMessageSentPayloadSchema,
+  documentReceivedPayloadSchema,
+  documentValidatedPayloadSchema,
+  prequalCompletedPayloadSchema,
+  csatRecordedPayloadSchema,
+  optOutPayloadSchema,
+  tipificacionRecordedPayloadSchema,
+  handoffRequestedPayloadSchema,
+  leadQualifiedPayloadSchema,
+  coreOutcomeRecordedPayloadSchema,
+  contactImportedEventSchema,
+  contactScoredEventSchema,
+  contactEligibilityDecidedEventSchema,
+  voiceCallRequestedEventSchema,
+  voiceCallDispatchedEventSchema,
+  voiceCallCompletedEventSchema,
+  waSendRequestedEventSchema,
+  waMessageSentEventSchema,
+  documentReceivedEventSchema,
+  documentValidatedEventSchema,
+  prequalCompletedEventSchema,
+  csatRecordedEventSchema,
+  optOutEventSchema,
+  tipificacionRecordedEventSchema,
+  handoffRequestedEventSchema,
+  leadQualifiedEventSchema,
+  coreOutcomeRecordedEventSchema,
+  novaAgencyCodes,
+  novaAgencyTagByCode,
+  type NovaProductRole,
+  type DurableEventEnvelope,
+  type NovaIngressEvent
+} from "./nova.js";
+import { novaProductCode } from "./nova.js";
 
 export const tenantIdSchema = z.string().uuid();
 
@@ -1580,6 +1632,26 @@ export const serviceCatalog: PlatformCatalog["services"] = [
     name: "lumen-service",
     port: 8090,
     responsibility: "Producto LUMEN: resumen preconsulta, voz clínica, HC estructurada y aprobación profesional."
+  },
+  {
+    name: "nova-core-service",
+    port: 8091,
+    responsibility: "Producto NOVA: contactos, campañas, compliance, CRM, handoff por sede y orquestación."
+  },
+  {
+    name: "voice-channel-service",
+    port: 8092,
+    responsibility: "Canal de voz compartido: único cliente del Neutral Dialer v3 y modo demo ElevenLabs SIP."
+  },
+  {
+    name: "liwa-channel-service",
+    port: 8093,
+    responsibility: "Canal WhatsApp compartido vía LIWA (flows, tags AG_*, webhooks e inbox de asesores)."
+  },
+  {
+    name: "documents-service",
+    port: 8094,
+    responsibility: "Metadatos y object storage de documentos del producto NOVA."
   }
 ];
 
@@ -1604,6 +1676,13 @@ export const productModules: ProductModule[] = [
     status: "building",
     ownerService: "lumen-service",
     description: "Documentacion clinica por voz y expediente estructurado para salud visual."
+  },
+  {
+    code: novaProductCode,
+    name: "NOVA",
+    status: "building",
+    ownerService: "nova-core-service",
+    description: "Campañas de contacto proactivo por voz IA y WhatsApp. Primer tenant: Coopfuturo."
   },
   {
     code: "CEDCO-R03",

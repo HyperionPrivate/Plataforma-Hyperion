@@ -66,7 +66,7 @@ jobs:
         shell: bash
         run: >-
           node -e "const fs=require('node:fs');const crypto=require('node:crypto');
-          const databaseNames=['ACCESS','SOFIA','KNOWLEDGE','AUDIT','INTEGRATION','PULSO','CHANNEL','LUMEN'];
+          const databaseNames=['ACCESS','SOFIA','KNOWLEDGE','AUDIT','INTEGRATION','PULSO','CHANNEL','LUMEN','NOVA','VOICE','LIWA','DOCUMENTS'];
           const natsNames=['TOPOLOGY','CHANNEL','PULSO','SOFIA','AUDIT','LUMEN'];
           const values=[...databaseNames.map((name)=>name+'_DATABASE_PASSWORD=A'+crypto.randomBytes(24).toString('base64url')),
           ...natsNames.map((name)=>'NATS_'+name+'_PASSWORD=A'+crypto.randomBytes(24).toString('base64url'))];

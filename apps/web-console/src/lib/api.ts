@@ -18,7 +18,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "PUT";
   body?: unknown;
   signal?: AbortSignal;
 }
@@ -77,6 +77,7 @@ export const api = {
   get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
   post: <T>(path: string, body: unknown, signal?: AbortSignal) => request<T>(path, { method: "POST", body, signal }),
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body }),
+  put: <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body }),
   text: async (path: string): Promise<{ content: string; filename?: string }> => {
     const response = await authorizedFetch(path);
     const raw = await response.text();

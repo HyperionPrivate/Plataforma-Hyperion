@@ -203,6 +203,49 @@ USER node
 
 CMD ["node", "services/whatsapp-channel-service/dist/index.js"]
 
+FROM durable-service-runtime-base AS nova-core-service
+
+COPY services/nova-core-service/package.json services/nova-core-service/package.json
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/nova-core-service..."
+COPY --from=build /app/services/nova-core-service/dist services/nova-core-service/dist
+
+USER node
+
+CMD ["node", "services/nova-core-service/dist/index.js"]
+
+FROM durable-service-runtime-base AS voice-channel-service
+
+COPY services/voice-channel-service/package.json services/voice-channel-service/package.json
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/voice-channel-service..."
+COPY --from=build /app/services/voice-channel-service/dist services/voice-channel-service/dist
+
+USER node
+
+CMD ["node", "services/voice-channel-service/dist/index.js"]
+
+FROM durable-service-runtime-base AS liwa-channel-service
+
+COPY services/liwa-channel-service/package.json services/liwa-channel-service/package.json
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/liwa-channel-service..."
+COPY --from=build /app/services/liwa-channel-service/dist services/liwa-channel-service/dist
+
+USER node
+
+CMD ["node", "services/liwa-channel-service/dist/index.js"]
+
+FROM durable-service-runtime-base AS documents-service
+
+COPY services/documents-service/package.json services/documents-service/package.json
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/documents-service..."
+COPY --from=build /app/services/documents-service/dist services/documents-service/dist
+
+RUN mkdir -p /var/lib/hyperion/documents \
+  && chown -R node:node /var/lib/hyperion
+
+USER node
+
+CMD ["node", "services/documents-service/dist/index.js"]
+
 # Migrations have a smaller dependency closure and do not inherit application
 # service artifacts.
 FROM runtime-base AS migrations

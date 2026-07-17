@@ -1,0 +1,9 @@
+# Dev overlay: publish liwa-channel for Cloudflare/ngrok webhook cutover.
+# Usage:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.liwa-tunnel.yml --env-file .env up -d liwa-channel-service
+#   cloudflared tunnel --url http://127.0.0.1:8093
+
+services:
+  liwa-channel-service:
+    ports:
+      - "8093:8093"

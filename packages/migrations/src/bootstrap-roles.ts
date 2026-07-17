@@ -228,6 +228,31 @@ export async function applyServiceRolePrivilegeMatrix(client: BootstrapClient): 
     grant select, insert, update, delete
       on table lumen.audio_cleanup_owner_leases
       to hyperion_lumen;
+
+    do $nova_grants$
+    begin
+      if to_regnamespace('nova') is not null then
+        execute 'grant usage on schema nova to hyperion_nova';
+        execute 'grant select, insert, update, delete on all tables in schema nova to hyperion_nova';
+        execute format('grant connect on database %I to hyperion_nova', current_database());
+      end if;
+      if to_regnamespace('voice') is not null then
+        execute 'grant usage on schema voice to hyperion_voice';
+        execute 'grant select, insert, update, delete on all tables in schema voice to hyperion_voice';
+        execute format('grant connect on database %I to hyperion_voice', current_database());
+      end if;
+      if to_regnamespace('liwa') is not null then
+        execute 'grant usage on schema liwa to hyperion_liwa';
+        execute 'grant select, insert, update, delete on all tables in schema liwa to hyperion_liwa';
+        execute format('grant connect on database %I to hyperion_liwa', current_database());
+      end if;
+      if to_regnamespace('documents') is not null then
+        execute 'grant usage on schema documents to hyperion_documents';
+        execute 'grant select, insert, update, delete on all tables in schema documents to hyperion_documents';
+        execute format('grant connect on database %I to hyperion_documents', current_database());
+      end if;
+    end
+    $nova_grants$;
     revoke all privileges
       on table lumen.n_minus_one_compatibility_windows,
                lumen.legacy_audio_scope_attestations

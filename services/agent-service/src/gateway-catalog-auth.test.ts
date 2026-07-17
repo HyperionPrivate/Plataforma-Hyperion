@@ -1,3 +1,4 @@
+import { productModules } from "@hyperion/contracts";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { registerRoutes } from "./app.js";
@@ -81,7 +82,19 @@ describe("agent-service gateway catalog auth", () => {
           }
         });
         expect(response.statusCode).toBe(200);
-        expect(response.json().data).toEqual([]);
+        if (path === "/v1/products") {
+          expect(response.json().data).toEqual(
+            productModules.map((module) => ({
+              code: module.code,
+              name: module.name,
+              status: module.status,
+              owner_service: module.ownerService
+            }))
+          );
+        } else {
+          // No DATABASE_URL in this fixture → empty agent list.
+          expect(response.json().data).toEqual([]);
+        }
       });
     });
   }

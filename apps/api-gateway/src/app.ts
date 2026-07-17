@@ -47,9 +47,10 @@ const LUMEN_AI_TIMEOUT_MS = 130_000;
 const LUMEN_REQUEST_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const HEALTH_CACHE_TTL_MS = 5_000;
 
-type HttpMethod = "GET" | "POST" | "PATCH";
+type HttpMethod = "GET" | "POST" | "PATCH" | "PUT";
+const NOVA_REQUEST_BODY_LIMIT_BYTES = 2_100_000;
 
-const PUBLIC_PATHS = new Set(["/v1/auth/login"]);
+const PUBLIC_PATHS = new Set(["/v1/auth/login", "/v1/liwa/webhooks", "/v1/liwa/webhooks/simulate"]);
 
 let healthCache: { expiresAt: number; payload: PlatformHealth } | undefined;
 
@@ -60,6 +61,10 @@ export function createGatewayRoutes(overrides?: {
     integration?: string;
     pulsoIris?: string;
     lumen?: string;
+    nova?: string;
+    voice?: string;
+    liwa?: string;
+    documents?: string;
     tenant?: string;
     audit?: string;
     knowledge?: string;
@@ -79,6 +84,11 @@ export function createGatewayRoutes(overrides?: {
       pulsoIris:
         overrides?.gatewayCredentials?.pulsoIris ?? readInternalCredential(process.env, "GATEWAY_TO_PULSO_TOKEN"),
       lumen: overrides?.gatewayCredentials?.lumen ?? readInternalCredential(process.env, "GATEWAY_TO_LUMEN_TOKEN"),
+      nova: overrides?.gatewayCredentials?.nova ?? readInternalCredential(process.env, "GATEWAY_TO_NOVA_TOKEN"),
+      voice: overrides?.gatewayCredentials?.voice ?? readInternalCredential(process.env, "GATEWAY_TO_VOICE_TOKEN"),
+      liwa: overrides?.gatewayCredentials?.liwa ?? readInternalCredential(process.env, "GATEWAY_TO_LIWA_TOKEN"),
+      documents:
+        overrides?.gatewayCredentials?.documents ?? readInternalCredential(process.env, "GATEWAY_TO_DOCUMENTS_TOKEN"),
       tenant: overrides?.gatewayCredentials?.tenant ?? readInternalCredential(process.env, "GATEWAY_TO_TENANT_TOKEN"),
       audit: overrides?.gatewayCredentials?.audit ?? readInternalCredential(process.env, "GATEWAY_TO_AUDIT_TOKEN"),
       knowledge:
@@ -218,6 +228,40 @@ export function createGatewayRoutes(overrides?: {
 
     app.get("/v1/lumen/catalog", async (request, reply) => {
       return proxyGet(request, reply, buildUpstreamUrl(urls.lumen, request));
+    });
+
+    app.get("/v1/nova/health", async (request, reply) => {
+      return proxyGet(request, reply, buildUpstreamUrl(urls.novaCore, request));
+    });
+
+    app.get("/v1/nova/catalog", async (request, reply) => {
+      return proxyGet(request, reply, buildUpstreamUrl(urls.novaCore, request));
+    });
+
+    app.get("/v1/voice/health", async (request, reply) => {
+      return proxyGet(request, reply, buildUpstreamUrl(urls.voiceChannel, request));
+    });
+
+    app.get("/v1/liwa/health", async (request, reply) => {
+      return proxyGet(request, reply, buildUpstreamUrl(urls.liwaChannel, request));
+    });
+
+    // Public LIWA provider webhooks (auth = X-LIWA-WEBHOOK-SECRET upstream).
+    app.post("/v1/liwa/webhooks", async (request, reply) => {
+      return proxyLiwaWebhook(request, reply, urls.liwaChannel, gatewayCredentials.liwa ?? null);
+    });
+    app.post("/v1/liwa/webhooks/simulate", async (request, reply) => {
+      return proxyLiwaWebhook(
+        request,
+        reply,
+        urls.liwaChannel,
+        gatewayCredentials.liwa ?? null,
+        "/v1/liwa/webhooks/simulate"
+      );
+    });
+
+    app.get("/v1/documents/health", async (request, reply) => {
+      return proxyGet(request, reply, buildUpstreamUrl(urls.documents, request));
     });
 
     app.get("/v1/tenants", async (request, reply) => {
@@ -374,6 +418,119 @@ export function createGatewayRoutes(overrides?: {
       }
     });
 
+    if (!app.hasContentTypeParser("multipart/form-data")) {
+      app.addContentTypeParser("multipart/form-data", { parseAs: "buffer" }, (_request, body, done) => {
+        done(null, body);
+      });
+    }
+
+    app.route({
+      method: ["GET", "POST", "PATCH", "PUT"],
+      url: "/v1/tenants/:tenantId/nova/*",
+      bodyLimit: NOVA_REQUEST_BODY_LIMIT_BYTES,
+      handler: async (request, reply) => {
+        const tenantId = tenantIdSchema.safeParse(readCanonicalTenantId(request.canonicalPath));
+        if (!tenantId.success) {
+          return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
+        }
+        const method = request.method as "GET" | "POST" | "PATCH" | "PUT";
+        const contentType = request.headers["content-type"] ?? "";
+        if (
+          method !== "GET" &&
+          contentType.toLowerCase().includes("multipart/form-data") &&
+          Buffer.isBuffer(request.body)
+        ) {
+          return proxyRaw(
+            request,
+            reply,
+            buildUpstreamUrl(urls.novaCore, request, true),
+            method,
+            request.body,
+            contentType,
+            UPSTREAM_TIMEOUT_MS,
+            gatewayCredentials.nova ?? null
+          );
+        }
+        return proxyJson(
+          request,
+          reply,
+          buildUpstreamUrl(urls.novaCore, request, true),
+          method,
+          method === "GET" ? undefined : request.body,
+          UPSTREAM_TIMEOUT_MS,
+          undefined,
+          gatewayCredentials.nova ?? null
+        );
+      }
+    });
+
+    app.route({
+      method: ["GET", "POST", "PATCH"],
+      url: "/v1/tenants/:tenantId/voice/*",
+      handler: async (request, reply) => {
+        const tenantId = tenantIdSchema.safeParse(readCanonicalTenantId(request.canonicalPath));
+        if (!tenantId.success) {
+          return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
+        }
+        const method = request.method as "GET" | "POST" | "PATCH";
+        return proxyJson(
+          request,
+          reply,
+          buildUpstreamUrl(urls.voiceChannel, request, true),
+          method,
+          method === "GET" ? undefined : request.body,
+          UPSTREAM_TIMEOUT_MS,
+          undefined,
+          gatewayCredentials.voice ?? null
+        );
+      }
+    });
+
+    app.route({
+      method: ["GET", "POST", "PATCH"],
+      url: "/v1/tenants/:tenantId/liwa/*",
+      handler: async (request, reply) => {
+        const tenantId = tenantIdSchema.safeParse(readCanonicalTenantId(request.canonicalPath));
+        if (!tenantId.success) {
+          return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
+        }
+        const method = request.method as "GET" | "POST" | "PATCH";
+        return proxyJson(
+          request,
+          reply,
+          buildUpstreamUrl(urls.liwaChannel, request, true),
+          method,
+          method === "GET" ? undefined : request.body,
+          UPSTREAM_TIMEOUT_MS,
+          undefined,
+          gatewayCredentials.liwa ?? null
+        );
+      }
+    });
+
+    app.route({
+      method: ["GET", "POST", "PATCH"],
+      url: "/v1/tenants/:tenantId/documents/*",
+      bodyLimit: LUMEN_REQUEST_BODY_LIMIT_BYTES,
+      handler: async (request, reply) => {
+        const tenantId = tenantIdSchema.safeParse(readCanonicalTenantId(request.canonicalPath));
+        if (!tenantId.success) {
+          return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
+        }
+        const method = request.method as "GET" | "POST" | "PATCH";
+        return proxyJson(
+          request,
+          reply,
+          buildUpstreamUrl(urls.documents, request, true),
+          method,
+          method === "GET" ? undefined : request.body,
+          UPSTREAM_TIMEOUT_MS,
+          undefined,
+          gatewayCredentials.documents ?? null
+        );
+      }
+    });
+
     app.get("/v1/platform/health", async () => {
       const now = Date.now();
       if (healthCache && healthCache.expiresAt > now) {
@@ -523,6 +680,23 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
     return role === "coordinator" || role === "advisor" ? undefined : "Forbidden";
   }
 
+  // NOVA product roles: coordinator≈supervisor, advisor≈asesor (admin ya pasó arriba).
+  if (path.includes("/nova/") || path.includes("/voice/") || path.includes("/liwa/") || path.includes("/documents/")) {
+    if (
+      path.includes("/nova/contacts/import") ||
+      path.includes("/nova/campaigns") ||
+      path.includes("/voice/campaigns") ||
+      path.includes("/nova/leads") ||
+      path.includes("/nova/compliance/settings") ||
+      path.includes("/nova/agent-configs") ||
+      path.includes("/nova/outbox/dlq") ||
+      path.includes("/voice/outbox/dlq")
+    ) {
+      return role === "coordinator" ? undefined : "Supervisor role required";
+    }
+    return role === "coordinator" || role === "advisor" ? undefined : "Forbidden";
+  }
+
   return "Forbidden";
 }
 
@@ -587,7 +761,11 @@ function buildRegistry(): DownstreamService[] {
     { name: "integration-service", url: urls.integration },
     { name: "pulso-iris-service", url: urls.pulsoIris },
     { name: "whatsapp-channel-service", url: urls.whatsappChannel },
-    { name: "lumen-service", url: urls.lumen }
+    { name: "lumen-service", url: urls.lumen },
+    { name: "nova-core-service", url: urls.novaCore },
+    { name: "voice-channel-service", url: urls.voiceChannel },
+    { name: "liwa-channel-service", url: urls.liwaChannel },
+    { name: "documents-service", url: urls.documents }
   ];
 }
 
@@ -605,11 +783,107 @@ async function proxyGet(request: FastifyRequest, reply: FastifyReply, url: strin
   }
 }
 
+async function proxyRaw(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  url: string,
+  method: "POST" | "PATCH" | "PUT",
+  body: Buffer,
+  contentType: string,
+  timeoutMs = UPSTREAM_TIMEOUT_MS,
+  gatewayCredential?: string | null
+): Promise<unknown> {
+  if (gatewayCredential === null || gatewayCredential === "") {
+    return reply.code(503).send(envelope({ error: "Gateway workload identity is not configured" }, request.id));
+  }
+  const requestAbort = createRequestAbortSignal(request, reply);
+  try {
+    const headers: Record<string, string> = {
+      "x-request-id": request.id,
+      "content-type": contentType
+    };
+    if (gatewayCredential !== undefined) {
+      Object.assign(headers, createInternalAuthorizationHeaders("api-gateway", gatewayCredential));
+    }
+    if (request.session) {
+      headers["x-operator-id"] = request.session.operator.id;
+      headers["x-operator-role"] = request.session.operator.role;
+      const assertionKey = readOperatorAssertionKey(process.env);
+      if (assertionKey) {
+        const tenantId = readCanonicalTenantId(request.canonicalPath);
+        headers[OPERATOR_ASSERTION_HEADER] = createOperatorAssertion(
+          {
+            operatorId: request.session.operator.id,
+            role: request.session.operator.role,
+            ...(tenantId ? { tenantId } : {}),
+            expiresAtUnix: Math.floor(Date.now() / 1000) + 60
+          },
+          assertionKey
+        );
+      }
+    }
+
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: new Uint8Array(body),
+      signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(timeoutMs)])
+    });
+    const payload = await response.json();
+    return reply.code(response.status).send(payload);
+  } catch {
+    if (requestAbort.signal.aborted && reply.raw.destroyed) return undefined;
+    return reply.code(502).send(envelope({ error: "Upstream service unavailable" }, request.id));
+  } finally {
+    requestAbort.cleanup();
+  }
+}
+
+async function proxyLiwaWebhook(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  liwaBaseUrl: string,
+  gatewayCredential: string | null,
+  path = "/v1/liwa/webhooks"
+): Promise<unknown> {
+  const base = liwaBaseUrl.replace(/\/$/, "");
+  const url = `${base}${path}`;
+  const requestAbort = createRequestAbortSignal(request, reply);
+  try {
+    const headers: Record<string, string> = {
+      "x-request-id": request.id,
+      "content-type": "application/json"
+    };
+    const webhookSecret = request.headers["x-liwa-webhook-secret"];
+    if (typeof webhookSecret === "string" && webhookSecret.trim()) {
+      headers["x-liwa-webhook-secret"] = webhookSecret.trim();
+    }
+    // Optional edge identity; upstream webhook route does not require it.
+    if (gatewayCredential) {
+      Object.assign(headers, createInternalAuthorizationHeaders("api-gateway", gatewayCredential));
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(request.body ?? {}),
+      signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)])
+    });
+    const payload = await response.json();
+    return reply.code(response.status).send(payload);
+  } catch {
+    if (requestAbort.signal.aborted && reply.raw.destroyed) return undefined;
+    return reply.code(502).send(envelope({ error: "Upstream service unavailable" }, request.id));
+  } finally {
+    requestAbort.cleanup();
+  }
+}
+
 async function proxyJson(
   request: FastifyRequest,
   reply: FastifyReply,
   url: string,
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "PUT",
   body?: unknown,
   timeoutMs = UPSTREAM_TIMEOUT_MS,
   onUpstreamSuccess?: () => void,

@@ -110,7 +110,11 @@ const DATABASE_ROLE_BY_SERVICE: Partial<Record<ServiceName, string>> = {
   "integration-service": "hyperion_integration",
   "pulso-iris-service": "hyperion_pulso",
   "whatsapp-channel-service": "hyperion_channel",
-  "lumen-service": "hyperion_lumen"
+  "lumen-service": "hyperion_lumen",
+  "nova-core-service": "hyperion_nova",
+  "voice-channel-service": "hyperion_voice",
+  "liwa-channel-service": "hyperion_liwa",
+  "documents-service": "hyperion_documents"
 };
 
 export async function createService(options: RuntimeOptions): Promise<ServiceHandle> {

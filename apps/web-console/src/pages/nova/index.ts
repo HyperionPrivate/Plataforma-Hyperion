@@ -1,0 +1,13 @@
+export { NovaDashboardTab } from "./NovaDashboardTab.js";
+export { NovaCampaignsTab } from "./NovaCampaignsTab.js";
+export { NovaConversationsTab } from "./NovaConversationsTab.js";
+export { NovaReviewsTab } from "./NovaReviewsTab.js";
+export { NovaCrmTab } from "./NovaCrmTab.js";
+export { NovaHandoffTab } from "./NovaHandoffTab.js";
+export { NovaSegmentationTab } from "./NovaSegmentationTab.js";
+export { NovaImportTab } from "./NovaImportTab.js";
+export { NovaReportsTab } from "./NovaReportsTab.js";
+export { NovaLabTab } from "./NovaLabTab.js";
+export { NovaConfigTab } from "./NovaConfigTab.js";
+export { NOVA_TABS, mapPlatformRole } from "./tabs.js";
+export type * from "./types.js";

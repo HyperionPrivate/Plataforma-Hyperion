@@ -11,6 +11,7 @@ import { BiPage } from "./pages/BiPage.js";
 import { CampaignsPage } from "./pages/CampaignsPage.js";
 import { ConfigPage } from "./pages/ConfigPage.js";
 import { ConversationsPage } from "./pages/ConversationsPage.js";
+import { NovaPage } from "./pages/NovaPage.js";
 import { OperationPage } from "./pages/OperationPage.js";
 import { RpaPage } from "./pages/RpaPage.js";
 
@@ -138,6 +139,7 @@ function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout:
             </Suspense>
           }
         />
+        <Route path="/nova" element={<NovaPage />} />
         <Route path="/rpa" element={<RpaPage />} />
         <Route path="/campanas" element={<CampaignsPage />} />
         <Route path="/bi" element={<BiPage />} />
