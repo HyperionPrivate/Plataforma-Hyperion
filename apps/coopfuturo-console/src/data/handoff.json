@@ -1,0 +1,67 @@
+{
+  "kpis": [
+    { "id": "cola", "label": "Leads en cola", "value": 37, "delta": 12, "deltaUnit": "%" },
+    { "id": "sla", "label": "SLA promedio", "value": "1h 42m", "delta": -8, "deltaUnit": "m" },
+    { "id": "expediente", "label": "Expediente completo", "value": 88, "unit": "%", "delta": 6, "deltaUnit": "pp" },
+    { "id": "cerrados", "label": "Cerrados hoy", "value": 26, "delta": 18, "deltaUnit": "%" }
+  ],
+  "queue": [
+    {
+      "id": "h1",
+      "conversationId": "cv1",
+      "priority": "inmediata",
+      "name": "María Fernanda López",
+      "segment": "Renovación",
+      "motivo": "Documento validado — solicita asesor",
+      "expedientePct": 100,
+      "asesor": null,
+      "tiempoCola": "0h 18m",
+      "aiSummary": "Quiere renovar. Orden de matrícula validada. Prefiere seguimiento por WhatsApp.",
+      "info": { "universidad": "UNAB", "programa": "Psicología", "canal": "whatsapp" }
+    },
+    {
+      "id": "h2",
+      "conversationId": "cv2",
+      "priority": "alta",
+      "name": "Juan David Morales",
+      "segment": "Nuevos",
+      "motivo": "Pregunta requisitos — fuera de FAQ",
+      "expedientePct": 40,
+      "asesor": "Laura Mendoza",
+      "tiempoCola": "1h 05m",
+      "aiSummary": "Prospecto nuevo pidiendo requisitos de crédito. Aún sin documentos.",
+      "info": { "universidad": "UIS", "programa": "Ingeniería Industrial", "canal": "whatsapp" }
+    },
+    {
+      "id": "h3",
+      "conversationId": "cv3",
+      "priority": "media",
+      "name": "Santiago Pérez",
+      "segment": "Reactivación",
+      "motivo": "Objeción: ya no estudia",
+      "expedientePct": 55,
+      "asesor": "Carlos Restrepo",
+      "tiempoCola": "2h 40m",
+      "aiSummary": "Indica que no estudia. Baja propensión; handoff para cierre o nutrición.",
+      "info": { "universidad": "UPB", "programa": "Administración", "canal": "voz" }
+    }
+  ],
+  "byAdvisor": [
+    { "name": "Laura M.", "count": 18 },
+    { "name": "Carlos R.", "count": 14 },
+    { "name": "Andrea D.", "count": 11 },
+    { "name": "Julián M.", "count": 9 },
+    { "name": "Paola N.", "count": 7 },
+    { "name": "David T.", "count": 5 }
+  ],
+  "quality": {
+    "score": 88,
+    "label": "Excelente",
+    "breakdown": [
+      { "label": "Expediente completo", "value": 88 },
+      { "label": "Información clave presente", "value": 92 },
+      { "label": "Resumen IA útil", "value": 85 },
+      { "label": "Asignación correcta", "value": 86 }
+    ]
+  }
+}

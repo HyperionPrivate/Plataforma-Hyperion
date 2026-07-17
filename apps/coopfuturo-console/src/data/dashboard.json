@@ -1,0 +1,49 @@
+{
+  "kpis": [
+    { "id": "contactabilidad", "label": "Contactabilidad", "value": 62, "unit": "%", "delta": 6.3, "deltaUnit": "pp", "sparkline": [48, 52, 55, 58, 60, 61, 62] },
+    { "id": "conversacion", "label": "Conversación completada", "value": 74, "unit": "%", "delta": 8.7, "deltaUnit": "pp", "sparkline": [55, 58, 62, 65, 68, 71, 74] },
+    { "id": "intencion", "label": "Intención positiva", "value": 41, "unit": "%", "delta": 4.2, "deltaUnit": "pp", "sparkline": [30, 32, 35, 36, 38, 40, 41] },
+    { "id": "ordenes", "label": "Órdenes recibidas", "value": 2847, "unit": "", "delta": 15.4, "deltaUnit": "%", "sparkline": [1800, 2000, 2200, 2400, 2550, 2700, 2847], "target": 3000 },
+    { "id": "csat", "label": "CSAT", "value": 4.4, "unit": "/5", "delta": 0.3, "deltaUnit": "", "sparkline": [3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4] }
+  ],
+  "contactsByDay": [
+    { "date": "19 may", "voz": 2100, "whatsapp": 1200 },
+    { "date": "20 may", "voz": 2300, "whatsapp": 1350 },
+    { "date": "21 may", "voz": 2500, "whatsapp": 1400 },
+    { "date": "22 may", "voz": 2200, "whatsapp": 1280 },
+    { "date": "23 may", "voz": 2400, "whatsapp": 1500 },
+    { "date": "24 may", "voz": 1800, "whatsapp": 1100 },
+    { "date": "25 may", "voz": 1526, "whatsapp": 902 }
+  ],
+  "funnelRenovacion": [
+    { "key": "contactado", "label": "Contactado", "count": 30000, "pct": 100 },
+    { "key": "interesado", "label": "Interesado", "count": 11842, "pct": 39.5 },
+    { "key": "documento", "label": "Documento", "count": 6021, "pct": 20.1 },
+    { "key": "transferido", "label": "Transferido", "count": 3244, "pct": 10.8 },
+    { "key": "renovado", "label": "Renovado", "count": 2847, "pct": 9.5 }
+  ],
+  "baseStatus": [
+    { "key": "contactados", "label": "Contactados", "count": 12450, "pct": 41.5, "color": "success" },
+    { "key": "no_contactados", "label": "No contactados", "count": 8950, "pct": 29.8, "color": "muted" },
+    { "key": "no_disponibles", "label": "No disponibles", "count": 4500, "pct": 15.0, "color": "warning" },
+    { "key": "rechazados", "label": "Rechazados", "count": 2100, "pct": 7.0, "color": "danger" },
+    { "key": "otros", "label": "Otros", "count": 2000, "pct": 6.7, "color": "info" }
+  ],
+  "ops": [
+    { "id": "llamadas", "label": "Llamadas realizadas", "value": "45.672" },
+    { "id": "wa", "label": "WhatsApps enviados", "value": "38.912" },
+    { "id": "conexion", "label": "Tasa de conexión voz", "value": "62%" },
+    { "id": "duracion", "label": "Duración prom. conversación", "value": "02:48" },
+    { "id": "sla", "label": "Nivel de servicio", "value": "81%" },
+    { "id": "abandonos", "label": "Abandonos voz", "value": "7%" },
+    { "id": "espera", "label": "Tiempo prom. espera", "value": "00:18" },
+    { "id": "agentes", "label": "Agentes activos", "value": "28" }
+  ],
+  "liveEvents": [
+    { "id": "1", "channel": "voz", "personName": "María Fernanda López", "kind": "Llamada conectada", "at": "10:32:45" },
+    { "id": "2", "channel": "whatsapp", "personName": "Juan Carlos Rendón", "kind": "Orden recibida", "at": "10:31:12" },
+    { "id": "3", "channel": "whatsapp", "personName": "Valentina Rojas", "kind": "Documento enviado", "at": "10:29:58" },
+    { "id": "4", "channel": "voz", "personName": "Andrés Mejía", "kind": "Handoff creado", "at": "10:28:01" },
+    { "id": "5", "channel": "whatsapp", "personName": "Laura Gómez", "kind": "Opt-out", "at": "10:27:44" }
+  ]
+}

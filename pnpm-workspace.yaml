@@ -2,6 +2,8 @@ packages:
   - "apps/*"
   - "services/*"
   - "packages/*"
+  # Standalone Next.js console (npm + own lockfile); built by its own Dockerfile.
+  - "!apps/coopfuturo-console"
 allowBuilds:
   "@whiskeysockets/baileys": false
   esbuild: true
