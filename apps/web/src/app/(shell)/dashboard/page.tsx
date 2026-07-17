@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { motion } from "motion/react";
 import { Filter, RefreshCw, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
@@ -11,6 +12,7 @@ import { ChartCard } from "@/components/data/chart-card";
 import { DualSeriesChart, FunnelChart, DonutChart } from "@/components/charts";
 import { LiveFeed, type LiveEvent } from "@/components/domain/live-feed";
 import { useDashboard, useLiveFeed } from "@/hooks/use-pulso";
+import { fetchSettings } from "@/services/ops-client";
 import { stagger } from "@/lib/motion";
 import { cn, formatNumber } from "@/lib/utils";
 import { Phone, MessageCircle, Clock, Users, Headphones, Percent, Timer, Activity } from "lucide-react";
@@ -41,6 +43,24 @@ export default function DashboardPage() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [period, setPeriod] = useState<"hoy" | "7d" | "30d">("hoy");
+  const [metaHoy, setMetaHoy] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await fetchSettings();
+        if (cancelled) return;
+        const m = s.ui?.meta_contactos_hoy;
+        setMetaHoy(typeof m === "number" && m > 0 ? Math.floor(m) : 0);
+      } catch {
+        /* dashboard still usable without meta */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const filtered = useMemo(() => {
     if (!data) return null;
@@ -86,6 +106,11 @@ export default function DashboardPage() {
 
   const vozTotal = filtered?.contactsByDay.reduce((a, d) => a + d.voz, 0) ?? 0;
   const waTotal = filtered?.contactsByDay.reduce((a, d) => a + d.whatsapp, 0) ?? 0;
+  const resultado = vozTotal + waTotal;
+  const periodMultiplier = period === "hoy" ? 1 : period === "7d" ? 7 : 30;
+  const metaPeriodo = metaHoy > 0 ? metaHoy * periodMultiplier : 0;
+  const metaPct =
+    metaPeriodo > 0 ? Math.min(100, Math.round((resultado / metaPeriodo) * 100)) : 0;
   const activeFilters =
     Object.values(filters).filter(Boolean).length < Object.keys(DEFAULT_FILTERS).length;
 
@@ -260,27 +285,37 @@ export default function DashboardPage() {
       </motion.div>
 
       <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-        <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-3 text-sm">
           <p className="font-medium">Meta vs. resultado ({period.toUpperCase()})</p>
           <p className="tabular text-[var(--muted)]">
-            {formatNumber(vozTotal + waTotal)} contactos canal
+            {formatNumber(resultado)} /{" "}
+            {metaPeriodo > 0 ? formatNumber(metaPeriodo) : "—"} contactos
           </p>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
-          <div
-            className="h-full rounded-full bg-[var(--accent)] transition-all"
-            style={{
-              width: `${Math.min(
-                100,
-                Math.round(((vozTotal + waTotal) / Math.max(vozTotal + waTotal, 50)) * 100),
-              )}%`,
-            }}
-          />
-        </div>
-        <p className="mt-2 text-xs text-[var(--muted)]">
-          Volumen del periodo filtrado · Voz {formatNumber(vozTotal)} · WhatsApp{" "}
-          {formatNumber(waTotal)}
-        </p>
+        {metaPeriodo > 0 ? (
+          <>
+            <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
+              <div
+                className="h-full rounded-full bg-[var(--accent)] transition-all"
+                style={{ width: `${metaPct}%` }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              {metaPct}% de la meta · Voz {formatNumber(vozTotal)} · WhatsApp{" "}
+              {formatNumber(waTotal)} · Meta diaria{" "}
+              {formatNumber(metaHoy)}
+              {period !== "hoy" ? ` × ${periodMultiplier}` : ""}
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-[var(--muted)]">
+            Sin meta configurada. Define la meta diaria en{" "}
+            <Link href="/configuracion" className="text-[var(--accent)] underline-offset-2 hover:underline">
+              Configuración → Operación
+            </Link>
+            .
+          </p>
+        )}
       </div>
 
       <div className="mt-[var(--page-gap)] grid gap-[var(--page-gap)] xl:grid-cols-[1fr_var(--panel-right-width)]">

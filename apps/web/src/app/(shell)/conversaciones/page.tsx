@@ -9,12 +9,24 @@ import { GaugeChart } from "@/components/charts";
 import { useConversations } from "@/hooks/use-pulso";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Search, Bot, CheckCircle2, Send, Phone, MessageCircle, Filter, Smile } from "lucide-react";
+import {
+  Search,
+  Bot,
+  CheckCircle2,
+  Send,
+  Phone,
+  MessageCircle,
+  Filter,
+  Smile,
+  ExternalLink,
+} from "lucide-react";
 import {
   claimConversation,
   createHandoff,
+  fetchConversationLiwaStatus,
   releaseConversation,
   sendConversationMessage,
+  type LiwaConversationStatus,
 } from "@/services/ops-client";
 import { sanitizeOpsCopy, sanitizeTags } from "@/lib/sanitize-ops-copy";
 
@@ -42,6 +54,7 @@ function ConversacionesContent() {
   const [query, setQuery] = useState("");
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>("all");
+  const [liwaStatus, setLiwaStatus] = useState<LiwaConversationStatus | null>(null);
 
   useEffect(() => {
     const fromUrl = searchParams.get("id");
@@ -56,6 +69,34 @@ function ConversacionesContent() {
     () => list.find((c) => c.id === selectedId) ?? list[0],
     [list, selectedId],
   );
+
+  useEffect(() => {
+    if (!selected?.id) {
+      setLiwaStatus(null);
+      return;
+    }
+    let cancelled = false;
+    async function pollLiwa() {
+      try {
+        const status = await fetchConversationLiwaStatus(selected!.id);
+        if (cancelled) return;
+        setLiwaStatus(status);
+        if (status.synced || status.handoff_detected) {
+          await refetch();
+        }
+      } catch {
+        if (!cancelled) {
+          setLiwaStatus(null);
+        }
+      }
+    }
+    void pollLiwa();
+    const timer = window.setInterval(() => void pollLiwa(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [selected?.id, refetch]);
 
   useEffect(() => {
     if (selected) {
@@ -102,13 +143,23 @@ function ConversacionesContent() {
     if (!selected || botActive || !draft.trim() || busy) return;
     setBusy(true);
     try {
-      await sendConversationMessage({
+      const res = await sendConversationMessage({
         conversation_id: selected.id,
         text: draft.trim(),
         role: "advisor",
       });
       setDraft("");
-      toast.success("Mensaje enviado");
+      if (res?.channel_acked) {
+        toast.success("WhatsApp enviado");
+      } else if (res?.delivery === "liwa_whatsapp") {
+        toast.success("WhatsApp aceptado por LIWA", {
+          description: "Entrega pendiente de confirmación",
+        });
+      } else {
+        toast.message("Mensaje guardado", {
+          description: res?.delivery || "local",
+        });
+      }
       await refetch();
     } catch (err) {
       toast.error("No se pudo enviar", {
@@ -285,110 +336,161 @@ function ConversacionesContent() {
         </section>
 
         <section className="flex min-h-0 flex-col rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-          <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-            <div>
-              <p className="font-medium">
-                {selected ? `${selected.name} — ${sanitizeOpsCopy(selected.topic)}` : "—"}
+          {!selected ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
+              <p className="text-sm font-medium">Sin conversación seleccionada</p>
+              <p className="max-w-sm text-xs text-[var(--muted)]">
+                No hay hilos activos. Genera actividad desde Laboratorio (voz/WhatsApp) o espera
+                inbound. Aquí no hay bot que tomar.
               </p>
-              <div className="mt-1 flex gap-1">
-                {displayTags.map((t) => (
-                  <Badge key={t} tone={t.includes("Documento") ? "info" : "success"}>
-                    {t}
-                  </Badge>
-                ))}
-                {selected?.claimedBy ? (
-                  <Badge tone="warning">Asesor: {selected.claimedBy}</Badge>
-                ) : null}
-              </div>
             </div>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}
-              >
-                <div
-                  className={cn(
-                    "max-w-[80%] rounded-2xl px-3 py-2 text-sm",
-                    m.role === "user"
-                      ? "bg-[var(--accent)] text-[#0A0F0D]"
-                      : "bg-[var(--surface-2)] text-[var(--text)]",
-                  )}
-                >
-                  {m.role === "bot" && (
-                    <span className="mb-1 flex items-center gap-1 text-[10px] text-[var(--muted)]">
-                      <Bot className="size-3" strokeWidth={1.75} />{" "}
-                      {!botActive || m.source === "advisor" ? "Asesor" : "Asistente"}
-                    </span>
-                  )}
-                  <p>{m.text}</p>
-                  {"attachment" in m && m.attachment && (
-                    <div className="mt-2 flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]/50 p-2 text-xs">
-                      <span className="font-medium">{m.attachment.name}</span>
-                      <span className="text-[var(--muted)]">{m.attachment.size}</span>
-                      {m.attachment.validated && (
-                        <span className="flex items-center gap-1 text-[var(--success)]">
-                          <CheckCircle2 className="size-3.5" strokeWidth={1.75} /> Validado
-                        </span>
-                      )}
-                    </div>
-                  )}
+          ) : (
+            <>
+              <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+                <div className="min-w-0">
+                  <p className="font-medium">
+                    {selected.name} — {sanitizeOpsCopy(selected.topic)}
+                  </p>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {displayTags.map((t) => (
+                      <Badge key={t} tone={t.includes("Documento") ? "info" : "success"}>
+                        {t}
+                      </Badge>
+                    ))}
+                    {selected.claimedBy ? (
+                      <Badge tone="warning">Asesor: {selected.claimedBy}</Badge>
+                    ) : null}
+                    {liwaStatus?.handoff_detected ? (
+                      <Badge tone="warning">
+                        Live chat LIWA
+                        {liwaStatus.agency_hint ? ` · ${liwaStatus.agency_hint}` : ""}
+                      </Badge>
+                    ) : liwaStatus?.ok ? (
+                      <Badge tone="info">Bot LIWA</Badge>
+                    ) : null}
+                    {(liwaStatus?.handoff_tags ?? []).slice(0, 2).map((t) => (
+                      <Badge key={t} tone="info">
+                        {t}
+                      </Badge>
+                    ))}
+                  </div>
+                  {liwaStatus?.handoff_detected ? (
+                    <p className="mt-2 text-xs text-[var(--muted)]">
+                      Chat humano en LIWA — aquí ves el estado; el historial completo del bot/usuario
+                      está en la bandeja LIWA. Puedes responder por API si tomas control.
+                    </p>
+                  ) : null}
                 </div>
-              </div>
-            ))}
-          </div>
-          <div className="relative border-t border-[var(--border)] p-3">
-            {botActive && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--surface)]/70 backdrop-blur-[2px]">
-                <div className="flex items-center gap-3 rounded-lg border border-[var(--accent)]/40 bg-[var(--surface-2)] px-4 py-2 shadow-[0_0_15px_rgba(52,211,153,0.08)]">
-                  <Bot className="size-4 animate-pulse text-[var(--accent)]" strokeWidth={1.75} />
-                  <span className="text-sm font-medium">Bot activo procesando</span>
-                  <Button size="sm" disabled={busy} onClick={() => void toggleControl()}>
-                    Tomar control
-                  </Button>
-                </div>
-              </div>
-            )}
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <p className="text-sm text-[var(--muted)]">
-                {botActive
-                  ? "Bot activo — Tomar control para escribir"
-                  : "Asesor al mando — puedes escribir"}
-              </p>
-              {!botActive && (
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={busy}
-                  onClick={() => void toggleControl()}
+                  className="shrink-0"
+                  onClick={() => {
+                    const base =
+                      process.env.NEXT_PUBLIC_LIWA_INBOX_URL ||
+                      liwaStatus?.inbox_url ||
+                      "https://chat.liwa.co/?acc=1656233";
+                    window.open(base, "_blank", "noopener,noreferrer");
+                  }}
                 >
-                  Devolver al bot
+                  <ExternalLink className="mr-1.5 size-3.5" strokeWidth={1.75} />
+                  Abrir en LIWA
                 </Button>
-              )}
-            </div>
-            <div className={cn("flex gap-2", botActive && "pointer-events-none opacity-40")}>
-              <input
-                className="h-10 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                placeholder={botActive ? "Tomar control para escribir…" : "Escribe un mensaje…"}
-                disabled={botActive || busy}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void sendMessage();
-                }}
-                aria-label="Mensaje al asociado"
-              />
-              <Button
-                size="icon"
-                disabled={botActive || !draft.trim() || busy}
-                onClick={() => void sendMessage()}
-                aria-label="Enviar mensaje"
-              >
-                <Send className="size-4" strokeWidth={1.75} />
-              </Button>
-            </div>
-          </div>
+              </div>
+              <div className="flex-1 space-y-3 overflow-y-auto p-4">
+                {messages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}
+                  >
+                    <div
+                      className={cn(
+                        "max-w-[80%] rounded-2xl px-3 py-2 text-sm",
+                        m.role === "user"
+                          ? "bg-[var(--accent)] text-[#0A0F0D]"
+                          : "bg-[var(--surface-2)] text-[var(--text)]",
+                      )}
+                    >
+                      {m.role === "bot" && (
+                        <span className="mb-1 flex items-center gap-1 text-[10px] text-[var(--muted)]">
+                          <Bot className="size-3" strokeWidth={1.75} />{" "}
+                          {!botActive || m.source === "advisor" ? "Asesor" : "Asistente"}
+                        </span>
+                      )}
+                      <p>{m.text}</p>
+                      {"attachment" in m && m.attachment && (
+                        <div className="mt-2 flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]/50 p-2 text-xs">
+                          <span className="font-medium">{m.attachment.name}</span>
+                          <span className="text-[var(--muted)]">{m.attachment.size}</span>
+                          {m.attachment.validated && (
+                            <span className="flex items-center gap-1 text-[var(--success)]">
+                              <CheckCircle2 className="size-3.5" strokeWidth={1.75} /> Validado
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="relative border-t border-[var(--border)] p-3">
+                {botActive && (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--surface)]/70 backdrop-blur-[2px]">
+                    <div className="flex items-center gap-3 rounded-lg border border-[var(--accent)]/40 bg-[var(--surface-2)] px-4 py-2 shadow-[0_0_15px_rgba(52,211,153,0.08)]">
+                      <Bot
+                        className="size-4 animate-pulse text-[var(--accent)]"
+                        strokeWidth={1.75}
+                      />
+                      <span className="text-sm font-medium">Bot activo procesando</span>
+                      <Button size="sm" disabled={busy} onClick={() => void toggleControl()}>
+                        Tomar control
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-sm text-[var(--muted)]">
+                    {botActive
+                      ? "Bot activo — Tomar control para escribir"
+                      : "Asesor al mando — puedes escribir"}
+                  </p>
+                  {!botActive && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() => void toggleControl()}
+                    >
+                      Devolver al bot
+                    </Button>
+                  )}
+                </div>
+                <div className={cn("flex gap-2", botActive && "pointer-events-none opacity-40")}>
+                  <input
+                    className="h-10 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                    placeholder={
+                      botActive ? "Tomar control para escribir…" : "Escribe un mensaje…"
+                    }
+                    disabled={botActive || busy}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void sendMessage();
+                    }}
+                    aria-label="Mensaje al asociado"
+                  />
+                  <Button
+                    size="icon"
+                    disabled={botActive || !draft.trim() || busy}
+                    onClick={() => void sendMessage()}
+                    aria-label="Enviar mensaje"
+                  >
+                    <Send className="size-4" strokeWidth={1.75} />
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="flex min-h-0 flex-col gap-3 overflow-y-auto">
@@ -435,9 +537,38 @@ function ConversacionesContent() {
               </p>
               <GaugeChart value={exp?.score ?? 0} label={exp?.scoreLabel} />
             </div>
-            <Button className="mt-2 w-full" disabled={busy} onClick={() => void transferToHandoff()}>
+            <Button
+              className="mt-2 w-full"
+              disabled={busy || !selected}
+              onClick={() => void transferToHandoff()}
+            >
               Transferir a asesor
             </Button>
+            {liwaStatus?.contact_id ? (
+              <dl className="mt-3 space-y-1 border-t border-[var(--border)] pt-3 text-xs text-[var(--muted)]">
+                <div className="flex justify-between gap-2">
+                  <dt>LIWA contact</dt>
+                  <dd className="font-mono text-[var(--text)]">{liwaStatus.contact_id}</dd>
+                </div>
+                {liwaStatus.phone ? (
+                  <div className="flex justify-between gap-2">
+                    <dt>Teléfono</dt>
+                    <dd className="tabular text-[var(--text)]">{liwaStatus.phone}</dd>
+                  </div>
+                ) : null}
+                <div className="flex justify-between gap-2">
+                  <dt>Modo LIWA</dt>
+                  <dd className="text-[var(--text)]">
+                    {liwaStatus.handoff_detected ? "live_chat" : liwaStatus.mode || "bot"}
+                  </dd>
+                </div>
+              </dl>
+            ) : null}
+            {!selected ? (
+              <p className="mt-2 text-center text-xs text-[var(--muted)]">
+                Selecciona una conversación para ver expediente.
+              </p>
+            ) : null}
           </div>
           {ai && (
             <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">

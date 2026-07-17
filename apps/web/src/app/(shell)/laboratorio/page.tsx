@@ -16,9 +16,19 @@ import {
   orchestrationBatch,
   runE2ERenovacion,
   sendWhatsApp,
+  simulateLiwaEvent,
   uploadDocument,
 } from "@/services/ops-client";
 import { toast } from "sonner";
+
+const LIWA_SIM_EVENTS = [
+  "document_received",
+  "prequal_completed",
+  "handoff_requested",
+  "csat",
+  "opt_out",
+  "message",
+] as const;
 
 function parseCsv(text: string): Record<string, string>[] {
   const lines = text.trim().split(/\r?\n/);
@@ -58,6 +68,9 @@ export default function LaboratorioPage() {
   const [agencyTag, setAgencyTag] = useState("RENOVACION_VIP");
   const [skipVoiceE2E, setSkipVoiceE2E] = useState(true);
   const [postIntent, setPostIntent] = useState("interesado");
+  const [liwaEvent, setLiwaEvent] = useState<(typeof LIWA_SIM_EVENTS)[number]>("document_received");
+  const [liwaCiudad, setLiwaCiudad] = useState("Barranquilla");
+  const [liwaScore, setLiwaScore] = useState(5);
 
   useEffect(() => {
     setAgencyTag(flow === "B" ? "REACTIVACION_VIP" : "RENOVACION_VIP");
@@ -125,6 +138,37 @@ export default function LaboratorioPage() {
       });
     } catch (err) {
       toast.error("Falló el batch", {
+        description: err instanceof Error ? err.message : "Error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSimulateLiwa() {
+    setBusy(true);
+    try {
+      const res = await simulateLiwaEvent({
+        event: liwaEvent,
+        phone,
+        name,
+        first_name: name,
+        ciudad: liwaCiudad,
+        score: liwaEvent === "csat" ? liwaScore : undefined,
+        text:
+          liwaEvent === "opt_out"
+            ? "STOP no me contacten"
+            : liwaEvent === "handoff_requested"
+              ? "Quiere hablar con un asesor"
+              : undefined,
+        tenant_id: "coopfuturo",
+      });
+      setLastResult(JSON.stringify(res, null, 2));
+      toast.success(`Evento ${liwaEvent}`, {
+        description: (res.actions || []).join(", ") || res.event,
+      });
+    } catch (err) {
+      toast.error("Simulación LIWA falló", {
         description: err instanceof Error ? err.message : "Error",
       });
     } finally {
@@ -480,6 +524,55 @@ export default function LaboratorioPage() {
                   : "Texto libre solo si el contacto escribió en las últimas 24h."
                 : "Modo mock: define LIWA_MODE=real y LIWA_API_TOKEN en el entorno de la API."}
             </p>
+          </div>
+        </ChartCard>
+
+        <ChartCard title="Simular evento LIWA → PULSO">
+          <div className="space-y-3 p-1">
+            <p className="text-xs text-[var(--muted)]">
+              Misma lógica que el webhook de Contabo. Usa el teléfono/nombre de arriba. Luego revisa
+              CRM (documento / interesado / transferido).
+            </p>
+            <label className="block text-sm">
+              Evento
+              <select
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
+                value={liwaEvent}
+                onChange={(e) =>
+                  setLiwaEvent(e.target.value as (typeof LIWA_SIM_EVENTS)[number])
+                }
+              >
+                {LIWA_SIM_EVENTS.map((ev) => (
+                  <option key={ev} value={ev}>
+                    {ev}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm">
+              Ciudad (→ tag AG_*)
+              <input
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                value={liwaCiudad}
+                onChange={(e) => setLiwaCiudad(e.target.value)}
+              />
+            </label>
+            {liwaEvent === "csat" && (
+              <label className="block text-sm">
+                Score 1–5
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                  value={liwaScore}
+                  onChange={(e) => setLiwaScore(Number(e.target.value) || 5)}
+                />
+              </label>
+            )}
+            <Button onClick={onSimulateLiwa} disabled={busy}>
+              Simular evento LIWA
+            </Button>
           </div>
         </ChartCard>
 

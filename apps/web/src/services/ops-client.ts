@@ -199,6 +199,29 @@ export async function moveCrmLead(input: {
   return postJson<Record<string, unknown>>("/ops/crm/move", input);
 }
 
+export type LiwaConversationStatus = {
+  ok: boolean;
+  conversation_id: string;
+  phone?: string;
+  live_chat: boolean;
+  handoff_detected: boolean;
+  tags: string[];
+  handoff_tags?: string[];
+  agency_hint?: string | null;
+  contact_id?: string;
+  mode?: "bot" | "live_chat" | "mock" | string;
+  inbox_url?: string;
+  synced?: boolean;
+  actions?: string[];
+  error?: string;
+};
+
+export async function fetchConversationLiwaStatus(conversationId: string) {
+  return getJson<LiwaConversationStatus>(
+    `/ops/conversations/${encodeURIComponent(conversationId)}/liwa-status`,
+  );
+}
+
 export async function claimConversation(input: {
   conversation_id: string;
   advisor?: string;
@@ -218,14 +241,37 @@ export async function sendConversationMessage(input: {
   text: string;
   role?: "advisor" | "bot" | "user";
 }) {
-  return postJson<{ ok: boolean; message: Record<string, unknown> }>(
-    "/ops/conversations/messages",
-    input,
-  );
+  return postJson<{
+    ok: boolean;
+    message: Record<string, unknown>;
+    delivery?: string;
+    channel_acked?: boolean;
+    liwa?: Record<string, unknown>;
+  }>("/ops/conversations/messages", input);
 }
 
 export async function listOptOuts() {
   return getJson<{ items: string[]; total: number }>("/ops/compliance/opt-outs");
+}
+
+export async function simulateLiwaEvent(input: {
+  event: string;
+  phone: string;
+  first_name?: string;
+  name?: string;
+  ciudad?: string;
+  text?: string;
+  score?: number;
+  tenant_id?: string;
+}) {
+  return postJson<{
+    ok: boolean;
+    event?: string;
+    actions?: string[];
+    crm?: Record<string, unknown>;
+    conversation_id?: string;
+    error?: string;
+  }>("/ops/laboratorio/liwa-event", input);
 }
 
 export async function registerDocument(input: {
@@ -328,12 +374,18 @@ export async function fetchReport(reportId: string) {
   );
 }
 
+export type OpsUiSettings = {
+  pii_masking?: boolean;
+  /** Meta diaria de contactos (voz+WA). 0 = sin meta configurada. */
+  meta_contactos_hoy?: number;
+};
+
 export async function fetchSettings() {
   return getJson<{
     channels: Record<string, boolean>;
     dialer: { base_url?: string; default_phone_number_id?: string };
     agent_config: Record<string, unknown>;
-    ui?: { pii_masking?: boolean };
+    ui?: OpsUiSettings;
     whatsapp?: {
       mode?: string;
       provider?: string;
@@ -349,7 +401,7 @@ export async function saveSettings(input: {
   channels?: Record<string, boolean | unknown>;
   dialer?: { base_url?: string; default_phone_number_id?: string };
   agent_config?: Record<string, unknown>;
-  ui?: { pii_masking?: boolean };
+  ui?: OpsUiSettings;
 }) {
   return putJson<Record<string, unknown>>("/ops/settings", input);
 }

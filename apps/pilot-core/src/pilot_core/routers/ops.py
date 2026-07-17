@@ -23,6 +23,7 @@ from pilot_core.modules.contacts.service import contacts_service
 from pilot_core.modules.core_adapter.service import core_adapter_service
 from pilot_core.modules.crm.service import crm_service
 from pilot_core.modules.documents_service import documents_service
+from pilot_core.modules.liwa_inbound import process_liwa_inbound
 from pilot_core.modules.liwa_whatsapp import liwa_whatsapp_service
 from pilot_core.modules.orchestration.service import orchestration_service
 from pilot_core.modules.pii import (
@@ -691,6 +692,77 @@ async def _read_body_capped(request: Request, *, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
+@router.post("/webhooks/liwa")
+async def liwa_inbound_webhook(request: Request) -> dict[str, Any]:
+    """LIWA Webhooks / API externa → espejo Conversaciones, CSAT, opt-out, handoff AG_*."""
+    settings = get_settings()
+    secret = (settings.liwa_webhook_secret or "").strip()
+    require_secret = settings.app_env in ("staging", "production") or not settings.auth_disabled
+    if require_secret and not secret:
+        raise PlatformError(
+            "webhook_misconfigured",
+            "LIWA_WEBHOOK_SECRET is required",
+            status_code=503,
+        )
+
+    provided = (
+        request.headers.get("x-liwa-webhook-secret")
+        or request.headers.get("x-webhook-secret")
+        or ""
+    ).strip()
+    if secret and provided != secret:
+        raise PlatformError("webhook_secret", "Invalid LIWA webhook secret", status_code=401)
+
+    raw = await _read_body_capped(request, max_bytes=_WEBHOOK_MAX_BYTES)
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except Exception as exc:
+        raise PlatformError("invalid_json", "Invalid JSON body", status_code=400) from exc
+    if not isinstance(payload, dict):
+        raise PlatformError("invalid_json", "JSON object required", status_code=400)
+
+    tenant = str(payload.get("tenant_id") or "").strip() or settings.liwa_webhook_tenant()
+    with ops_store.tenant_scope(tenant):
+        result = await process_liwa_inbound(payload)
+    return result
+
+
+class LiwaSimulateBody(BaseModel):
+    event: str = Field(
+        default="document_received",
+        description="document_received | prequal_completed | handoff_requested | csat | opt_out | message",
+    )
+    phone: str = Field(min_length=7, max_length=32)
+    first_name: str = "Asociado"
+    name: str | None = None
+    ciudad: str | None = "Barranquilla"
+    text: str | None = None
+    score: int | None = Field(default=None, ge=1, le=5)
+    tenant_id: str = "coopfuturo"
+
+
+@router.post("/laboratorio/liwa-event")
+async def simulate_liwa_event(
+    body: LiwaSimulateBody, _ctx: AuthContext = Depends(require_ops_roles(*OPS_OPERATE))
+) -> dict[str, Any]:
+    """Laboratorio: simular webhook LIWA sin configurar nodos (mismo path que producción)."""
+    payload: dict[str, Any] = {
+        "event": body.event,
+        "phone": body.phone,
+        "first_name": body.name or body.first_name,
+        "name": body.name or body.first_name,
+        "tenant_id": body.tenant_id,
+    }
+    if body.ciudad:
+        payload["ciudad"] = body.ciudad
+    if body.text:
+        payload["text"] = body.text
+    if body.score is not None:
+        payload["score"] = body.score
+    with ops_store.tenant_scope(body.tenant_id or get_settings().liwa_webhook_tenant()):
+        return await process_liwa_inbound(payload)
+
+
 @router.post("/webhooks/elevenlabs/post-call")
 async def elevenlabs_post_call_webhook(request: Request) -> dict[str, Any]:
     """Webhook ElevenLabs `post_call_transcription` → tipificación → WA si interesa."""
@@ -824,9 +896,13 @@ async def whatsapp_send(
             kind=body.kind,
             flow_id=body.flow_id,
         )
-        if not result.get("ok"):
+        # LIWA often returns HTTP 200 + success=true without message_id (AUD-016 →
+        # accepted_pending). That is a real handoff, not a send failure.
+        delivery = str(result.get("delivery") or "")
+        msg = result.get("message") if isinstance(result.get("message"), dict) else {}
+        wa_status = str(msg.get("status") or delivery)
+        if not result.get("ok") and wa_status not in {"accepted_pending", "queued_mock"}:
             detail = result.get("error") or "LIWA send failed"
-            msg = result.get("message")
             if isinstance(msg, dict) and msg.get("error"):
                 detail = str(msg.get("error"))
             raise PlatformError(
@@ -1047,6 +1123,171 @@ async def crm_create_lead(
     return crm_service.create_lead(name=body.name, funnel=body.funnel, phone=body.phone)
 
 
+@router.get("/conversations/{conversation_id}/liwa-status")
+async def conversation_liwa_status(
+    conversation_id: str,
+    _ctx: AuthContext = Depends(require_ops_auth),
+) -> dict[str, Any]:
+    """Poll LIWA contact (live_chat + tags) and sync handoff into PULSO for the demo bridge."""
+    from pilot_core.modules.liwa_inbound import _crm_to
+    from pilot_core.modules.liwa_whatsapp import is_handoff_tag
+
+    thread = next(
+        (t for t in ops_store.list_conversation_threads() if t.get("id") == conversation_id),
+        None,
+    )
+    if thread is None:
+        raise PlatformError("not_found", "conversation not found", status_code=404)
+
+    phone = str((thread.get("expediente") or {}).get("phone") or "").strip()
+    if not phone:
+        # Fallback: conversation ids like cv_573004198710
+        digits = "".join(ch for ch in conversation_id if ch.isdigit())
+        if len(digits) >= 10:
+            phone = f"+{digits}" if digits.startswith("57") else f"+57{digits[-10:]}"
+
+    if not phone:
+        return {
+            "ok": False,
+            "error": "phone_missing",
+            "conversation_id": conversation_id,
+            "live_chat": False,
+            "handoff_detected": False,
+            "tags": [],
+            "synced": False,
+        }
+
+    first_name = str(thread.get("name") or "Asociado")
+    settings = get_settings()
+    if not settings.liwa_live_enabled():
+        return {
+            "ok": False,
+            "error": "liwa_not_live",
+            "conversation_id": conversation_id,
+            "phone": phone,
+            "live_chat": False,
+            "handoff_detected": False,
+            "tags": [],
+            "mode": "mock",
+            "synced": False,
+            "inbox_url": "https://chat.liwa.co/?acc=1656233",
+        }
+
+    state = await liwa_whatsapp_service.get_contact_handoff_state(
+        phone=phone,
+        first_name=first_name,
+    )
+    synced = False
+    crm: dict[str, Any] | None = None
+    actions: list[str] = []
+
+    if state.get("handoff_detected"):
+        already = bool(thread.get("botPaused")) and (
+            "Handoff" in (thread.get("tags") or [])
+            or any(is_handoff_tag(str(t)) for t in (thread.get("tags") or []))
+        )
+        handoff_tag = None
+        for t in state.get("handoff_tags") or []:
+            handoff_tag = str(t)
+            break
+        agency_hint = state.get("agency_hint")
+        tags = list(thread.get("tags") or [])
+        if "Handoff" not in tags:
+            tags = ["Handoff", *tags]
+        if "WhatsApp" not in tags:
+            tags = ["WhatsApp", *tags]
+        if handoff_tag and handoff_tag not in tags:
+            tags = [handoff_tag, *tags]
+        snippet = (
+            f"Live chat LIWA"
+            + (f" · {agency_hint}" if agency_hint else "")
+            + (f" · {handoff_tag}" if handoff_tag else "")
+        )
+        thread = {
+            **thread,
+            "tags": tags,
+            "botActive": False,
+            "botPaused": True,
+            "channel": "whatsapp",
+            "snippet": snippet[:160],
+            "expediente": {
+                **(thread.get("expediente") or {}),
+                "phone": phone,
+                "estadoCrm": "Handoff",
+            },
+            "aiSummary": {
+                **(thread.get("aiSummary") or {}),
+                "text": snippet[:240],
+                "etapa": "asesor",
+                "intencion": "handoff",
+            },
+            "liwa_bridge": {
+                "contact_id": state.get("contact_id"),
+                "live_chat": state.get("live_chat"),
+                "agency_hint": agency_hint,
+                "handoff_tags": state.get("handoff_tags") or [],
+                "inbox_url": state.get("inbox_url"),
+            },
+        }
+        ops_store.upsert_conversation_thread(thread)
+        actions.append("thread_handoff_synced")
+        if not already:
+            ops_store.insert_handoff(
+                {
+                    "id": f"ho_{uuid4().hex[:10]}",
+                    "name": first_name,
+                    "segment": "WhatsApp",
+                    "motivo": snippet,
+                    "priority": "alta",
+                    "agency_tag": handoff_tag or agency_hint or "LIWA_LIVE",
+                    "phone": phone,
+                    "conversation_id": conversation_id,
+                    "status": "queued",
+                    "source": "liwa_bridge_poll",
+                }
+            )
+            actions.append("handoff_queued")
+            crm = _crm_to(phone=phone, column="transferido", name=first_name)
+            actions.append("crm_transferido")
+            ops_store.append_conversation_message(
+                conversation_id,
+                {
+                    "id": f"m_{uuid4().hex[:10]}",
+                    "role": "bot",
+                    "text": (
+                        "LIWA: conversación en live chat"
+                        + (f" ({agency_hint})" if agency_hint else "")
+                        + ". Atiende el chat humano en LIWA."
+                    )[:500],
+                    "at": "ahora",
+                    "source": "liwa_bridge",
+                },
+            )
+            actions.append("bridge_note_appended")
+            synced = True
+        else:
+            synced = True
+            actions.append("already_synced")
+
+    return {
+        "ok": bool(state.get("ok")),
+        "conversation_id": conversation_id,
+        "phone": phone,
+        "live_chat": bool(state.get("live_chat")),
+        "handoff_detected": bool(state.get("handoff_detected")),
+        "tags": state.get("tags") or [],
+        "handoff_tags": state.get("handoff_tags") or [],
+        "agency_hint": state.get("agency_hint"),
+        "contact_id": state.get("contact_id"),
+        "mode": state.get("mode") or "bot",
+        "inbox_url": state.get("inbox_url") or "https://chat.liwa.co/?acc=1656233",
+        "synced": synced,
+        "actions": actions,
+        "crm": crm,
+        "error": state.get("error"),
+    }
+
+
 class ConversationClaimBody(BaseModel):
     conversation_id: str
     advisor: str = "Admin Coopfuturo"
@@ -1132,12 +1373,56 @@ async def post_conversation_message(
         "source": body.role,
         "author_subject": ctx.subject,
     }
+    delivery = "persisted_local"
+    channel_acked = False
+    liwa_meta: dict[str, Any] | None = None
+
+    if body.role == "advisor":
+        thread = next(
+            (t for t in ops_store.list_conversation_threads() if t.get("id") == body.conversation_id),
+            None,
+        )
+        phone = str((thread or {}).get("expediente", {}).get("phone") or "").strip()
+        first_name = str((thread or {}).get("name") or "Asociado")
+        settings = get_settings()
+        if phone and settings.liwa_live_enabled():
+            decision = compliance_service.evaluate(phone=phone, channel="whatsapp")
+            if not decision.allowed:
+                raise PlatformError(
+                    "compliance_blocked",
+                    "; ".join(decision.reasons) or "Contact blocked",
+                    status_code=403,
+                )
+            liwa_res = await liwa_whatsapp_service.send_text(
+                phone=phone,
+                text=body.text,
+                first_name=first_name,
+            )
+            liwa_meta = liwa_res
+            entry = (liwa_res or {}).get("message") or {}
+            if liwa_res.get("ok") and entry.get("status") in {"sent", "accepted_pending"}:
+                delivery = "liwa_whatsapp"
+                channel_acked = entry.get("status") == "sent"
+                msg["receipt_id"] = entry.get("receipt_id")
+            else:
+                raise PlatformError(
+                    "liwa_send_failed",
+                    str(liwa_res.get("error") or entry.get("error") or "LIWA send failed"),
+                    status_code=502,
+                    details={"liwa": liwa_res},
+                )
+        elif phone and not settings.liwa_live_enabled():
+            delivery = "mock_local"
+            channel_acked = False
+            msg["note"] = "LIWA_MODE not real — message stored locally only"
+
     saved = ops_store.append_conversation_message(body.conversation_id, msg)
     return {
         "ok": True,
         "message": saved,
-        "delivery": "persisted_local",
-        "channel_acked": False,
+        "delivery": delivery,
+        "channel_acked": channel_acked,
+        "liwa": liwa_meta,
     }
 
 
@@ -1300,7 +1585,7 @@ async def get_report(
 @router.get("/settings")
 async def get_settings_api(_ctx: AuthContext = Depends(require_ops_auth)) -> dict[str, Any]:
     stored = ops_store.all_settings()
-    ui_defaults: dict[str, Any] = {"pii_masking": True}
+    ui_defaults: dict[str, Any] = {"pii_masking": True, "meta_contactos_hoy": 0}
     s = get_settings()
     defaults: dict[str, Any] = {
         "channels": {
@@ -1460,7 +1745,25 @@ async def put_settings(
         prev = ops_store.get_setting("ui") or {}
         if not isinstance(prev, dict):
             prev = {}
-        ops_store.set_setting("ui", {**prev, **body.ui})
+        allowed_ui = {"pii_masking", "meta_contactos_hoy"}
+        incoming = {k: v for k, v in body.ui.items() if k in allowed_ui}
+        if "meta_contactos_hoy" in incoming:
+            try:
+                meta_n = int(incoming["meta_contactos_hoy"])
+            except (TypeError, ValueError) as exc:
+                raise PlatformError(
+                    "validation_error",
+                    "meta_contactos_hoy must be an integer >= 0",
+                    status_code=422,
+                ) from exc
+            if meta_n < 0:
+                raise PlatformError(
+                    "validation_error",
+                    "meta_contactos_hoy must be >= 0",
+                    status_code=422,
+                )
+            incoming["meta_contactos_hoy"] = meta_n
+        ops_store.set_setting("ui", {**prev, **incoming})
     return await get_settings_api(_ctx)
 
 

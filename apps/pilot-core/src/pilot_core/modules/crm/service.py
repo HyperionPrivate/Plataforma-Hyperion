@@ -169,5 +169,81 @@ class CrmService:
         }
         return ops_store.upsert_crm_lead(lead)
 
+    def find_by_phone(self, phone: str) -> dict[str, Any] | None:
+        digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+        if not digits:
+            return None
+        for lead in ops_store.list_crm_leads():
+            p = "".join(ch for ch in str(lead.get("phone") or "") if ch.isdigit())
+            if p and p[-10:] == digits[-10:]:
+                return lead
+        return None
+
+    def ensure_at_column(
+        self,
+        *,
+        phone: str,
+        to_column: str,
+        name: str = "Asociado",
+        funnel: str = "Renovación",
+        tipificacion: str | None = None,
+        channel: str = "whatsapp",
+    ) -> dict[str, Any]:
+        """Create/find lead by phone and walk the funnel to ``to_column`` (LIWA events)."""
+        lead = self.find_by_phone(phone)
+        if lead is None:
+            lead = self.create_lead(name=name, funnel=funnel, phone=phone)
+            lead["channel"] = channel
+            lead = ops_store.upsert_crm_lead(lead)
+
+        order = [c[0] for c in _COLUMN_DEFS]
+        if to_column not in order:
+            raise ValueError(f"unknown_column:{to_column}")
+
+        # Short-circuit no_interes
+        if to_column == "no_interes":
+            current = lead.get("column_id") or "pendiente"
+            if current == "no_interes":
+                return lead
+            # Force tipificacion path via allowed edges when possible
+            tip = tipificacion or "opt_out_whatsapp"
+            if "no_interes" in _TRANSITIONS.get(current, []):
+                return self.move(lead_id=str(lead["id"]), to_column="no_interes", tipificacion=tip)
+            lead["column_id"] = "no_interes"
+            lead["tipificacion"] = tip
+            return ops_store.upsert_crm_lead(lead)
+
+        target_idx = order.index(to_column)
+        current = lead.get("column_id") or "pendiente"
+        if current not in order:
+            current = "pendiente"
+            lead["column_id"] = current
+            lead = ops_store.upsert_crm_lead(lead)
+        cur_idx = order.index(current)
+        if cur_idx >= target_idx:
+            return lead
+
+        # Walk forward only along the happy path columns
+        happy = ["pendiente", "contactado", "interesado", "documento", "transferido", "renovado"]
+        for nxt in happy:
+            if nxt not in order:
+                continue
+            if order.index(nxt) <= cur_idx:
+                continue
+            if order.index(nxt) > target_idx:
+                break
+            tip = tipificacion if nxt == to_column else None
+            try:
+                lead = self.move(lead_id=str(lead["id"]), to_column=nxt, tipificacion=tip)
+                cur_idx = order.index(nxt)
+            except ValueError:
+                # Force if graph blocks (e.g. already no_interes)
+                lead["column_id"] = nxt
+                if tip:
+                    lead["tipificacion"] = tip
+                lead = ops_store.upsert_crm_lead(lead)
+                cur_idx = order.index(nxt)
+        return lead
+
 
 crm_service = CrmService()

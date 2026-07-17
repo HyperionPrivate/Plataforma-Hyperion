@@ -34,6 +34,15 @@ def _weekday_label(created_at: str | None) -> str:
     return _DAY_LABELS[dt.weekday()]
 
 
+def _csat_avg() -> float:
+    try:
+        from pilot_core.modules.liwa_inbound import csat_average
+
+        return float(csat_average())
+    except Exception:
+        return 0.0
+
+
 class AnalyticsService:
     name: str = "analytics"
 
@@ -184,11 +193,11 @@ class AnalyticsService:
             {
                 "id": "csat",
                 "label": "CSAT",
-                "value": 0,
+                "value": _csat_avg(),
                 "unit": "/5",
                 "delta": 0,
                 "deltaUnit": "",
-                "sparkline": [0, 0, 0, 0, 0, 0, 0],
+                "sparkline": [0, 0, 0, 0, 0, 0, _csat_avg()],
             },
         ]
 

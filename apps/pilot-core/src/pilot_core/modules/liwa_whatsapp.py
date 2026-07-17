@@ -62,6 +62,29 @@ def _extract_receipt_id(payload: Any) -> str | None:
     return None
 
 
+# Preview copy for Renovaciones when LIWA send/flow returns no message body.
+_RENOVACIONES_FLOW_PREVIEW = (
+    "🚨 Estimado estudiante, tienes un cupo de crédito preaprobado. "
+    "Asegura hoy tu próximo semestre y sigue construyendo tu futuro con el respaldo de Coopfuturo. "
+    "Renueva tu crédito educativo de manera ágil, segura y sin salir de casa antes del 30 de junio "
+    "y participa en el sorteo de: ✅ Becas educativas y ✅ Auxilios para matrícula. "
+    "Tu próximo semestre te espera. Aprovecha esta oportunidad. "
+    "📩 Envía tu recibo y asegura hoy tu financiación con Coopfuturo."
+)
+
+
+def _flow_inbox_snippet(*, flow_id: str, text: str) -> str:
+    """Text shown in Conversaciones for outbound flow (LIWA does not return body)."""
+    t = (text or "").strip()
+    if t:
+        return t
+    fid = (flow_id or "").strip()
+    default_fid = (get_settings().liwa_default_flow_id or "1782399915832").strip()
+    if fid in {default_fid, "1782399915832"}:
+        return _RENOVACIONES_FLOW_PREVIEW
+    return f"Flujo WhatsApp enviado ({fid})" if fid else "Flujo WhatsApp enviado"
+
+
 def _audit(
     *,
     phone: str,
@@ -77,11 +100,13 @@ def _audit(
             "whatsapp": entry,
         }
     )
-    snippet = str(entry.get("text") or "").strip() or (
-        "Flujo WhatsApp enviado"
-        if str(entry.get("kind") or "") == "flow"
-        else "Mensaje WhatsApp enviado"
-    )
+    if str(entry.get("kind") or "") == "flow":
+        snippet = _flow_inbox_snippet(
+            flow_id=str(entry.get("flow_id") or ""),
+            text=str(entry.get("text") or ""),
+        )
+    else:
+        snippet = str(entry.get("text") or "").strip() or "Mensaje WhatsApp enviado"
     record_outbound_conversation(
         phone=phone,
         first_name=first_name or "Asociado",
@@ -303,6 +328,7 @@ class LiwaWhatsAppService:
             status = "accepted_pending"
         else:
             status = "failed"
+        preview = _flow_inbox_snippet(flow_id=fid, text=text or "")
         entry = cast(
             dict[str, Any],
             {
@@ -313,7 +339,7 @@ class LiwaWhatsAppService:
                 "status": status,
                 "receipt_id": receipt,
                 "to": phone,
-                "text": (text or "")[:500],
+                "text": preview[:500],
                 "flow_id": fid,
                 "provider": "liwa",
                 "contact_id": str(contact_id),
@@ -325,8 +351,10 @@ class LiwaWhatsAppService:
             },
         )
         _audit(phone=phone, first_name=first_name, entry=entry)
+        # LIWA frequently returns success without message_id → accepted_pending.
+        # That still means the flow was accepted; only hard failures set ok=False.
         return {
-            "ok": status == "sent",
+            "ok": status in {"sent", "accepted_pending"},
             "mock_commercial": False,
             "message": entry,
             "delivery": status,
@@ -409,6 +437,91 @@ class LiwaWhatsAppService:
             "note_result": {"ok": note.get("ok"), "id": (note.get("message") or {}).get("id")},
         }
 
+    async def get_contact(self, contact_id: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{_base_url()}/contacts/{contact_id}",
+                headers=_headers(),
+            )
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"raw": resp.text[:500]}
+        return {
+            "ok": resp.is_success and isinstance(data, dict) and not data.get("error"),
+            "http_status": resp.status_code,
+            "contact": data if isinstance(data, dict) else {},
+        }
+
+    async def get_contact_tags(self, contact_id: str) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{_base_url()}/contacts/{contact_id}/tags",
+                headers=_headers(),
+            )
+        if not resp.is_success:
+            return []
+        try:
+            data = resp.json()
+        except Exception:
+            return []
+        return data if isinstance(data, list) else []
+
+    async def get_contact_handoff_state(
+        self,
+        *,
+        phone: str,
+        first_name: str = "Asociado",
+    ) -> dict[str, Any]:
+        """Poll LIWA contact live_chat + tags (demo bridge without inbound webhooks)."""
+        if not get_settings().liwa_live_enabled():
+            return {
+                "ok": False,
+                "error": "liwa_not_live",
+                "live_chat": False,
+                "tags": [],
+                "handoff_detected": False,
+            }
+        created = await self.ensure_contact(phone=phone, first_name=first_name)
+        contact_id = created.get("contact_id")
+        if not contact_id:
+            return {
+                "ok": False,
+                "error": "contact_not_found",
+                "live_chat": False,
+                "tags": [],
+                "handoff_detected": False,
+                "provider": created,
+            }
+        cid = str(contact_id)
+        fetched = await self.get_contact(cid)
+        contact = fetched.get("contact") or {}
+        live_chat = bool(contact.get("live_chat"))
+        tag_rows = await self.get_contact_tags(cid)
+        tag_names = [
+            str(t.get("name") or "").strip()
+            for t in tag_rows
+            if isinstance(t, dict) and str(t.get("name") or "").strip()
+        ]
+        handoff_tags = [n for n in tag_names if is_handoff_tag(n)]
+        agency_hint = agency_hint_from_tags(tag_names)
+        handoff_detected = live_chat or bool(handoff_tags)
+        page_id = str(contact.get("page_id") or contact.get("account_id") or "1656233")
+        inbox_url = f"https://chat.liwa.co/?acc={page_id}"
+        return {
+            "ok": bool(fetched.get("ok")),
+            "contact_id": cid,
+            "phone": phone,
+            "live_chat": live_chat,
+            "tags": tag_names,
+            "handoff_tags": handoff_tags,
+            "agency_hint": agency_hint,
+            "handoff_detected": handoff_detected,
+            "inbox_url": inbox_url,
+            "page_id": page_id,
+            "mode": "bot" if not handoff_detected else "live_chat",
+        }
+
     async def send(
         self,
         *,
@@ -430,6 +543,47 @@ class LiwaWhatsAppService:
             first_name=first_name,
             text=text,
         )
+
+
+# Tag fragment → sede label (Renovaciones campaign tags + AG_*).
+_SEDE_HINTS: dict[str, str] = {
+    "PIEDE": "Piedecuesta",
+    "PIEDECUESTA": "Piedecuesta",
+    "BARRANQUILLA": "Barranquilla",
+    "BQUILLA": "Barranquilla",
+    "BUCARAMANGA": "Bucaramanga",
+    "CUCUTA": "Cúcuta",
+    "FLORIDABLANCA": "Floridablanca",
+    "FLOR": "Floridablanca",
+    "SAN_GIL": "San Gil",
+    "SANGIL": "San Gil",
+    "VALLEDUPAR": "Valledupar",
+    "VILLAVICENCIO": "Villavicencio",
+    "VILLAVO": "Villavicencio",
+    "BARRANCABERMEJA": "Barrancabermeja",
+}
+
+
+def agency_hint_from_tags(tag_names: list[str]) -> str | None:
+    """Best-effort sede from LIWA tags like RENOVACION_PIEDE_25062026 or AG_BARRANQUILLA."""
+    for raw in tag_names:
+        name = str(raw or "").strip().upper()
+        if not name:
+            continue
+        if name.startswith("AG_"):
+            key = name[3:].replace(" ", "_")
+            if key in _SEDE_HINTS:
+                return _SEDE_HINTS[key]
+            return key.replace("_", " ").title()
+        for key, label in _SEDE_HINTS.items():
+            if key in name:
+                return label
+    return None
+
+
+def is_handoff_tag(name: str) -> bool:
+    n = str(name or "").strip().upper()
+    return n.startswith("AG_") or n.startswith("RENOVACION_") or n.startswith("REACTIVACION_")
 
 
 liwa_whatsapp_service = LiwaWhatsAppService()
