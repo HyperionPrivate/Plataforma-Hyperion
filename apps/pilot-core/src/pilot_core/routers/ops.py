@@ -614,6 +614,8 @@ async def create_handoff(
 
         if not steps.get("persisted"):
             base_entry: dict[str, Any] = dict(existing_queued) if existing_queued else {}
+            raw_info = base_entry.get("info")
+            info_base: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
             entry: dict[str, Any] = {
                 **base_entry,
                 "id": hid,
@@ -633,19 +635,9 @@ async def create_handoff(
                 or "Creado desde laboratorio/API",
                 "liwa": liwa_meta,
                 "info": {
-                    **(base_entry.get("info") if isinstance(base_entry.get("info"), dict) else {}),
-                    "universidad": (
-                        (base_entry.get("info") or {}).get("universidad")
-                        if isinstance(base_entry.get("info"), dict)
-                        else "-"
-                    )
-                    or "-",
-                    "programa": (
-                        (base_entry.get("info") or {}).get("programa")
-                        if isinstance(base_entry.get("info"), dict)
-                        else "-"
-                    )
-                    or "-",
+                    **info_base,
+                    "universidad": info_base.get("universidad") or "-",
+                    "programa": info_base.get("programa") or "-",
                     "canal": "whatsapp" if body.phone else "voz",
                     "phone": body.phone or "",
                     "liwa_tag": liwa_meta.get("tag_name") or agency_tag,
@@ -994,7 +986,8 @@ async def whatsapp_send(
         # LIWA often returns HTTP 200 + success=true without message_id (AUD-016 →
         # accepted_pending). That is a real handoff, not a send failure.
         delivery = str(result.get("delivery") or "")
-        msg = result.get("message") if isinstance(result.get("message"), dict) else {}
+        raw_message = result.get("message")
+        msg: dict[str, Any] = raw_message if isinstance(raw_message, dict) else {}
         wa_status = str(msg.get("status") or delivery)
         if not result.get("ok") and wa_status not in {"accepted_pending", "queued_mock"}:
             detail = result.get("error") or "LIWA send failed"
@@ -1337,6 +1330,8 @@ async def conversation_liwa_status(
                 conversation_id=conversation_id,
                 phone=phone,
             )
+            existing_info = (existing_ho or {}).get("info") if existing_ho else None
+            ho_info: dict[str, Any] = existing_info if isinstance(existing_info, dict) else {}
             ho_payload = {
                 "id": (existing_ho or {}).get("id") or f"ho_{uuid4().hex[:10]}",
                 "name": first_name,
@@ -1351,11 +1346,7 @@ async def conversation_liwa_status(
                 "source": (existing_ho or {}).get("source") or "liwa_bridge_poll",
                 "aiSummary": snippet,
                 "info": {
-                    **(
-                        (existing_ho or {}).get("info")
-                        if isinstance((existing_ho or {}).get("info"), dict)
-                        else {}
-                    ),
+                    **ho_info,
                     "canal": "whatsapp",
                     "phone": phone,
                     "liwa_tag": handoff_tag or agency_hint,
@@ -1528,11 +1519,14 @@ async def post_conversation_message(
                 first_name=first_name,
             )
             liwa_meta = liwa_res
-            entry = (liwa_res or {}).get("message") or {}
+            raw_entry = (liwa_res or {}).get("message")
+            entry: dict[str, Any] = raw_entry if isinstance(raw_entry, dict) else {}
             if liwa_res.get("ok") and entry.get("status") in {"sent", "accepted_pending"}:
                 delivery = "liwa_whatsapp"
                 channel_acked = entry.get("status") == "sent"
-                msg["receipt_id"] = entry.get("receipt_id")
+                receipt = entry.get("receipt_id")
+                if receipt is not None:
+                    msg["receipt_id"] = str(receipt)
             else:
                 raise PlatformError(
                     "liwa_send_failed",

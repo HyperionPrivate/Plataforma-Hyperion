@@ -232,15 +232,15 @@ class CrmService:
                 continue
             if order.index(nxt) > target_idx:
                 break
-            tip = tipificacion if nxt == to_column else None
+            step_tip: str | None = tipificacion if nxt == to_column else None
             try:
-                lead = self.move(lead_id=str(lead["id"]), to_column=nxt, tipificacion=tip)
+                lead = self.move(lead_id=str(lead["id"]), to_column=nxt, tipificacion=step_tip)
                 cur_idx = order.index(nxt)
             except ValueError:
                 # Force if graph blocks (e.g. already no_interes)
                 lead["column_id"] = nxt
-                if tip:
-                    lead["tipificacion"] = tip
+                if step_tip:
+                    lead["tipificacion"] = step_tip
                 lead = ops_store.upsert_crm_lead(lead)
                 cur_idx = order.index(nxt)
         return lead
