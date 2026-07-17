@@ -19,6 +19,13 @@ RUN find apps packages services -type d -name dist -prune -exec rm -rf '{}' +
 ARG VITE_API_BASE_URL=http://localhost:8080
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
+# Per-product console builds. VITE_PRODUCT scopes the web console to a single
+# product (nova|pulso|lumen) or keeps the full shared console (all).
+ARG VITE_PRODUCT=all
+ENV VITE_PRODUCT=$VITE_PRODUCT
+ARG VITE_BRAND_LABEL=HYPERION
+ENV VITE_BRAND_LABEL=$VITE_BRAND_LABEL
+
 RUN pnpm install --frozen-lockfile
 RUN pnpm -r build
 
