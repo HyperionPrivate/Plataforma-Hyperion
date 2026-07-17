@@ -51,7 +51,8 @@ const liwaCatalog = {
     "csat",
     "opt_out",
     "tipificacion",
-    "message"
+    "message",
+    "bot_message"
   ] as const
 };
 
@@ -129,6 +130,11 @@ export async function registerLiwaRoutes(
       throw error;
     }
 
+    const flowLabel =
+      parsed.data.mode === "flow"
+        ? await resolveFlowSentLabel(dependencies.client, parsed.data.flow_id)
+        : undefined;
+
     await scope.db.transaction(async (tx) => {
       await upsertContactBinding(tx, {
         tenantId: scope.tenantId,
@@ -164,12 +170,7 @@ export async function registerLiwaRoutes(
         contact_ref: parsed.data.contact_ref,
         provider_ref: sendResult.providerRef || `accepted_pending:${messageId}`,
         mode: parsed.data.mode,
-        text:
-          parsed.data.mode === "text"
-            ? parsed.data.text
-            : parsed.data.flow_id
-              ? `Flujo LIWA enviado (${parsed.data.flow_id})`
-              : "Flujo LIWA enviado"
+        text: parsed.data.mode === "text" ? parsed.data.text : flowLabel
       });
       await insertLiwaOutboxEvent(tx, {
         eventId: randomUUID(),
@@ -318,6 +319,9 @@ export async function registerLiwaRoutes(
       throw error;
     }
 
+    const flowLabel =
+      payload.mode === "flow" ? await resolveFlowSentLabel(dependencies.client, payload.flow_id) : undefined;
+
     await context.db.transaction(async (tx) => {
       await upsertContactBinding(tx, {
         tenantId: parsed.tenant_id,
@@ -355,12 +359,7 @@ export async function registerLiwaRoutes(
           contact_ref: payload.contact_ref,
           provider_ref: sendResult.providerRef || `accepted_pending:${payload.message_id}`,
           mode: payload.mode,
-          text:
-            payload.mode === "text"
-              ? payload.text
-              : payload.flow_id
-                ? `Flujo LIWA enviado (${payload.flow_id})`
-                : "Flujo LIWA enviado"
+          text: payload.mode === "text" ? payload.text : flowLabel
         }),
         destination: novaDestination
       });
@@ -421,6 +420,30 @@ export async function registerLiwaRoutes(
       request.id
     );
   });
+}
+
+/** In-memory cache of LIWA flow id → name (refresh every 10 minutes). */
+const flowNameCache: { expiresAt: number; byId: Map<string, string> } = {
+  expiresAt: 0,
+  byId: new Map()
+};
+
+async function resolveFlowSentLabel(client: LiwaClient, flowId?: string): Promise<string> {
+  if (!flowId?.trim()) return "Flujo LIWA enviado";
+  const now = Date.now();
+  if (now >= flowNameCache.expiresAt) {
+    try {
+      const flows = await client.listFlows();
+      flowNameCache.byId = new Map(flows.map((f) => [f.id, f.name]));
+      flowNameCache.expiresAt = now + 10 * 60 * 1000;
+    } catch {
+      // keep previous cache on list failure
+      flowNameCache.expiresAt = now + 60 * 1000;
+    }
+  }
+  const name = flowNameCache.byId.get(flowId.trim());
+  if (name?.trim()) return `Flujo ${name.trim()} enviado`;
+  return `Flujo LIWA enviado (${flowId.trim()})`;
 }
 
 interface OutboundSendInput {
@@ -706,6 +729,31 @@ async function emitNormalizedWebhookEvent(
       }),
       destination: novaDestination
     });
+    return;
+  }
+
+  // Bot / outbound LIWA bubbles → mirror as wa.message.sent (nova inserts outbound).
+  if (kind === "bot_message") {
+    const botText = (parsed.text || parsed.motivo || parsed.name || "").trim();
+    if (botText) {
+      const messageId = randomUUID();
+      await insertLiwaOutboxEvent(db, {
+        eventId: randomUUID(),
+        eventType: "wa.message.sent",
+        tenantId,
+        correlationId,
+        businessIdempotencyKey: `wa-bot:${tenantId}:${externalId}`,
+        payload: waMessageSentPayloadSchema.parse({
+          message_id: messageId,
+          contact_id: contactId,
+          contact_ref: contactRef || undefined,
+          provider_ref: `liwa-bot:${externalId}`,
+          mode: "text",
+          text: botText.slice(0, 4000)
+        }),
+        destination: novaDestination
+      });
+    }
     return;
   }
 

@@ -91,6 +91,12 @@ export default function CrmPage() {
       toast.message("Lead ya en etapa final");
       return;
     }
+    if ((to === "renovado" || to === "no_interes") && !String(tip ?? "").trim()) {
+      toast.error("Tipificación requerida", {
+        description: "Selecciona una tipificación para cerrar el lead.",
+      });
+      return;
+    }
     const resolvedTip =
       tip ||
       (to === "renovado"
@@ -307,7 +313,7 @@ export default function CrmPage() {
 
             <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--border)] bg-[var(--bg)] p-5">
               <label className="text-xs text-[var(--muted)]" htmlFor="crm-tip">
-                Tipificación (opcional al avanzar)
+                Tipificación (requerida al cerrar en Renovado / No interés)
               </label>
               <select
                 id="crm-tip"

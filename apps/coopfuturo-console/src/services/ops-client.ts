@@ -1,7 +1,17 @@
 /** Mutations against pilot-core `/ops` (works alongside mock reads). */
-import { authHeaders, pilotCoreBaseUrl } from "@/lib/auth";
+import { authHeaders, pilotCoreBaseUrl, redirectToLogin } from "@/lib/auth";
 
 const base = pilotCoreBaseUrl();
+
+function assertOk(path: string, res: Response, text: string): void {
+  if (res.status === 401) {
+    redirectToLogin("expired");
+    throw new Error("Sesión expirada. Vuelve a iniciar sesión.");
+  }
+  if (!res.ok) {
+    throw new Error(`pilot-core ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
+}
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${base}${path}`, {
@@ -9,11 +19,9 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     headers: authHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`pilot-core ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  assertOk(path, res, text);
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 async function getJson<T>(path: string): Promise<T> {
@@ -21,11 +29,9 @@ async function getJson<T>(path: string): Promise<T> {
     method: "GET",
     headers: authHeaders({ Accept: "application/json" }),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`pilot-core ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  assertOk(path, res, text);
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 async function putJson<T>(path: string, body: unknown): Promise<T> {
@@ -34,11 +40,9 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
     headers: authHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`pilot-core ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  assertOk(path, res, text);
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 export type CreatedCampaign = {
@@ -145,6 +149,8 @@ export async function fetchWhatsAppPending(scope: "pending" | "review" = "pendin
 }
 
 export async function sendWhatsAppPending(input: {
+  id?: string;
+  review_id?: string;
   conversation_id?: string;
   phone?: string;
   flow_id?: string;
@@ -157,8 +163,13 @@ export async function sendWhatsAppPending(input: {
   }>("/ops/whatsapp/pending/send", input);
 }
 
-export async function skipWhatsAppPending(input: { conversation_id: string }) {
-  return postJson<{ ok: boolean; conversation_id: string; status: string }>(
+export async function skipWhatsAppPending(input: {
+  id?: string;
+  review_id?: string;
+  conversation_id?: string;
+  phone?: string;
+}) {
+  return postJson<{ ok: boolean; conversation_id?: string; status: string }>(
     "/ops/whatsapp/pending/skip",
     input,
   );

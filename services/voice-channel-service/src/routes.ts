@@ -51,6 +51,45 @@ function colombianGreeting(now: Date = new Date()): string {
 }
 
 /**
+ * Spoken-safe defaults so ElevenLabs never utters raw "{{universidad}}" etc.
+ * Empty/missing keys become neutral Spanish phrases the prompt treats as "sin dato".
+ */
+const SPOKEN_DEFAULTS: Record<string, string> = {
+  nombre: "Asociado",
+  documento: "",
+  agencia: "su sede",
+  universidad: "su universidad",
+  linea_credito: "su línea de crédito",
+  cuota: "",
+  saldo_total: "",
+  mora: "",
+  estado_cuenta: "",
+  fecha_prox_pago: "",
+  semestre: "",
+  plazo: "",
+  ciudad: "su ciudad"
+};
+
+function titleCaseName(raw: string): string {
+  const cleaned = String(raw ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!cleaned) return "Asociado";
+  // Prefer first given name(s); avoid shouting full legal names every turn.
+  const parts = cleaned.split(" ").slice(0, 2);
+  return parts
+    .map((p) => p.charAt(0).toLocaleUpperCase("es-CO") + p.slice(1).toLocaleLowerCase("es-CO"))
+    .join(" ");
+}
+
+function isGenericSpokenValue(value: string): boolean {
+  const v = value.trim().toLowerCase();
+  if (!v) return true;
+  if (/^\{\{[a-z0-9_]+\}\}$/i.test(v)) return true;
+  return /^(su |asociado|n\/a|na|null|undefined|desconocid)/i.test(v);
+}
+
+/**
  * Injects time-aware {{saludo}}, default {{disclosure_ai}} and
  * {{cupo_preaprobado_validado}}="no" when missing.
  * Callers may pass Excel Report fields: nombre, documento, phone_e164, agencia,
@@ -59,16 +98,29 @@ function colombianGreeting(now: Date = new Date()): string {
  * Only set cupo_preaprobado_validado to "si"/"true" when CRM/backend confirms it.
  */
 function withGreeting(dynamicVars?: Record<string, string>): Record<string, string> {
-  const vars = { ...(dynamicVars ?? {}) };
-  if (!vars.saludo || vars.saludo.trim() === "") {
-    vars.saludo = colombianGreeting();
+  const vars: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(dynamicVars ?? {})) {
+    const value = String(raw ?? "").trim();
+    if (!value || /^\{\{[a-z0-9_]+\}\}$/i.test(value)) continue;
+    vars[key] = value;
   }
-  if (!vars.disclosure_ai || vars.disclosure_ai.trim() === "") {
-    vars.disclosure_ai = "asistente de voz de Coopfuturo";
+  if (!vars.saludo) vars.saludo = colombianGreeting();
+  if (!vars.disclosure_ai) vars.disclosure_ai = "asistente de voz de Coopfuturo";
+  if (!vars.cupo_preaprobado_validado) vars.cupo_preaprobado_validado = "no";
+  if (vars.nombre) vars.nombre = titleCaseName(vars.nombre);
+  else vars.nombre = SPOKEN_DEFAULTS.nombre;
+  for (const [key, fallback] of Object.entries(SPOKEN_DEFAULTS)) {
+    if (key === "nombre") continue;
+    if (!vars[key] || isGenericSpokenValue(vars[key]!)) {
+      if (fallback) vars[key] = fallback;
+      else delete vars[key];
+    }
   }
-  if (!vars.cupo_preaprobado_validado || vars.cupo_preaprobado_validado.trim() === "") {
-    vars.cupo_preaprobado_validado = "no";
-  }
+  // Always present so prompt placeholders never leak as literal braces.
+  if (!vars.agencia) vars.agencia = SPOKEN_DEFAULTS.agencia;
+  if (!vars.universidad) vars.universidad = SPOKEN_DEFAULTS.universidad;
+  if (!vars.ciudad) vars.ciudad = SPOKEN_DEFAULTS.ciudad;
+  if (!vars.linea_credito) vars.linea_credito = SPOKEN_DEFAULTS.linea_credito;
   return vars;
 }
 

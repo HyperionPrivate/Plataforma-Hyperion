@@ -164,6 +164,11 @@ export class HttpDialerAdapter implements DialerAdapter {
       })
     });
     if (!response.ok) {
+      if (response.status === 429) {
+        throw new Error(
+          "Dialer rate limit (429): límite de llamadas demo por hora. Espera o sube DEMO_RATE_LIMIT_PER_HOUR_IP."
+        );
+      }
       throw new Error(`Dialer demo call failed with status ${response.status}`);
     }
     const body = (await response.json()) as Record<string, unknown>;

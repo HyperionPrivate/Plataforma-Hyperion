@@ -12,6 +12,7 @@ import {
   leadQualifiedPayloadSchema,
   coreOutcomeRecordedPayloadSchema,
   voiceCallCompletedPayloadSchema,
+  voiceCallDispatchedPayloadSchema,
   waMessageSentPayloadSchema,
   waMessageReceivedPayloadSchema,
   waSendRequestedPayloadSchema,
@@ -42,18 +43,34 @@ import { insertNovaOutboxEvent, listNovaOutboxDlq, redriveNovaOutboxDlq } from "
 import { canTransitionCrm, inferIntentFromPayload, stageFromPostCallIntent, type CrmStage } from "./post-call.js";
 import { resolveLiwaFlowId, resolveProductFlowForContact } from "./resolve-liwa-flow.js";
 
+const productLineSchema = z.enum(["renovacion", "reactivacion", "nuevos", "microcredito"]);
+
 const contactImportSchema = z.object({
   contacts: z
     .array(
       z.object({
         phone_e164: z.string().min(8).max(20),
         full_name: z.string().max(160).optional(),
-        agency_code: z.string().min(2).max(40).optional()
+        agency_code: z.string().min(2).max(40).optional(),
+        segment: z.string().max(80).optional(),
+        product_line: productLineSchema.optional()
       })
     )
     .min(1)
     .max(500)
 });
+
+function productLineFromSegment(raw?: string | null): "renovacion" | "reactivacion" | "nuevos" | "microcredito" {
+  const value = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "");
+  if (value.includes("react")) return "reactivacion";
+  if (value.includes("nuevo")) return "nuevos";
+  if (value.includes("micro")) return "microcredito";
+  return "renovacion";
+}
 
 const scoreSchema = z.object({
   segment: z.string().min(1).max(80).optional(),
@@ -88,8 +105,6 @@ const CRM_STAGES = [
 ] as const;
 
 const TERMINAL_CRM_STAGES = new Set<string>(["renovado", "no_interes", "won", "lost"]);
-
-const productLineSchema = z.enum(["renovacion", "reactivacion", "nuevos", "microcredito"]);
 
 const leadPatchSchema = z.object({
   stage: z.enum(CRM_STAGES).optional(),
@@ -241,7 +256,7 @@ export async function registerNovaRoutes(
 
     const result = await scope.db.query(
       `select contact_id, phone_e164, full_name, agency_code, segment, score, eligibility, opted_out,
-              propensity, urgency, wave, created_at, updated_at
+              propensity, urgency, wave, universidad, ciudad, created_at, updated_at
          from nova.contacts
         where tenant_id = $1
           and ($2::text is null or agency_code = $2)
@@ -313,14 +328,45 @@ export async function registerNovaRoutes(
         const created = !existing.rows[0];
 
         await tx.query(
-          `insert into nova.contacts (tenant_id, contact_id, phone_e164, full_name, agency_code, updated_at)
-           values ($1, $2, $3, $4, $5, now())
+          `insert into nova.contacts (tenant_id, contact_id, phone_e164, full_name, agency_code, segment, updated_at)
+           values ($1, $2, $3, $4, $5, $6, now())
            on conflict (tenant_id, phone_e164) do update
            set full_name = coalesce(excluded.full_name, nova.contacts.full_name),
                agency_code = coalesce(excluded.agency_code, nova.contacts.agency_code),
+               segment = coalesce(excluded.segment, nova.contacts.segment),
                updated_at = now()`,
-          [scope.tenantId, resolvedId, phone, row.full_name ?? null, row.agency_code ?? null]
+          [
+            scope.tenantId,
+            resolvedId,
+            phone,
+            row.full_name ?? null,
+            row.agency_code ?? null,
+            row.segment ?? null
+          ]
         );
+
+        const productLine = row.product_line ?? productLineFromSegment(row.segment);
+        const existingLead = await tx.query<{ leadId: string; stage: string }>(
+          `select lead_id as "leadId", stage from nova.leads
+            where tenant_id = $1 and contact_id = $2 and product_line = $3
+            order by updated_at desc limit 1`,
+          [scope.tenantId, resolvedId, productLine]
+        );
+        if (existingLead.rowCount === 0) {
+          await tx.query(
+            `insert into nova.leads (tenant_id, lead_id, contact_id, stage, product_line, agency_code)
+             values ($1, $2, $3, 'pendiente', $4, $5)`,
+            [scope.tenantId, randomUUID(), resolvedId, productLine, row.agency_code ?? null]
+          );
+        } else if (existingLead.rows[0]!.stage === "pendiente") {
+          await tx.query(
+            `update nova.leads
+                set agency_code = coalesce($3, agency_code),
+                    updated_at = now()
+              where tenant_id = $1 and lead_id = $2`,
+            [scope.tenantId, existingLead.rows[0]!.leadId, row.agency_code ?? null]
+          );
+        }
 
         const payload = contactImportedPayloadSchema.parse({
           contact_id: resolvedId,
@@ -741,8 +787,20 @@ export async function registerNovaRoutes(
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
 
     const result = await scope.db.query(
-      `select campaign_id, name, channel, product_flow, status, created_at, updated_at
-       from nova.campaigns where tenant_id = $1 order by created_at desc`,
+      `select c.campaign_id, c.name, c.channel, c.product_flow, c.status, c.created_at, c.updated_at,
+              coalesce(e.total, 0)::int as total,
+              coalesce(e.reached, 0)::int as reached,
+              coalesce(e.converted, 0)::int as converted
+         from nova.campaigns c
+         left join lateral (
+           select count(*)::int as total,
+                  count(*) filter (where status in ('reached', 'converted', 'attempted'))::int as reached,
+                  count(*) filter (where status = 'converted')::int as converted
+             from nova.campaign_enrollments
+            where tenant_id = c.tenant_id and campaign_id = c.campaign_id
+         ) e on true
+        where c.tenant_id = $1
+        order by c.created_at desc`,
       [scope.tenantId]
     );
     return envelope(result.rows, request.id);
@@ -1091,6 +1149,27 @@ export async function registerNovaRoutes(
       { conversation_id: conversationId, status: "claimed", operator_id: parsed.data.operator_id },
       request.id
     );
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/conversations/:id/release", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const conversationId = readUuid(request.params, "id");
+    if (!conversationId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+    const result = await scope.db.query(
+      `update nova.conversations
+          set status = 'open', claimed_by = null, updated_at = now()
+        where tenant_id = $1 and conversation_id = $2 and status = 'claimed'
+        returning conversation_id`,
+      [scope.tenantId, conversationId]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(409).send(envelope({ error: "Conversation not claimed or not found" }, request.id));
+    }
+    return envelope({ conversation_id: conversationId, status: "open", released: true }, request.id);
   });
 
   app.post("/v1/tenants/:tenantId/nova/conversations/:id/reply", async (request, reply) => {
@@ -1442,6 +1521,65 @@ export async function registerNovaRoutes(
     return envelope(result.rows, request.id);
   });
 
+  /** Create a pending WhatsApp review (Lab / revisión post-llamada demo). */
+  app.post("/v1/tenants/:tenantId/nova/reviews", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const parsed = z
+      .object({
+        phone_e164: z.string().min(8).max(20).optional(),
+        contact_id: z.string().uuid().optional(),
+        full_name: z.string().max(160).optional(),
+        intent: z.string().max(80).optional(),
+        flow_id: z.string().max(80).optional()
+      })
+      .safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "phone_e164 or contact_id required" }, request.id));
+    }
+
+    let contactId = parsed.data.contact_id;
+    if (!contactId) {
+      const phone = normalizeE164(parsed.data.phone_e164 ?? "");
+      if (!phone) {
+        return reply.code(400).send(envelope({ error: "phone_e164 or contact_id required" }, request.id));
+      }
+      contactId = await ensureContactFromRef(scope.db, scope.tenantId, undefined, phone, undefined);
+      if (!contactId) {
+        return reply.code(400).send(envelope({ error: "Unable to resolve contact" }, request.id));
+      }
+      if (parsed.data.full_name) {
+        await scope.db.query(
+          `update nova.contacts set full_name = coalesce($3, full_name), updated_at = now()
+            where tenant_id = $1 and contact_id = $2`,
+          [scope.tenantId, contactId, parsed.data.full_name]
+        );
+      }
+    }
+
+    const reviewId = randomUUID();
+    const flowId = parsed.data.flow_id ?? (await resolveLiwaFlowId(scope.db, scope.tenantId, "renovacion"));
+    await scope.db.query(
+      `insert into nova.whatsapp_reviews (tenant_id, review_id, contact_id, status, intent, flow_id)
+       values ($1, $2, $3, 'pending_review', $4, $5)`,
+      [scope.tenantId, reviewId, contactId, parsed.data.intent ?? "interesado", flowId]
+    );
+    return reply.code(201).send(
+      envelope(
+        {
+          review_id: reviewId,
+          contact_id: contactId,
+          status: "pending_review",
+          intent: parsed.data.intent ?? "interesado",
+          flow_id: flowId
+        },
+        request.id
+      )
+    );
+  });
+
   app.post("/v1/tenants/:tenantId/nova/reviews/:reviewId/decide", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
@@ -1633,6 +1771,12 @@ async function processInboundEvent(
   payload: Record<string, unknown>,
   serviceUrls: ReturnType<typeof readServiceUrls>
 ): Promise<void> {
+  if (eventType === "voice.call.dispatched") {
+    voiceCallDispatchedPayloadSchema.parse(payload);
+    await bumpAnalytics(db, tenantId, { calls_requested: 1 });
+    return;
+  }
+
   if (eventType === "voice.call.completed") {
     const parsed = voiceCallCompletedPayloadSchema.parse(payload);
     const intent = inferIntentFromPayload({
@@ -1685,6 +1829,18 @@ async function processInboundEvent(
       // Default ON: tipify positivo → disparar flujo LIWA (Renovaciones) sin gate de revisión.
       // Ops puede forzar revisión con POST_CALL_WHATSAPP_AUTO_SEND=false.
       const autoSend = (process.env.POST_CALL_WHATSAPP_AUTO_SEND ?? "true").toLowerCase() !== "false";
+
+      // Anti-duplicado: tipificación manual o completed re-emitido no debe reenviar WA.
+      const existingReview = await db.query(
+        `select 1 from nova.whatsapp_reviews
+          where tenant_id = $1 and call_id = $2
+          limit 1`,
+        [tenantId, parsed.call_id]
+      );
+      if ((existingReview.rowCount ?? 0) > 0) {
+        return;
+      }
+
       const reviewId = randomUUID();
       const productFlow = await resolveProductFlowForContact(db, tenantId, parsed.contact_id);
       const flowId = await resolveLiwaFlowId(db, tenantId, productFlow);

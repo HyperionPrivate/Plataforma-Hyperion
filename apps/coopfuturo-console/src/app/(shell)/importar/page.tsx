@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { ChartCard } from "@/components/data/chart-card";
 import { StatCard } from "@/components/data/stat-card";
 import { importContacts } from "@/services/ops-client";
-import { Upload } from "lucide-react";
+import { FileSpreadsheet, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 const FIELD_OPTIONS = [
@@ -78,10 +78,10 @@ export default function ImportarContactosPage() {
     });
   }, [rawRows, mapping]);
 
-  async function onFile(file: File | null) {
+  async function onCsvFile(file: File | null) {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".csv") && file.type !== "text/csv") {
-      toast.error("Por ahora solo CSV", { description: "XLSX queda para una próxima iteración" });
+      toast.error("Archivo no válido", { description: "Usa la zona CSV para archivos .csv" });
       return;
     }
     const text = await file.text();
@@ -93,6 +93,13 @@ export default function ImportarContactosPage() {
     setLastPreview(null);
     setPreviewRows([]);
     toast.message("Archivo cargado", { description: `${rows.length} filas` });
+  }
+
+  function onExcelFile(file: File | null) {
+    if (!file) return;
+    toast.message("Excel próximamente", {
+      description: "La carga .xlsx estará disponible en una próxima iteración. Por ahora usa CSV.",
+    });
   }
 
   async function runImport(commit: boolean) {
@@ -114,7 +121,7 @@ export default function ImportarContactosPage() {
       }
       toast.success(commit ? "Contactos importados" : "Preview listo", {
         description: commit
-          ? `committed=${res.committed ?? 0} · ve a Segmentación`
+          ? `committed=${res.committed ?? 0} · ve a CRM`
           : `valid=${res.valid ?? 0} invalid=${res.invalid ?? 0}`,
       });
     } catch (err) {
@@ -139,28 +146,33 @@ export default function ImportarContactosPage() {
     <div>
       <PageHeader
         title="Importar contactos"
-        subtitle="CSV → mapeo → preview → commit. Eso es lo que alimenta Segmentación."
+        subtitle="Sube un archivo de prueba (CSV hoy · Excel pronto), mapea columnas y crea contactos en CRM."
         actions={
-          <Button asChild variant="outline">
-            <Link href="/segmentacion">Ver Segmentación</Link>
-          </Button>
+          <div className="flex gap-2">
+            <Button asChild variant="outline">
+              <Link href="/crm">Ver CRM</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/segmentacion">Ver Segmentación</Link>
+            </Button>
+          </div>
         }
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard title="Archivo">
+        <ChartCard title="Cargar CSV">
           <div className="space-y-3 p-1">
             <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg)] px-6 py-10 text-center hover:border-[var(--accent)]/40">
               <Upload className="size-8 text-[var(--accent)]" strokeWidth={1.5} />
               <span className="text-sm font-medium">Arrastra o selecciona CSV</span>
               <span className="text-xs text-[var(--muted)]">
-                Solo CSV por ahora · teléfono en E.164 (+57…)
+                Teléfono en E.164 (+57…) · listo para importar
               </span>
               <input
                 type="file"
                 accept=".csv,text/csv"
                 className="hidden"
-                onChange={(e) => onFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => onCsvFile(e.target.files?.[0] ?? null)}
               />
             </label>
             {fileName ? (
@@ -172,10 +184,37 @@ export default function ImportarContactosPage() {
           </div>
         </ChartCard>
 
-        <ChartCard title="Mapeo de campos">
+        <ChartCard title="Cargar Excel (.xlsx)">
+          <div className="space-y-3 p-1">
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg)] px-6 py-10 text-center hover:border-[var(--accent)]/40">
+              <FileSpreadsheet className="size-8 text-[var(--accent)]" strokeWidth={1.5} />
+              <span className="text-sm font-medium">Arrastra o selecciona Excel</span>
+              <span className="text-xs text-[var(--muted)]">
+                .xlsx · disponible en una próxima iteración
+              </span>
+              <Badge tone="muted">Próximamente</Badge>
+              <input
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="hidden"
+                onChange={(e) => {
+                  onExcelFile(e.target.files?.[0] ?? null);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <p className="text-xs text-[var(--muted)]">
+              La zona ya está lista para pruebas con Excel; por ahora el import operativo usa CSV.
+            </p>
+          </div>
+        </ChartCard>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <ChartCard title="Mapeo de campos" className="lg:col-span-2">
           <div className="space-y-2 p-1">
             {!headers.length ? (
-              <p className="text-sm text-[var(--muted)]">Carga un archivo para mapear columnas.</p>
+              <p className="text-sm text-[var(--muted)]">Carga un CSV para mapear columnas.</p>
             ) : (
               headers.map((h) => (
                 <label key={h} className="flex items-center justify-between gap-3 text-sm">

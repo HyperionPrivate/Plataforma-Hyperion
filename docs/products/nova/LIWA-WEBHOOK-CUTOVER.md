@@ -69,11 +69,12 @@ Clon de chat en NOVA Conversaciones:
 | `document_received`                                | CRM documento + burbuja inbound (kind=document) |
 | `handoff_requested`                                | Handoff cola + burbuja system                   |
 | **`message` (+ `text`) — obligatorio para espejo** | Burbuja Asociado (texto libre)                  |
-| `bot_message` (opcional)                           | Burbuja Bot WhatsApp                            |
+| **`bot_message` (+ `text`) — clon exacto del bot** | Burbuja Bot (texto de la plantilla/burbuja)     |
 | Reply asesor                                       | Burbuja outbound + `send/text` LIWA             |
 
 Sin nodo External API `event=message` en el paso donde el usuario escribe, Conversaciones **no** ve el chat aunque WhatsApp funcione.  
-Cutover Contabo ordenado: [CONTABO_CHAT_ESPEJO_CUTOVER.md](CONTABO_CHAT_ESPEJO_CUTOVER.md).
+Sin `bot_message` tras cada burbuja del bot, Conversaciones solo ve el placeholder del flow y los replies humanos (LIWA **no** expone historial por API — sonda 2026-07-17).  
+Cutover Contabo ordenado + guía de nodos: [CONTABO_CHAT_ESPEJO_CUTOVER.md](CONTABO_CHAT_ESPEJO_CUTOVER.md).
 
 ```json
 {
@@ -81,6 +82,15 @@ Cutover Contabo ordenado: [CONTABO_CHAT_ESPEJO_CUTOVER.md](CONTABO_CHAT_ESPEJO_C
   "phone": "+573004198710",
   "text": "Quiero renovar mi crédito",
   "external_id": "chat-1"
+}
+```
+
+```json
+{
+  "event": "bot_message",
+  "phone": "+573004198710",
+  "text": "Hola, soy el asistente de CoopFuturo. ¿En qué te ayudo?",
+  "external_id": "renov-bot-1"
 }
 ```
 

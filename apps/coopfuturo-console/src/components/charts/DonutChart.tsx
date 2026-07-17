@@ -55,17 +55,17 @@ export function DonutChart({
           <span className="text-[10px] text-[var(--muted)]">{centerLabel}</span>
         </div>
       </div>
-      <ul className="flex flex-1 flex-col gap-1.5 text-xs">
+      <ul className="flex min-w-0 flex-1 flex-col gap-1.5 pr-1 text-xs">
         {slices.map((s) => (
-          <li key={s.key} className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-2 text-[var(--muted)]">
+          <li key={s.key} className="flex min-w-0 items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-2 text-[var(--muted)]">
               <span
-                className="size-2 rounded-full"
+                className="size-2 shrink-0 rounded-full"
                 style={{ background: COLORS[s.color] || COLORS.muted }}
               />
-              {s.label}
+              <span className="truncate">{s.label}</span>
             </span>
-            <span className="tabular text-[var(--text)]">
+            <span className="shrink-0 whitespace-nowrap tabular text-[var(--text)]">
               {formatNumber(s.count)} · {s.pct}%
             </span>
           </li>

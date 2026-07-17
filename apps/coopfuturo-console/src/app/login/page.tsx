@@ -2,7 +2,7 @@
 
 import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { setAccessToken } from "@/lib/auth";
+import { pilotCoreBaseUrl, setAccessToken } from "@/lib/auth";
 
 function oidcAuthorizeUrl(nextPath: string): string | null {
   const base = (process.env.NEXT_PUBLIC_OIDC_AUTHORIZE_URL || "").trim();
@@ -32,9 +32,13 @@ function oidcAuthorizeUrl(nextPath: string): string | null {
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const next = params.get("next") || "/dashboard";
+  const reason = params.get("reason");
   const authorizeUrl = useMemo(() => oidcAuthorizeUrl(next), [next]);
 
   // AUD2-005: accept implicit/token redirect fragment from IdP when configured.
@@ -49,11 +53,47 @@ function LoginForm() {
     router.replace(state.startsWith("/") ? state : "/dashboard");
   }, [params, next, router]);
 
-  function onSubmit(e: FormEvent) {
+  async function onPasswordLogin(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
+      setError("Correo y contraseña son obligatorios.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`${pilotCoreBaseUrl()}/auth/login`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trimmedEmail, password }),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        token?: string;
+        expiresAt?: string;
+        error?: string;
+        data?: { token?: string; expiresAt?: string };
+      };
+      const access = body.token ?? body.data?.token;
+      const expiresAt = body.expiresAt ?? body.data?.expiresAt;
+      if (!res.ok || !access) {
+        setError(body.error || "Credenciales inválidas");
+        return;
+      }
+      setAccessToken(access, expiresAt);
+      router.replace(next.startsWith("/") ? next : "/dashboard");
+    } catch {
+      setError("No se pudo iniciar sesión. Revisa la conexión.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function onTokenSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = token.trim();
     if (!trimmed) {
-      setError("Pega un access token JWT (Bearer) emitido por tu IdP.");
+      setError("Pega un access token emitido por Hyperion (/v1/auth/login).");
       return;
     }
     setAccessToken(trimmed);
@@ -61,18 +101,17 @@ function LoginForm() {
   }
 
   return (
-    <form
-      onSubmit={onSubmit}
-      className="w-full max-w-lg space-y-6 border border-[var(--border)] bg-[var(--surface)] p-8"
-    >
+    <div className="w-full max-w-lg space-y-6 border border-[var(--border)] bg-[var(--surface)] p-8">
       <div className="space-y-2">
         <p className="text-xs tracking-[0.25em] text-[var(--muted)]">PULSO</p>
         <h1 className="text-2xl font-semibold">Acceso autenticado</h1>
         <p className="text-sm text-[var(--muted)]">
-          Preferido: iniciar sesión con el IdP (OIDC). Alternativa de laboratorio: pegar un access
-          token RS256. La UI lo envía como Bearer hacia{" "}
-          <code className="text-[var(--text)]">/pilot-core</code>.
+          Inicia sesión con tu usuario Hyperion. Si la sesión caduca, Lab e import CSV responden 401
+          hasta que vuelvas a entrar.
         </p>
+        {reason === "expired" ? (
+          <p className="text-sm text-amber-300">Tu sesión expiró. Vuelve a iniciar sesión.</p>
+        ) : null}
       </div>
 
       {authorizeUrl ? (
@@ -82,32 +121,58 @@ function LoginForm() {
         >
           Continuar con IdP
         </a>
-      ) : (
-        <p className="text-xs text-[var(--muted)]">
-          Configura <code>NEXT_PUBLIC_OIDC_AUTHORIZE_URL</code> para el redirect OIDC. Mientras
-          tanto puedes pegar un JWT de prueba.
-        </p>
-      )}
+      ) : null}
 
-      <label className="block space-y-2 text-sm">
-        <span className="text-[var(--muted)]">Access token (laboratorio)</span>
-        <textarea
-          className="min-h-32 w-full border border-[var(--border)] bg-[var(--bg)] p-3 font-mono text-xs"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </label>
-      {error ? <p className="text-sm text-red-400">{error}</p> : null}
-      <button
-        type="submit"
-        className="w-full border border-[var(--border)] px-4 py-3 text-sm font-medium"
-      >
-        Continuar con token
-      </button>
-    </form>
+      <form onSubmit={onPasswordLogin} className="space-y-4">
+        <label className="block space-y-2 text-sm">
+          <span className="text-[var(--muted)]">Correo</span>
+          <input
+            type="email"
+            className="w-full border border-[var(--border)] bg-[var(--bg)] p-3 text-sm"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            required
+          />
+        </label>
+        <label className="block space-y-2 text-sm">
+          <span className="text-[var(--muted)]">Contraseña</span>
+          <input
+            type="password"
+            className="w-full border border-[var(--border)] bg-[var(--bg)] p-3 text-sm"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+          />
+        </label>
+        {error ? <p className="text-sm text-red-400">{error}</p> : null}
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full bg-[var(--accent)] px-4 py-3 text-sm font-medium text-black disabled:opacity-60"
+        >
+          {busy ? "Entrando…" : "Entrar"}
+        </button>
+      </form>
+
+      <details className="space-y-3 text-sm">
+        <summary className="cursor-pointer text-[var(--muted)]">Pegar token manual (avanzado)</summary>
+        <form onSubmit={onTokenSubmit} className="space-y-3 pt-2">
+          <textarea
+            className="min-h-24 w-full border border-[var(--border)] bg-[var(--bg)] p-3 font-mono text-xs"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="token de POST /v1/auth/login"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button type="submit" className="w-full border border-[var(--border)] px-4 py-3 text-sm font-medium">
+            Continuar con token
+          </button>
+        </form>
+      </details>
+    </div>
   );
 }
 
