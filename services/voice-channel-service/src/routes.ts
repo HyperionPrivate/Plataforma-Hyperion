@@ -30,6 +30,48 @@ const callCreateSchema = z.object({
   dynamic_vars: z.record(z.string()).optional()
 });
 
+/** Time-of-day greeting in Colombia (America/Bogota) so the agent never says "buenos días" at night. */
+function colombianGreeting(now: Date = new Date()): string {
+  let hour: number;
+  try {
+    hour = Number(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Bogota",
+        hour: "2-digit",
+        hourCycle: "h23"
+      }).format(now)
+    );
+  } catch {
+    hour = (now.getUTCHours() + 24 - 5) % 24;
+  }
+  if (Number.isNaN(hour)) hour = 12;
+  if (hour >= 5 && hour < 12) return "Buenos días";
+  if (hour >= 12 && hour < 19) return "Buenas tardes";
+  return "Buenas noches";
+}
+
+/**
+ * Injects time-aware {{saludo}}, default {{disclosure_ai}} and
+ * {{cupo_preaprobado_validado}}="no" when missing.
+ * Callers may pass Excel Report fields: nombre, documento, phone_e164, agencia,
+ * universidad, linea_credito, cuota, saldo_total, mora, estado_cuenta,
+ * fecha_prox_pago, semestre, plazo, ciudad.
+ * Only set cupo_preaprobado_validado to "si"/"true" when CRM/backend confirms it.
+ */
+function withGreeting(dynamicVars?: Record<string, string>): Record<string, string> {
+  const vars = { ...(dynamicVars ?? {}) };
+  if (!vars.saludo || vars.saludo.trim() === "") {
+    vars.saludo = colombianGreeting();
+  }
+  if (!vars.disclosure_ai || vars.disclosure_ai.trim() === "") {
+    vars.disclosure_ai = "asistente de voz de Coopfuturo";
+  }
+  if (!vars.cupo_preaprobado_validado || vars.cupo_preaprobado_validado.trim() === "") {
+    vars.cupo_preaprobado_validado = "no";
+  }
+  return vars;
+}
+
 const campaignCreateSchema = z.object({
   name: z.string().min(2).max(160),
   agent_id: z.string().min(1).max(160).optional(),
@@ -83,7 +125,7 @@ export async function registerVoiceRoutes(
     try {
       const placed = await dependencies.dialer.placeCall({
         phoneE164: parsed.data.phone_e164,
-        dynamicVars: parsed.data.dynamic_vars,
+        dynamicVars: withGreeting(parsed.data.dynamic_vars),
         idempotencyKey: `manual:${scope.tenantId}:${callId}`
       });
 
@@ -374,6 +416,7 @@ export async function registerVoiceRoutes(
     try {
       const placed = await dependencies.dialer.placeCall({
         phoneE164: callPayload.phone_e164,
+        dynamicVars: withGreeting(),
         idempotencyKey: `requested:${tenantId}:${callPayload.call_id}`
       });
 
