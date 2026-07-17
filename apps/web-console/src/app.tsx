@@ -59,15 +59,24 @@ function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout:
     (async () => {
       try {
         const tenants = await api.get<TenantRow[]>("/v1/tenants");
-        const cedco = tenants.find((row) => row.slug === "cedco") ?? tenants[0];
-        if (!cedco) {
+        // Prefer Coopfuturo (NOVA/LIWA) when present; otherwise CEDCO / first available.
+        const selected =
+          tenants.find((row) => row.slug === "coopfuturo") ??
+          tenants.find((row) => row.slug === "cedco") ??
+          tenants[0];
+        if (!selected) {
           setError("No hay tenants disponibles para este operador.");
           setReady(true);
           return;
         }
 
-        const info: TenantInfo = { id: cedco.id, slug: cedco.slug, displayName: cedco.display_name };
-        const siteList = await api.get<PulsoIrisSite[]>(tenantPath(cedco.id, "config/sites"));
+        const info: TenantInfo = { id: selected.id, slug: selected.slug, displayName: selected.display_name };
+        let siteList: PulsoIrisSite[] = [];
+        try {
+          siteList = await api.get<PulsoIrisSite[]>(tenantPath(selected.id, "config/sites"));
+        } catch {
+          siteList = [];
+        }
 
         if (!cancelled) {
           setTenant(info);

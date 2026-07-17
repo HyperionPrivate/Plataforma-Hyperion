@@ -224,6 +224,18 @@ export function NovaPage() {
     await refresh();
   }
 
+  async function fetchConversationMessages(conversationId: string) {
+    return api.get<
+      Array<{
+        message_id: string;
+        direction: "inbound" | "outbound";
+        body: string;
+        kind: string;
+        created_at?: string;
+      }>
+    >(novaPath(tenant.id, `conversations/${conversationId}/messages`));
+  }
+
   async function decideReview(reviewId: string, decision: "approve" | "skip") {
     if (!canWriteOps) return;
     await api.post(novaPath(tenant.id, `reviews/${reviewId}/decide`), {
@@ -336,6 +348,7 @@ export function NovaPage() {
             onClaim={claimConversation}
             onReply={replyConversation}
             onChannelStatus={fetchChannelStatus}
+            onLoadMessages={fetchConversationMessages}
           />
         ) : null}
 

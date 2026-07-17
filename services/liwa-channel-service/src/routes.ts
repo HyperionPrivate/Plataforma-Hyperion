@@ -7,6 +7,7 @@ import {
   tenantIdSchema,
   waSendRequestedPayloadSchema,
   waMessageSentPayloadSchema,
+  waMessageReceivedPayloadSchema,
   handoffRequestedPayloadSchema,
   documentReceivedPayloadSchema,
   prequalCompletedPayloadSchema,
@@ -49,7 +50,8 @@ const liwaCatalog = {
     "handoff_requested",
     "csat",
     "opt_out",
-    "tipificacion"
+    "tipificacion",
+    "message"
   ] as const
 };
 
@@ -161,7 +163,13 @@ export async function registerLiwaRoutes(
         contact_id: parsed.data.contact_id,
         contact_ref: parsed.data.contact_ref,
         provider_ref: sendResult.providerRef || `accepted_pending:${messageId}`,
-        mode: parsed.data.mode
+        mode: parsed.data.mode,
+        text:
+          parsed.data.mode === "text"
+            ? parsed.data.text
+            : parsed.data.flow_id
+              ? `Flujo LIWA enviado (${parsed.data.flow_id})`
+              : "Flujo LIWA enviado"
       });
       await insertLiwaOutboxEvent(tx, {
         eventId: randomUUID(),
@@ -346,7 +354,13 @@ export async function registerLiwaRoutes(
           contact_id: payload.contact_id,
           contact_ref: payload.contact_ref,
           provider_ref: sendResult.providerRef || `accepted_pending:${payload.message_id}`,
-          mode: payload.mode
+          mode: payload.mode,
+          text:
+            payload.mode === "text"
+              ? payload.text
+              : payload.flow_id
+                ? `Flujo LIWA enviado (${payload.flow_id})`
+                : "Flujo LIWA enviado"
         }),
         destination: novaDestination
       });
@@ -569,6 +583,21 @@ async function emitNormalizedWebhookEvent(
       }),
       destination: novaDestination
     });
+    await emitWaMessageReceived(db, {
+      tenantId,
+      correlationId,
+      contactId,
+      contactRef,
+      externalId: `chat-doc:${externalId}`,
+      text: parsed.filename
+        ? `Documento recibido: ${parsed.filename}`
+        : parsed.documentUrl
+          ? `Documento recibido: ${parsed.documentUrl}`
+          : "Documento recibido",
+      kind: "document",
+      agencyCode: parsed.agencyCode,
+      novaDestination
+    });
     return;
   }
 
@@ -609,6 +638,17 @@ async function emitNormalizedWebhookEvent(
         reason: parsed.motivo
       }),
       destination: novaDestination
+    });
+    await emitWaMessageReceived(db, {
+      tenantId,
+      correlationId,
+      contactId,
+      contactRef,
+      externalId: `chat-handoff:${externalId}`,
+      text: parsed.motivo ? `Handoff: ${parsed.motivo}` : "Handoff solicitado",
+      kind: "system",
+      agencyCode: parsed.agencyCode,
+      novaDestination
     });
     return;
   }
@@ -666,7 +706,63 @@ async function emitNormalizedWebhookEvent(
       }),
       destination: novaDestination
     });
+    return;
   }
+
+  // Free-text chat clone (event=message) or unknown payloads that still carry user text.
+  const chatText =
+    kind === "message"
+      ? parsed.text || parsed.motivo || parsed.name
+      : kind === "unknown"
+        ? parsed.text
+        : undefined;
+  if (chatText) {
+    await emitWaMessageReceived(db, {
+      tenantId,
+      correlationId,
+      contactId,
+      contactRef,
+      externalId: `chat:${externalId}`,
+      text: chatText,
+      kind: "text",
+      agencyCode: parsed.agencyCode,
+      novaDestination
+    });
+  }
+}
+
+async function emitWaMessageReceived(
+  db: DatabaseClient,
+  input: {
+    tenantId: string;
+    correlationId: string;
+    contactId?: string;
+    contactRef: string;
+    externalId: string;
+    text: string;
+    kind: "text" | "document" | "system";
+    agencyCode?: string;
+    novaDestination: string;
+  }
+): Promise<void> {
+  const messageId = randomUUID();
+  await insertLiwaOutboxEvent(db, {
+    eventId: randomUUID(),
+    eventType: "wa.message.received",
+    tenantId: input.tenantId,
+    correlationId: input.correlationId,
+    businessIdempotencyKey: `wa-in:${input.tenantId}:${input.externalId}`,
+    payload: waMessageReceivedPayloadSchema.parse({
+      message_id: messageId,
+      contact_id: input.contactId,
+      contact_ref: input.contactRef || undefined,
+      text: input.text.slice(0, 4000),
+      external_id: input.externalId,
+      kind: input.kind,
+      agency_code: input.agencyCode
+    }),
+    destination: input.novaDestination
+  });
 }
 
 function requireTenantDb(

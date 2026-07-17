@@ -1,12 +1,11 @@
 # Post-llamada → WhatsApp (NOVA / version limpia)
 
-Qué incluye esta entrega (sin clon inbound del chat LIWA):
+Qué incluye esta entrega:
 
 1. **Auto-send tras tipify positivo** — al completar la llamada con intención CONTINUE (`interesado`, `pedir_whatsapp`, renovar, etc.), nova-core encola `wa.send.requested` y liwa-channel dispara el flujo LIWA (`POST /contacts/{id}/send/{flow_id}`).
 2. **Conversaciones Ops** — tras `wa.message.sent`, se abre/actualiza un hilo en `nova.conversations` para que el asesor pueda responder.
-3. **Reply asesor** — `POST .../nova/conversations/:id/reply` → `send/text` LIWA (ventana 24h WhatsApp).
-
-Fuera de alcance aquí: espejo de burbujas inbound (webhook `message` / clon completo). Ver `LIWA-WEBHOOK-CUTOVER.md`.
+3. **Reply asesor** — `POST .../nova/conversations/:id/reply` → `send/text` LIWA (ventana 24h WhatsApp) + burbuja outbound en `nova.conversation_messages`.
+4. **Clon inbound (webhook)** — LIWA → `POST /v1/liwa/webhooks` emite `wa.message.received` (texto libre, documento, handoff) → burbujas en Conversaciones. Ver `LIWA-WEBHOOK-CUTOVER.md`.
 
 ## Flujo
 
@@ -16,7 +15,9 @@ voice.call.completed (poller o webhook EL)
   → si wantsWhatsapp y POST_CALL_WHATSAPP_AUTO_SEND≠false
       → outbox wa.send.requested (mode=flow, flow_id resuelto)
       → liwa: ensureContact + tags + sendFlow
-      → wa.message.sent → abre Conversaciones
+      → wa.message.sent → abre Conversaciones (+ burbuja outbound)
+  → LIWA webhook (document/handoff/message)
+      → wa.message.received → burbuja inbound
   → asesor: Conversaciones → reply → send/text
 ```
 

@@ -13,16 +13,26 @@ export interface ChannelStatus {
   note?: string;
 }
 
+export interface ConversationMessage {
+  message_id: string;
+  direction: "inbound" | "outbound";
+  body: string;
+  kind: string;
+  created_at?: string;
+}
+
 export function NovaConversationsTab({
   conversations,
   onClaim,
   onReply,
-  onChannelStatus
+  onChannelStatus,
+  onLoadMessages
 }: {
   conversations: ConversationRow[];
   onClaim: (conversationId: string) => Promise<void>;
   onReply: (conversationId: string, text: string) => Promise<void>;
   onChannelStatus?: (conversationId: string) => Promise<ChannelStatus>;
+  onLoadMessages?: (conversationId: string) => Promise<ConversationMessage[]>;
 }) {
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraft] = useState("");
@@ -30,6 +40,8 @@ export function NovaConversationsTab({
   const [channel, setChannel] = useState<"all" | string>("all");
   const [busy, setBusy] = useState(false);
   const [channelStatus, setChannelStatus] = useState<ChannelStatus | null>(null);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
 
   const filtered = useMemo(() => {
     return conversations.filter((row) => {
@@ -60,6 +72,28 @@ export function NovaConversationsTab({
     };
   }, [onChannelStatus, selected?.conversation_id]);
 
+  useEffect(() => {
+    if (!selected || !onLoadMessages) {
+      setMessages([]);
+      return;
+    }
+    let cancelled = false;
+    setMessagesLoading(true);
+    void onLoadMessages(selected.conversation_id)
+      .then((rows) => {
+        if (!cancelled) setMessages(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setMessages([]);
+      })
+      .finally(() => {
+        if (!cancelled) setMessagesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onLoadMessages, selected?.conversation_id, selected?.last_message_at]);
+
   async function claim() {
     if (!selected) return;
     setBusy(true);
@@ -77,6 +111,10 @@ export function NovaConversationsTab({
     try {
       await onReply(selected.conversation_id, draft.trim());
       setDraft("");
+      if (onLoadMessages) {
+        const rows = await onLoadMessages(selected.conversation_id);
+        setMessages(rows);
+      }
     } finally {
       setBusy(false);
     }
@@ -165,6 +203,50 @@ export function NovaConversationsTab({
                 {channelStatus.note ? <p className="tiny muted">{channelStatus.note}</p> : null}
               </div>
             ) : null}
+
+            <div
+              className="col"
+              style={{
+                gap: 8,
+                minHeight: 180,
+                maxHeight: 320,
+                overflow: "auto",
+                padding: 12,
+                border: "1px solid var(--border, #ddd)",
+                borderRadius: 8,
+                background: "var(--surface-2, #f7f7f7)"
+              }}
+            >
+              {messagesLoading ? (
+                <p className="tiny muted">Cargando mensajes…</p>
+              ) : messages.length === 0 ? (
+                <EmptyState label="Sin mensajes aún. Webhooks LIWA (documento / handoff / message) aparecen aquí." />
+              ) : (
+                messages.map((msg) => {
+                  const inbound = msg.direction === "inbound";
+                  return (
+                    <div
+                      key={msg.message_id}
+                      style={{
+                        alignSelf: inbound ? "flex-start" : "flex-end",
+                        maxWidth: "85%",
+                        padding: "8px 10px",
+                        borderRadius: 10,
+                        background: inbound ? "#fff" : "var(--accent-soft, #dbeafe)",
+                        border: "1px solid var(--border, #e5e5e5)"
+                      }}
+                    >
+                      <p className="tiny muted" style={{ marginBottom: 4 }}>
+                        {inbound ? "Contacto" : "Asesor"}
+                        {msg.kind !== "text" ? ` · ${msg.kind}` : ""}
+                        {msg.created_at ? ` · ${new Date(msg.created_at).toLocaleString()}` : ""}
+                      </p>
+                      <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{msg.body}</p>
+                    </div>
+                  );
+                })
+              )}
+            </div>
 
             <div className="row" style={{ gap: 8 }}>
               <button className="btn" type="button" disabled={busy} onClick={() => void claim()}>

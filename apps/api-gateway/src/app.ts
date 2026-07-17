@@ -50,7 +50,12 @@ const HEALTH_CACHE_TTL_MS = 5_000;
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT";
 const NOVA_REQUEST_BODY_LIMIT_BYTES = 2_100_000;
 
-const PUBLIC_PATHS = new Set(["/v1/auth/login", "/v1/liwa/webhooks", "/v1/liwa/webhooks/simulate"]);
+const PUBLIC_PATHS = new Set([
+  "/v1/auth/login",
+  "/v1/liwa/webhooks",
+  "/v1/liwa/webhook", // alias: LIWA / browser probes often omit the trailing "s"
+  "/v1/liwa/webhooks/simulate"
+]);
 
 let healthCache: { expiresAt: number; payload: PlatformHealth } | undefined;
 
@@ -247,7 +252,22 @@ export function createGatewayRoutes(overrides?: {
     });
 
     // Public LIWA provider webhooks (auth = X-LIWA-WEBHOOK-SECRET upstream).
+    const liwaWebhookOk = async (request: { id: string }, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+      reply.code(200).send(
+        envelope(
+          {
+            ok: true,
+            hint: "Use POST /v1/liwa/webhooks with JSON body (event + phone). GET is only a probe."
+          },
+          request.id
+        )
+      );
+    app.get("/v1/liwa/webhooks", liwaWebhookOk);
+    app.get("/v1/liwa/webhook", liwaWebhookOk);
     app.post("/v1/liwa/webhooks", async (request, reply) => {
+      return proxyLiwaWebhook(request, reply, urls.liwaChannel, gatewayCredentials.liwa ?? null);
+    });
+    app.post("/v1/liwa/webhook", async (request, reply) => {
       return proxyLiwaWebhook(request, reply, urls.liwaChannel, gatewayCredentials.liwa ?? null);
     });
     app.post("/v1/liwa/webhooks/simulate", async (request, reply) => {

@@ -13,6 +13,7 @@ import {
   coreOutcomeRecordedPayloadSchema,
   voiceCallCompletedPayloadSchema,
   waMessageSentPayloadSchema,
+  waMessageReceivedPayloadSchema,
   waSendRequestedPayloadSchema,
   documentReceivedPayloadSchema,
   documentValidatedPayloadSchema,
@@ -121,7 +122,8 @@ const labLiwaEventSchema = z.object({
   ciudad: z.string().max(80).optional(),
   score: z.number().int().min(1).max(5).optional(),
   tipificacion: z.string().max(80).optional(),
-  full_name: z.string().max(160).optional()
+  full_name: z.string().max(160).optional(),
+  text: z.string().max(2000).optional()
 });
 
 const productFlowSchema = z.enum(["renovacion", "reactivacion"]);
@@ -1035,6 +1037,33 @@ export async function registerNovaRoutes(
     return envelope(result.rows, request.id);
   });
 
+  app.get("/v1/tenants/:tenantId/nova/conversations/:id/messages", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const conversationId = readUuid(request.params, "id");
+    if (!conversationId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+
+    const exists = await scope.db.query(
+      `select 1 from nova.conversations where tenant_id = $1 and conversation_id = $2`,
+      [scope.tenantId, conversationId]
+    );
+    if (exists.rowCount === 0) {
+      return reply.code(404).send(envelope({ error: "Conversation not found" }, request.id));
+    }
+
+    const result = await scope.db.query(
+      `select message_id, direction, body, kind, external_id, created_at
+         from nova.conversation_messages
+        where tenant_id = $1 and conversation_id = $2
+        order by created_at asc
+        limit 500`,
+      [scope.tenantId, conversationId]
+    );
+    return envelope(result.rows, request.id);
+  });
+
   app.post("/v1/tenants/:tenantId/nova/conversations/:id/claim", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
@@ -1094,6 +1123,13 @@ export async function registerNovaRoutes(
         if (convo.rowCount === 0) throw new Error("conversation_not_found");
 
         const row = convo.rows[0]!;
+        await tx.query(
+          `insert into nova.conversation_messages
+             (tenant_id, conversation_id, message_id, direction, body, kind, external_id)
+           values ($1, $2, $3, 'outbound', $4, 'text', $5)
+           on conflict (tenant_id, message_id) do nothing`,
+          [scope.tenantId, conversationId, messageId, parsed.data.text, `reply:${messageId}`]
+        );
         await insertNovaOutboxEvent(tx, {
           eventId: randomUUID(),
           eventType: "wa.send.requested",
@@ -1197,6 +1233,7 @@ export async function registerNovaRoutes(
       score: parsed.data.score,
       tipificacion: parsed.data.tipificacion,
       full_name: parsed.data.full_name ?? "Lab Demo",
+      text: parsed.data.text ?? (parsed.data.event === "message" ? "Hola desde Lab" : undefined),
       external_id: `lab-${randomUUID()}`
     };
 
@@ -1707,34 +1744,45 @@ async function processInboundEvent(
           where tenant_id = $1 and contact_id = $2 and status = 'approved'`,
         [tenantId, parsed.contact_id]
       );
-      // Open/refresh Ops Conversaciones thread (no inbound clone yet — outbound + advisor reply).
-      const existing = await db.query<{ conversation_id: string }>(
-        `select conversation_id from nova.conversations
-          where tenant_id = $1 and contact_id = $2 and channel = 'whatsapp'
-            and status in ('open', 'claimed')
-          order by coalesce(last_message_at, created_at) desc
-          limit 1`,
-        [tenantId, parsed.contact_id]
-      );
-      if (existing.rowCount && existing.rows[0]) {
-        await db.query(
-          `update nova.conversations
-              set last_message_at = now(), updated_at = now()
-            where tenant_id = $1 and conversation_id = $2`,
-          [tenantId, existing.rows[0].conversation_id]
-        );
-      } else {
-        const agency = await db.query<{ agency_code: string | null }>(
-          `select agency_code from nova.contacts where tenant_id = $1 and contact_id = $2`,
-          [tenantId, parsed.contact_id]
-        );
-        await db.query(
-          `insert into nova.conversations (tenant_id, conversation_id, contact_id, channel, agency_code, status, last_message_at)
-           values ($1, $2, $3, 'whatsapp', $4, 'open', now())`,
-          [tenantId, randomUUID(), parsed.contact_id, agency.rows[0]?.agency_code ?? null]
-        );
+      const conversationId = await upsertWhatsappConversation(db, tenantId, parsed.contact_id);
+      if (parsed.text?.trim() && conversationId) {
+        await insertConversationMessage(db, {
+          tenantId,
+          conversationId,
+          messageId: parsed.message_id,
+          direction: "outbound",
+          body: parsed.text.trim(),
+          kind: "text",
+          externalId: parsed.provider_ref ? `liwa-out:${parsed.provider_ref}` : `wa-sent:${parsed.message_id}`
+        });
       }
     }
+    return;
+  }
+
+  if (eventType === "wa.message.received") {
+    const parsed = waMessageReceivedPayloadSchema.parse(payload);
+    const contactId = await ensureContactFromRef(
+      db,
+      tenantId,
+      parsed.contact_id,
+      parsed.contact_ref,
+      parsed.agency_code
+    );
+    if (!contactId) {
+      throw new Error("wa.message.received requires resolvable contact_id or contact_ref phone");
+    }
+    const conversationId = await upsertWhatsappConversation(db, tenantId, contactId, parsed.agency_code);
+    if (!conversationId) return;
+    await insertConversationMessage(db, {
+      tenantId,
+      conversationId,
+      messageId: parsed.message_id,
+      direction: "inbound",
+      body: parsed.text,
+      kind: parsed.kind ?? "text",
+      externalId: parsed.external_id
+    });
     return;
   }
 
@@ -1833,6 +1881,88 @@ async function processInboundEvent(
     const stage = (stageRaw as CrmStage | undefined) ?? "contactado";
     await upsertLeadStage(db, tenantId, contactId, stage, tipificacion);
   }
+}
+
+async function upsertWhatsappConversation(
+  db: DatabaseClient,
+  tenantId: string,
+  contactId: string,
+  agencyCodeHint?: string
+): Promise<string | undefined> {
+  const existing = await db.query<{ conversation_id: string }>(
+    `select conversation_id from nova.conversations
+      where tenant_id = $1 and contact_id = $2 and channel = 'whatsapp'
+        and status in ('open', 'claimed')
+      order by coalesce(last_message_at, created_at) desc
+      limit 1`,
+    [tenantId, contactId]
+  );
+  if (existing.rowCount && existing.rows[0]) {
+    await db.query(
+      `update nova.conversations
+          set last_message_at = now(), updated_at = now(),
+              agency_code = coalesce(agency_code, $3)
+        where tenant_id = $1 and conversation_id = $2`,
+      [tenantId, existing.rows[0].conversation_id, agencyCodeHint ?? null]
+    );
+    return existing.rows[0].conversation_id;
+  }
+
+  const agency = await db.query<{ agency_code: string | null }>(
+    `select agency_code from nova.contacts where tenant_id = $1 and contact_id = $2`,
+    [tenantId, contactId]
+  );
+  const conversationId = randomUUID();
+  await db.query(
+    `insert into nova.conversations (tenant_id, conversation_id, contact_id, channel, agency_code, status, last_message_at)
+     values ($1, $2, $3, 'whatsapp', $4, 'open', now())`,
+    [tenantId, conversationId, contactId, agencyCodeHint ?? agency.rows[0]?.agency_code ?? null]
+  );
+  return conversationId;
+}
+
+async function insertConversationMessage(
+  db: DatabaseClient,
+  input: {
+    tenantId: string;
+    conversationId: string;
+    messageId: string;
+    direction: "inbound" | "outbound";
+    body: string;
+    kind: "text" | "document" | "system";
+    externalId?: string;
+  }
+): Promise<void> {
+  if (input.externalId) {
+    const dup = await db.query(
+      `select 1 from nova.conversation_messages
+        where tenant_id = $1 and external_id = $2`,
+      [input.tenantId, input.externalId]
+    );
+    if (dup.rowCount && dup.rowCount > 0) return;
+  }
+
+  await db.query(
+    `insert into nova.conversation_messages
+       (tenant_id, conversation_id, message_id, direction, body, kind, external_id)
+     values ($1, $2, $3, $4, $5, $6, $7)
+     on conflict (tenant_id, message_id) do nothing`,
+    [
+      input.tenantId,
+      input.conversationId,
+      input.messageId,
+      input.direction,
+      input.body,
+      input.kind,
+      input.externalId ?? null
+    ]
+  );
+  await db.query(
+    `update nova.conversations
+        set last_message_at = now(), updated_at = now()
+      where tenant_id = $1 and conversation_id = $2`,
+    [input.tenantId, input.conversationId]
+  );
 }
 
 async function resolveContactId(

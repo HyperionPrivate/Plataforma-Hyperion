@@ -15,7 +15,11 @@ const EVENT_ALIASES: Record<string, string> = {
   optout: "opt_out",
   baja: "opt_out",
   tipify: "tipificacion",
-  tipificacion: "tipificacion"
+  tipificacion: "tipificacion",
+  message: "message",
+  mensaje: "message",
+  text: "message",
+  chat: "message"
 };
 
 const CITY_TAG: Record<string, string> = {
@@ -35,7 +39,14 @@ const CITY_TAG: Record<string, string> = {
 };
 
 export type NormalizedLiwaEventKind =
-  "document_received" | "prequal_completed" | "handoff_requested" | "csat" | "opt_out" | "tipificacion" | "unknown";
+  | "document_received"
+  | "prequal_completed"
+  | "handoff_requested"
+  | "csat"
+  | "opt_out"
+  | "tipificacion"
+  | "message"
+  | "unknown";
 
 export interface NormalizedLiwaPayload {
   event: NormalizedLiwaEventKind | string;
@@ -54,6 +65,8 @@ export interface NormalizedLiwaPayload {
   tipificacion?: string;
   name: string;
   motivo: string;
+  /** Free-text / last user message when LIWA sends event=message. */
+  text?: string;
   fields: Record<string, unknown>;
 }
 
@@ -181,6 +194,17 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
       "Asociado"
   ).trim();
 
+  const textRaw = String(
+    body.text ??
+      body.message ??
+      body.body ??
+      body.last_message ??
+      fields.text ??
+      fields.message ??
+      ""
+  ).trim();
+  const text = textRaw.length > 0 ? textRaw.slice(0, 4000) : undefined;
+
   let tipificacion = String(body.tipificacion ?? body.disposition ?? "").trim() || undefined;
   if (!tipificacion && event === "tipificacion" && tagName) {
     tipificacion = fold(tagName).replace(/\s+/g, "_");
@@ -213,6 +237,7 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
     score,
     tipificacion,
     name,
+    text,
     motivo: String(body.motivo ?? body.reason ?? (tagName ? `Tag LIWA: ${tagName}` : "Handoff desde flujo LIWA")),
     fields: Object.fromEntries(
       Object.entries({
@@ -286,5 +311,6 @@ export function mapEventKind(event: string): NormalizedLiwaEventKind {
   if (event === "csat" || event.includes("csat") || event === "nps") return "csat";
   if (event === "opt_out" || event.includes("opt")) return "opt_out";
   if (event === "tipificacion" || event.includes("tipif")) return "tipificacion";
+  if (event === "message" || event.includes("mensaje") || event === "chat") return "message";
   return "unknown";
 }

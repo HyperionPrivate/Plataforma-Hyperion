@@ -59,8 +59,30 @@ Si el quick tunnel se reinicia, la URL cambia: actualiza el webhook en LIWA.
 }
 ```
 
-Eventos: `document_received` | `prequal_completed` | `handoff_requested` | `csat` | `tipificacion` | `opt_out`  
-Aliases aceptados: `documento`, `asesor`, `nps`, `baja`, `tipify`, etc.
+Eventos: `document_received` | `prequal_completed` | `handoff_requested` | `csat` | `tipificacion` | `opt_out` | `message`  
+Aliases aceptados: `documento`, `asesor`, `nps`, `baja`, `tipify`, `mensaje`, `chat`, etc.
+
+Clon de chat en NOVA Conversaciones:
+
+| Evento LIWA | Efecto en NOVA |
+| --- | --- |
+| `document_received` | CRM documento + burbuja inbound (kind=document) |
+| `handoff_requested` | Handoff cola + burbuja system |
+| **`message` (+ `text`) — obligatorio para espejo** | Burbuja Asociado (texto libre) |
+| `bot_message` (opcional) | Burbuja Bot WhatsApp |
+| Reply asesor | Burbuja outbound + `send/text` LIWA |
+
+Sin nodo External API `event=message` en el paso donde el usuario escribe, Conversaciones **no** ve el chat aunque WhatsApp funcione.  
+Cutover Contabo ordenado: [CONTABO_CHAT_ESPEJO_CUTOVER.md](CONTABO_CHAT_ESPEJO_CUTOVER.md).
+
+```json
+{
+  "event": "message",
+  "phone": "+573004198710",
+  "text": "Quiero renovar mi crédito",
+  "external_id": "chat-1"
+}
+```
 
 ## Binding de tenant
 

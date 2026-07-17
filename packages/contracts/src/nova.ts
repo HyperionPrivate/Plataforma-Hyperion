@@ -146,7 +146,19 @@ export const waMessageSentPayloadSchema = z.object({
   contact_id: z.string().uuid().optional(),
   contact_ref: z.string().min(3).max(160).optional(),
   provider_ref: z.string().max(160).optional(),
-  mode: z.enum(["flow", "text"])
+  mode: z.enum(["flow", "text"]),
+  text: z.string().max(4000).optional()
+});
+
+/** Inbound LIWA → Ops Conversaciones (chat clone). */
+export const waMessageReceivedPayloadSchema = z.object({
+  message_id: z.string().uuid(),
+  contact_id: z.string().uuid().optional(),
+  contact_ref: z.string().min(3).max(160).optional(),
+  text: z.string().min(1).max(4000),
+  external_id: z.string().max(240).optional(),
+  kind: z.enum(["text", "document", "system"]).optional().default("text"),
+  agency_code: z.string().max(40).optional()
 });
 
 export const documentReceivedPayloadSchema = z.object({
@@ -242,6 +254,7 @@ export const voiceCallDispatchedEventSchema = envelopeEvent("voice.call.dispatch
 export const voiceCallCompletedEventSchema = envelopeEvent("voice.call.completed", voiceCallCompletedPayloadSchema);
 export const waSendRequestedEventSchema = envelopeEvent("wa.send.requested", waSendRequestedPayloadSchema);
 export const waMessageSentEventSchema = envelopeEvent("wa.message.sent", waMessageSentPayloadSchema);
+export const waMessageReceivedEventSchema = envelopeEvent("wa.message.received", waMessageReceivedPayloadSchema);
 export const documentReceivedEventSchema = envelopeEvent("document.received", documentReceivedPayloadSchema);
 export const documentValidatedEventSchema = envelopeEvent("document.validated", documentValidatedPayloadSchema);
 export const prequalCompletedEventSchema = envelopeEvent("wa.prequal.completed", prequalCompletedPayloadSchema);
@@ -298,6 +311,7 @@ export const novaCatalog = {
     "voice.call.completed",
     "wa.send.requested",
     "wa.message.sent",
+    "wa.message.received",
     "wa.prequal.completed",
     "document.received",
     "document.validated",
