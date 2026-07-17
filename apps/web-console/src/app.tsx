@@ -5,6 +5,7 @@ import { Login } from "./components/Login.js";
 import { LoadingState } from "./components/ui.js";
 import { api, apiBaseUrl, SessionExpiredError } from "./lib/api.js";
 import { ConsoleContext, tenantPath, type TenantInfo } from "./lib/context.js";
+import { defaultRoute, productEnabled } from "./lib/product.js";
 import { clearSession, loadSession, type StoredSession } from "./lib/session.js";
 import { AgendaPage } from "./pages/AgendaPage.js";
 import { BiPage } from "./pages/BiPage.js";
@@ -67,7 +68,11 @@ function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout:
         }
 
         const info: TenantInfo = { id: cedco.id, slug: cedco.slug, displayName: cedco.display_name };
-        const siteList = await api.get<PulsoIrisSite[]>(tenantPath(cedco.id, "config/sites"));
+        // Sites are a PULSO concept; product-scoped builds (e.g. NOVA) must not
+        // depend on the PULSO catalog to boot.
+        const siteList = productEnabled("pulso")
+          ? await api.get<PulsoIrisSite[]>(tenantPath(cedco.id, "config/sites"))
+          : [];
 
         if (!cancelled) {
           setTenant(info);
@@ -121,30 +126,32 @@ function ConsoleShell({ session, onLogout }: { session: StoredSession; onLogout:
   return (
     <ConsoleContext.Provider value={contextValue}>
       <Routes>
-        <Route path="/" element={<Navigate to="/operacion" replace />} />
-        <Route path="/operacion" element={<OperationPage />} />
-        <Route path="/conversaciones" element={<ConversationsPage />} />
-        <Route path="/agenda" element={<AgendaPage />} />
-        <Route
-          path="/lumen/*"
-          element={
-            <Suspense
-              fallback={
-                <main className="login-shell">
-                  <LoadingState label="Cargando LUMEN..." />
-                </main>
-              }
-            >
-              <LumenPage />
-            </Suspense>
-          }
-        />
-        <Route path="/nova" element={<NovaPage />} />
-        <Route path="/rpa" element={<RpaPage />} />
-        <Route path="/campanas" element={<CampaignsPage />} />
-        <Route path="/bi" element={<BiPage />} />
-        <Route path="/configuracion" element={<ConfigPage />} />
-        <Route path="*" element={<Navigate to="/operacion" replace />} />
+        <Route path="/" element={<Navigate to={defaultRoute()} replace />} />
+        {productEnabled("pulso") ? <Route path="/operacion" element={<OperationPage />} /> : null}
+        {productEnabled("pulso") ? <Route path="/conversaciones" element={<ConversationsPage />} /> : null}
+        {productEnabled("pulso") ? <Route path="/agenda" element={<AgendaPage />} /> : null}
+        {productEnabled("lumen") ? (
+          <Route
+            path="/lumen/*"
+            element={
+              <Suspense
+                fallback={
+                  <main className="login-shell">
+                    <LoadingState label="Cargando LUMEN..." />
+                  </main>
+                }
+              >
+                <LumenPage />
+              </Suspense>
+            }
+          />
+        ) : null}
+        {productEnabled("nova") ? <Route path="/nova" element={<NovaPage />} /> : null}
+        {productEnabled("pulso") ? <Route path="/rpa" element={<RpaPage />} /> : null}
+        {productEnabled("pulso") ? <Route path="/campanas" element={<CampaignsPage />} /> : null}
+        {productEnabled("pulso") ? <Route path="/bi" element={<BiPage />} /> : null}
+        {productEnabled("pulso") ? <Route path="/configuracion" element={<ConfigPage />} /> : null}
+        <Route path="*" element={<Navigate to={defaultRoute()} replace />} />
       </Routes>
     </ConsoleContext.Provider>
   );

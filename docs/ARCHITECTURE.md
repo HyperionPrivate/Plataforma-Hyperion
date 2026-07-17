@@ -61,7 +61,10 @@ gestionada, mTLS y rotación externa sin debilitar la autorización por contrato
 Un Dockerfile multi-stage produce una imagen runtime distinta por servicio Node: cada destino contiene solo el
 artefacto del servicio y su cierre de dependencias de produccion, y ejecuta como usuario `node`. Migraciones y el
 bootstrap de topologia JetStream tienen imagenes one-shot separadas sin artefactos de aplicaciones; la consola
-usa nginx sin privilegios. Cada servicio expone `/health` y `/ready`; los servicios con base de datos validan la
+usa nginx sin privilegios. La consola comparte codigo (ADR-0001) pero se entrega por producto: el build arg
+`VITE_PRODUCT` (`all`|`nova`|`pulso`|`lumen`) y `VITE_BRAND_LABEL` acotan navegacion, rutas y marca en tiempo de
+build, de modo que un despliegue como `web-console-nova` solo expone NOVA sin superficie de PULSO o LUMEN. Cada
+servicio expone `/health` y `/ready`; los servicios con base de datos validan la
 version de esquema que les corresponde antes de quedar sanos y `/ready` responde HTTP 503 cuando alguna
 dependencia está caída. El cierre concede 65 segundos por defecto para drenar dispatchers y consumidores antes de
 forzar la salida; SOFÍA los detiene en paralelo con su runtime y limita cada consumidor JetStream a 15 segundos,
