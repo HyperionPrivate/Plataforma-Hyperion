@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
-
-from platform_kit.correlation import tenant_id_ctx
 from pilot_core import ops_store
 from pilot_core.main import app
 from pilot_core.modules.liwa_inbound import normalize_liwa_webhook, process_liwa_inbound
 from pilot_core.settings import get_settings
+from platform_kit.correlation import tenant_id_ctx
 
 
 @pytest.fixture(autouse=True)

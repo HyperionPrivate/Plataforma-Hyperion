@@ -661,10 +661,7 @@ async def create_handoff(
                     entry = ops_store.insert_handoff(entry)
             except Exception:  # noqa: BLE001 — resume if row already exists
                 prior_ho = steps.get("handoff")
-                if isinstance(prior_ho, dict):
-                    entry = prior_ho
-                else:
-                    entry = ops_store.upsert_handoff(entry)
+                entry = prior_ho if isinstance(prior_ho, dict) else ops_store.upsert_handoff(entry)
             steps["persisted"] = True
             steps["handoff"] = entry
             saga["steps"] = steps
@@ -1303,7 +1300,7 @@ async def conversation_liwa_status(
         if handoff_tag and handoff_tag not in tags:
             tags = [handoff_tag, *tags]
         snippet = (
-            f"Live chat LIWA"
+            "Live chat LIWA"
             + (f" · {agency_hint}" if agency_hint else "")
             + (f" · {handoff_tag}" if handoff_tag else "")
         )
