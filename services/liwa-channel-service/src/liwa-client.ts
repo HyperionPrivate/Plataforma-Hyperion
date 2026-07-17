@@ -158,12 +158,15 @@ export class HttpLiwaClient implements LiwaClient {
   }
 
   /**
-   * Human inbox reply within the WhatsApp 24h session window.
-   * Set LIWA_FORCE_TEXT=1 to bypass the soft guard (e.g. integration tests).
-   * Cold outbound contacts must use sendFlow instead.
+   * Human inbox reply within the WhatsApp 24h session window (Ops Conversaciones).
+   * Cold outbound must use sendFlow — callers enforce mode=flow for first touch.
+   * Set LIWA_BLOCK_TEXT=1 only to force the soft guard (tests / emergency).
+   * LIWA_FORCE_TEXT=1 keeps the previous "always allow" override.
    */
   async sendText(contactId: string, text: string): Promise<LiwaSendResult> {
-    if (!this.env.LIWA_FORCE_TEXT?.trim()) {
+    const block = this.env.LIWA_BLOCK_TEXT?.trim() === "1";
+    const force = Boolean(this.env.LIWA_FORCE_TEXT?.trim());
+    if (block && !force) {
       throw new LiwaTextWindowError();
     }
     const response = await this.request("POST", `/contacts/${encodeURIComponent(contactId)}/send/text`, { text });

@@ -219,7 +219,8 @@ export function NovaConfigTab({ tenantId }: { tenantId: string }) {
           </label>
         </div>
         <p className="tiny muted" style={{ marginTop: 8 }}>
-          Gate WhatsApp: auto-send apagado por defecto (`POST_CALL_WHATSAPP_AUTO_SEND=true` para omitir revisión).
+          Gate WhatsApp: auto-send encendido por defecto (tipify positivo → flujo LIWA). Usa{" "}
+          <code>POST_CALL_WHATSAPP_AUTO_SEND=false</code> para exigir revisión humana.
         </p>
         <button className="btn" style={{ marginTop: 12 }} disabled={saving} onClick={() => void saveCompliance()}>
           Guardar operación + compliance

@@ -1082,28 +1082,31 @@ export async function registerNovaRoutes(
 
     try {
       await scope.db.transaction(async (tx) => {
-        const convo = await tx.query<{ contactId: string }>(
-          `update nova.conversations
-           set last_message_at = now(), updated_at = now()
-           where tenant_id = $1 and conversation_id = $2
-           returning contact_id as "contactId"`,
+        const convo = await tx.query<{ contactId: string; phone: string }>(
+          `update nova.conversations c
+              set last_message_at = now(), updated_at = now()
+             from nova.contacts ct
+            where c.tenant_id = $1 and c.conversation_id = $2
+              and ct.tenant_id = c.tenant_id and ct.contact_id = c.contact_id
+            returning c.contact_id as "contactId", ct.phone_e164 as phone`,
           [scope.tenantId, conversationId]
         );
         if (convo.rowCount === 0) throw new Error("conversation_not_found");
 
+        const row = convo.rows[0]!;
         await insertNovaOutboxEvent(tx, {
           eventId: randomUUID(),
           eventType: "wa.send.requested",
           tenantId: scope.tenantId,
           correlationId,
           businessIdempotencyKey: `wa-reply:${scope.tenantId}:${conversationId}:${messageId}`,
-          payload: {
+          payload: waSendRequestedPayloadSchema.parse({
             message_id: messageId,
-            contact_id: convo.rows[0]!.contactId,
-            contact_ref: convo.rows[0]!.contactId,
+            contact_id: row.contactId,
+            contact_ref: row.phone,
             mode: "text",
             text: parsed.data.text
-          },
+          }),
           destination: `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/internal/events`
         });
       });
@@ -1462,7 +1465,8 @@ export async function registerNovaRoutes(
             mode: "flow",
             flow_id: autoFlow,
             agency_tag: agencyTag,
-            review_id: reviewId
+            review_id: reviewId,
+            product_flow: productFlow
           }),
           destination: liwaDestination
         });
@@ -1643,12 +1647,25 @@ async function processInboundEvent(
     }
 
     if (stageInfo.wantsWhatsapp) {
-      const autoSend = (process.env.POST_CALL_WHATSAPP_AUTO_SEND ?? "false").toLowerCase() === "true";
+      // Default ON: tipify positivo → disparar flujo LIWA (Renovaciones) sin gate de revisión.
+      // Ops puede forzar revisión con POST_CALL_WHATSAPP_AUTO_SEND=false.
+      const autoSend = (process.env.POST_CALL_WHATSAPP_AUTO_SEND ?? "true").toLowerCase() !== "false";
       const reviewId = randomUUID();
+      const productFlow = await resolveProductFlowForContact(db, tenantId, parsed.contact_id);
+      const flowId = await resolveLiwaFlowId(db, tenantId, productFlow);
+
       await db.query(
-        `insert into nova.whatsapp_reviews (tenant_id, review_id, contact_id, call_id, status, intent)
-         values ($1, $2, $3, $4, $5, $6)`,
-        [tenantId, reviewId, parsed.contact_id, parsed.call_id, autoSend ? "approved" : "pending_review", intent]
+        `insert into nova.whatsapp_reviews (tenant_id, review_id, contact_id, call_id, status, intent, flow_id)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          tenantId,
+          reviewId,
+          parsed.contact_id,
+          parsed.call_id,
+          autoSend ? "approved" : "pending_review",
+          intent,
+          flowId
+        ]
       );
 
       if (autoSend) {
@@ -1659,8 +1676,6 @@ async function processInboundEvent(
         );
         const row = contact.rows[0];
         if (row) {
-          const productFlow = await resolveProductFlowForContact(db, tenantId, parsed.contact_id);
-          const flowId = await resolveLiwaFlowId(db, tenantId, productFlow);
           await insertNovaOutboxEvent(db, {
             eventId: randomUUID(),
             eventType: "wa.send.requested",
@@ -1674,7 +1689,8 @@ async function processInboundEvent(
               mode: "flow",
               flow_id: flowId,
               agency_tag: agencyTagFromCode(row.agencyCode),
-              review_id: reviewId
+              review_id: reviewId,
+              product_flow: productFlow
             }),
             destination: `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/internal/events`
           });
@@ -1693,6 +1709,33 @@ async function processInboundEvent(
           where tenant_id = $1 and contact_id = $2 and status = 'approved'`,
         [tenantId, parsed.contact_id]
       );
+      // Open/refresh Ops Conversaciones thread (no inbound clone yet — outbound + advisor reply).
+      const existing = await db.query<{ conversation_id: string }>(
+        `select conversation_id from nova.conversations
+          where tenant_id = $1 and contact_id = $2 and channel = 'whatsapp'
+            and status in ('open', 'claimed')
+          order by coalesce(last_message_at, created_at) desc
+          limit 1`,
+        [tenantId, parsed.contact_id]
+      );
+      if (existing.rowCount && existing.rows[0]) {
+        await db.query(
+          `update nova.conversations
+              set last_message_at = now(), updated_at = now()
+            where tenant_id = $1 and conversation_id = $2`,
+          [tenantId, existing.rows[0].conversation_id]
+        );
+      } else {
+        const agency = await db.query<{ agency_code: string | null }>(
+          `select agency_code from nova.contacts where tenant_id = $1 and contact_id = $2`,
+          [tenantId, parsed.contact_id]
+        );
+        await db.query(
+          `insert into nova.conversations (tenant_id, conversation_id, contact_id, channel, agency_code, status, last_message_at)
+           values ($1, $2, $3, 'whatsapp', $4, 'open', now())`,
+          [tenantId, randomUUID(), parsed.contact_id, agency.rows[0]?.agency_code ?? null]
+        );
+      }
     }
     return;
   }

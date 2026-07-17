@@ -136,7 +136,9 @@ export const waSendRequestedPayloadSchema = z.object({
   flow_id: z.string().max(80).optional(),
   text: z.string().max(2000).optional(),
   agency_tag: z.string().max(40).optional(),
-  review_id: z.string().uuid().optional()
+  review_id: z.string().uuid().optional(),
+  /** Product line for VIP tag / flow context (renovacion | reactivacion). */
+  product_flow: z.enum(["renovacion", "reactivacion"]).optional()
 });
 
 export const waMessageSentPayloadSchema = z.object({

@@ -360,15 +360,14 @@ export async function registerVoiceRoutes(
     const analysis = (data.analysis as Record<string, unknown> | undefined) ?? {};
     const dataCollection = (analysis.data_collection_results as Record<string, unknown> | undefined) ?? {};
     const intent =
-      String(
-        dataCollection.intencion ??
-          dataCollection.intent ??
-          dataCollection.disposition ??
-          data.intent ??
-          payload.intent ??
-          analysis.call_successful ??
-          ""
-      ).trim() || undefined;
+      readElevenLabsField(dataCollection.intencion) ||
+      readElevenLabsField(dataCollection.intent) ||
+      readElevenLabsField(dataCollection.disposition) ||
+      readElevenLabsField(dataCollection.pedir_whatsapp) ||
+      readElevenLabsField(dataCollection.quiere_whatsapp) ||
+      readElevenLabsField(data.intent) ||
+      readElevenLabsField(payload.intent) ||
+      undefined;
 
     const insert = await context.db.query(
       `insert into voice.webhook_receipts (receipt_id, source, external_id, signature_valid, payload)
@@ -660,6 +659,23 @@ function verifyElevenLabsWebhook(
   return validSignature
     ? { accepted: true, signatureValid: true, statusCode: 200 }
     : { accepted: false, signatureValid: false, statusCode: 401, message: "Invalid ElevenLabs signature" };
+}
+
+/** Unwrap ElevenLabs data_collection `{ value: "..." }` or plain scalars. */
+function readElevenLabsField(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
+    const text = String(raw).trim();
+    return text.length > 0 ? text : undefined;
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    for (const key of ["value", "result", "answer", "selected"]) {
+      const nested = readElevenLabsField(obj[key]);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
 }
 
 function readHeader(request: FastifyRequest, name: string): string | undefined {

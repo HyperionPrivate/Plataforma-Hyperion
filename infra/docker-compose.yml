@@ -453,6 +453,8 @@ services:
       CORE_BASE_URL: ${CORE_BASE_URL:-}
       LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1782399915832}
       LIWA_FLOW_ID_B: ${LIWA_FLOW_ID_B:-1782486171458}
+      # Tipify positivo → POST LIWA /contacts/{id}/send/{flow_id} sin revisión humana
+      POST_CALL_WHATSAPP_AUTO_SEND: ${POST_CALL_WHATSAPP_AUTO_SEND:-true}
       PORT: 8091
     expose:
       - "8091"

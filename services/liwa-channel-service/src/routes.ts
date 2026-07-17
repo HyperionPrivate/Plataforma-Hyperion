@@ -107,10 +107,10 @@ export async function registerLiwaRoutes(
 
     const messageId = randomUUID();
     const correlationId = randomUUID();
-    let providerRef: string;
+    let sendResult: { providerRef: string; status: "sent" | "accepted_pending" };
 
     try {
-      providerRef = await dispatchOutboundMessage(dependencies.client, parsed.data);
+      sendResult = await dispatchOutboundMessage(dependencies.client, parsed.data);
     } catch (error) {
       if (error instanceof LiwaTextWindowError) {
         return reply.code(422).send(
@@ -138,15 +138,20 @@ export async function registerLiwaRoutes(
       await tx.query(
         `insert into liwa.messages (
            tenant_id, message_id, contact_ref, direction, kind, status, flow_id, agency_tag, payload, correlation_id
-         ) values ($1, $2, $3, 'outbound', $4, 'sent', $5, $6, $7::jsonb, $8)`,
+         ) values ($1, $2, $3, 'outbound', $4, $5, $6, $7, $8::jsonb, $9)`,
         [
           scope.tenantId,
           messageId,
           parsed.data.contact_ref,
           parsed.data.mode,
+          sendResult.status,
           parsed.data.flow_id ?? null,
           parsed.data.agency_tag ?? null,
-          JSON.stringify({ text: parsed.data.text, provider_ref: providerRef }),
+          JSON.stringify({
+            text: parsed.data.text,
+            provider_ref: sendResult.providerRef,
+            send_status: sendResult.status
+          }),
           correlationId
         ]
       );
@@ -155,7 +160,7 @@ export async function registerLiwaRoutes(
         message_id: messageId,
         contact_id: parsed.data.contact_id,
         contact_ref: parsed.data.contact_ref,
-        provider_ref: providerRef,
+        provider_ref: sendResult.providerRef || `accepted_pending:${messageId}`,
         mode: parsed.data.mode
       });
       await insertLiwaOutboxEvent(tx, {
@@ -169,7 +174,16 @@ export async function registerLiwaRoutes(
       });
     });
 
-    return reply.code(201).send(envelope({ message_id: messageId, provider_ref: providerRef }, request.id));
+    return reply.code(201).send(
+      envelope(
+        {
+          message_id: messageId,
+          provider_ref: sendResult.providerRef,
+          status: sendResult.status
+        },
+        request.id
+      )
+    );
   });
 
   const handleInboundWebhook = async (request: FastifyRequest, reply: FastifyReply, opts?: { simulate?: boolean }) => {
@@ -284,7 +298,8 @@ export async function registerLiwaRoutes(
         mode: payload.mode,
         flow_id: payload.flow_id,
         text: payload.text,
-        agency_tag: payload.agency_tag
+        agency_tag: payload.agency_tag,
+        product_flow: payload.product_flow
       });
     } catch (error) {
       if (error instanceof LiwaTextWindowError) {
