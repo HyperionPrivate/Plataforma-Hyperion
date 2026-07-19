@@ -89,7 +89,7 @@ RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/p
 USER node
 CMD ["node", "packages/pulso-migrations/dist/index.js"]
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS pulso-console
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:a718212f9cf21e241f14067333000a3f0930292f5354fe0db269e9a2a2596b9e AS pulso-console
 
 ENV BFF_UPSTREAM=http://pulso-bff:8097 \
     CONSOLE_CELL=pulso \
