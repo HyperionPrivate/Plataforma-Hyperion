@@ -389,6 +389,17 @@ test("the complete stack is restricted to main and scheduled execution", async (
   assert.doesNotMatch(checkJob, /COMPOSE_PROFILES:\s*legacy-gateway/);
   assert.match(dockerJob, /^\s{6}COMPOSE_PROFILES: legacy-gateway$/m);
   assert.match(compatibilityJob, /^\s{6}COMPOSE_PROFILES: legacy-gateway$/m);
+  assert.match(dockerJob, /^\s{6}COMPOSE_PARALLEL_LIMIT: 2$/m);
+  assert.match(compatibilityJob, /^\s{6}COMPOSE_PARALLEL_LIMIT: 2$/m);
+
+  const ownershipGuard = checkJob.indexOf("Verify service role ownership guard");
+  const legacyRoleRestore = checkJob.indexOf("Restore ephemeral service database passwords");
+  const auditRoleActivation = checkJob.indexOf("Activate Audit runtime role with the provider-owned one-shot");
+  const auditFlow = checkJob.indexOf("Test autonomous Channel to Audit flow");
+  assert.ok(ownershipGuard >= 0, "full-stack CI must exercise the historical service-role fence");
+  assert.ok(legacyRoleRestore > ownershipGuard, "legacy runtime roles must be restored after the historical fence");
+  assert.ok(auditRoleActivation > legacyRoleRestore, "Audit must be reactivated after the historical global fence");
+  assert.ok(auditFlow > auditRoleActivation, "Audit must be active before the autonomous event flow");
 });
 
 test("workflow actions are immutable SHA references", async () => {
