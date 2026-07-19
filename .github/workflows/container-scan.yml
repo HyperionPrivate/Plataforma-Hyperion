@@ -21,8 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TRIVY_VERSION: "0.68.2"
-  TRIVY_LINUX_64BIT_SHA256: 3d933bbc3685f95ec15280f620583d05d97ee3affb66944d14481d5d6d567064
+  TRIVY_VERSION: "0.72.0"
+  TRIVY_LINUX_64BIT_SHA256: bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea
 
 jobs:
   impact:
@@ -66,6 +66,7 @@ jobs:
       matrix: ${{ fromJSON(needs.impact.outputs.matrix) }}
     env:
       COMPOSE_PARALLEL_LIMIT: 2
+      COMPOSE_PROFILES: ${{ matrix.cell == 'nova' && 'customer-coopfuturo' || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
