@@ -66,7 +66,7 @@ jobs:
           fi
           node -e 'const url=new URL(process.argv[1]);if(url.protocol!=="https:"||url.username||url.password||url.search||url.hash||url.pathname!=="/")process.exit(1)' "$NPM_REGISTRY_ORIGIN"
       - name: Checkout exact release source
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.source_revision }}
           persist-credentials: false
@@ -86,7 +86,7 @@ jobs:
           node -e 'if (!Number.isFinite(Date.parse(process.argv[1]))) process.exit(1)' "$timestamp"
           printf 'timestamp=%s\n' "$timestamp" >> "$GITHUB_OUTPUT"
       - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           registry-url: ${{ inputs.npm_registry_origin }}
@@ -219,7 +219,7 @@ jobs:
           --source-repository "$SOURCE_REPOSITORY"
           --release-directory "$RELEASE_DIRECTORY"
       - name: Publish immutable release evidence artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: federated-release-${{ inputs.cell }}-${{ inputs.release_version }}
           path: ${{ runner.temp }}/federated-release
