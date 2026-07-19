@@ -21,6 +21,17 @@ import { CELL_COMPOSE_SERVICES } from "../architecture/cell-policy.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
+test("pnpm tolera un registro lento sin confiar ciegamente en el lockfile", async () => {
+  const workspace = await readFile(path.join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
+
+  assert.match(workspace, /^networkConcurrency: 8$/m);
+  assert.match(workspace, /^fetchRetries: 4$/m);
+  assert.match(workspace, /^fetchRetryMaxtimeout: 120000$/m);
+  assert.match(workspace, /^fetchTimeout: 180000$/m);
+  assert.doesNotMatch(workspace, /^trustLockfile:\s*true$/m);
+  assert.doesNotMatch(workspace, /^minimumReleaseAge:\s*0$/m);
+});
+
 test("el contexto NOVA materializa sólo fuentes de su celda", async (context) => {
   const outputRoot = await temporaryContextRoot();
   context.after(() => rm(outputRoot, { recursive: true, force: true }));

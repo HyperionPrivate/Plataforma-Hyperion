@@ -234,7 +234,10 @@ jobs:
         shell: bash
         run: docker rm --force hyperion-ci-nats >/dev/null 2>&1 || true
       - name: Test
-        run: pnpm -r test
+        shell: bash
+        run: |
+          audit_runtime_url="postgres://hyperion_audit:${AUDIT_DATABASE_PASSWORD}@localhost:5432/hyperion_audit_ci"
+          TEST_AUDIT_DATABASE_URL="$audit_runtime_url" pnpm -r test
         env:
           TEST_DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_test
 

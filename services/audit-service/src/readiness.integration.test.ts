@@ -3,8 +3,8 @@ import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AUDIT_RUNTIME_MIGRATION_REQUIREMENT } from "@hyperion/audit-migrations/schema-manifest";
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_AUDIT_DATABASE_URL = process.env.TEST_AUDIT_DATABASE_URL;
+const describeIntegration = TEST_AUDIT_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("Audit provider-owned readiness", () => {
   let service: ServiceHandle;
@@ -12,7 +12,7 @@ describeIntegration("Audit provider-owned readiness", () => {
 
   beforeAll(async () => {
     previousDatabaseUrl = process.env.DATABASE_URL;
-    process.env.DATABASE_URL = TEST_DATABASE_URL;
+    process.env.DATABASE_URL = TEST_AUDIT_DATABASE_URL;
     service = await createService({
       serviceName: "audit-service",
       databaseRequired: true,

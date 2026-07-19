@@ -3,15 +3,15 @@ import { createDatabase, type DatabaseClient } from "@hyperion/database";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { receiveInternalAuditEvent, type InternalAuditEventEnvelope } from "./event-inbox.js";
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_AUDIT_DATABASE_URL = process.env.TEST_AUDIT_DATABASE_URL;
+const describeIntegration = TEST_AUDIT_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("provider-owned durable Audit persistence", () => {
   let db: DatabaseClient;
   const tenantId = randomUUID();
 
   beforeAll(async () => {
-    db = createDatabase(TEST_DATABASE_URL ?? "");
+    db = createDatabase(TEST_AUDIT_DATABASE_URL ?? "");
   });
 
   afterAll(async () => {

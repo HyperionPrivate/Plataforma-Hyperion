@@ -6,6 +6,13 @@ packages:
   - "!apps/coopfuturo-console"
 linkWorkspacePackages: true
 preferWorkspacePackages: true
+# Full-stack image rehearsals build several isolated closures at once. Keep
+# pnpm's lockfile supply-chain verification enabled, but avoid overwhelming the
+# registry and tolerate transiently slow metadata responses.
+networkConcurrency: 8
+fetchRetries: 4
+fetchRetryMaxtimeout: 120000
+fetchTimeout: 180000
 allowBuilds:
   "@whiskeysockets/baileys": false
   esbuild: true
