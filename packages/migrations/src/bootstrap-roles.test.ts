@@ -21,11 +21,12 @@ function existingRoleRows(): Array<{ rolname: string }> {
 }
 
 describe("service database role bootstrap configuration", () => {
-  it("excludes the provider-owned Audit role from the seven-role global rotation unit", () => {
+  it("rotates shared-database service roles including Audit while excluding NOVA provider roles", () => {
     expect(SERVICE_DATABASE_ROLES).toEqual([
       { environmentVariable: "ACCESS_DATABASE_PASSWORD", role: "hyperion_access" },
       { environmentVariable: "SOFIA_DATABASE_PASSWORD", role: "hyperion_sofia" },
       { environmentVariable: "KNOWLEDGE_DATABASE_PASSWORD", role: "hyperion_knowledge" },
+      { environmentVariable: "AUDIT_DATABASE_PASSWORD", role: "hyperion_audit" },
       { environmentVariable: "INTEGRATION_DATABASE_PASSWORD", role: "hyperion_integration" },
       { environmentVariable: "PULSO_DATABASE_PASSWORD", role: "hyperion_pulso" },
       { environmentVariable: "CHANNEL_DATABASE_PASSWORD", role: "hyperion_channel" },
