@@ -95,7 +95,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@hyperion/frontend-build-provenance": "workspace:*",
-    "@types/node": "^22.13.14",
+    "@types/node": "^26.1.1",
     "@types/pg": "^8.11.11",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^10.6.0",
