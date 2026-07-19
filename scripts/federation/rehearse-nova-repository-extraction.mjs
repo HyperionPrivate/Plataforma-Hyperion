@@ -789,15 +789,7 @@ function commitTouchesPath(repository, commit, repositoryPathValue, execute) {
   return (
     gitLines(
       repository,
-      [
-        "diff-tree",
-        "--no-commit-id",
-        "--name-only",
-        "-r",
-        commit,
-        "--",
-        stripDirectorySuffix(repositoryPathValue)
-      ],
+      ["diff-tree", "--no-commit-id", "--name-only", "-r", commit, "--", stripDirectorySuffix(repositoryPathValue)],
       execute,
       "commit path touch check"
     ).length > 0
