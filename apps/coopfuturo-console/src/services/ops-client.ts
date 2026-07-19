@@ -1,5 +1,5 @@
 /** Mutations against pilot-core `/ops` (works alongside mock reads). */
-import { authHeaders, pilotCoreBaseUrl, redirectToLogin } from "@/lib/auth";
+import { pilotCoreBaseUrl, redirectToLogin, sessionHeaders } from "@/lib/auth";
 
 const base = pilotCoreBaseUrl();
 
@@ -16,7 +16,11 @@ function assertOk(path: string, res: Response, text: string): void {
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method: "POST",
-    headers: authHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
+    credentials: "include",
+    headers: sessionHeaders(
+      { Accept: "application/json", "Content-Type": "application/json" },
+      { csrf: true },
+    ),
     body: JSON.stringify(body),
   });
   const text = await res.text();
@@ -27,7 +31,8 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method: "GET",
-    headers: authHeaders({ Accept: "application/json" }),
+    credentials: "include",
+    headers: sessionHeaders({ Accept: "application/json" }),
   });
   const text = await res.text();
   assertOk(path, res, text);
@@ -37,7 +42,11 @@ async function getJson<T>(path: string): Promise<T> {
 async function putJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method: "PUT",
-    headers: authHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
+    credentials: "include",
+    headers: sessionHeaders(
+      { Accept: "application/json", "Content-Type": "application/json" },
+      { csrf: true },
+    ),
     body: JSON.stringify(body),
   });
   const text = await res.text();
@@ -276,7 +285,6 @@ export async function simulateLiwaEvent(input: {
   ciudad?: string;
   text?: string;
   score?: number;
-  tenant_id?: string;
 }) {
   return postJson<{
     ok: boolean;
@@ -314,7 +322,8 @@ export async function uploadDocument(input: {
   form.append("kind", input.kind ?? "orden_matricula");
   const res = await fetch(`${base}/ops/documents/upload`, {
     method: "POST",
-    headers: authHeaders({ Accept: "application/json" }),
+    credentials: "include",
+    headers: sessionHeaders({ Accept: "application/json" }, { csrf: true }),
     body: form,
   });
   if (!res.ok) {

@@ -1,10 +1,30 @@
 -- Polish CoopFuturo demo: remove smoke chat noise, seed realistic threads,
 -- collapse duplicate leads, align CRM stages.
--- Tenant: CoopFuturo Contabo
+-- Usage: psql ... -v ON_ERROR_STOP=1 -v tenant_id="$TENANT_ID" -f scripts/ops/polish-coopfuturo-demo.sql
+
+\set ON_ERROR_STOP on
+
+\if :{?tenant_id}
+\else
+  \echo 'ERROR: tenant_id is required (canonical UUID).'
+  \quit 64
+\endif
+
+SELECT :'tenant_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' AS tenant_id_is_uuid
+\gset
+
+\if :tenant_id_is_uuid
+\else
+  \echo 'ERROR: tenant_id must be a canonical UUID.'
+  \quit 64
+\endif
+
+BEGIN;
+SET LOCAL hyperion.ops_tenant_id TO :'tenant_id';
 
 DO $$
 DECLARE
-  v_tenant uuid := '787bc386-6d37-4c08-b929-5c8b9dc5ef40';
+  v_tenant CONSTANT uuid := current_setting('hyperion.ops_tenant_id')::uuid;
   v_carlos uuid;
   v_ana uuid;
   v_jp uuid;
@@ -283,3 +303,5 @@ BEGIN
     VALUES (v_tenant, gen_random_uuid(), v_calos, 'pendiente', NULL, 'renovacion');
   END IF;
 END $$;
+
+COMMIT;

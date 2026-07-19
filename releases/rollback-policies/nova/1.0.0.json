@@ -1,0 +1,51 @@
+{
+  "$schema": "../../schemas/rollback-policy.schema.json",
+  "schemaVersion": 1,
+  "cell": "nova",
+  "policyVersion": "1.0.0",
+  "catalogVersion": "1.0.0",
+  "ociComponents": [
+    "nova-core-service",
+    "voice-channel-service",
+    "liwa-channel-service",
+    "documents-service",
+    "nova-bff",
+    "nova-console",
+    "coopfuturo-console",
+    "nova-migrations"
+  ],
+  "migration": {
+    "componentId": "nova-migrations",
+    "sourcePath": "packages/nova-migrations",
+    "files": [
+      {
+        "path": "sql/047-nova-autonomy.sql",
+        "sha256": "78d894e5f0fd286b5f79b26ee0473f13a8e1a7e49e3837adf484a0081e991cc0"
+      },
+      {
+        "path": "sql/048-nova-correlation-and-domain.sql",
+        "sha256": "edc865a5d7cf2e3a736a6198ae35494e242e658c3cca233977e072d2f83a2ba0"
+      },
+      {
+        "path": "sql/049-nova-ui-meta-contactos.sql",
+        "sha256": "8b1a98f113f7a6f594ab71359cd493f40a9499c90369f2abf0bf2748cdf7f65d"
+      },
+      {
+        "path": "sql/050-nova-lead-product-line.sql",
+        "sha256": "2fa735028c26bd4b7d0ef1c959164a9751d5a72ddd87024bff7a9538d2898b8b"
+      },
+      {
+        "path": "sql/051-liwa-accepted-pending.sql",
+        "sha256": "e473e592a89295c0b1bd4701806ca9152fc3ca5098377babe03e124edcadc6ea"
+      },
+      {
+        "path": "sql/052-nova-conversation-messages.sql",
+        "sha256": "04238598d846503d6a84a62d27ca18179aa22f4a8b3fa523e0e2d25568d08048"
+      },
+      {
+        "path": "sql/053-nova-tenant-owned-routing.sql",
+        "sha256": "2027d498c91982b36cb906ac6a710d1bec06ec0e50f6a4286020bde650d38730"
+      }
+    ]
+  }
+}

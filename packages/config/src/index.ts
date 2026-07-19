@@ -1,4 +1,4 @@
-import type { ServiceName } from "@hyperion/contracts";
+import type { ServiceName } from "@hyperion/platform-contracts";
 import { readDeploymentEnvironment } from "./deployment-environment.js";
 
 export {
@@ -45,7 +45,7 @@ export interface ServiceUrlMap {
   documents: string;
 }
 
-const defaultPorts: Record<ServiceName, number> = {
+const defaultPorts: Readonly<Record<string, number>> = {
   "api-gateway": 8080,
   "identity-service": 8081,
   "tenant-service": 8082,
@@ -68,7 +68,7 @@ export function readServiceConfig(serviceName: ServiceName): ServiceConfig {
     serviceName,
     environment: readDeploymentEnvironment(process.env),
     host: process.env.HOST ?? "0.0.0.0",
-    port: readNumber(process.env.PORT, defaultPorts[serviceName]),
+    port: readNumber(process.env.PORT, defaultPorts[serviceName], serviceName),
     serviceVersion: process.env.SERVICE_VERSION ?? "0.1.0",
     databaseUrl: readOptional(process.env.DATABASE_URL),
     corsAllowedOrigins: readCsv(process.env.CORS_ALLOWED_ORIGINS)
@@ -103,8 +103,11 @@ export function requireEnv(name: string): string {
   return value;
 }
 
-function readNumber(value: string | undefined, fallback: number): number {
+function readNumber(value: string | undefined, fallback: number | undefined, serviceName: string): number {
   if (!value) {
+    if (fallback === undefined) {
+      throw new Error(`PORT is required for provider-owned service: ${serviceName}`);
+    }
     return fallback;
   }
 

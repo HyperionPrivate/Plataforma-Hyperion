@@ -1,4 +1,4 @@
-import { envelope, tenantIdSchema } from "@hyperion/contracts";
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import { validateInternalAuthorization, type RouteRegistrar, type ServiceContext } from "@hyperion/service-runtime";
 import { z } from "zod";
 

@@ -1,3 +1,4 @@
+import { pulsoDeliveryGuardRequestSchema, pulsoDeliveryGuardResultSchema } from "@hyperion/pulso-contracts";
 import { createInternalAuthorizationHeaders } from "@hyperion/service-runtime";
 import { z } from "zod";
 
@@ -10,17 +11,7 @@ const deliveryResponseSchema = z
 
 const guardResponseSchema = z
   .object({
-    data: z
-      .object({
-        messageId: z.string().uuid(),
-        conversationId: z.string().uuid(),
-        sender: z.string(),
-        body: z.string(),
-        provider: z.string().nullable(),
-        deliveryStatus: z.string().nullable(),
-        matches: z.boolean()
-      })
-      .strict(),
+    data: pulsoDeliveryGuardResultSchema,
     meta: z.object({ requestId: z.string().optional(), generatedAt: z.string().datetime() }).partial().passthrough()
   })
   .passthrough();
@@ -81,16 +72,20 @@ export function createPulsoDeliveryClient(options: {
 
     async guardQueuedMessage(tenantId, messageId, input) {
       if (!credential) throw new Error("CHANNEL_TO_PULSO_TOKEN is required for delivery guards");
-      const query = new URLSearchParams({
+      const body = pulsoDeliveryGuardRequestSchema.parse({
         conversationId: input.conversationId,
         body: input.body,
         expectedDeliveryStatus: "queued"
       });
       const response = await request(
-        `${pulsoIrisUrl}/internal/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/messages/${encodeURIComponent(messageId)}/delivery-guard?${query}`,
+        `${pulsoIrisUrl}/internal/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/messages/${encodeURIComponent(messageId)}/delivery-guard`,
         {
-          method: "GET",
-          headers: createInternalAuthorizationHeaders("whatsapp-channel-service", credential),
+          method: "POST",
+          headers: {
+            ...createInternalAuthorizationHeaders("whatsapp-channel-service", credential),
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(body),
           signal: AbortSignal.timeout(timeoutMs)
         }
       );

@@ -1,0 +1,120 @@
+name: hyperion-nova
+
+# Local/CI-only overlay. It makes the external Access/JWKS dependency
+# deterministic for a cold standalone acceptance without embedding Access in
+# the NOVA cell. The fixture exposes only a public JWK and a degraded readiness
+# response; it cannot mint tokens or serve product traffic.
+services:
+  nova-access-jwks-fixture:
+    build:
+      context: ../.docker-contexts/nova
+      dockerfile: Dockerfile
+      target: nova-bff
+    command:
+      - node
+      - --input-type=module
+      - --eval
+      - |
+        import { createServer } from "node:http";
+
+        const allowedEnvironments = new Set(["local", "development", "test", "ci"]);
+        const deployment = String(process.env.HYPERION_ENVIRONMENT ?? "").trim().toLowerCase();
+        if (!allowedEnvironments.has(deployment)) {
+          console.error("NOVA acceptance JWKS fixture is forbidden outside local/CI");
+          process.exit(78);
+        }
+
+        const jwk = Object.freeze({
+          kty: "RSA",
+          n: "6-WSs_gwDVF2lRPMactVU0Z80n7mSA0XJxZVoY2TFovhae92dZNbGx_g5bnbMhthKTdUUe8iKw5UDZnUcxt4NIZDoBU8QVNzVIZlFWB5JzopMWDt5QA_wQ4t283uRV11GSPiKvRLvMvvRXSuRgig_To71yCpaR06-7TpLgl1k8lMh_xWpeUGfThJ80XIG4ypwcBGh39xwwh8k3kmMup5bkH-NrQ01_Q9LZ-hD1w2BNNB_1RWrCRB_hLuuTVyI__7K53Fh6xB91cGzFBQ44qpK-_oPdObUDKyzPVbQYV_KdX8xu6zkpD8ck6DUYvzgmJOWYrgEikvAvXi4xXgEfI89Q",
+          e: "AQAB",
+          kid: "hyperion-nova-acceptance-readiness",
+          alg: "RS256",
+          use: "sig"
+        });
+        const send = (request, response, statusCode, body) => {
+          const payload = JSON.stringify(body);
+          response.writeHead(statusCode, {
+            "cache-control": "no-store",
+            "content-length": Buffer.byteLength(payload),
+            "content-type": "application/json; charset=utf-8",
+            "x-content-type-options": "nosniff"
+          });
+          response.end(request.method === "HEAD" ? undefined : payload);
+        };
+        const server = createServer((request, response) => {
+          const host = String(request.headers.host ?? "").split(":", 1)[0].toLowerCase();
+          const allowedMethod = request.method === "GET" || request.method === "HEAD";
+          if (allowedMethod && request.url === "/jwks" && host === "identity-service") {
+            return send(request, response, 200, { keys: [jwk] });
+          }
+          if (allowedMethod && request.url === "/ready" && host === "identity-service") {
+            return send(request, response, 503, { service: "access-acceptance-fixture", status: "degraded" });
+          }
+          return send(request, response, 404, { status: "not-found" });
+        });
+        server.headersTimeout = 5_000;
+        server.requestTimeout = 5_000;
+        const listenPort = Number.parseInt(String(process.argv[1] ?? "18080"), 10);
+        const listenHost = String(process.argv[2] ?? "0.0.0.0");
+        if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65_535) {
+          console.error("Invalid NOVA acceptance JWKS fixture port");
+          process.exit(78);
+        }
+        server.listen(listenPort, listenHost, () => {
+          const address = server.address();
+          if (listenPort === 0 && address && typeof address === "object") {
+            console.log("NOVA_JWKS_FIXTURE_PORT=" + address.port);
+          }
+        });
+        const close = () => server.close(() => process.exit(0));
+        process.once("SIGINT", close);
+        process.once("SIGTERM", close);
+      - "18080"
+      - 0.0.0.0
+    environment:
+      HYPERION_ENVIRONMENT: ${NOVA_DEPLOYMENT_ENVIRONMENT:?NOVA_DEPLOYMENT_ENVIRONMENT is required}
+    expose:
+      - "18080"
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - --eval
+        - |
+          const response = await fetch("http://identity-service:18080/jwks");
+          const body = await response.json();
+          process.exit(response.status === 200 && body.keys?.[0]?.kid === "hyperion-nova-acceptance-readiness" ? 0 : 1);
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s
+    networks:
+      nova-acceptance-jwks:
+        aliases:
+          - identity-service
+
+  nova-bff:
+    environment:
+      ACCESS_JWKS_URL: http://identity-service:18080/jwks
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: "true"
+      ACCESS_SERVICE_URL: http://identity-service:18080
+    depends_on:
+      nova-access-jwks-fixture:
+        condition: service_healthy
+    networks:
+      default: {}
+      nova-acceptance-jwks: {}
+
+networks:
+  nova-acceptance-jwks:
+    internal: true

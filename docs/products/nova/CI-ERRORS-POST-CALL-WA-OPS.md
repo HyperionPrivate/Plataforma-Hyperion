@@ -1,14 +1,17 @@
 # CI errors en `feat/nova-post-call-wa-ops` — causa y prevención
 
-Documento de referencia para futuros despliegues / PRs sobre main (versión limpia).
-Surgió al subir el corte post-llamada WhatsApp + reply asesor (PR #20).
+> Estado: referencia histórica del PR #20; no es un runbook vigente. Desde el corte federado, NOVA se construye
+> con la clausura de cada componente y sus Dockerfiles no ejecutan `pnpm -r build`. Los nombres `web-console` y
+> `NovaPage` que siguen aparecen únicamente para explicar el incidente original.
+
+Registro retrospectivo del corte post-llamada WhatsApp + reply asesor (PR #20).
 
 ## Qué falló en GitHub Actions
 
 | Check                          | Síntoma                            | Causa raíz                                                                               |
 | ------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------------- |
 | `lint` / `pnpm lint`           | `prettier --check` en ~10 archivos | Código y docs tocados sin pasar Prettier del monorepo                                    |
-| `docker-build-and-smoke`       | `tsc` en `apps/web-console`        | Tipado incorrecto de `fetchChannelStatus`                                                |
+| `docker-build-and-smoke`       | `tsc` en `apps/nova-console`       | Tipado incorrecto de `fetchChannelStatus`                                                |
 | `n-minus-one-upgrade-rollback` | compose / postgres no levantan     | **Cascada**: el build Docker falla antes (mismo error TS); no era un bug N-1 de producto |
 
 ## 1. Prettier (`Code style issues found in 10 files`)
@@ -25,8 +28,8 @@ Si algún archivo del PR no coincide con la config Prettier del repo, el job fal
 
 Archivos que fallaron en este PR (ejemplos):
 
-- `apps/web-console/src/pages/NovaPage.tsx`
-- `apps/web-console/src/pages/nova/NovaConversationsTab.tsx` (+ otras tabs Nova)
+- `apps/nova-console/src/pages/NovaPage.tsx`
+- `apps/nova-console/src/pages/nova/NovaConversationsTab.tsx` (+ otras tabs Nova)
 - `services/nova-core-service/src/routes.ts`
 - `services/voice-channel-service/src/routes.ts`
 - `docs/products/nova/POST-CALL-WHATSAPP.md` y otros docs
@@ -62,7 +65,7 @@ async function fetchChannelStatus(conversationId: string) {
 }
 ```
 
-`tsc --noEmit` (parte del `build` de `@hyperion/web-console`) rechaza asignar `Promise<unknown>` a `Promise<ChannelStatus>`.
+`tsc --noEmit` (parte del `build` de `@hyperion/nova-console`) rechaza asignar `Promise<unknown>` a `Promise<ChannelStatus>`.
 
 Ese fallo rompe `pnpm -r build` dentro de las imágenes Docker → fallan smoke y checks que dependen del compose.
 
@@ -74,12 +77,12 @@ async function fetchChannelStatus(conversationId: string): Promise<ChannelStatus
 }
 ```
 
-Y exportar el tipo desde `apps/web-console/src/pages/nova/index.ts` para importarlo limpio en `NovaPage`.
+Y exportar el tipo desde `apps/nova-console/src/pages/nova/index.ts` para importarlo limpio en `NovaPage`.
 
 ### Cómo evitarlo
 
 - Tipar siempre `api.get<T>` / `api.post<T>` cuando el valor se pasa a props tipadas.
-- Antes de push: `pnpm --filter @hyperion/web-console build` (o al menos `tsc -p apps/web-console/tsconfig.json --noEmit`).
+- Antes de push: `pnpm --filter @hyperion/nova-console build` (o al menos `tsc -p apps/nova-console/tsconfig.json --noEmit`).
 
 ## 3. Fallos Docker / N-1 que “parecen” de infra
 
@@ -92,7 +95,7 @@ Solo si lint y build pasan y N-1 sigue fallando, ahí sí revisar `.ci/n-minus-o
 1. Basarse en `main` sin cambiar la estructura del monorepo.
 2. `pnpm format` (o Prettier en archivos tocados).
 3. `pnpm lint`.
-4. `pnpm --filter @hyperion/web-console build` (o `pnpm build` si el cambio toca varios packages).
+4. `pnpm --filter @hyperion/nova-console build` (o `pnpm build` si el cambio toca varios packages).
 5. Push a la feature branch; no pegar PATs en chats/issues — usar `gh auth login` o secretos del entorno.
 
 ## Seguridad

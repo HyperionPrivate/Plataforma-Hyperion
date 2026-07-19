@@ -12,9 +12,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hyperion/contracts": "workspace:*",
+    "@hyperion/audit-contracts": "1.1.0",
     "@hyperion/database": "workspace:*",
     "@hyperion/durable-events": "workspace:*",
+    "@hyperion/lumen-contracts": "1.1.0",
+    "@hyperion/lumen-migrations": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
     "@hyperion/service-runtime": "workspace:*",
     "fastify": "^5.2.1",
     "music-metadata": "^11.13.0",

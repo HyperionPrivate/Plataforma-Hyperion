@@ -1,0 +1,8 @@
+name: hyperion-platform
+
+# Exec-only view of the Audit PostgreSQL service. The descriptor contains no
+# Access or product credentials and must never be used to create a database.
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    profiles: ["audit-ops"]

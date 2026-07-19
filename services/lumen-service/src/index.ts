@@ -1,3 +1,4 @@
+import { LUMEN_CURRENT_SCHEMA_VERSION } from "@hyperion/lumen-migrations/schema-manifest";
 import { startService } from "@hyperion/service-runtime";
 import { registerRoutes } from "./app.js";
 
@@ -7,7 +8,7 @@ await startService({
   requiredSchemaVersion: {
     schema: "lumen",
     serviceName: "lumen",
-    minimumVersion: 26
+    minimumVersion: LUMEN_CURRENT_SCHEMA_VERSION
   },
   registerRoutes
 });

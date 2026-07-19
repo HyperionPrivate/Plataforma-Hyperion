@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { voiceCallCompletedPayloadSchema } from "@hyperion/contracts";
+import { voiceCallCompletedPayloadSchema } from "@hyperion/nova-contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import type { DialerAdapter } from "./dialer-adapter.js";
 import { insertVoiceOutboxEvent } from "./outbox.js";

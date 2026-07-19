@@ -1,4 +1,4 @@
-import { envelope, tenantIdSchema } from "@hyperion/contracts";
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";

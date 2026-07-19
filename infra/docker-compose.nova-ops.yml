@@ -1,0 +1,9 @@
+name: hyperion-nova
+
+# Exec-only view of the existing PostgreSQL service. The NOVA backup and
+# restore wrappers use this file so Compose never needs credentials belonging
+# to PULSO, LUMEN or platform runtimes. Do not use it to create a database.
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    profiles: ["nova-ops"]

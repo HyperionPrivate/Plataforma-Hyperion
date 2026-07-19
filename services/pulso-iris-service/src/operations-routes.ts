@@ -1,5 +1,4 @@
 import {
-  envelope,
   pulsoIrisAppointmentInputSchema,
   pulsoIrisAppointmentListSchema,
   pulsoIrisAppointmentPatchSchema,
@@ -17,7 +16,8 @@ import {
   pulsoIrisRpaActionListSchema,
   pulsoIrisRpaActionPatchSchema,
   pulsoIrisWaitlistInputSchema
-} from "@hyperion/contracts";
+} from "@hyperion/pulso-contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import { isRestrictedDeploymentEnvironment, type ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance } from "fastify";
 import type { AuditEmitter } from "./audit-client.js";

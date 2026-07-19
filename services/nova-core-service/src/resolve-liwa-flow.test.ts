@@ -10,7 +10,7 @@ function mockDb(rows: unknown[]) {
 describe("resolveLiwaFlowId", () => {
   it("prefers explicit flow id", async () => {
     const db = mockDb([{ liwa_flow_id: "from-config" }]);
-    const id = await resolveLiwaFlowId(db as never, "t1", "renovacion", {
+    const id = await resolveLiwaFlowId(db as never, "t1", "flow-a", {
       explicitFlowId: "explicit-9",
       env: { LIWA_DEFAULT_FLOW_ID: "env-default" } as NodeJS.ProcessEnv
     });
@@ -20,23 +20,15 @@ describe("resolveLiwaFlowId", () => {
 
   it("uses agent_configs before env", async () => {
     const db = mockDb([{ liwa_flow_id: "cfg-b" }]);
-    const id = await resolveLiwaFlowId(db as never, "t1", "reactivacion", {
-      env: { LIWA_FLOW_ID_B: "env-b", LIWA_DEFAULT_FLOW_ID: "env-a" } as NodeJS.ProcessEnv
+    const id = await resolveLiwaFlowId(db as never, "t1", "flow-b", {
+      env: { LIWA_DEFAULT_FLOW_ID: "env-a" } as NodeJS.ProcessEnv
     });
     expect(id).toBe("cfg-b");
   });
 
-  it("uses LIWA_FLOW_ID_B for reactivacion when config empty", async () => {
-    const db = mockDb([{ liwa_flow_id: null }]);
-    const id = await resolveLiwaFlowId(db as never, "t1", "reactivacion", {
-      env: { LIWA_FLOW_ID_B: "flow-b", LIWA_DEFAULT_FLOW_ID: "flow-a" } as NodeJS.ProcessEnv
-    });
-    expect(id).toBe("flow-b");
-  });
-
   it("falls back to LIWA_DEFAULT_FLOW_ID", async () => {
     const db = mockDb([]);
-    const id = await resolveLiwaFlowId(db as never, "t1", "renovacion", {
+    const id = await resolveLiwaFlowId(db as never, "t1", "flow-a", {
       env: { LIWA_DEFAULT_FLOW_ID: "flow-a" } as NodeJS.ProcessEnv
     });
     expect(id).toBe("flow-a");
@@ -45,7 +37,7 @@ describe("resolveLiwaFlowId", () => {
 
 describe("resolveProductFlowForContact", () => {
   it("reads product_flow from latest campaign enrollment", async () => {
-    const db = mockDb([{ product_flow: "reactivacion" }]);
-    await expect(resolveProductFlowForContact(db as never, "t1", "c1")).resolves.toBe("reactivacion");
+    const db = mockDb([{ product_flow: "flow-b" }]);
+    await expect(resolveProductFlowForContact(db as never, "t1", "c1")).resolves.toBe("flow-b");
   });
 });

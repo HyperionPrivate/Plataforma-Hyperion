@@ -1,4 +1,4 @@
-import { isRestrictedDeploymentEnvironment } from "@hyperion/config";
+import { isRestrictedDeploymentEnvironment } from "@hyperion/nova-config";
 
 export const DEFAULT_LIWA_BASE_URL = "https://chat.liwa.co/api";
 

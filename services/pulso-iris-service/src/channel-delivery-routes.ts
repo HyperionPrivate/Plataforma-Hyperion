@@ -1,5 +1,6 @@
-import { envelope, tenantIdSchema } from "@hyperion/contracts";
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { DatabaseExecutor } from "@hyperion/database";
+import { pulsoDeliveryGuardRequestSchema } from "@hyperion/pulso-contracts";
 import { validateInternalAuthorization, type RouteRegistrar, type ServiceContext } from "@hyperion/service-runtime";
 import { z } from "zod";
 
@@ -58,13 +59,7 @@ const deliveryUpdateSchema = z
     }
   });
 
-const messageGuardSchema = z
-  .object({
-    conversationId: uuid,
-    body: z.string().min(1).max(4096),
-    expectedDeliveryStatus: z.literal("queued").default("queued")
-  })
-  .strict();
+const emptyQuerySchema = z.object({}).strict();
 
 export function registerChannelDeliveryRoutes(
   app: Parameters<RouteRegistrar>[0],
@@ -74,14 +69,15 @@ export function registerChannelDeliveryRoutes(
   const authorize = (headers: Parameters<typeof validateInternalAuthorization>[0]) =>
     validateInternalAuthorization(headers, { "whatsapp-channel-service": channelCredential });
 
-  app.get("/internal/v1/tenants/:tenantId/pulso-iris/messages/:messageId/delivery-guard", async (request, reply) => {
+  app.post("/internal/v1/tenants/:tenantId/pulso-iris/messages/:messageId/delivery-guard", async (request, reply) => {
     const authError = authorize(request.headers);
     if (authError) {
       return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
     }
     const params = deliveryParams.safeParse(request.params);
-    const query = messageGuardSchema.safeParse(request.query);
-    if (!params.success || !query.success) {
+    const query = emptyQuerySchema.safeParse(request.query);
+    const body = pulsoDeliveryGuardRequestSchema.safeParse(request.body);
+    if (!params.success || !query.success || !body.success) {
       return reply.code(400).send(envelope({ error: "Invalid delivery guard request" }, request.id));
     }
     if (!context.db) {
@@ -107,19 +103,14 @@ export function registerChannelDeliveryRoutes(
       return reply.code(404).send(envelope({ error: "Message not found" }, request.id));
     }
     const matches =
-      row.conversationId === query.data.conversationId &&
+      row.conversationId === body.data.conversationId &&
       row.sender === "sofia" &&
       row.provider === "whatsapp_web_test" &&
-      row.deliveryStatus === query.data.expectedDeliveryStatus &&
-      row.body === query.data.body;
+      row.deliveryStatus === body.data.expectedDeliveryStatus &&
+      row.body === body.data.body;
     return envelope(
       {
         messageId: row.id,
-        conversationId: row.conversationId,
-        sender: row.sender,
-        body: row.body,
-        provider: row.provider,
-        deliveryStatus: row.deliveryStatus,
         matches
       },
       request.id

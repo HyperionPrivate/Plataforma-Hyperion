@@ -6,19 +6,23 @@ import { createAuditClient, PULSO_AUDIT_EVENT_TYPE } from "./audit-client.js";
 
 const { Client } = pg;
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 let client: pg.Client;
+let fixtureClient: pg.Client;
 let db: DatabaseClient;
 let tenantId: string;
 
 describeIntegration("PULSO transactional audit outbox", () => {
   beforeAll(async () => {
     client = new Client({ connectionString: TEST_DATABASE_URL });
+    fixtureClient = new Client({ connectionString: TEST_PULSO_FIXTURE_DATABASE_URL });
     await client.connect();
+    await fixtureClient.connect();
     db = createDatabase(TEST_DATABASE_URL ?? "");
     tenantId = randomUUID();
-    await client.query(
+    await fixtureClient.query(
       `insert into platform.tenants (id, slug, display_name)
        values ($1::uuid, $2, 'PULSO audit transaction integration')`,
       [tenantId, `pulso-audit-${tenantId}`]
@@ -30,9 +34,12 @@ describeIntegration("PULSO transactional audit outbox", () => {
     if (client) {
       if (tenantId) {
         await client.query("delete from pulso_iris.outbox_events where tenant_id = $1::uuid", [tenantId]);
-        await client.query("delete from platform.tenants where id = $1::uuid", [tenantId]);
       }
       await client.end();
+    }
+    if (fixtureClient) {
+      if (tenantId) await fixtureClient.query("delete from platform.tenants where id = $1::uuid", [tenantId]);
+      await fixtureClient.end();
     }
   });
 

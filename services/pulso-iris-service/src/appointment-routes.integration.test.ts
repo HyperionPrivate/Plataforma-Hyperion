@@ -6,14 +6,17 @@ import { registerAppointmentRoutes } from "./appointment-routes.js";
 import { expireAppointmentHolds } from "./appointment-hold-expiration.js";
 import type { EmitAuditEventInput } from "./audit-client.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
+import { ensureAgendaSettingsExist } from "./agenda-settings.js";
 import { registerConfigRoutes } from "./config-routes.js";
 
 const { Client } = pg;
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 let app: ServiceHandle["app"];
 let client: pg.Client;
+let fixtureClient: pg.Client;
 let tenantId: string;
 let patientId: string;
 let alternatePatientId: string;
@@ -36,7 +39,9 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
     client = new Client({ connectionString: TEST_DATABASE_URL });
+    fixtureClient = new Client({ connectionString: TEST_PULSO_FIXTURE_DATABASE_URL });
     await client.connect();
+    await fixtureClient.connect();
     tenantId = await createFixtures();
 
     const service = await createService({
@@ -59,8 +64,11 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
   afterAll(async () => {
     await app?.close();
     if (client) {
-      if (tenantId) await client.query("delete from platform.tenants where id = $1", [tenantId]);
       await client.end();
+    }
+    if (fixtureClient) {
+      if (tenantId) await fixtureClient.query("delete from platform.tenants where id = $1", [tenantId]);
+      await fixtureClient.end();
     }
     delete process.env.DATABASE_URL;
   });
@@ -495,12 +503,13 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
 
 async function createFixtures(): Promise<string> {
   const slug = `appointment-lifecycle-${randomUUID()}`;
-  const tenant = await client.query<{ id: string }>(
+  const tenant = await fixtureClient.query<{ id: string }>(
     `insert into platform.tenants (slug, display_name, status)
      values ($1, $1, 'active') returning id`,
     [slug]
   );
   const createdTenantId = tenant.rows[0]!.id;
+  await ensureAgendaSettingsExist(client, createdTenantId);
   const patient = await client.query<{ id: string }>(
     `insert into pulso_iris.administrative_patients (tenant_id, full_name)
      values ($1, 'Paciente sintetico') returning id`,

@@ -10,6 +10,10 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/coverage/**",
       "**/.vite/**",
+      // Generated, allowlisted Docker build contexts duplicate already-linted sources.
+      ".docker-contexts/**",
+      // Local scratch output only. Keep source directories covered by lint.
+      "tmp/**",
       // Standalone Next.js app: linted by its own toolchain, not the root config.
       "apps/coopfuturo-console/**"
     ]

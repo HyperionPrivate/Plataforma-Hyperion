@@ -1,16 +1,10 @@
 import { startService } from "@hyperion/service-runtime";
+import { PULSO_RUNTIME_SCHEMA_REQUIREMENTS } from "@hyperion/pulso-migrations/schema-manifest";
 import { registerRoutes } from "./app.js";
 
 await startService({
   serviceName: "prompt-flow-service",
   databaseRequired: true,
-  requiredMigrations: [
-    "001-platform.sql",
-    "012-whatsapp-sofia-runtime.sql",
-    "013-sofia-confirmation-protocol.sql",
-    "014-sofia-local-time-protocol.sql",
-    "015-sofia-fresh-availability.sql",
-    "016-sofia-search-constraints.sql"
-  ],
+  requiredSchemaVersion: PULSO_RUNTIME_SCHEMA_REQUIREMENTS.sofia,
   registerRoutes
 });

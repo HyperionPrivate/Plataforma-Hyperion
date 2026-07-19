@@ -11,6 +11,9 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.6.0)
+      '@hyperion/frontend-build-provenance':
+        specifier: workspace:*
+        version: link:packages/frontend-build-provenance
       '@types/node':
         specifier: ^22.13.14
         version: 22.20.0
@@ -56,6 +59,9 @@ importers:
       '@hyperion/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
@@ -63,11 +69,42 @@ importers:
         specifier: ^5.2.1
         version: 5.10.0
 
-  apps/web-console:
+  apps/lumen-bff:
     dependencies:
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
+      '@fastify/rate-limit':
+        specifier: ^11.1.0
+        version: 11.1.0
+      '@hyperion/lumen-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/lumen-contracts
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      fastify:
+        specifier: ^5.2.1
+        version: 5.10.0
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  apps/lumen-console:
+    dependencies:
+      '@hyperion/lumen-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/lumen-contracts
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
       lucide-react:
         specifier: ^0.468.0
         version: 0.468.0(react@19.2.7)
@@ -84,6 +121,9 @@ importers:
         specifier: ^3.9.2
         version: 3.9.2(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)
     devDependencies:
+      '@hyperion/frontend-build-provenance':
+        specifier: 0.1.0
+        version: link:../../packages/frontend-build-provenance
       '@types/react':
         specifier: ^19.0.10
         version: 19.2.17
@@ -103,11 +143,277 @@ importers:
         specifier: ^3.0.8
         version: 3.2.7(@types/node@22.20.0)(tsx@4.23.0)
 
+  apps/nova-bff:
+    dependencies:
+      '@fastify/rate-limit':
+        specifier: ^11.1.0
+        version: 11.1.0
+      '@hyperion/nova-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/nova-contracts
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      fastify:
+        specifier: ^5.2.1
+        version: 5.10.0
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  apps/nova-console:
+    dependencies:
+      '@hyperion/nova-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/nova-contracts
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      lucide-react:
+        specifier: ^0.468.0
+        version: 0.468.0(react@19.2.7)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.7(react@19.2.7)
+      react-router-dom:
+        specifier: ^7.18.1
+        version: 7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      recharts:
+        specifier: ^3.9.2
+        version: 3.9.2(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.14
+        version: 22.20.0
+      '@types/react':
+        specifier: ^19.0.10
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.4
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^4.3.4
+        version: 4.7.0(vite@6.4.3(@types/node@22.20.0)(tsx@4.23.0))
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vite:
+        specifier: ^6.2.2
+        version: 6.4.3(@types/node@22.20.0)(tsx@4.23.0)
+      vitest:
+        specifier: ^3.0.8
+        version: 3.2.7(@types/node@22.20.0)(tsx@4.23.0)
+
+  apps/platform-admin-bff:
+    dependencies:
+      '@fastify/rate-limit':
+        specifier: ^11.1.0
+        version: 11.1.0
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      fastify:
+        specifier: ^5.2.1
+        version: 5.10.0
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  apps/platform-admin-console:
+    dependencies:
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      lucide-react:
+        specifier: ^0.468.0
+        version: 0.468.0(react@19.2.7)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.7(react@19.2.7)
+      react-router-dom:
+        specifier: ^7.18.1
+        version: 7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+    devDependencies:
+      '@hyperion/frontend-build-provenance':
+        specifier: 0.1.0
+        version: link:../../packages/frontend-build-provenance
+      '@types/react':
+        specifier: ^19.0.10
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.4
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^4.3.4
+        version: 4.7.0(vite@6.4.3(@types/node@22.20.0)(tsx@4.23.0))
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vite:
+        specifier: ^6.2.2
+        version: 6.4.3(@types/node@22.20.0)(tsx@4.23.0)
+      vitest:
+        specifier: ^3.0.8
+        version: 3.2.7(@types/node@22.20.0)(tsx@4.23.0)
+
+  apps/pulso-bff:
+    dependencies:
+      '@fastify/rate-limit':
+        specifier: ^11.1.0
+        version: 11.1.0
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      '@hyperion/pulso-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/pulso-contracts
+      fastify:
+        specifier: ^5.2.1
+        version: 5.10.0
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  apps/pulso-console:
+    dependencies:
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      '@hyperion/pulso-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/pulso-contracts
+      lucide-react:
+        specifier: ^0.468.0
+        version: 0.468.0(react@19.2.7)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.7(react@19.2.7)
+      react-router-dom:
+        specifier: ^7.18.1
+        version: 7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      recharts:
+        specifier: ^3.9.2
+        version: 3.9.2(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)
+    devDependencies:
+      '@hyperion/frontend-build-provenance':
+        specifier: 0.1.0
+        version: link:../../packages/frontend-build-provenance
+      '@types/react':
+        specifier: ^19.0.10
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.4
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^4.3.4
+        version: 4.7.0(vite@6.4.3(@types/node@22.20.0)(tsx@4.23.0))
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vite:
+        specifier: ^6.2.2
+        version: 6.4.3(@types/node@22.20.0)(tsx@4.23.0)
+      vitest:
+        specifier: ^3.0.8
+        version: 3.2.7(@types/node@22.20.0)(tsx@4.23.0)
+
+  apps/web-console:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vite:
+        specifier: ^6.2.2
+        version: 6.4.3(@types/node@22.20.0)(tsx@4.23.0)
+      vitest:
+        specifier: ^3.0.8
+        version: 3.2.7(@types/node@22.20.0)(tsx@4.23.0)
+
+  packages/access-migrations:
+    dependencies:
+      pg:
+        specifier: ^8.14.0
+        version: 8.22.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      '@types/pg':
+        specifier: ^8.11.11
+        version: 8.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/audit-contracts:
+    dependencies:
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../platform-contracts
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
+  packages/audit-migrations:
+    dependencies:
+      pg:
+        specifier: ^8.14.0
+        version: 8.22.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      '@types/pg':
+        specifier: ^8.11.11
+        version: 8.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
   packages/config:
     dependencies:
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../contracts
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../platform-contracts
 
   packages/contracts:
     dependencies:
@@ -133,7 +439,34 @@ importers:
         specifier: 3.4.0
         version: 3.4.0
 
+  packages/frontend-build-provenance: {}
+
   packages/logger: {}
+
+  packages/lumen-contracts:
+    dependencies:
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../platform-contracts
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
+  packages/lumen-migrations:
+    dependencies:
+      pg:
+        specifier: ^8.14.0
+        version: 8.22.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      '@types/pg':
+        specifier: ^8.11.11
+        version: 8.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
 
   packages/migrations:
     dependencies:
@@ -146,6 +479,130 @@ importers:
       pg:
         specifier: ^8.14.0
         version: 8.22.0
+
+  packages/nova-config:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/nova-contracts:
+    dependencies:
+      '@hyperion/audit-contracts':
+        specifier: 1.1.0
+        version: link:../audit-contracts
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../platform-contracts
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
+  packages/nova-durable-events:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/nova-migrations:
+    dependencies:
+      pg:
+        specifier: ^8.14.0
+        version: 8.22.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      '@types/pg':
+        specifier: ^8.11.11
+        version: 8.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/nova-service-runtime:
+    dependencies:
+      '@fastify/cors':
+        specifier: ^10.0.2
+        version: 10.1.0
+      '@fastify/helmet':
+        specifier: ^13.0.2
+        version: 13.0.2
+      '@fastify/rate-limit':
+        specifier: ^11.1.0
+        version: 11.1.0
+      '@hyperion/database':
+        specifier: 0.1.0
+        version: link:../database
+      '@hyperion/logger':
+        specifier: 0.1.0
+        version: link:../logger
+      '@hyperion/nova-config':
+        specifier: workspace:*
+        version: link:../nova-config
+      fastify:
+        specifier: ^5.2.1
+        version: 5.10.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/platform-contracts:
+    dependencies:
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
+  packages/platform-migrations:
+    dependencies:
+      pg:
+        specifier: ^8.14.0
+        version: 8.22.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      '@types/pg':
+        specifier: ^8.11.11
+        version: 8.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/pulso-contracts:
+    dependencies:
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../platform-contracts
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
+  packages/pulso-migrations:
+    dependencies:
+      pg:
+        specifier: ^8.14.0
+        version: 8.22.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.0
+      '@types/pg':
+        specifier: ^8.11.11
+        version: 8.20.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
 
   packages/service-runtime:
     dependencies:
@@ -161,30 +618,36 @@ importers:
       '@hyperion/config':
         specifier: workspace:*
         version: link:../config
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../contracts
       '@hyperion/database':
         specifier: workspace:*
         version: link:../database
       '@hyperion/logger':
         specifier: workspace:*
         version: link:../logger
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../platform-contracts
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
 
   services/agent-service:
     dependencies:
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@hyperion/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@hyperion/durable-events':
         specifier: workspace:*
         version: link:../../packages/durable-events
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      '@hyperion/pulso-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/pulso-contracts
+      '@hyperion/pulso-migrations':
+        specifier: workspace:*
+        version: link:../../packages/pulso-migrations
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
@@ -194,15 +657,21 @@ importers:
 
   services/audit-service:
     dependencies:
-      '@hyperion/contracts':
+      '@hyperion/audit-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/audit-contracts
+      '@hyperion/audit-migrations':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../packages/audit-migrations
       '@hyperion/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@hyperion/durable-events':
         specifier: workspace:*
         version: link:../../packages/durable-events
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
@@ -212,21 +681,21 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.787.0
         version: 3.1088.0
-      '@hyperion/config':
-        specifier: workspace:*
-        version: link:../../packages/config
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@hyperion/database':
-        specifier: workspace:*
+        specifier: 0.1.0
         version: link:../../packages/database
-      '@hyperion/durable-events':
+      '@hyperion/nova-config':
         specifier: workspace:*
-        version: link:../../packages/durable-events
-      '@hyperion/service-runtime':
+        version: link:../../packages/nova-config
+      '@hyperion/nova-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/nova-contracts
+      '@hyperion/nova-durable-events':
         specifier: workspace:*
-        version: link:../../packages/service-runtime
+        version: link:../../packages/nova-durable-events
+      '@hyperion/nova-service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/nova-service-runtime
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
@@ -246,21 +715,39 @@ importers:
 
   services/identity-service:
     dependencies:
-      '@hyperion/contracts':
+      '@hyperion/access-migrations':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../packages/access-migrations
+      '@hyperion/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@hyperion/durable-events':
+        specifier: workspace:*
+        version: link:../../packages/durable-events
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
 
   services/integration-service:
     dependencies:
-      '@hyperion/contracts':
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      '@hyperion/pulso-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/pulso-contracts
+      '@hyperion/pulso-migrations':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../packages/pulso-migrations
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
@@ -270,30 +757,33 @@ importers:
 
   services/knowledge-service:
     dependencies:
-      '@hyperion/contracts':
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      '@hyperion/pulso-migrations':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../packages/pulso-migrations
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
 
   services/liwa-channel-service:
     dependencies:
-      '@hyperion/config':
-        specifier: workspace:*
-        version: link:../../packages/config
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@hyperion/database':
-        specifier: workspace:*
+        specifier: 0.1.0
         version: link:../../packages/database
-      '@hyperion/durable-events':
+      '@hyperion/nova-config':
         specifier: workspace:*
-        version: link:../../packages/durable-events
-      '@hyperion/service-runtime':
+        version: link:../../packages/nova-config
+      '@hyperion/nova-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/nova-contracts
+      '@hyperion/nova-durable-events':
         specifier: workspace:*
-        version: link:../../packages/service-runtime
+        version: link:../../packages/nova-durable-events
+      '@hyperion/nova-service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/nova-service-runtime
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
@@ -313,15 +803,24 @@ importers:
 
   services/lumen-service:
     dependencies:
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
+      '@hyperion/audit-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/audit-contracts
       '@hyperion/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@hyperion/durable-events':
         specifier: workspace:*
         version: link:../../packages/durable-events
+      '@hyperion/lumen-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/lumen-contracts
+      '@hyperion/lumen-migrations':
+        specifier: workspace:*
+        version: link:../../packages/lumen-migrations
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
@@ -340,21 +839,21 @@ importers:
 
   services/nova-core-service:
     dependencies:
-      '@hyperion/config':
-        specifier: workspace:*
-        version: link:../../packages/config
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@hyperion/database':
-        specifier: workspace:*
+        specifier: 0.1.0
         version: link:../../packages/database
-      '@hyperion/durable-events':
+      '@hyperion/nova-config':
         specifier: workspace:*
-        version: link:../../packages/durable-events
-      '@hyperion/service-runtime':
+        version: link:../../packages/nova-config
+      '@hyperion/nova-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/nova-contracts
+      '@hyperion/nova-durable-events':
         specifier: workspace:*
-        version: link:../../packages/service-runtime
+        version: link:../../packages/nova-durable-events
+      '@hyperion/nova-service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/nova-service-runtime
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
@@ -374,24 +873,36 @@ importers:
 
   services/prompt-flow-service:
     dependencies:
-      '@hyperion/contracts':
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      '@hyperion/pulso-migrations':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../packages/pulso-migrations
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
 
   services/pulso-iris-service:
     dependencies:
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
+      '@hyperion/audit-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/audit-contracts
       '@hyperion/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@hyperion/durable-events':
         specifier: workspace:*
         version: link:../../packages/durable-events
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      '@hyperion/pulso-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/pulso-contracts
+      '@hyperion/pulso-migrations':
+        specifier: workspace:*
+        version: link:../../packages/pulso-migrations
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
@@ -407,30 +918,33 @@ importers:
 
   services/tenant-service:
     dependencies:
-      '@hyperion/contracts':
+      '@hyperion/access-migrations':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../packages/access-migrations
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
 
   services/voice-channel-service:
     dependencies:
-      '@hyperion/config':
-        specifier: workspace:*
-        version: link:../../packages/config
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@hyperion/database':
-        specifier: workspace:*
+        specifier: 0.1.0
         version: link:../../packages/database
-      '@hyperion/durable-events':
+      '@hyperion/nova-config':
         specifier: workspace:*
-        version: link:../../packages/durable-events
-      '@hyperion/service-runtime':
+        version: link:../../packages/nova-config
+      '@hyperion/nova-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/nova-contracts
+      '@hyperion/nova-durable-events':
         specifier: workspace:*
-        version: link:../../packages/service-runtime
+        version: link:../../packages/nova-durable-events
+      '@hyperion/nova-service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/nova-service-runtime
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
@@ -450,15 +964,21 @@ importers:
 
   services/whatsapp-channel-service:
     dependencies:
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@hyperion/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@hyperion/durable-events':
         specifier: workspace:*
         version: link:../../packages/durable-events
+      '@hyperion/platform-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/platform-contracts
+      '@hyperion/pulso-contracts':
+        specifier: 1.1.0
+        version: link:../../packages/pulso-contracts
+      '@hyperion/pulso-migrations':
+        specifier: workspace:*
+        version: link:../../packages/pulso-migrations
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime

@@ -1,0 +1,194 @@
+name: publish-shared-library
+
+on:
+  workflow_dispatch:
+    inputs:
+      library:
+        description: Shared library package
+        required: true
+        type: choice
+        options:
+          - database
+          - logger
+      version:
+        description: Exact stable package SemVer and canonical shared-library tag version
+        required: true
+        type: string
+      source_revision:
+        description: Exact protected-main commit to publish
+        required: true
+        type: string
+      registry_origin:
+        description: Credential-free HTTPS npm registry origin
+        required: true
+        default: https://registry.npmjs.org
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: publish-shared-library-${{ inputs.library }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: ${{ inputs.library }} / ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    environment: release-publication
+    timeout-minutes: 30
+    steps:
+      - name: Require protected main and immutable inputs
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          VERSION: ${{ inputs.version }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "$SOURCE_REVISION" =~ ^0+$ ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [[ "$REGISTRY_ORIGIN" != "https://registry.npmjs.org" ]]; then
+            echo 'Shared libraries may publish only to the allowlisted npm registry.' >&2
+            exit 1
+          fi
+          if [[ "$REF_PROTECTED" != "true" || "$GITHUB_REF" != "refs/heads/main" || "$GITHUB_SHA" != "$SOURCE_REVISION" ]]; then
+            echo 'Dispatch from protected main with source_revision equal to github.sha.' >&2
+            exit 1
+          fi
+          node -e 'const u=new URL(process.argv[1]);if(u.protocol!=="https:"||u.username||u.password||u.search||u.hash||u.pathname!=="/")process.exit(1)' "$REGISTRY_ORIGIN"
+
+      - name: Checkout exact source and tags
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ inputs.source_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node and registry
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          registry-url: ${{ inputs.registry_origin }}
+
+      - name: Resolve shared package and canonical tag
+        shell: bash
+        env:
+          LIBRARY: ${{ inputs.library }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          case "$LIBRARY" in
+            database) package_name='@hyperion/database' ;;
+            logger) package_name='@hyperion/logger' ;;
+            *) echo 'Unknown shared library.' >&2; exit 1 ;;
+          esac
+          package_directory="packages/$LIBRARY"
+          canonical_tag="shared/$LIBRARY/v$VERSION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          test "$(git rev-parse "$canonical_tag^{commit}")" = "$SOURCE_REVISION"
+          PACKAGE_NAME="$package_name" PACKAGE_DIRECTORY="$package_directory" VERSION="$VERSION" node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const manifest = JSON.parse(await readFile(`${process.env.PACKAGE_DIRECTORY}/package.json`, 'utf8'));
+          const catalog = JSON.parse(await readFile('releases/registry/provider-artifacts.v1.json', 'utf8'));
+          const matches = catalog.artifacts.filter((entry) => entry.packageName === process.env.PACKAGE_NAME);
+          if (matches.length !== 1) throw new Error('shared package must appear exactly once in the registry catalog');
+          const artifact = matches[0];
+          if (manifest.name !== process.env.PACKAGE_NAME || manifest.version !== process.env.VERSION) throw new Error('source manifest identity differs');
+          if (artifact.kind !== 'shared-library' || artifact.sourcePath !== process.env.PACKAGE_DIRECTORY || artifact.currentVersion !== process.env.VERSION) throw new Error('shared package differs from registry catalog');
+          if (!['ready', 'published'].includes(artifact.publication?.state)) throw new Error('shared package publication is not approved');
+          if (artifact.publication.workflow !== '.github/workflows/publish-shared-libraries.yml') throw new Error('shared package workflow differs from registry catalog');
+          if (artifact.publication.tagPattern !== `shared/${process.env.LIBRARY ?? process.env.PACKAGE_DIRECTORY.split('/').at(-1)}/v{version}`) throw new Error('shared package tag pattern differs from registry catalog');
+          NODE
+          printf 'PACKAGE_NAME=%s\nPACKAGE_DIRECTORY=%s\nCANONICAL_TAG=%s\n' "$package_name" "$package_directory" "$canonical_tag" >> "$GITHUB_ENV"
+
+      - name: Install and verify the shared package closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+          node scripts/releases/check-provider-artifact-catalog.mjs
+          pnpm --filter "$PACKAGE_NAME..." build
+          pnpm --filter "$PACKAGE_NAME" typecheck
+          pnpm --filter "$PACKAGE_NAME" test
+          pnpm exec eslint "$PACKAGE_DIRECTORY"
+          pnpm exec prettier --check "$PACKAGE_DIRECTORY"
+
+      - name: Pack once and inspect the publishable manifest
+        id: pack
+        shell: bash
+        run: >-
+          node scripts/releases/npm-artifact-publication.mjs pack
+          --package-directory "$PACKAGE_DIRECTORY"
+          --package-name "$PACKAGE_NAME"
+          --version "${{ inputs.version }}"
+          --source-revision "${{ inputs.source_revision }}"
+          --catalog releases/registry/provider-artifacts.v1.json
+          --output-directory "$RUNNER_TEMP/shared-library/local"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Authenticate and check exact-version immutability
+        id: preflight
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: >-
+          node scripts/releases/npm-artifact-publication.mjs preflight
+          --package-name "$PACKAGE_NAME"
+          --version "${{ inputs.version }}"
+          --registry-origin "${{ inputs.registry_origin }}"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Attest the exact shared-library tarball
+        if: steps.preflight.outputs.already_published == 'false'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.pack.outputs.tarball }}
+
+      - name: Publish the same attested tarball without overwrite
+        if: steps.preflight.outputs.already_published == 'false'
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: npm publish "$TARBALL" --access public --ignore-scripts --registry "$REGISTRY_ORIGIN"
+
+      - name: Read back exact bytes, registry identity and protected-main provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          LOCAL_TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: >-
+          node scripts/releases/npm-artifact-publication.mjs readback
+          --package-name "$PACKAGE_NAME"
+          --version "${{ inputs.version }}"
+          --catalog releases/registry/provider-artifacts.v1.json
+          --registry-origin "${{ inputs.registry_origin }}"
+          --source-revision "${{ inputs.source_revision }}"
+          --source-repository "${{ github.repository }}"
+          --local-tarball "$LOCAL_TARBALL"
+          --output "$RUNNER_TEMP/shared-library/registry-evidence.json"
+          --attempts 5
+          --retry-delay-ms 5000
+
+      - name: Attest the registry evidence candidate
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ runner.temp }}/shared-library/registry-evidence.json
+
+      - name: Upload immutable registry evidence candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: shared-library-${{ inputs.library }}-${{ inputs.version }}-registry-evidence
+          path: ${{ runner.temp }}/shared-library/registry-evidence.json
+          if-no-files-found: error
+          retention-days: 30

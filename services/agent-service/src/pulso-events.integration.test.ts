@@ -9,15 +9,18 @@ import {
 import type { PulsoEventPosition } from "./pulso-position-client.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("durable PULSO -> SOFIA persistence", () => {
   let db: DatabaseClient;
+  let fixtureDb: DatabaseClient;
   let tenantId = "";
 
   beforeAll(async () => {
     db = createDatabase(TEST_DATABASE_URL ?? "");
-    const tenant = await db.query<{ id: string }>(
+    fixtureDb = createDatabase(TEST_PULSO_FIXTURE_DATABASE_URL ?? "");
+    const tenant = await fixtureDb.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name)
        values ($1, 'Autonomous SOFIA flow test') returning id`,
       [`autonomous-sofia-${randomUUID()}`]
@@ -32,9 +35,10 @@ describeIntegration("durable PULSO -> SOFIA persistence", () => {
       await db.query("delete from agent_runtime.inbox_events where tenant_id = $1", [tenantId]);
       await db.query("delete from agent_runtime.job_stream_positions where tenant_id = $1", [tenantId]);
       await db.query("delete from agent_runtime.pulso_stream_positions where tenant_id = $1", [tenantId]);
-      await db.query("delete from platform.tenants where id = $1", [tenantId]);
+      await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
+    await fixtureDb.close();
   });
 
   it("persists a contiguous v2 stream, rejects a gap and keeps successor jobs behind the head", async () => {

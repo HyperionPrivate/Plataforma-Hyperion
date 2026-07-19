@@ -1,19 +1,27 @@
 {
   "name": "@hyperion/identity-service",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
+    "tenant:projections": "node dist/access-tenant-projection-operations.js",
+    "lumen:projections": "node dist/lumen-projection-operations.js",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:lumen-projection-postgres": "vitest run src/lumen-projections.redrive.integration.test.ts",
+    "test:tenant-projection-postgres": "vitest run src/access-tenant-projections.integration.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hyperion/contracts": "workspace:*",
+    "@hyperion/database": "workspace:*",
+    "@hyperion/durable-events": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
+    "@hyperion/access-migrations": "workspace:*",
     "@hyperion/service-runtime": "workspace:*",
-    "fastify": "^5.2.1"
+    "fastify": "^5.2.1",
+    "zod": "^3.24.2"
   }
 }

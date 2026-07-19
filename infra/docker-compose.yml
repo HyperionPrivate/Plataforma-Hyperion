@@ -3,22 +3,47 @@ name: plataforma-hyperion
 x-node-build: &node-build
   context: ..
   dockerfile: infra/docker/node-service.Dockerfile
-  args:
-    VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+
+# Product contexts are generated from explicit allowlists by
+# `pnpm docker:contexts`. They do not transmit sibling-cell source trees to
+# BuildKit. Keeping these anchors separate makes accidental fallback to the
+# repository-wide compatibility Dockerfile visible in Compose reviews.
+x-nova-build: &nova-build
+  context: ../.docker-contexts/nova
+  dockerfile: Dockerfile
+
+x-lumen-console-build: &lumen-console-build
+  context: ../.docker-contexts/lumen
+  dockerfile: Dockerfile
+
+x-pulso-console-build: &pulso-console-build
+  context: ../.docker-contexts/pulso
+  dockerfile: Dockerfile
+
+x-platform-build: &platform-build
+  context: ../.docker-contexts/platform
+  dockerfile: Dockerfile
 
 x-admin-database-url: &admin-database-url postgres://${POSTGRES_USER:-hyperion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
-x-access-database-url: &access-database-url postgres://hyperion_access:${ACCESS_DATABASE_PASSWORD:?ACCESS_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+x-identity-database-url: &identity-database-url postgres://hyperion_identity:${IDENTITY_DATABASE_PASSWORD:?IDENTITY_DATABASE_PASSWORD is required}@postgres:5432/${ACCESS_POSTGRES_DB:-hyperion_access}
+x-tenant-database-url: &tenant-database-url postgres://hyperion_tenant:${TENANT_DATABASE_PASSWORD:?TENANT_DATABASE_PASSWORD is required}@postgres:5432/${ACCESS_POSTGRES_DB:-hyperion_access}
+x-access-migrator-database-url: &access-migrator-database-url postgres://hyperion_access_migrator:${ACCESS_MIGRATOR_DATABASE_PASSWORD:?ACCESS_MIGRATOR_DATABASE_PASSWORD is required}@postgres:5432/${ACCESS_POSTGRES_DB:-hyperion_access}
+x-access-postgres-admin-url: &access-postgres-admin-url postgres://${POSTGRES_USER:-hyperion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/postgres
 x-sofia-database-url: &sofia-database-url postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD:?SOFIA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
 x-knowledge-database-url: &knowledge-database-url postgres://hyperion_knowledge:${KNOWLEDGE_DATABASE_PASSWORD:?KNOWLEDGE_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
-x-audit-database-url: &audit-database-url postgres://hyperion_audit:${AUDIT_DATABASE_PASSWORD:?AUDIT_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+x-audit-database-url: &audit-database-url postgres://hyperion_audit:${AUDIT_DATABASE_PASSWORD:?AUDIT_DATABASE_PASSWORD is required}@postgres:5432/${AUDIT_POSTGRES_DB:-hyperion_audit}
 x-integration-database-url: &integration-database-url postgres://hyperion_integration:${INTEGRATION_DATABASE_PASSWORD:?INTEGRATION_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
 x-pulso-database-url: &pulso-database-url postgres://hyperion_pulso:${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
 x-channel-database-url: &channel-database-url postgres://hyperion_channel:${CHANNEL_DATABASE_PASSWORD:?CHANNEL_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
 x-lumen-database-url: &lumen-database-url postgres://hyperion_lumen:${LUMEN_DATABASE_PASSWORD:?LUMEN_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
-x-nova-database-url: &nova-database-url postgres://hyperion_nova:${NOVA_DATABASE_PASSWORD:?NOVA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
-x-voice-database-url: &voice-database-url postgres://hyperion_voice:${VOICE_DATABASE_PASSWORD:?VOICE_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
-x-liwa-database-url: &liwa-database-url postgres://hyperion_liwa:${LIWA_DATABASE_PASSWORD:?LIWA_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
-x-documents-database-url: &documents-database-url postgres://hyperion_documents:${DOCUMENTS_DATABASE_PASSWORD:?DOCUMENTS_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-hyperion}
+x-nova-database-url: &nova-database-url postgres://hyperion_nova:${NOVA_DATABASE_PASSWORD:?NOVA_DATABASE_PASSWORD is required}@postgres:5432/${NOVA_POSTGRES_DB:-hyperion_nova}
+x-voice-database-url: &voice-database-url postgres://hyperion_voice:${VOICE_DATABASE_PASSWORD:?VOICE_DATABASE_PASSWORD is required}@postgres:5432/${NOVA_POSTGRES_DB:-hyperion_nova}
+x-liwa-database-url: &liwa-database-url postgres://hyperion_liwa:${LIWA_DATABASE_PASSWORD:?LIWA_DATABASE_PASSWORD is required}@postgres:5432/${NOVA_POSTGRES_DB:-hyperion_nova}
+x-documents-database-url: &documents-database-url postgres://hyperion_documents:${DOCUMENTS_DATABASE_PASSWORD:?DOCUMENTS_DATABASE_PASSWORD is required}@postgres:5432/${NOVA_POSTGRES_DB:-hyperion_nova}
+x-nova-migrator-database-url: &nova-migrator-database-url postgres://hyperion_nova_migrator:${NOVA_MIGRATOR_DATABASE_PASSWORD:?NOVA_MIGRATOR_DATABASE_PASSWORD is required}@postgres:5432/${NOVA_POSTGRES_DB:-hyperion_nova}
+x-nova-postgres-admin-url: &nova-postgres-admin-url postgres://${POSTGRES_USER:-hyperion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/postgres
+x-audit-migrator-database-url: &audit-migrator-database-url postgres://hyperion_audit_migrator:${AUDIT_MIGRATOR_DATABASE_PASSWORD:?AUDIT_MIGRATOR_DATABASE_PASSWORD is required}@postgres:5432/${AUDIT_POSTGRES_DB:-hyperion_audit}
+x-audit-postgres-admin-url: &audit-postgres-admin-url postgres://${POSTGRES_USER:-hyperion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/postgres
 
 # Los secretos HTTP se declaran por vínculo productor→consumidor en cada
 # workload. Ningún servicio recibe una credencial global reutilizable.
@@ -60,7 +85,7 @@ x-node-readycheck: &node-readycheck
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-hyperion}
@@ -78,6 +103,8 @@ services:
     build:
       <<: *node-build
       target: migrations
+      args:
+        BUILD_FILTER: "@hyperion/migrations"
     restart: "no"
     command: ["node", "packages/migrations/dist/index.js"]
     environment:
@@ -85,6 +112,8 @@ services:
       DATABASE_URL: *admin-database-url
       MIGRATION_LOCK_TIMEOUT_MS: ${MIGRATION_LOCK_TIMEOUT_MS:-10000}
       MIGRATION_STATEMENT_TIMEOUT_MS: ${MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
+      PULSO_DEMO_TENANT_ID: ${PULSO_DEMO_TENANT_ID:-}
+      LUMEN_DEMO_TENANT_ID: ${LUMEN_DEMO_TENANT_ID:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,6 +122,8 @@ services:
     build:
       <<: *node-build
       target: migrations
+      args:
+        BUILD_FILTER: "@hyperion/migrations"
     restart: "no"
     command: ["node", "packages/migrations/dist/bootstrap-roles.js"]
     environment:
@@ -104,37 +135,225 @@ services:
       ACCESS_DATABASE_PASSWORD: ${ACCESS_DATABASE_PASSWORD:?ACCESS_DATABASE_PASSWORD is required}
       SOFIA_DATABASE_PASSWORD: ${SOFIA_DATABASE_PASSWORD:?SOFIA_DATABASE_PASSWORD is required}
       KNOWLEDGE_DATABASE_PASSWORD: ${KNOWLEDGE_DATABASE_PASSWORD:?KNOWLEDGE_DATABASE_PASSWORD is required}
-      AUDIT_DATABASE_PASSWORD: ${AUDIT_DATABASE_PASSWORD:?AUDIT_DATABASE_PASSWORD is required}
       INTEGRATION_DATABASE_PASSWORD: ${INTEGRATION_DATABASE_PASSWORD:?INTEGRATION_DATABASE_PASSWORD is required}
       PULSO_DATABASE_PASSWORD: ${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}
       CHANNEL_DATABASE_PASSWORD: ${CHANNEL_DATABASE_PASSWORD:?CHANNEL_DATABASE_PASSWORD is required}
       LUMEN_DATABASE_PASSWORD: ${LUMEN_DATABASE_PASSWORD:?LUMEN_DATABASE_PASSWORD is required}
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+
+  platform-migrations:
+    build:
+      <<: *node-build
+      target: platform-migrations
+      args:
+        BUILD_FILTER: "@hyperion/platform-migrations"
+    restart: "no"
+    command: ["node", "packages/platform-migrations/dist/index.js"]
+    environment:
+      <<: *service-env
+      PLATFORM_MIGRATOR_DATABASE_URL: *admin-database-url
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+
+  # Access owns the neutral SSO/provisioning database. Runtime identities stay
+  # NOLOGIN until the complete provider ledger and exact ACL matrix validate.
+  access-database-bootstrap:
+    image: ${ACCESS_MIGRATIONS_IMAGE:-hyperion/access-migrations:local}
+    build:
+      <<: *node-build
+      target: access-migrations
+      args:
+        BUILD_FILTER: "@hyperion/access-migrations"
+    restart: "no"
+    command: ["node", "packages/access-migrations/dist/bootstrap-database.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      ACCESS_POSTGRES_ADMIN_URL: *access-postgres-admin-url
+      ACCESS_POSTGRES_DB: ${ACCESS_POSTGRES_DB:-hyperion_access}
+      ACCESS_MIGRATOR_DATABASE_PASSWORD: ${ACCESS_MIGRATOR_DATABASE_PASSWORD:?ACCESS_MIGRATOR_DATABASE_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  access-migrations:
+    image: ${ACCESS_MIGRATIONS_IMAGE:-hyperion/access-migrations:local}
+    build:
+      <<: *node-build
+      target: access-migrations
+      args:
+        BUILD_FILTER: "@hyperion/access-migrations"
+    restart: "no"
+    command: ["node", "packages/access-migrations/dist/index.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      ACCESS_POSTGRES_DB: ${ACCESS_POSTGRES_DB:-hyperion_access}
+      ACCESS_MIGRATOR_DATABASE_URL: *access-migrator-database-url
+    depends_on:
+      access-database-bootstrap:
+        condition: service_completed_successfully
+
+  access-role-bootstrap:
+    image: ${ACCESS_MIGRATIONS_IMAGE:-hyperion/access-migrations:local}
+    build:
+      <<: *node-build
+      target: access-migrations
+      args:
+        BUILD_FILTER: "@hyperion/access-migrations"
+    restart: "no"
+    command: ["node", "packages/access-migrations/dist/bootstrap-roles.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      ACCESS_POSTGRES_ADMIN_URL: *access-postgres-admin-url
+      ACCESS_POSTGRES_DB: ${ACCESS_POSTGRES_DB:-hyperion_access}
+      ACCESS_MIGRATOR_DATABASE_PASSWORD: ${ACCESS_MIGRATOR_DATABASE_PASSWORD:?ACCESS_MIGRATOR_DATABASE_PASSWORD is required}
+      IDENTITY_DATABASE_PASSWORD: ${IDENTITY_DATABASE_PASSWORD:?IDENTITY_DATABASE_PASSWORD is required}
+      TENANT_DATABASE_PASSWORD: ${TENANT_DATABASE_PASSWORD:?TENANT_DATABASE_PASSWORD is required}
+    depends_on:
+      access-migrations:
+        condition: service_completed_successfully
+
+  # Audit owns its database lifecycle. None of these one-shots consumes the
+  # global migration image, global DATABASE_URL, or credentials from a product.
+  audit-database-bootstrap:
+    image: ${AUDIT_MIGRATIONS_IMAGE:-hyperion/audit-migrations:local}
+    build:
+      <<: *platform-build
+      target: audit-migrations
+    restart: "no"
+    command: ["node", "packages/audit-migrations/dist/bootstrap-database.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      AUDIT_POSTGRES_ADMIN_URL: *audit-postgres-admin-url
+      AUDIT_POSTGRES_DB: ${AUDIT_POSTGRES_DB:-hyperion_audit}
+      AUDIT_MIGRATOR_DATABASE_PASSWORD: ${AUDIT_MIGRATOR_DATABASE_PASSWORD:?AUDIT_MIGRATOR_DATABASE_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  audit-migrations:
+    image: ${AUDIT_MIGRATIONS_IMAGE:-hyperion/audit-migrations:local}
+    build:
+      <<: *platform-build
+      target: audit-migrations
+    restart: "no"
+    command: ["node", "packages/audit-migrations/dist/index.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      AUDIT_MIGRATOR_DATABASE_URL: *audit-migrator-database-url
+    depends_on:
+      audit-database-bootstrap:
+        condition: service_completed_successfully
+
+  audit-role-bootstrap:
+    image: ${AUDIT_MIGRATIONS_IMAGE:-hyperion/audit-migrations:local}
+    build:
+      <<: *platform-build
+      target: audit-migrations
+    restart: "no"
+    command: ["node", "packages/audit-migrations/dist/bootstrap-roles.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      AUDIT_POSTGRES_ADMIN_URL: *audit-postgres-admin-url
+      AUDIT_POSTGRES_DB: ${AUDIT_POSTGRES_DB:-hyperion_audit}
+      AUDIT_DATABASE_PASSWORD: ${AUDIT_DATABASE_PASSWORD:?AUDIT_DATABASE_PASSWORD is required}
+    depends_on:
+      audit-migrations:
+        condition: service_completed_successfully
+
+  # NOVA owns a logical database, migrator and runtime-role bootstrap. These
+  # one-shots receive only the PostgreSQL admin credential plus NOVA-cell
+  # credentials; no LUMEN/PULSO password or migration is in their environment
+  # or generated Docker context.
+  nova-database-bootstrap:
+    build:
+      <<: *nova-build
+      target: nova-migrations
+    restart: "no"
+    command: ["node", "packages/nova-migrations/dist/bootstrap-database.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      NOVA_POSTGRES_ADMIN_URL: *nova-postgres-admin-url
+      NOVA_POSTGRES_DB: ${NOVA_POSTGRES_DB:-hyperion_nova}
+      NOVA_MIGRATOR_DATABASE_PASSWORD: ${NOVA_MIGRATOR_DATABASE_PASSWORD:?NOVA_MIGRATOR_DATABASE_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  nova-migrations:
+    build:
+      <<: *nova-build
+      target: nova-migrations
+    restart: "no"
+    command: ["node", "packages/nova-migrations/dist/index.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      NOVA_MIGRATOR_DATABASE_URL: *nova-migrator-database-url
+    depends_on:
+      nova-database-bootstrap:
+        condition: service_completed_successfully
+
+  nova-role-bootstrap:
+    build:
+      <<: *nova-build
+      target: nova-migrations
+    restart: "no"
+    command: ["node", "packages/nova-migrations/dist/bootstrap-roles.js"]
+    environment:
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      NOVA_POSTGRES_ADMIN_URL: *nova-postgres-admin-url
+      NOVA_POSTGRES_DB: ${NOVA_POSTGRES_DB:-hyperion_nova}
       NOVA_DATABASE_PASSWORD: ${NOVA_DATABASE_PASSWORD:?NOVA_DATABASE_PASSWORD is required}
       VOICE_DATABASE_PASSWORD: ${VOICE_DATABASE_PASSWORD:?VOICE_DATABASE_PASSWORD is required}
       LIWA_DATABASE_PASSWORD: ${LIWA_DATABASE_PASSWORD:?LIWA_DATABASE_PASSWORD is required}
       DOCUMENTS_DATABASE_PASSWORD: ${DOCUMENTS_DATABASE_PASSWORD:?DOCUMENTS_DATABASE_PASSWORD is required}
     depends_on:
-      migrations:
+      nova-migrations:
         condition: service_completed_successfully
 
   identity-service:
     build:
       <<: *node-build
       target: identity-service
+      args:
+        BUILD_FILTER: "@hyperion/identity-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/identity-service/dist/index.js"]
     environment:
       <<: *service-env
-      DATABASE_URL: *access-database-url
-      EXPECTED_DATABASE_ROLE: hyperion_access
+      DATABASE_URL: *identity-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_identity
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
-      GATEWAY_TO_IDENTITY_TOKEN: ${GATEWAY_TO_IDENTITY_TOKEN:?GATEWAY_TO_IDENTITY_TOKEN is required}
-      GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
-      ACCESS_TO_LUMEN_TOKEN: ${ACCESS_TO_LUMEN_TOKEN:?ACCESS_TO_LUMEN_TOKEN is required}
-      ACCESS_TO_NOVA_TOKEN: ${ACCESS_TO_NOVA_TOKEN:?ACCESS_TO_NOVA_TOKEN is required}
+      GATEWAY_TO_IDENTITY_TOKEN: ${GATEWAY_TO_IDENTITY_TOKEN:-}
+      NOVA_BFF_TO_ACCESS_TOKEN: ${NOVA_BFF_TO_ACCESS_TOKEN:-}
+      LUMEN_BFF_TO_ACCESS_TOKEN: ${LUMEN_BFF_TO_ACCESS_TOKEN:-}
+      PULSO_BFF_TO_ACCESS_TOKEN: ${PULSO_BFF_TO_ACCESS_TOKEN:-}
+      PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN: ${PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN:?PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN is required}
+      PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN: ${PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN:?PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN is required}
+      PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY: ${PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY:?PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY is required}
+      GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:-}
+      ACCESS_TOKEN_PRIVATE_KEY_FILE: ${ACCESS_TOKEN_PRIVATE_KEY_FILE:-}
+      ACCESS_TOKEN_PRIVATE_KEY_PEM: ${ACCESS_TOKEN_PRIVATE_KEY_PEM:-}
+      ACCESS_TOKEN_PREVIOUS_JWKS_FILE: ${ACCESS_TOKEN_PREVIOUS_JWKS_FILE:-}
+      ACCESS_TOKEN_ISSUER: ${ACCESS_TOKEN_ISSUER:-https://access.hyperion.local}
+      ACCESS_TOKEN_AUDIENCES: ${ACCESS_TOKEN_AUDIENCES:-nova-bff,lumen-bff,pulso-bff,platform-admin-bff}
+      ACCESS_TOKEN_KEY_ID: ${ACCESS_TOKEN_KEY_ID:-access-current}
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-300}
+      ACCESS_TO_LUMEN_TOKEN: ${ACCESS_TO_LUMEN_TOKEN:-}
+      ACCESS_TENANT_SNAPSHOT_TRANSPORT: ${ACCESS_TENANT_SNAPSHOT_TRANSPORT:-disabled}
+      ACCESS_TENANT_SNAPSHOT_HTTP_URL: ${ACCESS_TENANT_SNAPSHOT_HTTP_URL:-http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots}
+      ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: ${ACCESS_TO_CHANNEL_TOKEN:-}
+      ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: ${ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP:-false}
+      ACCESS_LUMEN_PROJECTION_TRANSPORT: ${ACCESS_LUMEN_PROJECTION_TRANSPORT:-disabled}
+      ACCESS_LUMEN_BACKFILL_LIMIT: ${ACCESS_LUMEN_BACKFILL_LIMIT:-100}
+      ACCESS_LUMEN_RECONCILE_INTERVAL_MS: ${ACCESS_LUMEN_RECONCILE_INTERVAL_MS:-60000}
+      LUMEN_SERVICE_URL: http://lumen-service:8090
+      ACCESS_TO_NOVA_TOKEN: ${ACCESS_TO_NOVA_TOKEN:-}
       PORT: 8081
     expose:
       - "8081"
@@ -142,21 +361,24 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-role-bootstrap:
+      access-role-bootstrap:
         condition: service_completed_successfully
 
   tenant-service:
     build:
       <<: *node-build
       target: tenant-service
+      args:
+        BUILD_FILTER: "@hyperion/tenant-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/tenant-service/dist/index.js"]
     environment:
       <<: *service-env
-      DATABASE_URL: *access-database-url
-      EXPECTED_DATABASE_ROLE: hyperion_access
-      GATEWAY_TO_TENANT_TOKEN: ${GATEWAY_TO_TENANT_TOKEN:?GATEWAY_TO_TENANT_TOKEN is required}
+      DATABASE_URL: *tenant-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_tenant
+      GATEWAY_TO_TENANT_TOKEN: ${GATEWAY_TO_TENANT_TOKEN:-}
+      PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN: ${PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN:?PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN is required}
       PORT: 8082
     expose:
       - "8082"
@@ -164,13 +386,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-role-bootstrap:
+      access-role-bootstrap:
         condition: service_completed_successfully
 
   agent-service:
     build:
       <<: *node-build
       target: agent-service
+      args:
+        BUILD_FILTER: "@hyperion/agent-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/agent-service/dist/index.js"]
@@ -210,6 +434,8 @@ services:
     build:
       <<: *node-build
       target: prompt-flow-service
+      args:
+        BUILD_FILTER: "@hyperion/prompt-flow-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/prompt-flow-service/dist/index.js"]
@@ -232,6 +458,8 @@ services:
     build:
       <<: *node-build
       target: knowledge-service
+      args:
+        BUILD_FILTER: "@hyperion/knowledge-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/knowledge-service/dist/index.js"]
@@ -252,7 +480,7 @@ services:
 
   audit-service:
     build:
-      <<: *node-build
+      <<: *platform-build
       target: audit-service
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
@@ -270,20 +498,21 @@ services:
       LIWA_TO_AUDIT_TOKEN: ${LIWA_TO_AUDIT_TOKEN:?LIWA_TO_AUDIT_TOKEN is required}
       DOCUMENTS_TO_AUDIT_TOKEN: ${DOCUMENTS_TO_AUDIT_TOKEN:?DOCUMENTS_TO_AUDIT_TOKEN is required}
       GATEWAY_TO_AUDIT_TOKEN: ${GATEWAY_TO_AUDIT_TOKEN:?GATEWAY_TO_AUDIT_TOKEN is required}
+      PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN: ${PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN:?PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN is required}
       PORT: 8086
     expose:
       - "8086"
     healthcheck: *node-readycheck
     depends_on:
-      postgres:
-        condition: service_healthy
-      db-role-bootstrap:
+      audit-role-bootstrap:
         condition: service_completed_successfully
 
   integration-service:
     build:
       <<: *node-build
       target: integration-service
+      args:
+        BUILD_FILTER: "@hyperion/integration-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/integration-service/dist/index.js"]
@@ -293,10 +522,14 @@ services:
       EXPECTED_DATABASE_ROLE: hyperion_integration
       GATEWAY_TO_INTEGRATION_TOKEN: ${GATEWAY_TO_INTEGRATION_TOKEN:?GATEWAY_TO_INTEGRATION_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      PULSO_BFF_TO_INTEGRATION_TOKEN: ${PULSO_BFF_TO_INTEGRATION_TOKEN:?PULSO_BFF_TO_INTEGRATION_TOKEN is required}
+      PULSO_OPERATOR_ASSERTION_KEY: ${PULSO_OPERATOR_ASSERTION_KEY:?PULSO_OPERATOR_ASSERTION_KEY is required}
       INTEGRATION_TO_CHANNEL_TOKEN: ${INTEGRATION_TO_CHANNEL_TOKEN:?INTEGRATION_TO_CHANNEL_TOKEN is required}
       INTEGRATION_TO_SOFIA_TOKEN: ${INTEGRATION_TO_SOFIA_TOKEN:?INTEGRATION_TO_SOFIA_TOKEN is required}
+      INTEGRATION_TO_PULSO_TOKEN: ${INTEGRATION_TO_PULSO_TOKEN:?INTEGRATION_TO_PULSO_TOKEN is required}
       WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
       AGENT_SERVICE_URL: http://agent-service:8083
+      PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
       PORT: 8087
     expose:
       - "8087"
@@ -311,6 +544,8 @@ services:
     build:
       <<: *node-build
       target: pulso-iris-service
+      args:
+        BUILD_FILTER: "@hyperion/pulso-iris-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/pulso-iris-service/dist/index.js"]
@@ -320,7 +555,10 @@ services:
       EXPECTED_DATABASE_ROLE: hyperion_pulso
       GATEWAY_TO_PULSO_TOKEN: ${GATEWAY_TO_PULSO_TOKEN:?GATEWAY_TO_PULSO_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      PULSO_BFF_TO_CORE_TOKEN: ${PULSO_BFF_TO_CORE_TOKEN:?PULSO_BFF_TO_CORE_TOKEN is required}
+      PULSO_OPERATOR_ASSERTION_KEY: ${PULSO_OPERATOR_ASSERTION_KEY:?PULSO_OPERATOR_ASSERTION_KEY is required}
       CHANNEL_TO_PULSO_TOKEN: ${CHANNEL_TO_PULSO_TOKEN:?CHANNEL_TO_PULSO_TOKEN is required}
+      INTEGRATION_TO_PULSO_TOKEN: ${INTEGRATION_TO_PULSO_TOKEN:?INTEGRATION_TO_PULSO_TOKEN is required}
       PULSO_TO_CHANNEL_TOKEN: ${PULSO_TO_CHANNEL_TOKEN:?PULSO_TO_CHANNEL_TOKEN is required}
       SOFIA_TO_PULSO_TOKEN: ${SOFIA_TO_PULSO_TOKEN:?SOFIA_TO_PULSO_TOKEN is required}
       PULSO_TO_SOFIA_TOKEN: ${PULSO_TO_SOFIA_TOKEN:?PULSO_TO_SOFIA_TOKEN is required}
@@ -346,6 +584,8 @@ services:
     build:
       <<: *node-build
       target: whatsapp-channel-service
+      args:
+        BUILD_FILTER: "@hyperion/whatsapp-channel-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/whatsapp-channel-service/dist/index.js"]
@@ -358,6 +598,7 @@ services:
       PULSO_TO_CHANNEL_TOKEN: ${PULSO_TO_CHANNEL_TOKEN:?PULSO_TO_CHANNEL_TOKEN is required}
       CHANNEL_TO_PULSO_TOKEN: ${CHANNEL_TO_PULSO_TOKEN:?CHANNEL_TO_PULSO_TOKEN is required}
       CHANNEL_TO_AUDIT_TOKEN: ${CHANNEL_TO_AUDIT_TOKEN:?CHANNEL_TO_AUDIT_TOKEN is required}
+      ACCESS_TO_CHANNEL_TOKEN: ${ACCESS_TO_CHANNEL_TOKEN:-}
       PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
       DURABLE_HTTP_OUTBOX_ENABLED: ${DURABLE_HTTP_OUTBOX_ENABLED:-true}
       WHATSAPP_WEB_TEST_ENABLED: ${WHATSAPP_WEB_TEST_ENABLED:-false}
@@ -386,6 +627,8 @@ services:
     build:
       <<: *node-build
       target: lumen-service
+      args:
+        BUILD_FILTER: "@hyperion/lumen-service"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "services/lumen-service/dist/index.js"]
@@ -395,6 +638,8 @@ services:
       EXPECTED_DATABASE_ROLE: hyperion_lumen
       GATEWAY_TO_LUMEN_TOKEN: ${GATEWAY_TO_LUMEN_TOKEN:?GATEWAY_TO_LUMEN_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      LUMEN_BFF_TO_LUMEN_TOKEN: ${LUMEN_BFF_TO_LUMEN_TOKEN:?LUMEN_BFF_TO_LUMEN_TOKEN is required}
+      LUMEN_OPERATOR_ASSERTION_KEY: ${LUMEN_OPERATOR_ASSERTION_KEY:?LUMEN_OPERATOR_ASSERTION_KEY is required}
       ACCESS_TO_LUMEN_TOKEN: ${ACCESS_TO_LUMEN_TOKEN:?ACCESS_TO_LUMEN_TOKEN is required}
       PULSO_TO_LUMEN_TOKEN: ${PULSO_TO_LUMEN_TOKEN:?PULSO_TO_LUMEN_TOKEN is required}
       LUMEN_TO_AUDIT_TOKEN: ${LUMEN_TO_AUDIT_TOKEN:?LUMEN_TO_AUDIT_TOKEN is required}
@@ -427,7 +672,7 @@ services:
 
   nova-core-service:
     build:
-      <<: *node-build
+      <<: *nova-build
       target: nova-core-service
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
@@ -438,6 +683,8 @@ services:
       EXPECTED_DATABASE_ROLE: hyperion_nova
       GATEWAY_TO_NOVA_TOKEN: ${GATEWAY_TO_NOVA_TOKEN:?GATEWAY_TO_NOVA_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      NOVA_BFF_TO_NOVA_TOKEN: ${NOVA_BFF_TO_NOVA_TOKEN:?NOVA_BFF_TO_NOVA_TOKEN is required}
+      NOVA_OPERATOR_ASSERTION_KEY: ${NOVA_OPERATOR_ASSERTION_KEY:?NOVA_OPERATOR_ASSERTION_KEY is required}
       ACCESS_TO_NOVA_TOKEN: ${ACCESS_TO_NOVA_TOKEN:?ACCESS_TO_NOVA_TOKEN is required}
       NOVA_TO_AUDIT_TOKEN: ${NOVA_TO_AUDIT_TOKEN:?NOVA_TO_AUDIT_TOKEN is required}
       NOVA_TO_VOICE_TOKEN: ${NOVA_TO_VOICE_TOKEN:?NOVA_TO_VOICE_TOKEN is required}
@@ -463,12 +710,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-role-bootstrap:
+      nova-role-bootstrap:
         condition: service_completed_successfully
 
   voice-channel-service:
     build:
-      <<: *node-build
+      <<: *nova-build
       target: voice-channel-service
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
@@ -479,6 +726,8 @@ services:
       EXPECTED_DATABASE_ROLE: hyperion_voice
       GATEWAY_TO_VOICE_TOKEN: ${GATEWAY_TO_VOICE_TOKEN:?GATEWAY_TO_VOICE_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      NOVA_BFF_TO_VOICE_TOKEN: ${NOVA_BFF_TO_VOICE_TOKEN:?NOVA_BFF_TO_VOICE_TOKEN is required}
+      NOVA_OPERATOR_ASSERTION_KEY: ${NOVA_OPERATOR_ASSERTION_KEY:?NOVA_OPERATOR_ASSERTION_KEY is required}
       NOVA_TO_VOICE_TOKEN: ${NOVA_TO_VOICE_TOKEN:?NOVA_TO_VOICE_TOKEN is required}
       VOICE_TO_NOVA_TOKEN: ${VOICE_TO_NOVA_TOKEN:?VOICE_TO_NOVA_TOKEN is required}
       VOICE_TO_AUDIT_TOKEN: ${VOICE_TO_AUDIT_TOKEN:?VOICE_TO_AUDIT_TOKEN is required}
@@ -492,6 +741,8 @@ services:
       ELEVENLABS_AGENT_ID: ${ELEVENLABS_AGENT_ID:-}
       # Required for outcome poller to complete demo Lab calls via conversation API.
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      # Provider callback HMAC. Deliberately distinct from the outbound API key.
+      ELEVENLABS_WEBHOOK_HMAC_SECRET: ${ELEVENLABS_WEBHOOK_HMAC_SECRET:-}
       NOVA_CORE_SERVICE_URL: http://nova-core-service:8091
       AUDIT_SERVICE_URL: http://audit-service:8086
       PORT: 8092
@@ -501,12 +752,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-role-bootstrap:
+      nova-role-bootstrap:
         condition: service_completed_successfully
 
   liwa-channel-service:
     build:
-      <<: *node-build
+      <<: *nova-build
       target: liwa-channel-service
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
@@ -517,13 +768,13 @@ services:
       EXPECTED_DATABASE_ROLE: hyperion_liwa
       GATEWAY_TO_LIWA_TOKEN: ${GATEWAY_TO_LIWA_TOKEN:?GATEWAY_TO_LIWA_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      NOVA_BFF_TO_LIWA_TOKEN: ${NOVA_BFF_TO_LIWA_TOKEN:?NOVA_BFF_TO_LIWA_TOKEN is required}
+      NOVA_OPERATOR_ASSERTION_KEY: ${NOVA_OPERATOR_ASSERTION_KEY:?NOVA_OPERATOR_ASSERTION_KEY is required}
       NOVA_TO_LIWA_TOKEN: ${NOVA_TO_LIWA_TOKEN:?NOVA_TO_LIWA_TOKEN is required}
       LIWA_TO_NOVA_TOKEN: ${LIWA_TO_NOVA_TOKEN:?LIWA_TO_NOVA_TOKEN is required}
       LIWA_TO_AUDIT_TOKEN: ${LIWA_TO_AUDIT_TOKEN:?LIWA_TO_AUDIT_TOKEN is required}
       LIWA_WEBHOOK_SECRET: ${LIWA_WEBHOOK_SECRET:-}
-      # Local cutover only: Tools→Webhooks UI cannot send custom headers.
-      # Prefer ?secret= on the webhook URL; insecure=1 accepts missing secret when HYPERION_ENVIRONMENT=local.
-      LIWA_WEBHOOK_ALLOW_INSECURE: ${LIWA_WEBHOOK_ALLOW_INSECURE:-0}
+      # The public endpoint requires X-LIWA-WEBHOOK-SECRET over HTTPS/private tunnel.
       LIWA_BASE_URL: ${LIWA_BASE_URL:-https://chat.liwa.co/api}
       LIWA_API_TOKEN: ${LIWA_API_TOKEN:-}
       LIWA_ACCOUNT_ID: ${LIWA_ACCOUNT_ID:-1656233}
@@ -542,12 +793,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-role-bootstrap:
+      nova-role-bootstrap:
         condition: service_completed_successfully
 
   documents-service:
     build:
-      <<: *node-build
+      <<: *nova-build
       target: documents-service
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
@@ -558,6 +809,8 @@ services:
       EXPECTED_DATABASE_ROLE: hyperion_documents
       GATEWAY_TO_DOCUMENTS_TOKEN: ${GATEWAY_TO_DOCUMENTS_TOKEN:?GATEWAY_TO_DOCUMENTS_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
+      NOVA_BFF_TO_DOCUMENTS_TOKEN: ${NOVA_BFF_TO_DOCUMENTS_TOKEN:?NOVA_BFF_TO_DOCUMENTS_TOKEN is required}
+      NOVA_OPERATOR_ASSERTION_KEY: ${NOVA_OPERATOR_ASSERTION_KEY:?NOVA_OPERATOR_ASSERTION_KEY is required}
       NOVA_TO_DOCUMENTS_TOKEN: ${NOVA_TO_DOCUMENTS_TOKEN:?NOVA_TO_DOCUMENTS_TOKEN is required}
       DOCUMENTS_TO_NOVA_TOKEN: ${DOCUMENTS_TO_NOVA_TOKEN:?DOCUMENTS_TO_NOVA_TOKEN is required}
       DOCUMENTS_TO_AUDIT_TOKEN: ${DOCUMENTS_TO_AUDIT_TOKEN:?DOCUMENTS_TO_AUDIT_TOKEN is required}
@@ -579,13 +832,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-role-bootstrap:
+      nova-role-bootstrap:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
 
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -604,7 +857,7 @@ services:
       start_period: 10s
 
   minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
     depends_on:
       minio:
         condition: service_healthy
@@ -619,9 +872,12 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
 
   api-gateway:
+    profiles: ["legacy-gateway"]
     build:
       <<: *node-build
       target: api-gateway
+      args:
+        BUILD_FILTER: "@hyperion/api-gateway"
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
     command: ["node", "apps/api-gateway/dist/index.js"]
@@ -661,65 +917,264 @@ services:
       GATEWAY_TO_SOFIA_TOKEN: ${GATEWAY_TO_SOFIA_TOKEN:?GATEWAY_TO_SOFIA_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
     ports:
-      - "${API_GATEWAY_HOST_PORT:-8080}:8080"
+      - name: legacy-http
+        target: 8080
+        published: "${API_GATEWAY_HOST_PORT:-8080}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     healthcheck: *node-healthcheck
 
+  nova-bff:
+    build:
+      <<: *nova-build
+      target: nova-bff
+    restart: unless-stopped
+    stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    environment:
+      NODE_ENV: production
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      SERVICE_VERSION: ${NOVA_BFF_VERSION:-1.0.0}
+      PORT: 8095
+      ACCESS_JWKS_URL: ${ACCESS_JWKS_URL:?ACCESS_JWKS_URL is required}
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: ${ACCESS_JWKS_ALLOW_PRIVATE_HTTP:?ACCESS_JWKS_ALLOW_PRIVATE_HTTP is required}
+      ACCESS_TOKEN_ISSUER: ${ACCESS_TOKEN_ISSUER:?ACCESS_TOKEN_ISSUER is required}
+      ACCESS_TOKEN_AUDIENCE: nova-bff
+      ACCESS_SERVICE_URL: http://identity-service:8081
+      NOVA_BFF_TO_ACCESS_TOKEN: ${NOVA_BFF_TO_ACCESS_TOKEN:?NOVA_BFF_TO_ACCESS_TOKEN is required}
+      NOVA_CORE_SERVICE_URL: http://nova-core-service:8091
+      VOICE_CHANNEL_SERVICE_URL: http://voice-channel-service:8092
+      LIWA_CHANNEL_SERVICE_URL: http://liwa-channel-service:8093
+      DOCUMENTS_SERVICE_URL: http://documents-service:8094
+      NOVA_BFF_TO_NOVA_TOKEN: ${NOVA_BFF_TO_NOVA_TOKEN:?NOVA_BFF_TO_NOVA_TOKEN is required}
+      NOVA_BFF_TO_VOICE_TOKEN: ${NOVA_BFF_TO_VOICE_TOKEN:?NOVA_BFF_TO_VOICE_TOKEN is required}
+      NOVA_BFF_TO_LIWA_TOKEN: ${NOVA_BFF_TO_LIWA_TOKEN:?NOVA_BFF_TO_LIWA_TOKEN is required}
+      NOVA_BFF_TO_DOCUMENTS_TOKEN: ${NOVA_BFF_TO_DOCUMENTS_TOKEN:?NOVA_BFF_TO_DOCUMENTS_TOKEN is required}
+      NOVA_OPERATOR_ASSERTION_KEY: ${NOVA_OPERATOR_ASSERTION_KEY:?NOVA_OPERATOR_ASSERTION_KEY is required}
+      # Optional until hostname-edge is enabled; provider callbacks fail closed when absent.
+      NOVA_PROVIDER_EDGE_TOKEN: ${NOVA_PROVIDER_EDGE_TOKEN:-}
+    expose:
+      - "8095"
+    healthcheck: *node-readycheck
+
+  nova-console:
+    build:
+      <<: *nova-build
+      target: nova-console
+    restart: unless-stopped
+    environment:
+      BFF_UPSTREAM: http://nova-bff:8095
+      CONSOLE_CELL: nova
+      CONSOLE_ROUTE_PATTERN: ^/$
+    ports:
+      - "${NOVA_CONSOLE_HOST_PORT:-3010}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      nova-bff:
+        condition: service_healthy
+
+  lumen-bff:
+    build:
+      <<: *lumen-console-build
+      target: lumen-bff
+      args:
+        BFF_PACKAGE: "@hyperion/lumen-bff"
+        BFF_PATH: lumen-bff
+    restart: unless-stopped
+    stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    environment:
+      NODE_ENV: production
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      SERVICE_VERSION: ${LUMEN_BFF_VERSION:-1.0.0}
+      PORT: 8096
+      ACCESS_JWKS_URL: ${ACCESS_JWKS_URL:?ACCESS_JWKS_URL is required}
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: ${ACCESS_JWKS_ALLOW_PRIVATE_HTTP:?ACCESS_JWKS_ALLOW_PRIVATE_HTTP is required}
+      ACCESS_TOKEN_ISSUER: ${ACCESS_TOKEN_ISSUER:?ACCESS_TOKEN_ISSUER is required}
+      ACCESS_TOKEN_AUDIENCE: lumen-bff
+      ACCESS_SERVICE_URL: http://identity-service:8081
+      LUMEN_BFF_TO_ACCESS_TOKEN: ${LUMEN_BFF_TO_ACCESS_TOKEN:?LUMEN_BFF_TO_ACCESS_TOKEN is required}
+      LUMEN_SERVICE_URL: http://lumen-service:8090
+      LUMEN_BFF_TO_LUMEN_TOKEN: ${LUMEN_BFF_TO_LUMEN_TOKEN:?LUMEN_BFF_TO_LUMEN_TOKEN is required}
+      LUMEN_OPERATOR_ASSERTION_KEY: ${LUMEN_OPERATOR_ASSERTION_KEY:?LUMEN_OPERATOR_ASSERTION_KEY is required}
+    expose:
+      - "8096"
+    healthcheck: *node-readycheck
+
+  pulso-bff:
+    build:
+      <<: *pulso-console-build
+      target: pulso-bff
+      args:
+        BFF_PACKAGE: "@hyperion/pulso-bff"
+        BFF_PATH: pulso-bff
+    restart: unless-stopped
+    stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    environment:
+      NODE_ENV: production
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      SERVICE_VERSION: ${PULSO_BFF_VERSION:-1.0.0}
+      PORT: 8097
+      ACCESS_JWKS_URL: ${ACCESS_JWKS_URL:?ACCESS_JWKS_URL is required}
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: ${ACCESS_JWKS_ALLOW_PRIVATE_HTTP:?ACCESS_JWKS_ALLOW_PRIVATE_HTTP is required}
+      ACCESS_TOKEN_ISSUER: ${ACCESS_TOKEN_ISSUER:?ACCESS_TOKEN_ISSUER is required}
+      ACCESS_TOKEN_AUDIENCE: pulso-bff
+      ACCESS_SERVICE_URL: http://identity-service:8081
+      PULSO_BFF_TO_ACCESS_TOKEN: ${PULSO_BFF_TO_ACCESS_TOKEN:?PULSO_BFF_TO_ACCESS_TOKEN is required}
+      PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
+      AGENT_SERVICE_URL: http://agent-service:8083
+      PROMPT_FLOW_SERVICE_URL: http://prompt-flow-service:8084
+      KNOWLEDGE_SERVICE_URL: http://knowledge-service:8085
+      INTEGRATION_SERVICE_URL: http://integration-service:8087
+      WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
+      PULSO_BFF_TO_CORE_TOKEN: ${PULSO_BFF_TO_CORE_TOKEN:?PULSO_BFF_TO_CORE_TOKEN is required}
+      PULSO_BFF_TO_INTEGRATION_TOKEN: ${PULSO_BFF_TO_INTEGRATION_TOKEN:?PULSO_BFF_TO_INTEGRATION_TOKEN is required}
+      PULSO_OPERATOR_ASSERTION_KEY: ${PULSO_OPERATOR_ASSERTION_KEY:?PULSO_OPERATOR_ASSERTION_KEY is required}
+    expose:
+      - "8097"
+    healthcheck: *node-readycheck
+
+  platform-admin-bff:
+    build:
+      <<: *platform-build
+      target: platform-admin-bff
+    restart: unless-stopped
+    stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    environment:
+      NODE_ENV: production
+      HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
+      SERVICE_VERSION: ${PLATFORM_ADMIN_BFF_VERSION:-1.0.0}
+      PORT: 8098
+      ACCESS_JWKS_URL: ${ACCESS_JWKS_URL:?ACCESS_JWKS_URL is required}
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: ${ACCESS_JWKS_ALLOW_PRIVATE_HTTP:?ACCESS_JWKS_ALLOW_PRIVATE_HTTP is required}
+      ACCESS_TOKEN_ISSUER: ${ACCESS_TOKEN_ISSUER:?ACCESS_TOKEN_ISSUER is required}
+      ACCESS_SERVICE_URL: http://identity-service:8081
+      IDENTITY_SERVICE_URL: http://identity-service:8081
+      TENANT_SERVICE_URL: http://tenant-service:8082
+      AUDIT_SERVICE_URL: http://audit-service:8086
+      PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN: ${PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN:?PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN is required}
+      PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN: ${PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN:?PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN is required}
+      PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN: ${PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN:?PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN is required}
+      PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN: ${PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN:?PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN is required}
+      PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY: ${PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY:?PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY is required}
+    expose:
+      - "8098"
+    healthcheck: *node-healthcheck
+    depends_on:
+      identity-service:
+        condition: service_healthy
+      tenant-service:
+        condition: service_healthy
+      audit-service:
+        condition: service_healthy
+
+  lumen-console:
+    build:
+      <<: *lumen-console-build
+      target: lumen-console
+      args:
+        CONSOLE_PACKAGE: "@hyperion/lumen-console"
+        CONSOLE_PATH: apps/lumen-console
+    restart: unless-stopped
+    environment:
+      BFF_UPSTREAM: http://lumen-bff:8096
+      CONSOLE_CELL: lumen
+      CONSOLE_ROUTE_PATTERN: ^(?:/|/lumen(?:/[^/]+)?/?)$
+    ports:
+      - "${LUMEN_CONSOLE_HOST_PORT:-3002}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      lumen-bff:
+        condition: service_healthy
+
+  pulso-console:
+    build:
+      <<: *pulso-console-build
+      target: pulso-console
+      args:
+        CONSOLE_PACKAGE: "@hyperion/pulso-console"
+        CONSOLE_PATH: apps/pulso-console
+    restart: unless-stopped
+    environment:
+      BFF_UPSTREAM: http://pulso-bff:8097
+      CONSOLE_CELL: pulso
+      CONSOLE_ROUTE_PATTERN: ^(?:/|/(?:operacion|conversaciones|agenda|rpa|campanas|bi|configuracion)/?)$
+    ports:
+      - "${PULSO_CONSOLE_HOST_PORT:-3000}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      pulso-bff:
+        condition: service_healthy
+
+  platform-admin-console:
+    build:
+      <<: *platform-build
+      target: platform-admin-console
+    restart: unless-stopped
+    environment:
+      BFF_UPSTREAM: http://platform-admin-bff:8098
+      CONSOLE_CELL: platform
+      CONSOLE_ROUTE_PATTERN: ^(?:/|/(?:operators|tenants|grants|catalog)/?)$
+    ports:
+      - "${PLATFORM_ADMIN_CONSOLE_HOST_PORT:-3003}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      platform-admin-bff:
+        condition: service_healthy
+
+  # The old shared origin is now an edge-only compatibility surface. It serves
+  # no application bundle and emits structured telemetry for every 308/404.
   web-console:
     build:
-      <<: *node-build
+      context: docker/legacy
+      dockerfile: Dockerfile
       target: web-console
     restart: unless-stopped
+    environment:
+      NOVA_CONSOLE_ORIGIN: ${NOVA_CONSOLE_ORIGIN:-http://localhost:3010}
+      LUMEN_CONSOLE_ORIGIN: ${LUMEN_CONSOLE_ORIGIN:-http://localhost:3002}
+      PULSO_CONSOLE_ORIGIN: ${PULSO_CONSOLE_ORIGIN:-http://localhost:3000}
     ports:
-      - "${WEB_CONSOLE_HOST_PORT:-3000}:8080"
+      - "${LEGACY_WEB_CONSOLE_HOST_PORT:-3004}:8080"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 10s
-    depends_on:
-      api-gateway:
-        condition: service_healthy
 
-  # Legacy Vite NOVA-scoped console (kept for smoke/CI; Contabo CoopFuturo uses
-  # coopfuturo-console below on the same host port).
-  web-console-nova:
-    build:
-      context: ..
-      dockerfile: infra/docker/node-service.Dockerfile
-      target: web-console
-      args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
-        VITE_PRODUCT: nova
-        VITE_BRAND_LABEL: CoopFuturo
-    profiles: ["legacy-nova-console"]
-    restart: unless-stopped
-    ports:
-      - "${WEB_CONSOLE_NOVA_HOST_PORT:-3001}:8080"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    depends_on:
-      api-gateway:
-        condition: service_healthy
-
-  # Real CoopFuturo / PULSO Ops UI (Next.js from CoopFuturo_/apps/web).
+  # Client-specific CoopFuturo UI inside the NOVA cell.
   # Serves on the same host port Contabo already uses for CoopFuturo (:19001).
   coopfuturo-console:
     build:
-      context: ../apps/coopfuturo-console
+      context: ../.docker-contexts/coopfuturo
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_MODE: live
-        NEXT_PUBLIC_PILOT_CORE_URL: /pilot-core
         NEXT_PUBLIC_REQUIRE_AUTH: "true"
     restart: unless-stopped
     environment:
-      HYPERION_GATEWAY_URL: http://api-gateway:8080
-      COOPFUTURO_TENANT_ID: ${COOPFUTURO_TENANT_ID:-787bc386-6d37-4c08-b929-5c8b9dc5ef40}
+      NOVA_BFF_URL: http://nova-bff:8095
+      COOPFUTURO_TENANT_ID: ${COOPFUTURO_TENANT_ID:-}
+      COOPFUTURO_PUBLIC_ORIGIN: ${COOPFUTURO_PUBLIC_ORIGIN:-}
       # Lab / post-call WA / ops default — must match the LIWA entry-point used in demos.
       COOPFUTURO_LIWA_FLOW_ID: ${COOPFUTURO_LIWA_FLOW_ID:-1784249919201}
       LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1784249919201}
@@ -727,7 +1182,7 @@ services:
     ports:
       # Contabo already maps WEB_CONSOLE_NOVA_HOST_PORT=19001; reuse it so CoopFuturo
       # keeps the same URL after swapping the Vite console for this Next UI.
-      - "${WEB_CONSOLE_NOVA_HOST_PORT:-3001}:3000"
+      - "${WEB_CONSOLE_NOVA_HOST_PORT:-3011}:3000"
     healthcheck:
       test:
         [
@@ -741,7 +1196,7 @@ services:
       retries: 5
       start_period: 25s
     depends_on:
-      api-gateway:
+      nova-bff:
         condition: service_healthy
 
 volumes:

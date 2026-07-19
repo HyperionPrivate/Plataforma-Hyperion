@@ -4,10 +4,10 @@ import {
   tenantIdSchema,
   documentReceivedPayloadSchema,
   documentValidatedPayloadSchema
-} from "@hyperion/contracts";
-import { readServiceUrls } from "@hyperion/config";
+} from "@hyperion/nova-contracts";
+import { readServiceUrls } from "@hyperion/nova-config";
 import type { DatabaseClient } from "@hyperion/database";
-import type { ServiceContext } from "@hyperion/service-runtime";
+import type { ServiceContext } from "@hyperion/nova-service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { createObjectStore, detectContentType, newDocumentId, type ObjectStore } from "./object-store.js";

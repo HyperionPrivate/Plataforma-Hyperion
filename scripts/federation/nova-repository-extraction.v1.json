@@ -1,0 +1,274 @@
+{
+  "schemaVersion": 1,
+  "cell": "nova",
+  "description": "Deterministic source and lineage manifest for rehearsing the NOVA repository extraction.",
+  "tagAllowlist": [],
+  "directPaths": [
+    ".github/CODEOWNERS",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/dependabot.yml",
+    ".github/workflows/build-attested-cell-images.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/container-scan.yml",
+    ".github/workflows/gitleaks.yml",
+    ".github/workflows/nova.yml",
+    ".github/workflows/publish-provider-contracts.yml",
+    ".github/workflows/publish-release.yml",
+    ".gitignore",
+    ".prettierignore",
+    ".prettierrc.json",
+    "README.md",
+    "SECURITY.md",
+    "apps/coopfuturo-console",
+    "apps/nova-bff",
+    "apps/nova-console",
+    "docs/architecture/decisions/ADR-0003-nova-product-boundaries.md",
+    "docs/architecture/decisions/ADR-0006-federated-product-cells.md",
+    "docs/operations/NOVA-CUTOVER.md",
+    "docs/operations/NOVA-RECOVERY.md",
+    "docs/operations/NOVA-REPOSITORY-EXTRACTION.md",
+    "docs/operations/NOVA-STANDALONE.md",
+    "docs/products/NOVA.md",
+    "docs/products/nova",
+    "eslint.config.mjs",
+    "fixtures/contracts/provider-owned/nova-contracts",
+    "infra/docker/cells/nova.Dockerfile",
+    "infra/docker/console.nginx.conf.template",
+    "infra/docker-compose.nova.acceptance.yml",
+    "infra/docker-compose.nova-ops.yml",
+    "infra/docker-compose.nova.yml",
+    "infra/nova-ops.env.example",
+    "infra/nova.env.example",
+    "package.json",
+    "packages/nova-config",
+    "packages/nova-contracts",
+    "packages/nova-durable-events",
+    "packages/nova-migrations",
+    "packages/nova-service-runtime",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "releases/README.md",
+    "releases/catalogs/nova",
+    "releases/manifests/nova",
+    "releases/registry/README.md",
+    "releases/registry/provider-artifacts.v1.json",
+    "releases/rollback-policies/nova",
+    "releases/schemas",
+    "scripts/architecture/cell-policy.mjs",
+    "scripts/architecture/check-boundaries.mjs",
+    "scripts/architecture/check-boundaries.test.mjs",
+    "scripts/architecture/check-compose-identities.mjs",
+    "scripts/architecture/check-compose-identities.test.mjs",
+    "scripts/architecture/check-federation-boundaries.mjs",
+    "scripts/architecture/check-federation-boundaries.test.mjs",
+    "scripts/architecture/workspace-dependency-graph.mjs",
+    "scripts/autonomy/elevenlabs-bootstrap-nova.mjs",
+    "scripts/autonomy/nova-audit-http.e2e.mjs",
+    "scripts/autonomy/nova-audit-http.test.mjs",
+    "scripts/autonomy/nova-smoke.e2e.mjs",
+    "scripts/autonomy/nova-smoke.test.mjs",
+    "scripts/ci/cell-compose-plan.mjs",
+    "scripts/ci/cell-install-plan.mjs",
+    "scripts/ci/cell-install-plan.test.mjs",
+    "scripts/ci/nova-migration-autonomy.test.mjs",
+    "scripts/ci/resolve-cell-impact.mjs",
+    "scripts/ci/resolve-cell-impact.test.mjs",
+    "scripts/ci/resolve-compose-image-reference.mjs",
+    "scripts/ci/resolve-compose-image-reference.test.mjs",
+    "scripts/ci/run-cell-federation-tests.mjs",
+    "scripts/ci/run-cell-federation-tests.test.mjs",
+    "scripts/ci/run-cell-phase.mjs",
+    "scripts/ci/run-cell-phase.test.mjs",
+    "scripts/ci/smoke-cell-bff-image.mjs",
+    "scripts/ci/smoke-cell-bff-image.test.mjs",
+    "scripts/ci/verify-required-cell-result.mjs",
+    "scripts/ci/verify-required-cell-result.test.mjs",
+    "scripts/docker/generate-cell-contexts.mjs",
+    "scripts/docker/generate-cell-contexts.test.mjs",
+    "scripts/docker/generate-coopfuturo-context.mjs",
+    "scripts/docker/nginx-federation.test.mjs",
+    "scripts/docker/nova-migration-artifacts.test.mjs",
+    "scripts/docker/nova-standalone-compose.test.mjs",
+    "scripts/docs/check-docs.mjs",
+    "scripts/docs/check-docs.test.mjs",
+    "scripts/federation",
+    "scripts/ops/nova-documents-snapshot.sh",
+    "scripts/ops/nova-documents-snapshot.test.sh",
+    "scripts/ops/nova-postgres-backup.sh",
+    "scripts/ops/nova-postgres-hooks.test.sh",
+    "scripts/ops/nova-postgres-restore.sh",
+    "scripts/ops/postgres-backup.sh",
+    "scripts/ops/postgres-restore.sh",
+    "scripts/ops/rollback-verifier-test-helper.mjs",
+    "scripts/ops/run-nova-postgres-recovery-drill.mjs",
+    "scripts/ops/run-nova-postgres-recovery-drill.test.mjs",
+    "scripts/ops/run-postgres-backup-tests.mjs",
+    "scripts/ops/verify-cell-rollback-core.mjs",
+    "scripts/ops/verify-nova-recovery-evidence.mjs",
+    "scripts/ops/verify-nova-recovery-evidence.test.mjs",
+    "scripts/ops/verify-nova-rollback.mjs",
+    "scripts/ops/verify-nova-rollback.test.mjs",
+    "scripts/releases",
+    "services/documents-service",
+    "services/liwa-channel-service",
+    "services/nova-core-service",
+    "services/voice-channel-service",
+    "tsconfig.base.json"
+  ],
+  "historicalRenames": [
+    {
+      "from": "apps/web-console/src/app.tsx",
+      "to": "apps/nova-console/src/app.tsx"
+    },
+    {
+      "from": "apps/web-console/src/components/Layout.tsx",
+      "to": "apps/nova-console/src/components/NovaShell.tsx"
+    },
+    {
+      "from": "apps/web-console/src/components/Login.tsx",
+      "to": "apps/nova-console/src/components/Login.tsx"
+    },
+    {
+      "from": "apps/web-console/src/components/nova/",
+      "to": "apps/nova-console/src/components/nova/"
+    },
+    {
+      "from": "apps/web-console/src/components/ui.tsx",
+      "to": "apps/nova-console/src/components/ui.tsx"
+    },
+    {
+      "from": "apps/web-console/src/lib/api.ts",
+      "to": "apps/nova-console/src/lib/api.ts"
+    },
+    {
+      "from": "apps/web-console/src/lib/context.ts",
+      "to": "apps/nova-console/src/lib/context.ts"
+    },
+    {
+      "from": "apps/web-console/src/lib/format.ts",
+      "to": "apps/nova-console/src/lib/format.ts"
+    },
+    {
+      "from": "apps/web-console/src/lib/session.ts",
+      "to": "apps/nova-console/src/lib/session.ts"
+    },
+    {
+      "from": "apps/web-console/src/main.tsx",
+      "to": "apps/nova-console/src/main.tsx"
+    },
+    {
+      "from": "apps/web-console/src/pages/NovaPage.tsx",
+      "to": "apps/nova-console/src/pages/NovaPage.tsx"
+    },
+    {
+      "from": "apps/web-console/src/pages/nova/",
+      "to": "apps/nova-console/src/pages/nova/"
+    },
+    {
+      "from": "packages/migrations/sql/047-nova-autonomy.sql",
+      "to": "packages/nova-migrations/sql/047-nova-autonomy.sql"
+    },
+    {
+      "from": "packages/migrations/sql/048-nova-correlation-and-domain.sql",
+      "to": "packages/nova-migrations/sql/048-nova-correlation-and-domain.sql"
+    },
+    {
+      "from": "packages/migrations/sql/049-nova-ui-meta-contactos.sql",
+      "to": "packages/nova-migrations/sql/049-nova-ui-meta-contactos.sql"
+    },
+    {
+      "from": "packages/migrations/sql/050-nova-lead-product-line.sql",
+      "to": "packages/nova-migrations/sql/050-nova-lead-product-line.sql"
+    },
+    {
+      "from": "packages/migrations/sql/051-liwa-accepted-pending.sql",
+      "to": "packages/nova-migrations/sql/051-liwa-accepted-pending.sql"
+    },
+    {
+      "from": "packages/migrations/sql/052-nova-conversation-messages.sql",
+      "to": "packages/nova-migrations/sql/052-nova-conversation-messages.sql"
+    }
+  ],
+  "directHistoryPaths": [
+    "apps/coopfuturo-console",
+    "services/documents-service",
+    "services/liwa-channel-service",
+    "services/nova-core-service",
+    "services/voice-channel-service"
+  ],
+  "ancestryOnly": [
+    {
+      "path": "packages/contracts/src/nova.ts",
+      "lineageTargets": ["packages/nova-contracts/src/index.ts"],
+      "headPolicy": "remove-during-adaptation",
+      "reason": "The compatibility mirror and provider-owned contract coexist at the cut commit, so a direct rename would collide."
+    },
+    {
+      "path": "packages/config/src/deployment-environment.ts",
+      "lineageTargets": ["packages/nova-config/src/index.ts"],
+      "headPolicy": "remove-during-adaptation",
+      "reason": "NOVA config folds selected platform configuration behavior into a product-owned module."
+    },
+    {
+      "path": "packages/config/src/index.ts",
+      "lineageTargets": ["packages/nova-config/src/index.ts"],
+      "headPolicy": "remove-during-adaptation",
+      "reason": "The source and split package coexist at the cut commit."
+    },
+    {
+      "path": "packages/config/src/secret-placeholders.ts",
+      "lineageTargets": ["packages/nova-config/src/index.ts"],
+      "headPolicy": "remove-during-adaptation",
+      "reason": "NOVA retains only its own secret policy after extraction."
+    },
+    {
+      "path": "packages/durable-events/src/index.ts",
+      "lineageTargets": ["packages/nova-durable-events/src/index.ts"],
+      "headPolicy": "remove-during-adaptation",
+      "reason": "The generic and NOVA event runtimes coexist at the cut commit."
+    },
+    {
+      "path": "packages/service-runtime/src",
+      "lineageTargets": ["packages/nova-service-runtime/src"],
+      "headPolicy": "remove-during-adaptation",
+      "reason": "The product runtime was split from the shared runtime while both paths remain present."
+    }
+  ],
+  "requiredExternalArtifacts": [
+    "@hyperion/audit-contracts@1.1.0",
+    "@hyperion/database@0.1.0",
+    "@hyperion/logger@0.1.0",
+    "@hyperion/platform-contracts@1.1.0"
+  ],
+  "forbiddenHeadPathPrefixes": [
+    "apps/lumen-",
+    "apps/pulso-",
+    "docs/products/LUMEN",
+    "docs/products/PULSO",
+    "infra/docker-compose.lumen",
+    "infra/docker-compose.pulso",
+    "packages/lumen-",
+    "packages/pulso-",
+    "releases/catalogs/lumen/",
+    "releases/catalogs/pulso/",
+    "releases/manifests/lumen/",
+    "releases/manifests/pulso/",
+    "releases/rollback-policies/lumen/",
+    "releases/rollback-policies/pulso/",
+    "services/agent-service/",
+    "services/integration-service/",
+    "services/knowledge-service/",
+    "services/lumen-service/",
+    "services/prompt-flow-service/",
+    "services/pulso-iris-service/",
+    "services/whatsapp-channel-service/"
+  ],
+  "adaptationRequired": [
+    "Remove every ancestry-only path from HEAD while retaining it in history.",
+    "Reduce package.json, pnpm-workspace.yaml and all cell-aware scripts to NOVA only.",
+    "Regenerate pnpm-lock.yaml after all external artifacts pass live registry readback.",
+    "Rewrite the Docker context and Dockerfile to install external packages instead of copying provider sources.",
+    "Rewrite .github/workflows/nova.yml as a standalone workflow without _cell-ci.yml.",
+    "Remove monorepo-only release, documentation, architecture and operations branches from retained neutral tooling."
+  ]
+}

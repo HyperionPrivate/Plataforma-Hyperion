@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
@@ -208,14 +208,6 @@ describeIntegration("PostgreSQL service role isolation", () => {
         queries: ["select count(*) from platform.knowledge_sources", "select count(*) from platform.schema_migrations"]
       },
       {
-        role: "hyperion_audit",
-        queries: [
-          "select count(*) from platform.audit_events",
-          "select count(*) from audit_runtime.inbox_events",
-          "select count(*) from platform.schema_migrations"
-        ]
-      },
-      {
         role: "hyperion_integration",
         queries: [
           "select count(*) from platform.integrations",
@@ -262,13 +254,24 @@ describeIntegration("PostgreSQL service role isolation", () => {
     }
   });
 
-  it("allows owned writes and trigger execution after PUBLIC function access is revoked", async () => {
+  it("allows owner writes after the historical cross-owner trigger is removed", async () => {
+    await withAdmin(async (admin) => {
+      const trigger = await admin.query<{ count: number }>(
+        `select count(*)::int as count
+           from pg_catalog.pg_trigger
+          where tgrelid = 'platform.tenants'::regclass
+            and tgname = 'trg_initialize_agenda_settings'
+            and not tgisinternal`
+      );
+      expect(trigger.rows[0]?.count).toBe(0);
+    });
+
     await withRole("hyperion_access", async (access) => {
       await access.query("begin");
       try {
         await access.query(
           `insert into platform.tenants (slug, display_name)
-           values ($1, 'Role permission trigger test')`,
+           values ($1, 'Role permission owner write test')`,
           [`role-permission-${randomUUID()}`]
         );
       } finally {
@@ -388,11 +391,6 @@ describeIntegration("PostgreSQL service role isolation", () => {
       );
     });
 
-    await withRole("hyperion_audit", async (audit) => {
-      await expectPermissionDenied(audit, "select count(*) from pulso_iris.messages");
-      await expectPermissionDenied(audit, "select count(*) from lumen.encounters");
-    });
-
     await withRole("hyperion_sofia", async (sofia) => {
       await expectPermissionDenied(sofia, "select count(*) from pulso_iris.outbox_event_positions");
       await expectPermissionDenied(sofia, "update pulso_iris.conversations set updated_at = updated_at where false");
@@ -410,83 +408,6 @@ describeIntegration("PostgreSQL service role isolation", () => {
         "update channel_runtime.inbound_events set updated_at = updated_at where false"
       );
     });
-  });
-
-  it("keeps the Audit ledger and inbox append-only for the runtime role", async () => {
-    await withRole("hyperion_audit", async (audit) => {
-      await audit.query("begin");
-      try {
-        await audit.query(
-          `insert into platform.audit_events (event_type, entity_type, metadata)
-           values ('role.append.probe', 'permission_test', '{"synthetic":true}'::jsonb)`
-        );
-        await audit.query(
-          `insert into audit_runtime.inbox_events (
-             event_id, tenant_id, source_service, event_type, event_version,
-             payload_hash, contract_hash, occurred_at
-           ) values ($1, null, 'sofia-automation', 'sofia.audit.event.record.v1', 1, $2, $3, now())`,
-          [
-            randomUUID(),
-            "a".repeat(64),
-            createHash("sha256")
-              .update(["sofia-automation", "sofia.audit.event.record.v1", "1", "<none>", "a".repeat(64)].join("\u001f"))
-              .digest("hex")
-          ]
-        );
-      } finally {
-        await audit.query("rollback");
-      }
-
-      await expectPermissionDenied(audit, "update platform.audit_events set metadata = metadata where false");
-      await expectPermissionDenied(audit, "delete from platform.audit_events where false");
-      await expectPermissionDenied(
-        audit,
-        "update audit_runtime.inbox_events set payload_hash = payload_hash where false"
-      );
-      await expectPermissionDenied(audit, "delete from audit_runtime.inbox_events where false");
-    });
-  });
-
-  it("preserves historical Audit tenant identifiers when Access deletes a tenant", async () => {
-    let tenantId = "";
-    let auditEventId = "";
-    try {
-      await withRole("hyperion_access", async (access) => {
-        const tenant = await access.query<{ id: string }>(
-          `insert into platform.tenants (slug, display_name)
-           values ($1, 'Audit external identifier probe') returning id`,
-          [`audit-external-id-${randomUUID()}`]
-        );
-        tenantId = tenant.rows[0]?.id ?? "";
-      });
-
-      await withRole("hyperion_audit", async (audit) => {
-        const event = await audit.query<{ id: string }>(
-          `insert into platform.audit_events (tenant_id, event_type, entity_type, metadata)
-           values ($1, 'tenant.lifecycle.probe', 'tenant', '{"synthetic":true}'::jsonb)
-           returning id`,
-          [tenantId]
-        );
-        auditEventId = event.rows[0]?.id ?? "";
-      });
-
-      await withRole("hyperion_access", async (access) => {
-        await access.query("delete from platform.tenants where id = $1", [tenantId]);
-      });
-
-      await withRole("hyperion_audit", async (audit) => {
-        const evidence = await audit.query<{ tenantId: string }>(
-          `select tenant_id as "tenantId" from platform.audit_events where id = $1`,
-          [auditEventId]
-        );
-        expect(evidence.rows).toEqual([{ tenantId }]);
-      });
-    } finally {
-      await withAdmin(async (admin) => {
-        if (auditEventId) await admin.query("delete from platform.audit_events where id = $1", [auditEventId]);
-        if (tenantId) await admin.query("delete from platform.tenants where id = $1", [tenantId]);
-      });
-    }
   });
 
   itOwnershipGuard("refuses to layer grants over a service role that already owns a schema or function", async () => {

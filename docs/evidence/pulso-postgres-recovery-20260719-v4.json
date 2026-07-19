@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 2,
+  "cell": "pulso",
+  "scope": "postgres-only",
+  "operationId": "20260719T055031Z",
+  "project": "hyperion-pulso-recovery-acceptance-20260719t055031z-967d21f1",
+  "dockerContext": "desktop-linux",
+  "dockerEndpointSha256": "2e1a13b5c38007e19366225454c425eb89626875521ad4eddc04f1b533aa4908",
+  "source": {
+    "branch": "feat/federated-separation",
+    "revision": "1d77f380a5684d4de3a072c1aa4c8714a2ed023c",
+    "workingTreeIncluded": true,
+    "workingTreeStatusSha256": "72b070fa37d282872dec3022cbf8cc37fc89ef48a94fd6f45b5689d2e384bb40",
+    "workingTreePatchSha256": "dac5eaeff7f27e02c79cbe351d7d1729c4797140b8fba87bc621c7b48f06cf7b",
+    "closure": {
+      "files": 287,
+      "sha256": "6b1f88dd59add73aa07134723e64080d7702c87f8749749c958800c200fcef6d"
+    },
+    "migrationSqlClosure": {
+      "files": 4,
+      "sha256": "e822a7f4a611f60fe1a14ef0ae29df423a10698c30f82c4a09ddf24d5ebbb044"
+    },
+    "commandSourcesSha256": "f6bb4c7595ca3f9da4de1770ca5f53c5097b59beff179c92255f7b59354ed0b1"
+  },
+  "sourceDatabase": "hyperion_pulso",
+  "sourceDatabaseRemovedBeforeValidation": true,
+  "restoreDatabase": "hyperion_pulso_restore_drill",
+  "restoreOwner": "hyperion_pulso_migrator",
+  "backupSha256": "47d91b2f34b249c8af5b7c67443999f4d2cf847c3a547ffeb830d8fb513285e9",
+  "schemaSha256": "eefdf405856d0f17c32601b2f35b531aec1aaa2840f380098e367c6ef64e6481",
+  "ledgerSha256": "437a8a18edcf99fb4cfbb737fb1875fd9cf53e47635ebda494bc7ce35d232749",
+  "aclSha256": "a34882abd8bce8af5a469a3d70d59677e0c6fac52ebcffcf157725e74dd411c6",
+  "globalReadinessMarkerSha256": "a4fe308e4e40770a9c11954c9a2ff73ef4f8ae2bc0a23d5dad5fbcf13baa63b0",
+  "sofiaReadinessMarkerSha256": "8ec705a462598559a7abe6b273f946512cf99db563fa06726c9dd744ce3c6fcf",
+  "catalogEvidenceSha256": "22f3d0b5277bebdf4a7cf4fc8cf2ec0d52412a97274a8913c61a0d6a92afae76",
+  "migrationCount": 4,
+  "schemaVersionValue": 4,
+  "sofiaSchemaVersionValue": 1,
+  "recoveryCanarySha256": "e37682d6ff740a3caec854d70ce5486a6a02f5a4dffcbc6ba43f817a36337302",
+  "sourceRecoveryCanarySha256": "e37682d6ff740a3caec854d70ce5486a6a02f5a4dffcbc6ba43f817a36337302",
+  "restoredRecoveryCanarySha256": "e37682d6ff740a3caec854d70ce5486a6a02f5a4dffcbc6ba43f817a36337302",
+  "recoveryCanaryPreserved": true,
+  "runtimeRolesVerified": 5,
+  "migrationsSkippedOnValidation": [
+    "001-pulso-autonomous-baseline.sql",
+    "002-pulso-runtime-roles.sql",
+    "003-sofia-readiness-marker.sql",
+    "004-access-channel-tenant-projection.sql"
+  ],
+  "roleBootstrapCount": 5,
+  "publicDatabasePrivilegesRevoked": true,
+  "whatsappSessionsIncluded": false,
+  "schemaVerifier": {
+    "name": "assertPulsoCatalogEvidence",
+    "verified": true,
+    "expectedGlobalMarker": "4\t004-access-channel-tenant-projection.sql",
+    "expectedSofiaMarker": "1\t003-sofia-readiness-marker.sql"
+  },
+  "rawReceipts": {
+    "backup": {
+      "BACKUP_CATALOG_ENTRIES": "523",
+      "BACKUP_DATABASE": "hyperion_pulso",
+      "BACKUP_DIRECTORY_MODE": "700",
+      "BACKUP_DIRECTORY_OWNER": "pc:UNKNOWN",
+      "BACKUP_FILE": "pulso-20260719T055031Z.dump.gz",
+      "BACKUP_FILE_MODE": "600",
+      "BACKUP_FILE_OWNER": "pc:UNKNOWN",
+      "BACKUP_PROFILE": "pulso",
+      "BACKUP_SHA256": "47d91b2f34b249c8af5b7c67443999f4d2cf847c3a547ffeb830d8fb513285e9",
+      "BACKUP_SIZE_BYTES": "35291"
+    },
+    "restore": {
+      "RESTORE_CATALOG_ENTRIES": "523",
+      "RESTORE_DATABASE": "hyperion_pulso_restore_drill",
+      "RESTORE_FILE": "pulso-20260719T055031Z.dump.gz",
+      "RESTORE_OWNER": "hyperion_pulso_migrator",
+      "RESTORE_PROFILE": "pulso",
+      "RESTORE_SHA256": "47d91b2f34b249c8af5b7c67443999f4d2cf847c3a547ffeb830d8fb513285e9"
+    },
+    "migrationValidation": {
+      "event": "pulso_migrations_complete",
+      "applied": [],
+      "adopted": [],
+      "skipped": [
+        "001-pulso-autonomous-baseline.sql",
+        "002-pulso-runtime-roles.sql",
+        "003-sofia-readiness-marker.sql",
+        "004-access-channel-tenant-projection.sql"
+      ]
+    },
+    "roleValidation": {
+      "event": "pulso_database_roles_ready",
+      "roleCount": 5
+    }
+  },
+  "logSha256": {
+    "backup": "39224cdb9cf6f77513bc795745027e823b5f359371543e23307acd197e6cc829",
+    "restore": "95b5fcc4048b79c9620daadaf3e9e6bb289a7510f3d76d0e4634f8c91895cf9f",
+    "migrationValidation": "cd1f2e759d8c2c2396e31c53b0caeeb8e10842beb98587dfc5f49f9972e2c538",
+    "roleValidation": "ef127072ebd0b6f18cfaaa900fa4069200323377102af71275b2a1b103097cbf"
+  },
+  "dockerInventory": {
+    "before": [
+      {
+        "id": "5f69d77dcb57dbd4cf1eadc7a5657a8f49c25b2ebefc8cfebe783825dcc4aab3",
+        "name": "hyperion-pulso-v4-acceptance-codex",
+        "image": "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+      },
+      {
+        "id": "c82071e34f765d7dd46e20c4db4e31b59d7f9dc09cc6e4a450230da5c6decfa6",
+        "name": "plataforma-hyperion-agent-service-1",
+        "image": "sha256:a27407a1193fc8a85153b1d85378547924042cd0fb8ed3886885b38def6c03de"
+      },
+      {
+        "id": "28014d9c94ad58d6bde933ce92268e428af490ffc929808bb754a1be86ecea59",
+        "name": "plataforma-hyperion-api-gateway-1",
+        "image": "sha256:9dc41b29a814c9b5e66b2bb8fdb875cf3bcb198c5f4a566641bb25433845e6a5"
+      },
+      {
+        "id": "3b1ebae10ddeb72d369483136c81511f8fd5bb73006f450834a4c9571cc53610",
+        "name": "plataforma-hyperion-audit-service-1",
+        "image": "plataforma-hyperion-audit-service"
+      },
+      {
+        "id": "249ec96537c23269053acfb805b5759ef23f67e38c45902a34ae53716cd401a1",
+        "name": "plataforma-hyperion-db-role-bootstrap-1",
+        "image": "sha256:6034ef8b4e20a3ed0806cdadef7ed9add6cbc817c76f2738cbfbd9e2d220b4dc"
+      },
+      {
+        "id": "2f228abda00ccf4248c103e09305748d5ea650e7778aff7e7c7a42291f4a6c97",
+        "name": "plataforma-hyperion-identity-service-1",
+        "image": "plataforma-hyperion-identity-service"
+      },
+      {
+        "id": "d31ef27d01a4ea240285115707a02e22ec7f34997d4be74c9e8a33ac8ceddf20",
+        "name": "plataforma-hyperion-integration-service-1",
+        "image": "plataforma-hyperion-integration-service"
+      },
+      {
+        "id": "41eee156ebfd54a14fcfe2bc9a15ee7b9efdad96ee6f5c0b81fef1de204f1dc7",
+        "name": "plataforma-hyperion-knowledge-service-1",
+        "image": "plataforma-hyperion-knowledge-service"
+      },
+      {
+        "id": "cb97223012287021c4f3b1fcfdc2099ebf6e8f5dec09dd4de65b815316ff6341",
+        "name": "plataforma-hyperion-liwa-channel-service-1",
+        "image": "sha256:179b1ea724529392db2740dd86750bb6dfcb34690654d2db130bb20a5a535709"
+      },
+      {
+        "id": "792904e86490eea64cb7a23a6ce3909a0670e711db6c17d0ade76a7697ba5d3c",
+        "name": "plataforma-hyperion-lumen-service-1",
+        "image": "sha256:5a0f4d836a2180a32419a047348005c92c15faa7c314ab558e1598a9783ce738"
+      },
+      {
+        "id": "8a1964e934cdebeb92f66e9ff7a25085cc4f7914a731fd8addeb342bbc59606e",
+        "name": "plataforma-hyperion-migrations-1",
+        "image": "sha256:964d7ad3971b877b040e04b91882e281684154dd828fbc4f598a8e108e78f1e6"
+      },
+      {
+        "id": "dbd7e28f4b663abb05f6bd03994bf93763dff3a48edc89e8ef55ea3db94781b9",
+        "name": "plataforma-hyperion-nova-core-service-1",
+        "image": "sha256:57a8adf4b108194c1a47b3eabf6f3f988210392d4a8f72acce3c43631bc52b19"
+      },
+      {
+        "id": "5e46c6f5de89f8e1e0b47e5457d9a58564f1b8e37b5d9c8d030d920417796d47",
+        "name": "plataforma-hyperion-postgres-1",
+        "image": "postgres:16-alpine"
+      },
+      {
+        "id": "e189c6f5672faab8086f748b31ef14ce09d3a649fb3f32bae3769515332f9526",
+        "name": "plataforma-hyperion-prompt-flow-service-1",
+        "image": "plataforma-hyperion-prompt-flow-service"
+      },
+      {
+        "id": "546b8d36d24c5a4873294e08be4b6453286ab1e6897d5d947af1ac88a20fb9e3",
+        "name": "plataforma-hyperion-pulso-iris-service-1",
+        "image": "plataforma-hyperion-pulso-iris-service"
+      },
+      {
+        "id": "7f2386351d0de862215ae9640cf8b43e1ddca6b2d369fb5d70328f0047c3e78b",
+        "name": "plataforma-hyperion-tenant-service-1",
+        "image": "plataforma-hyperion-tenant-service"
+      },
+      {
+        "id": "5f08dc14b3df528ec1fea6e2e15280a26e12852f95ff5c3c77dd52e21334ea94",
+        "name": "plataforma-hyperion-web-console-1",
+        "image": "sha256:418a144deea4abe34c2a0d1a9298b2134c92660ad4025bb7b1d5a7997cbcf364"
+      },
+      {
+        "id": "7f87a8adf82469ca93743d9dc33cd7528d0df55648db1927099c916770d9199c",
+        "name": "victoriaos-finalbuena-app",
+        "image": "victoriaos-victoria-finalbuena-app"
+      }
+    ],
+    "after": [
+      {
+        "id": "5f69d77dcb57dbd4cf1eadc7a5657a8f49c25b2ebefc8cfebe783825dcc4aab3",
+        "name": "hyperion-pulso-v4-acceptance-codex",
+        "image": "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+      },
+      {
+        "id": "c82071e34f765d7dd46e20c4db4e31b59d7f9dc09cc6e4a450230da5c6decfa6",
+        "name": "plataforma-hyperion-agent-service-1",
+        "image": "sha256:a27407a1193fc8a85153b1d85378547924042cd0fb8ed3886885b38def6c03de"
+      },
+      {
+        "id": "28014d9c94ad58d6bde933ce92268e428af490ffc929808bb754a1be86ecea59",
+        "name": "plataforma-hyperion-api-gateway-1",
+        "image": "sha256:9dc41b29a814c9b5e66b2bb8fdb875cf3bcb198c5f4a566641bb25433845e6a5"
+      },
+      {
+        "id": "3b1ebae10ddeb72d369483136c81511f8fd5bb73006f450834a4c9571cc53610",
+        "name": "plataforma-hyperion-audit-service-1",
+        "image": "plataforma-hyperion-audit-service"
+      },
+      {
+        "id": "249ec96537c23269053acfb805b5759ef23f67e38c45902a34ae53716cd401a1",
+        "name": "plataforma-hyperion-db-role-bootstrap-1",
+        "image": "sha256:6034ef8b4e20a3ed0806cdadef7ed9add6cbc817c76f2738cbfbd9e2d220b4dc"
+      },
+      {
+        "id": "2f228abda00ccf4248c103e09305748d5ea650e7778aff7e7c7a42291f4a6c97",
+        "name": "plataforma-hyperion-identity-service-1",
+        "image": "plataforma-hyperion-identity-service"
+      },
+      {
+        "id": "d31ef27d01a4ea240285115707a02e22ec7f34997d4be74c9e8a33ac8ceddf20",
+        "name": "plataforma-hyperion-integration-service-1",
+        "image": "plataforma-hyperion-integration-service"
+      },
+      {
+        "id": "41eee156ebfd54a14fcfe2bc9a15ee7b9efdad96ee6f5c0b81fef1de204f1dc7",
+        "name": "plataforma-hyperion-knowledge-service-1",
+        "image": "plataforma-hyperion-knowledge-service"
+      },
+      {
+        "id": "cb97223012287021c4f3b1fcfdc2099ebf6e8f5dec09dd4de65b815316ff6341",
+        "name": "plataforma-hyperion-liwa-channel-service-1",
+        "image": "sha256:179b1ea724529392db2740dd86750bb6dfcb34690654d2db130bb20a5a535709"
+      },
+      {
+        "id": "792904e86490eea64cb7a23a6ce3909a0670e711db6c17d0ade76a7697ba5d3c",
+        "name": "plataforma-hyperion-lumen-service-1",
+        "image": "sha256:5a0f4d836a2180a32419a047348005c92c15faa7c314ab558e1598a9783ce738"
+      },
+      {
+        "id": "8a1964e934cdebeb92f66e9ff7a25085cc4f7914a731fd8addeb342bbc59606e",
+        "name": "plataforma-hyperion-migrations-1",
+        "image": "sha256:964d7ad3971b877b040e04b91882e281684154dd828fbc4f598a8e108e78f1e6"
+      },
+      {
+        "id": "dbd7e28f4b663abb05f6bd03994bf93763dff3a48edc89e8ef55ea3db94781b9",
+        "name": "plataforma-hyperion-nova-core-service-1",
+        "image": "sha256:57a8adf4b108194c1a47b3eabf6f3f988210392d4a8f72acce3c43631bc52b19"
+      },
+      {
+        "id": "5e46c6f5de89f8e1e0b47e5457d9a58564f1b8e37b5d9c8d030d920417796d47",
+        "name": "plataforma-hyperion-postgres-1",
+        "image": "postgres:16-alpine"
+      },
+      {
+        "id": "e189c6f5672faab8086f748b31ef14ce09d3a649fb3f32bae3769515332f9526",
+        "name": "plataforma-hyperion-prompt-flow-service-1",
+        "image": "plataforma-hyperion-prompt-flow-service"
+      },
+      {
+        "id": "546b8d36d24c5a4873294e08be4b6453286ab1e6897d5d947af1ac88a20fb9e3",
+        "name": "plataforma-hyperion-pulso-iris-service-1",
+        "image": "plataforma-hyperion-pulso-iris-service"
+      },
+      {
+        "id": "7f2386351d0de862215ae9640cf8b43e1ddca6b2d369fb5d70328f0047c3e78b",
+        "name": "plataforma-hyperion-tenant-service-1",
+        "image": "plataforma-hyperion-tenant-service"
+      },
+      {
+        "id": "5f08dc14b3df528ec1fea6e2e15280a26e12852f95ff5c3c77dd52e21334ea94",
+        "name": "plataforma-hyperion-web-console-1",
+        "image": "sha256:418a144deea4abe34c2a0d1a9298b2134c92660ad4025bb7b1d5a7997cbcf364"
+      },
+      {
+        "id": "7f87a8adf82469ca93743d9dc33cd7528d0df55648db1927099c916770d9199c",
+        "name": "victoriaos-finalbuena-app",
+        "image": "victoriaos-victoria-finalbuena-app"
+      }
+    ],
+    "beforeSha256": "d488277c44f01783f02955c822bb39f3922f4e02cd935c71fc550d37c2ddc9f9",
+    "afterSha256": "d488277c44f01783f02955c822bb39f3922f4e02cd935c71fc550d37c2ddc9f9",
+    "preexistingResourcesPreserved": true
+  },
+  "cleanupVerified": true
+}

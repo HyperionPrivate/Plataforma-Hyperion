@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schemas/release-manifest.schema.json",
+  "schemaVersion": 1,
+  "cell": "lumen",
+  "catalogVersion": "1.1.0",
+  "releaseVersion": "0.2.0-dev.0",
+  "status": "draft",
+  "generatedAt": "2026-07-18T02:35:00Z",
+  "imagesVerified": false,
+  "components": [
+    {
+      "id": "lumen-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/lumen-service@sha256:b6f9ab460059c871fdbe4dfcce9373ff6f477c21def900e0343329a8beebcf61"
+    },
+    {
+      "id": "lumen-bff",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/lumen-bff@sha256:48abc1e220f7e31d2163dfa30f43e6d306402cc6acf8d24237697f44575808f9"
+    },
+    {
+      "id": "lumen-console",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/lumen-console@sha256:d70d3e7dd404ff2586134fe6a974ebc740e7a23bdad9b89e206e2a9a8bfb0a78"
+    },
+    {
+      "id": "lumen-migrations",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/lumen-migrations@sha256:58f366eed48b03227a40371f8d64e4cfd41668d109cd9c94e33b2c4caa3e999d"
+    },
+    {
+      "id": "lumen-contracts",
+      "version": "1.1.0",
+      "package": "@hyperion/lumen-contracts@1.1.0"
+    }
+  ]
+}

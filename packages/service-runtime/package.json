@@ -20,9 +20,9 @@
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^11.1.0",
     "@hyperion/config": "workspace:*",
-    "@hyperion/contracts": "workspace:*",
     "@hyperion/database": "workspace:*",
     "@hyperion/logger": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
     "fastify": "^5.2.1"
   }
 }

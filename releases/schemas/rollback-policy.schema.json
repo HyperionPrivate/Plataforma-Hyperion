@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hyperion provider-owned rollback policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schemaVersion", "cell", "policyVersion", "catalogVersion", "migration"],
+  "properties": {
+    "$schema": {
+      "const": "../../schemas/rollback-policy.schema.json"
+    },
+    "schemaVersion": {
+      "enum": [1, 2]
+    },
+    "cell": {
+      "enum": ["nova", "lumen", "pulso"]
+    },
+    "policyVersion": {
+      "$ref": "#/$defs/semver"
+    },
+    "catalogVersion": {
+      "$ref": "#/$defs/semver"
+    },
+    "ociComponents": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/componentId"
+      }
+    },
+    "rollbackOciComponents": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/componentId"
+      }
+    },
+    "forwardOnlyOciComponents": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/componentId"
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["componentId", "sourcePath", "files"],
+      "properties": {
+        "componentId": {
+          "$ref": "#/$defs/componentId"
+        },
+        "sourcePath": {
+          "type": "string",
+          "pattern": "^packages/(?:nova|lumen|pulso)-migrations$"
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^sql/[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*\\.sql$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        }
+      },
+      "required": ["ociComponents"],
+      "not": {
+        "anyOf": [{ "required": ["rollbackOciComponents"] }, { "required": ["forwardOnlyOciComponents"] }]
+      }
+    },
+    {
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        }
+      },
+      "required": ["rollbackOciComponents", "forwardOnlyOciComponents"],
+      "not": {
+        "required": ["ociComponents"]
+      }
+    }
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "componentId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    }
+  }
+}

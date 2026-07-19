@@ -1,0 +1,9 @@
+name: hyperion-pulso
+
+# Exec-only view of the existing standalone PULSO PostgreSQL service. Backup
+# and restore wrappers use this descriptor so they never parse credentials or
+# services from another product cell. It must not be used to create a database.
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    profiles: ["pulso-ops"]

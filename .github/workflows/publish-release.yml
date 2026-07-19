@@ -1,0 +1,228 @@
+name: publish-federated-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      cell:
+        description: Cell whose release evidence will be published
+        required: true
+        type: choice
+        options:
+          - platform
+          - nova
+          - lumen
+          - pulso
+      catalog_version:
+        description: Existing versioned catalog (SemVer)
+        required: true
+        default: 1.0.0
+        type: string
+      release_version:
+        description: New release version (SemVer)
+        required: true
+        type: string
+      source_revision:
+        description: Exact lowercase 40-character Git commit SHA built into every image
+        required: true
+        type: string
+      image_inventory_json:
+        description: Exact JSON inventory mapping every cell OCI component to repository@sha256:digest
+        required: true
+        type: string
+      npm_registry_origin:
+        description: Credential-free HTTPS origin that owns every provider contract package
+        required: true
+        default: https://registry.npmjs.org
+        type: string
+
+permissions:
+  contents: write
+  packages: read
+  attestations: read
+
+concurrency:
+  group: publish-federated-release-${{ inputs.cell }}
+  cancel-in-progress: false
+
+jobs:
+  publish-evidence:
+    name: ${{ inputs.cell }} / publish release evidence
+    runs-on: ubuntu-latest
+    environment: release-publication
+    steps:
+      - name: Require the selected protected-main source and safe registry
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          NPM_REGISTRY_ORIGIN: ${{ inputs.npm_registry_origin }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "$SOURCE_REVISION" =~ ^0+$ ]]
+          if [[ "$REF_PROTECTED" != "true" || "$GITHUB_REF" != "refs/heads/main" || "$GITHUB_SHA" != "$SOURCE_REVISION" ]]; then
+            echo "Dispatch this workflow on protected main and use that exact github.sha as source_revision." >&2
+            exit 1
+          fi
+          node -e 'const url=new URL(process.argv[1]);if(url.protocol!=="https:"||url.username||url.password||url.search||url.hash||url.pathname!=="/")process.exit(1)' "$NPM_REGISTRY_ORIGIN"
+      - name: Checkout exact release source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - name: Verify checked-out source revision
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+      - name: Resolve deterministic release timestamp
+        id: source
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          timestamp=$(git show -s --format=%cI "$SOURCE_REVISION")
+          node -e 'if (!Number.isFinite(Date.parse(process.argv[1]))) process.exit(1)' "$timestamp"
+          printf 'timestamp=%s\n' "$timestamp" >> "$GITHUB_OUTPUT"
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          registry-url: ${{ inputs.npm_registry_origin }}
+      - name: Authenticate registry readback
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Materialize exact image inventory
+        env:
+          IMAGE_INVENTORY_JSON: ${{ inputs.image_inventory_json }}
+          RELEASE_DIRECTORY: ${{ runner.temp }}/federated-release
+        run: >-
+          node -e "const fs=require('node:fs');const path=require('node:path');
+          const value=JSON.parse(process.env.IMAGE_INVENTORY_JSON);
+          fs.mkdirSync(process.env.RELEASE_DIRECTORY,{recursive:true,mode:0o700});
+          fs.writeFileSync(path.join(process.env.RELEASE_DIRECTORY,'image-inventory.json'),JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'})"
+      - name: Verify every registry digest and signed build provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_DIRECTORY: ${{ runner.temp }}/federated-release
+          CELL: ${{ inputs.cell }}
+          CATALOG_VERSION: ${{ inputs.catalog_version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          VERIFIED_AT: ${{ steps.source.outputs.timestamp }}
+        run: |
+          node scripts/releases/verify-image-provenance.mjs \
+            --cell "$CELL" \
+            --catalog-version "$CATALOG_VERSION" \
+            --source-revision "$SOURCE_REVISION" \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --image-inventory "$RELEASE_DIRECTORY/image-inventory.json" \
+            --verified-at "$VERIFIED_AT" \
+            --output "$RELEASE_DIRECTORY/registry-verification.json"
+      - name: Verify every npm package integrity and signed source provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_DIRECTORY: ${{ runner.temp }}/federated-release
+          CELL: ${{ inputs.cell }}
+          CATALOG_VERSION: ${{ inputs.catalog_version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          NPM_REGISTRY_ORIGIN: ${{ inputs.npm_registry_origin }}
+          VERIFIED_AT: ${{ steps.source.outputs.timestamp }}
+        run: |
+          node scripts/releases/verify-npm-provenance.mjs \
+            --cell "$CELL" \
+            --catalog-version "$CATALOG_VERSION" \
+            --source-revision "$SOURCE_REVISION" \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --registry-origin "$NPM_REGISTRY_ORIGIN" \
+            --verified-at "$VERIFIED_AT" \
+            --output "$RELEASE_DIRECTORY/npm-verification.json"
+      - name: Prepare published manifest and checksum attestation
+        shell: bash
+        env:
+          RELEASE_DIRECTORY: ${{ runner.temp }}/federated-release
+          CELL: ${{ inputs.cell }}
+          CATALOG_VERSION: ${{ inputs.catalog_version }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TIMESTAMP: ${{ steps.source.outputs.timestamp }}
+        run: |
+          node scripts/releases/prepare-published-release.mjs \
+            --cell "$CELL" \
+            --catalog-version "$CATALOG_VERSION" \
+            --release-version "$RELEASE_VERSION" \
+            --source-revision "$SOURCE_REVISION" \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --image-inventory "$RELEASE_DIRECTORY/image-inventory.json" \
+            --registry-verification "$RELEASE_DIRECTORY/registry-verification.json" \
+            --npm-verification "$RELEASE_DIRECTORY/npm-verification.json" \
+            --generated-at "$RELEASE_TIMESTAMP" \
+            --released-at "$RELEASE_TIMESTAMP" \
+            --manifest-output "$RELEASE_DIRECTORY/manifest.json" \
+            --attestation-output "$RELEASE_DIRECTORY/attestation.json"
+      - name: Validate publication candidate as publishable
+        shell: bash
+        env:
+          RELEASE_DIRECTORY: ${{ runner.temp }}/federated-release
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+        run: >-
+          node scripts/releases/validate-published-release.mjs
+          --publishable
+          --source-revision "$SOURCE_REVISION"
+          --source-repository "$SOURCE_REPOSITORY"
+          --image-inventory "$RELEASE_DIRECTORY/image-inventory.json"
+          --registry-verification "$RELEASE_DIRECTORY/registry-verification.json"
+          --npm-verification "$RELEASE_DIRECTORY/npm-verification.json"
+          --manifest "$RELEASE_DIRECTORY/manifest.json"
+          --attestation "$RELEASE_DIRECTORY/attestation.json"
+      - name: Seal release evidence files
+        shell: bash
+        env:
+          RELEASE_DIRECTORY: ${{ runner.temp }}/federated-release
+        run: >-
+          cd "$RELEASE_DIRECTORY" &&
+          sha256sum manifest.json image-inventory.json registry-verification.json npm-verification.json attestation.json > SHA256SUMS &&
+          sha256sum --check SHA256SUMS
+      - name: Materialize deterministic release notes
+        shell: bash
+        env:
+          RELEASE_DIRECTORY: ${{ runner.temp }}/federated-release
+          CELL: ${{ inputs.cell }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          printf 'Federated release evidence for %s %s at source revision `%s`.\n' \
+            "$CELL" "$RELEASE_VERSION" "$SOURCE_REVISION" > "$RELEASE_DIRECTORY/RELEASE-NOTES.md"
+      - name: Reconcile and publish permanent GitHub Release evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_DIRECTORY: ${{ runner.temp }}/federated-release
+          CELL: ${{ inputs.cell }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+        run: >-
+          node scripts/releases/reconcile-github-release.mjs
+          --cell "$CELL"
+          --release-version "$RELEASE_VERSION"
+          --source-revision "$SOURCE_REVISION"
+          --source-repository "$SOURCE_REPOSITORY"
+          --release-directory "$RELEASE_DIRECTORY"
+      - name: Publish immutable release evidence artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: federated-release-${{ inputs.cell }}-${{ inputs.release_version }}
+          path: ${{ runner.temp }}/federated-release
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 9

@@ -1,4 +1,15 @@
+---
+documentType: runbook
+status: not-current
+owner: nova-operations
+issue: HYP-NOVA-012
+reviewDue: 2026-09-30
+---
+
 # Contabo — stack de prueba (puerto aislado)
+
+> **Estado: no vigente para exposición pública.** Este runbook solo puede usarse
+> detrás de un túnel privado con TLS hasta que se valide de nuevo para producción.
 
 Entorno **solo pruebas** en el VPS Contabo, sin tocar lo que ya escucha en 80/443.
 
@@ -10,13 +21,13 @@ Entorno **solo pruebas** en el VPS Contabo, sin tocar lo que ya escucha en 80/44
 | 25384    | Cerrado / timeout | No usable desde esta red                        |
 | 80 / 443 | Abiertos          | Ya hay algo en producción/piloto — **no pisar** |
 
-URL de prueba del webhook (cuando el stack `hyperion-test` esté up):
+URL de prueba del webhook (cuando el stack `hyperion-test` y el túnel TLS estén up):
 
 ```text
-http://144.91.100.31:18081/v1/liwa/webhooks
+https://<host-del-tunel-privado>/v1/liwa/webhooks
 ```
 
-Consola Ops prueba: `http://144.91.100.31:13001`
+Consola Ops prueba: acceso local mediante port-forward SSH a `http://127.0.0.1:13001`.
 
 ## Requisitos de acceso
 
@@ -38,19 +49,20 @@ export COMPOSE_PROJECT_NAME=hyperion-test
 export API_GATEWAY_HOST_PORT=18081
 export WEB_CONSOLE_HOST_PORT=13001
 
-docker compose -p hyperion-test \
+docker compose --profile legacy-gateway -p hyperion-test \
   -f infra/docker-compose.yml \
   -f infra/docker-compose.contabo-test.yml \
   --env-file .env.contabo-test \
   up -d --build
 ```
 
-Abrir firewall Contabo / ufw solo para `18081` y `13001` (no reabrir servicios ajenos).
+No abrir `18081` ni `13001` al Internet. El overlay los enlaza a loopback; usar
+un túnel TLS para LIWA y port-forward SSH para la consola.
 
 ## Smoke webhook
 
 ```bash
-curl -i -X POST "http://144.91.100.31:18081/v1/liwa/webhooks" \
+curl -i -X POST "https://<host-del-tunel-privado>/v1/liwa/webhooks" \
   -H "Content-Type: application/json" \
   -H "X-LIWA-WEBHOOK-SECRET: <secret>" \
   -d '{"event":"handoff_requested","phone":"+573004198710","agencia":"AG_PIEDECUESTA","ciudad":"Piedecuesta"}'

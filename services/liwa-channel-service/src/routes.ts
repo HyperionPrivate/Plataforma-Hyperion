@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   envelope,
-  novaAgencyTagByCode,
   novaCatalog,
+  novaFlowIdSchema,
   novaIngressEventSchema,
   tenantIdSchema,
   waSendRequestedPayloadSchema,
@@ -14,10 +14,10 @@ import {
   csatRecordedPayloadSchema,
   optOutPayloadSchema,
   tipificacionRecordedPayloadSchema
-} from "@hyperion/contracts";
-import { readServiceUrls } from "@hyperion/config";
+} from "@hyperion/nova-contracts";
+import { readServiceUrls } from "@hyperion/nova-config";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
-import type { ServiceContext } from "@hyperion/service-runtime";
+import type { ServiceContext } from "@hyperion/nova-service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { createLiwaClient, LiwaTextWindowError, type LiwaClient } from "./liwa-client.js";
@@ -28,6 +28,7 @@ import {
   normalizePhoneE164,
   type NormalizedLiwaPayload
 } from "./liwa-webhook-normalize.js";
+import { isValidLiwaWebhookSecret } from "./webhook-auth.js";
 
 const liwaCatalog = {
   product: novaCatalog.product.code,
@@ -64,7 +65,7 @@ const sendSchema = z.object({
   flow_id: z.string().max(80).optional(),
   text: z.string().max(2000).optional(),
   agency_tag: z.string().max(40).optional(),
-  product_flow: z.enum(["renovacion", "reactivacion"]).optional()
+  product_flow: novaFlowIdSchema.optional()
 });
 
 const replySchema = z.object({
@@ -198,17 +199,7 @@ export async function registerLiwaRoutes(
 
     const secret = process.env.LIWA_WEBHOOK_SECRET?.trim();
     const headerSecret = readHeader(request, "x-liwa-webhook-secret");
-    const querySecret = (() => {
-      const q = request.query as Record<string, unknown> | undefined;
-      const raw = q?.secret ?? q?.webhook_secret;
-      return typeof raw === "string" ? raw.trim() : "";
-    })();
-    const allowInsecure =
-      process.env.LIWA_WEBHOOK_ALLOW_INSECURE?.trim() === "1" &&
-      (process.env.HYPERION_ENVIRONMENT?.trim() === "local" ||
-        process.env.HYPERION_DEPLOYMENT_ENVIRONMENT?.trim() === "development");
-    const secretOk = Boolean(secret) && (headerSecret === secret || querySecret === secret);
-    if (!secretOk && !allowInsecure) {
+    if (!isValidLiwaWebhookSecret(headerSecret, secret)) {
       return reply.code(401).send(envelope({ error: "Invalid webhook secret" }, request.id));
     }
 
@@ -455,7 +446,7 @@ interface OutboundSendInput {
 
 interface OutboundSendInputExtended extends OutboundSendInput {
   first_name?: string;
-  product_flow?: "renovacion" | "reactivacion";
+  product_flow?: string;
 }
 
 async function dispatchOutboundMessage(
@@ -468,13 +459,13 @@ async function dispatchOutboundMessage(
     if (input.agency_tag) {
       await applyAgencyTag(client, contactId, input.agency_tag);
     }
-    const vipTag =
-      process.env.LIWA_VIP_TAG?.trim() ||
-      (input.product_flow === "reactivacion" ? "REACTIVACION_VIP" : "RENOVACION_VIP");
-    try {
-      await applyAgencyTag(client, contactId, vipTag);
-    } catch {
-      // VIP tag may not exist yet; agency tag is enough for queue routing
+    const configuredFlowTag = process.env.LIWA_FLOW_TAG?.trim();
+    if (configuredFlowTag) {
+      try {
+        await applyAgencyTag(client, contactId, configuredFlowTag);
+      } catch {
+        // Optional provider tag must not block the tenant-owned agency route.
+      }
     }
     return client.sendFlow(contactId, input.flow_id);
   }
@@ -494,8 +485,7 @@ async function applyAgencyTag(client: LiwaClient, contactId: string, agencyTag: 
 
 function resolveAgencyTagName(agencyTag: string): string {
   if (agencyTag.startsWith("AG_")) return agencyTag;
-  const mapped = novaAgencyTagByCode[agencyTag as keyof typeof novaAgencyTagByCode];
-  return mapped ?? `AG_${agencyTag.toUpperCase()}`;
+  return `AG_${agencyTag.toUpperCase()}`;
 }
 
 async function upsertContactBinding(
@@ -640,8 +630,8 @@ async function emitNormalizedWebhookEvent(
   }
 
   if (kind === "handoff_requested") {
-    if (!parsed.ciudad && !parsed.agencia && !parsed.agencyCode) {
-      throw new Error("handoff webhook requires ciudad/agencia to resolve agency (no blind BAQ default)");
+    if (!parsed.agencyCode) {
+      throw new Error("handoff webhook requires an explicit tenant-owned agency_code");
     }
     const handoffId = randomUUID();
     await insertLiwaOutboxEvent(db, {
@@ -654,7 +644,7 @@ async function emitNormalizedWebhookEvent(
         handoff_id: handoffId,
         contact_id: contactId,
         contact_ref: contactRef || undefined,
-        agency_code: parsed.agencyCode ?? "BGA",
+        agency_code: parsed.agencyCode,
         agency_tag: parsed.agencyTag,
         reason: parsed.motivo
       }),

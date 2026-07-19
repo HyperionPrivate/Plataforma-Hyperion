@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ChartCard } from "@/components/data/chart-card";
 import { Badge } from "@/components/ui/badge";
 import { ScatterChart, ConversionHeatmap, type ScatterPoint } from "@/components/charts";
-import { useSegmentation } from "@/hooks/use-pulso";
+import { useSegmentation } from "@/hooks/use-nova";
 
 export default function SegmentacionPage() {
   const { data, isLoading, isError, refetch } = useSegmentation();

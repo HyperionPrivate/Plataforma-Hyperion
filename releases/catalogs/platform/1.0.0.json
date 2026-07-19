@@ -1,0 +1,122 @@
+{
+  "$schema": "../../schemas/release-catalog.schema.json",
+  "schemaVersion": 1,
+  "cell": "platform",
+  "catalogVersion": "1.0.0",
+  "owner": "@AdministracionHyperion",
+  "createdAt": "2026-07-17T00:00:00Z",
+  "components": [
+    {
+      "id": "identity-service",
+      "kind": "service",
+      "distribution": "oci",
+      "sourcePath": "services/identity-service",
+      "versionSource": "services/identity-service/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/identity-service"
+    },
+    {
+      "id": "tenant-service",
+      "kind": "service",
+      "distribution": "oci",
+      "sourcePath": "services/tenant-service",
+      "versionSource": "services/tenant-service/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/tenant-service"
+    },
+    {
+      "id": "audit-service",
+      "kind": "service",
+      "distribution": "oci",
+      "sourcePath": "services/audit-service",
+      "versionSource": "services/audit-service/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/audit-service"
+    },
+    {
+      "id": "audit-migrations",
+      "kind": "migrations",
+      "distribution": "oci",
+      "sourcePath": "packages/audit-migrations",
+      "versionSource": "packages/audit-migrations/package.json",
+      "version": "1.0.0",
+      "imageRepository": "ghcr.io/administracionhyperion/audit-migrations",
+      "buildService": "audit-migrations",
+      "composeServices": ["audit-database-bootstrap", "audit-migrations", "audit-role-bootstrap"]
+    },
+    {
+      "id": "api-gateway",
+      "kind": "gateway",
+      "distribution": "oci",
+      "sourcePath": "apps/api-gateway",
+      "versionSource": "apps/api-gateway/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/api-gateway"
+    },
+    {
+      "id": "platform-admin-bff",
+      "kind": "bff",
+      "distribution": "oci",
+      "sourcePath": "apps/platform-admin-bff",
+      "versionSource": "apps/platform-admin-bff/package.json",
+      "version": "1.0.0",
+      "imageRepository": "ghcr.io/administracionhyperion/platform-admin-bff"
+    },
+    {
+      "id": "platform-admin-console",
+      "kind": "console",
+      "distribution": "oci",
+      "sourcePath": "apps/platform-admin-console",
+      "versionSource": "apps/platform-admin-console/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/platform-admin-console"
+    },
+    {
+      "id": "web-console",
+      "kind": "console",
+      "distribution": "oci",
+      "sourcePath": "apps/web-console",
+      "versionSource": "apps/web-console/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/web-console"
+    },
+    {
+      "id": "legacy-global-migrations",
+      "kind": "migrations",
+      "distribution": "oci",
+      "sourcePath": "packages/migrations",
+      "versionSource": "packages/migrations/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/legacy-global-migrations",
+      "buildService": "migrations",
+      "composeServices": ["migrations", "db-role-bootstrap"]
+    },
+    {
+      "id": "platform-migrations",
+      "kind": "migrations",
+      "distribution": "oci",
+      "sourcePath": "packages/platform-migrations",
+      "versionSource": "packages/platform-migrations/package.json",
+      "version": "1.0.0",
+      "imageRepository": "ghcr.io/administracionhyperion/platform-migrations"
+    },
+    {
+      "id": "platform-contracts",
+      "kind": "contract",
+      "distribution": "npm",
+      "sourcePath": "packages/platform-contracts",
+      "versionSource": "packages/platform-contracts/package.json",
+      "version": "1.0.0",
+      "packageName": "@hyperion/platform-contracts"
+    },
+    {
+      "id": "audit-contracts",
+      "kind": "contract",
+      "distribution": "npm",
+      "sourcePath": "packages/audit-contracts",
+      "versionSource": "packages/audit-contracts/package.json",
+      "version": "1.0.0",
+      "packageName": "@hyperion/audit-contracts"
+    }
+  ]
+}

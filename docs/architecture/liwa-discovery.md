@@ -29,12 +29,17 @@ También existen flujos AccesoDirecto_AgBucaramanga, Bienvenida, etc.
 
 ### Tags de agencia (`GET /accounts/tags`)
 
-Coinciden con `novaAgencyTagByCode` en `packages/contracts/src/nova.ts`:
+El snapshot observado fue:
 
 `AG_BARRANQUILLA`, `AG_BUCARAMANGA`, `AG_CUCUTA`, `AG_FLORIDABLANCA`, `AG_PIEDECUESTA`,
 `AG_SAN GIL`, `AG_BARRANCABERMEJA`, `AG_VALLEDUPAR`, `AG_VILLAVICENCIO`.
 
 Extras de campaña: `RENOVACION_*` por sede, `RENOVACION_VIP`.
+
+Estos valores no forman un catálogo global cerrado. El contrato provider-owned
+[`@hyperion/nova-contracts`](../../packages/nova-contracts/src/index.ts) valida `agency_code` y `agency_tag`; el
+routing efectivo se resuelve por tenant desde `nova.agencies` en
+[nova-core-service](../../services/nova-core-service/src/routes.ts).
 
 ### Teams (`GET /accounts/teams`)
 

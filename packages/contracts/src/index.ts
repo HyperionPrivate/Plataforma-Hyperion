@@ -58,8 +58,10 @@ export const pulsoIrisAgentCode = "SOFIA" as const;
 export const lumenProductCode = "LUMEN" as const;
 export {
   novaProductCode,
+  novaAuditEventRecordContract,
   novaCatalog,
   novaProductRoleSchema,
+  novaFlowIdSchema,
   durableEventEnvelopeSchema,
   novaIngressEventSchema,
   envelopeEvent,
@@ -99,8 +101,6 @@ export {
   handoffRequestedEventSchema,
   leadQualifiedEventSchema,
   coreOutcomeRecordedEventSchema,
-  novaAgencyCodes,
-  novaAgencyTagByCode,
   type NovaProductRole,
   type DurableEventEnvelope,
   type NovaIngressEvent
@@ -1456,12 +1456,20 @@ export const productModuleSchema = z.object({
 
 export type ProductModule = z.infer<typeof productModuleSchema>;
 
+export const serviceCellSchema = z.enum(["PLATFORM", "NOVA", "LUMEN", "PULSO_IRIS"]);
+export const serviceLifecycleSchema = z.enum(["active", "deprecated"]);
+export type ServiceCell = z.infer<typeof serviceCellSchema>;
+export type ServiceLifecycle = z.infer<typeof serviceLifecycleSchema>;
+
 export const platformCatalogSchema = z.object({
   services: z.array(
     z.object({
       name: serviceNameSchema,
       port: z.number().int().positive(),
-      responsibility: z.string().min(1)
+      responsibility: z.string().min(1),
+      // Optional so N-1 catalog payloads remain valid during the provider-owned split.
+      cell: serviceCellSchema.optional(),
+      lifecycle: serviceLifecycleSchema.optional()
     })
   ),
   productModules: z.array(productModuleSchema)
@@ -1583,77 +1591,107 @@ export const serviceCatalog: PlatformCatalog["services"] = [
   {
     name: "api-gateway",
     port: 8080,
-    responsibility: "Entrada HTTP publica, health agregado y fachada de plataforma."
+    responsibility: "Fachada HTTP temporal de compatibilidad, en retirada hacia routing por hostname.",
+    cell: "PLATFORM",
+    lifecycle: "deprecated"
   },
   {
     name: "identity-service",
     port: 8081,
-    responsibility: "Operadores, autenticacion, sesiones y permisos."
+    responsibility: "Access de plataforma: operadores, SSO, sesiones, grants y permisos.",
+    cell: "PLATFORM",
+    lifecycle: "active"
   },
   {
     name: "tenant-service",
     port: 8082,
-    responsibility: "Clientes, organizaciones, ambientes y configuracion por tenant."
+    responsibility: "Aprovisionamiento neutral de clientes, organizaciones y ambientes.",
+    cell: "PLATFORM",
+    lifecycle: "active"
   },
   {
     name: "agent-service",
     port: 8083,
-    responsibility: "Agentes IA, productos, canales y ciclo de vida operacional."
+    responsibility: "Componente PULSO: SOFIA y ciclo de vida operacional de agentes.",
+    cell: "PULSO_IRIS",
+    lifecycle: "active"
   },
   {
     name: "prompt-flow-service",
     port: 8084,
-    responsibility: "Versionado de prompts, flujos conversacionales y reglas de ejecucion."
+    responsibility: "Componente PULSO mientras no exista un segundo consumidor: prompts y flujos.",
+    cell: "PULSO_IRIS",
+    lifecycle: "active"
   },
   {
     name: "knowledge-service",
     port: 8085,
-    responsibility: "Fuentes de conocimiento, ingesta, indices y trazabilidad documental."
+    responsibility: "Componente PULSO mientras no exista un segundo consumidor: knowledge e ingesta.",
+    cell: "PULSO_IRIS",
+    lifecycle: "active"
   },
   {
     name: "audit-service",
     port: 8086,
-    responsibility: "Bitacora inmutable, eventos de negocio y evidencia operacional."
+    responsibility: "Audit asincrono de plataforma: bitacora inmutable y evidencia operacional.",
+    cell: "PLATFORM",
+    lifecycle: "active"
   },
   {
     name: "integration-service",
     port: 8087,
-    responsibility: "Conectores externos como voz, WhatsApp, GLPI, ERP y activos."
+    responsibility: "Componente PULSO mientras no exista un segundo consumidor: conectores externos.",
+    cell: "PULSO_IRIS",
+    lifecycle: "active"
   },
   {
     name: "pulso-iris-service",
     port: 8088,
-    responsibility: "Producto PULSO IRIS: Sofia, agenda, handoff, RPA y operacion CEDCO."
+    responsibility: "Core PULSO IRIS: agenda, handoff, RPA y operacion CEDCO.",
+    cell: "PULSO_IRIS",
+    lifecycle: "active"
   },
   {
     name: "whatsapp-channel-service",
     port: 8089,
-    responsibility: "Canal temporal WhatsApp Web de prueba: QR, sesion durable y entrega de texto autorizada."
+    responsibility: "Componente PULSO mientras no exista un segundo consumidor: canal WhatsApp Web.",
+    cell: "PULSO_IRIS",
+    lifecycle: "active"
   },
   {
     name: "lumen-service",
     port: 8090,
-    responsibility: "Producto LUMEN: resumen preconsulta, voz clínica, HC estructurada y aprobación profesional."
+    responsibility: "Core LUMEN: resumen preconsulta, voz clinica, HC estructurada y aprobacion profesional.",
+    cell: "LUMEN",
+    lifecycle: "active"
   },
   {
     name: "nova-core-service",
     port: 8091,
-    responsibility: "Producto NOVA: contactos, campañas, compliance, CRM, handoff por sede y orquestación."
+    responsibility: "Core NOVA: contactos, campanas, compliance, CRM, handoff y orquestacion.",
+    cell: "NOVA",
+    lifecycle: "active"
   },
   {
     name: "voice-channel-service",
     port: 8092,
-    responsibility: "Canal de voz compartido: único cliente del Neutral Dialer v3 y modo demo ElevenLabs SIP."
+    responsibility: "Componente NOVA: cliente del Neutral Dialer v3 y modo demo ElevenLabs SIP.",
+    cell: "NOVA",
+    lifecycle: "active"
   },
   {
     name: "liwa-channel-service",
     port: 8093,
-    responsibility: "Canal WhatsApp compartido vía LIWA (flows, tags AG_*, webhooks e inbox de asesores)."
+    responsibility: "Componente NOVA: canal WhatsApp via LIWA, webhooks e inbox de asesores.",
+    cell: "NOVA",
+    lifecycle: "active"
   },
   {
     name: "documents-service",
     port: 8094,
-    responsibility: "Metadatos y object storage de documentos del producto NOVA."
+    responsibility: "Componente NOVA: metadatos y object storage de documentos.",
+    cell: "NOVA",
+    lifecycle: "active"
   }
 ];
 
@@ -1662,8 +1700,8 @@ export const productModules: ProductModule[] = [
     code: "CORE",
     name: "Nucleo Hyperion",
     status: "building",
-    ownerService: "api-gateway",
-    description: "Base comun para identidad, tenants, auditoria, integraciones y productos."
+    ownerService: "identity-service",
+    description: "Plano neutral minimo de Access, aprovisionamiento y Audit."
   },
   {
     code: pulsoIrisProductCode,
@@ -1684,7 +1722,7 @@ export const productModules: ProductModule[] = [
     name: "NOVA",
     status: "building",
     ownerService: "nova-core-service",
-    description: "Campañas de contacto proactivo por voz IA y WhatsApp. Primer tenant: Coopfuturo."
+    description: "Campañas de contacto proactivo por voz IA y WhatsApp."
   },
   {
     code: "CEDCO-R03",

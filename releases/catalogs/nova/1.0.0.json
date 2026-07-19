@@ -1,0 +1,93 @@
+{
+  "$schema": "../../schemas/release-catalog.schema.json",
+  "schemaVersion": 1,
+  "cell": "nova",
+  "catalogVersion": "1.0.0",
+  "owner": "@AdministracionHyperion",
+  "createdAt": "2026-07-17T00:00:00Z",
+  "rollbackPolicy": "releases/rollback-policies/nova/1.0.0.json",
+  "rollbackPolicySha256": "4c4276917969074997f306856bb4d5721626faa24c46d99b098376e7fbd9c3c5",
+  "components": [
+    {
+      "id": "nova-core-service",
+      "kind": "service",
+      "distribution": "oci",
+      "sourcePath": "services/nova-core-service",
+      "versionSource": "services/nova-core-service/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/nova-core-service"
+    },
+    {
+      "id": "voice-channel-service",
+      "kind": "service",
+      "distribution": "oci",
+      "sourcePath": "services/voice-channel-service",
+      "versionSource": "services/voice-channel-service/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/voice-channel-service"
+    },
+    {
+      "id": "liwa-channel-service",
+      "kind": "service",
+      "distribution": "oci",
+      "sourcePath": "services/liwa-channel-service",
+      "versionSource": "services/liwa-channel-service/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/liwa-channel-service"
+    },
+    {
+      "id": "documents-service",
+      "kind": "service",
+      "distribution": "oci",
+      "sourcePath": "services/documents-service",
+      "versionSource": "services/documents-service/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/documents-service"
+    },
+    {
+      "id": "nova-bff",
+      "kind": "bff",
+      "distribution": "oci",
+      "sourcePath": "apps/nova-bff",
+      "versionSource": "apps/nova-bff/package.json",
+      "version": "1.0.0",
+      "imageRepository": "ghcr.io/administracionhyperion/nova-bff"
+    },
+    {
+      "id": "nova-console",
+      "kind": "console",
+      "distribution": "oci",
+      "sourcePath": "apps/nova-console",
+      "versionSource": "apps/nova-console/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/nova-console"
+    },
+    {
+      "id": "coopfuturo-console",
+      "kind": "console",
+      "distribution": "oci",
+      "sourcePath": "apps/coopfuturo-console",
+      "versionSource": "apps/coopfuturo-console/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/coopfuturo-console"
+    },
+    {
+      "id": "nova-migrations",
+      "kind": "migrations",
+      "distribution": "oci",
+      "sourcePath": "packages/nova-migrations",
+      "versionSource": "packages/nova-migrations/package.json",
+      "version": "1.0.0",
+      "imageRepository": "ghcr.io/administracionhyperion/nova-migrations"
+    },
+    {
+      "id": "nova-contracts",
+      "kind": "contract",
+      "distribution": "npm",
+      "sourcePath": "packages/nova-contracts",
+      "versionSource": "packages/nova-contracts/package.json",
+      "version": "1.1.0",
+      "packageName": "@hyperion/nova-contracts"
+    }
+  ]
+}

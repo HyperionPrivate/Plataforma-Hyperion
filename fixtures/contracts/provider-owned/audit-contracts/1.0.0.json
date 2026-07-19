@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@hyperion/audit-contracts",
+  "version": "1.0.0",
+  "provenance": {
+    "kind": "repository-baseline",
+    "published": false,
+    "sourceRevision": null,
+    "note": "Generated from the repository package tarball; this is not registry publication evidence."
+  },
+  "manifest": {
+    "name": "@hyperion/audit-contracts",
+    "version": "1.0.0",
+    "type": "module",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "files": ["dist", "!dist/**/*.test.*"],
+    "dependencies": {
+      "zod": "^3.24.2",
+      "@hyperion/platform-contracts": "1.0.0"
+    }
+  },
+  "declarationFiles": {
+    "dist/index.d.ts": "import { z } from \"zod\";\nexport declare const novaAuditEventRecordContract: {\n    readonly eventType: \"nova.audit.event.record.v1\";\n    readonly sourceService: \"nova-core-service\";\n};\n/**\n * Audit owns the ingress contracts it accepts. Product packages may re-export\n * their entry, but the platform-side consumer must never import a product\n * contract package just to decide which event types are valid.\n */\nexport declare const auditEventRecordV1Contracts: {\n    readonly sofia: {\n        readonly eventType: \"sofia.audit.event.record.v1\";\n        readonly sourceService: \"sofia-automation\";\n    };\n    readonly lumen: {\n        readonly eventType: \"lumen.audit.event.record.v1\";\n        readonly sourceService: \"lumen-service\";\n    };\n    readonly pulso: {\n        readonly eventType: \"pulso.audit.event.record.v1\";\n        readonly sourceService: \"pulso-iris-service\";\n    };\n    readonly channel: {\n        readonly eventType: \"channel.audit.event.record.v1\";\n        readonly sourceService: \"whatsapp-channel-service\";\n    };\n    readonly nova: {\n        readonly eventType: \"nova.audit.event.record.v1\";\n        readonly sourceService: \"nova-core-service\";\n    };\n};\n/** Drain-only N-1 wire contract retained until its durable is empty. */\nexport declare const legacyAuditEventRecordV1Contract: {\n    readonly eventType: \"audit.event.record.v1\";\n    readonly persistedEventType: \"legacy.audit.event.record.v1\";\n    readonly sourceService: \"legacy-unknown\";\n};\nexport declare const auditEventRecordV1TypeSchema: z.ZodEnum<[\"sofia.audit.event.record.v1\", \"lumen.audit.event.record.v1\", \"pulso.audit.event.record.v1\", \"channel.audit.event.record.v1\", \"nova.audit.event.record.v1\"]>;\nexport declare const auditEventInputSchema: z.ZodObject<{\n    tenantId: z.ZodOptional<z.ZodString>;\n    actorId: z.ZodOptional<z.ZodString>;\n    eventType: z.ZodString;\n    entityType: z.ZodString;\n    entityId: z.ZodOptional<z.ZodString>;\n    metadata: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;\n}, \"strict\", z.ZodTypeAny, {\n    eventType: string;\n    entityType: string;\n    metadata: Record<string, unknown>;\n    tenantId?: string | undefined;\n    actorId?: string | undefined;\n    entityId?: string | undefined;\n}, {\n    eventType: string;\n    entityType: string;\n    tenantId?: string | undefined;\n    actorId?: string | undefined;\n    entityId?: string | undefined;\n    metadata?: Record<string, unknown> | undefined;\n}>;\nexport declare const auditEventRecordV1BaseSchema: z.ZodObject<{\n    id: z.ZodString;\n    type: z.ZodString;\n    version: z.ZodLiteral<1>;\n    occurredAt: z.ZodString;\n    tenantId: z.ZodNullable<z.ZodString>;\n    payload: z.ZodObject<{\n        tenantId: z.ZodOptional<z.ZodString>;\n        actorId: z.ZodOptional<z.ZodString>;\n        eventType: z.ZodString;\n        entityType: z.ZodString;\n        entityId: z.ZodOptional<z.ZodString>;\n        metadata: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;\n    }, \"strict\", z.ZodTypeAny, {\n        eventType: string;\n        entityType: string;\n        metadata: Record<string, unknown>;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n    }, {\n        eventType: string;\n        entityType: string;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n        metadata?: Record<string, unknown> | undefined;\n    }>;\n}, \"strict\", z.ZodTypeAny, {\n    tenantId: string | null;\n    type: string;\n    id: string;\n    version: 1;\n    occurredAt: string;\n    payload: {\n        eventType: string;\n        entityType: string;\n        metadata: Record<string, unknown>;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n    };\n}, {\n    tenantId: string | null;\n    type: string;\n    id: string;\n    version: 1;\n    occurredAt: string;\n    payload: {\n        eventType: string;\n        entityType: string;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n        metadata?: Record<string, unknown> | undefined;\n    };\n}>;\nexport declare function validateAuditEventTenant(event: z.infer<typeof auditEventRecordV1BaseSchema>, context: z.RefinementCtx): void;\nexport declare const auditEventRecordV1Schema: z.ZodEffects<z.ZodObject<{\n    id: z.ZodString;\n    version: z.ZodLiteral<1>;\n    occurredAt: z.ZodString;\n    tenantId: z.ZodNullable<z.ZodString>;\n    payload: z.ZodObject<{\n        tenantId: z.ZodOptional<z.ZodString>;\n        actorId: z.ZodOptional<z.ZodString>;\n        eventType: z.ZodString;\n        entityType: z.ZodString;\n        entityId: z.ZodOptional<z.ZodString>;\n        metadata: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;\n    }, \"strict\", z.ZodTypeAny, {\n        eventType: string;\n        entityType: string;\n        metadata: Record<string, unknown>;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n    }, {\n        eventType: string;\n        entityType: string;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n        metadata?: Record<string, unknown> | undefined;\n    }>;\n} & {\n    type: z.ZodEnum<[\"sofia.audit.event.record.v1\", \"lumen.audit.event.record.v1\", \"pulso.audit.event.record.v1\", \"channel.audit.event.record.v1\", \"nova.audit.event.record.v1\"]>;\n}, \"strict\", z.ZodTypeAny, {\n    tenantId: string | null;\n    type: \"nova.audit.event.record.v1\" | \"sofia.audit.event.record.v1\" | \"lumen.audit.event.record.v1\" | \"pulso.audit.event.record.v1\" | \"channel.audit.event.record.v1\";\n    id: string;\n    version: 1;\n    occurredAt: string;\n    payload: {\n        eventType: string;\n        entityType: string;\n        metadata: Record<string, unknown>;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n    };\n}, {\n    tenantId: string | null;\n    type: \"nova.audit.event.record.v1\" | \"sofia.audit.event.record.v1\" | \"lumen.audit.event.record.v1\" | \"pulso.audit.event.record.v1\" | \"channel.audit.event.record.v1\";\n    id: string;\n    version: 1;\n    occurredAt: string;\n    payload: {\n        eventType: string;\n        entityType: string;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n        metadata?: Record<string, unknown> | undefined;\n    };\n}>, {\n    tenantId: string | null;\n    type: \"nova.audit.event.record.v1\" | \"sofia.audit.event.record.v1\" | \"lumen.audit.event.record.v1\" | \"pulso.audit.event.record.v1\" | \"channel.audit.event.record.v1\";\n    id: string;\n    version: 1;\n    occurredAt: string;\n    payload: {\n        eventType: string;\n        entityType: string;\n        metadata: Record<string, unknown>;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n    };\n}, {\n    tenantId: string | null;\n    type: \"nova.audit.event.record.v1\" | \"sofia.audit.event.record.v1\" | \"lumen.audit.event.record.v1\" | \"pulso.audit.event.record.v1\" | \"channel.audit.event.record.v1\";\n    id: string;\n    version: 1;\n    occurredAt: string;\n    payload: {\n        eventType: string;\n        entityType: string;\n        tenantId?: string | undefined;\n        actorId?: string | undefined;\n        entityId?: string | undefined;\n        metadata?: Record<string, unknown> | undefined;\n    };\n}>;\nexport declare const auditInboxResultSchema: z.ZodDiscriminatedUnion<\"status\", [z.ZodObject<{\n    status: z.ZodLiteral<\"accepted\">;\n    eventId: z.ZodString;\n}, \"passthrough\", z.ZodTypeAny, z.objectOutputType<{\n    status: z.ZodLiteral<\"accepted\">;\n    eventId: z.ZodString;\n}, z.ZodTypeAny, \"passthrough\">, z.objectInputType<{\n    status: z.ZodLiteral<\"accepted\">;\n    eventId: z.ZodString;\n}, z.ZodTypeAny, \"passthrough\">>, z.ZodObject<{\n    status: z.ZodLiteral<\"duplicate\">;\n    eventId: z.ZodString;\n}, \"strip\", z.ZodTypeAny, {\n    status: \"duplicate\";\n    eventId: string;\n}, {\n    status: \"duplicate\";\n    eventId: string;\n}>, z.ZodObject<{\n    status: z.ZodLiteral<\"conflict\">;\n    eventId: z.ZodString;\n}, \"strip\", z.ZodTypeAny, {\n    status: \"conflict\";\n    eventId: string;\n}, {\n    status: \"conflict\";\n    eventId: string;\n}>]>;\nexport declare const auditEntityTypeSchema: z.ZodString;\nexport declare const auditEventViewSchema: z.ZodObject<{\n    id: z.ZodString;\n    eventType: z.ZodString;\n    actorId: z.ZodNullable<z.ZodString>;\n    metadata: z.ZodRecord<z.ZodString, z.ZodUnknown>;\n    createdAt: z.ZodEffects<z.ZodUnion<[z.ZodString, z.ZodDate]>, string, string | Date>;\n}, \"strict\", z.ZodTypeAny, {\n    actorId: string | null;\n    eventType: string;\n    metadata: Record<string, unknown>;\n    id: string;\n    createdAt: string;\n}, {\n    actorId: string | null;\n    eventType: string;\n    metadata: Record<string, unknown>;\n    id: string;\n    createdAt: string | Date;\n}>;\nexport declare const auditEventViewListSchema: z.ZodArray<z.ZodObject<{\n    id: z.ZodString;\n    eventType: z.ZodString;\n    actorId: z.ZodNullable<z.ZodString>;\n    metadata: z.ZodRecord<z.ZodString, z.ZodUnknown>;\n    createdAt: z.ZodEffects<z.ZodUnion<[z.ZodString, z.ZodDate]>, string, string | Date>;\n}, \"strict\", z.ZodTypeAny, {\n    actorId: string | null;\n    eventType: string;\n    metadata: Record<string, unknown>;\n    id: string;\n    createdAt: string;\n}, {\n    actorId: string | null;\n    eventType: string;\n    metadata: Record<string, unknown>;\n    id: string;\n    createdAt: string | Date;\n}>, \"many\">;\nexport type AuditEventInput = z.infer<typeof auditEventInputSchema>;\nexport type AuditEventRecordV1 = z.infer<typeof auditEventRecordV1Schema>;\nexport type AuditInboxResult = z.infer<typeof auditInboxResultSchema>;\nexport type AuditEventView = z.infer<typeof auditEventViewSchema>;\nexport type AuditEventRecordV1Contract = (typeof auditEventRecordV1Contracts)[keyof typeof auditEventRecordV1Contracts];\nexport type AuditEventRecordV1Type = AuditEventRecordV1Contract[\"eventType\"];\nexport type AuditEventSourceService = AuditEventRecordV1Contract[\"sourceService\"];\nexport type PersistedAuditEventRecordV1Type = AuditEventRecordV1Type | typeof legacyAuditEventRecordV1Contract.persistedEventType;\nexport type PersistedAuditEventSourceService = AuditEventSourceService | typeof legacyAuditEventRecordV1Contract.sourceService;\n"
+  },
+  "runtimeSchemas": {
+    ".#auditEntityTypeSchema": {
+      "typeName": "ZodString",
+      "sha256": "bf19c59f57a2797c162638e0559bedfe9e220367af18342b594c8e55e6f72b95"
+    },
+    ".#auditEventInputSchema": {
+      "typeName": "ZodObject",
+      "sha256": "3cff02b6abab2388af2832e1788ceda289867368512ddd632f21fb4af1a10ee3"
+    },
+    ".#auditEventRecordV1BaseSchema": {
+      "typeName": "ZodObject",
+      "sha256": "f859d682aeaf747fb341b881f5a24f4cd3b9e53c2772daeeeee6219fc8d25a78"
+    },
+    ".#auditEventRecordV1Schema": {
+      "typeName": "ZodEffects",
+      "sha256": "863a6bb3cc5cb3c84535cd87104a7a0562303d011f58acf1967733f38397d192"
+    },
+    ".#auditEventRecordV1TypeSchema": {
+      "typeName": "ZodEnum",
+      "sha256": "e563bedb97abbff9d41e69f5a0e877046226e57925dd44adddc6a767960eee3b"
+    },
+    ".#auditEventViewListSchema": {
+      "typeName": "ZodArray",
+      "sha256": "9445b211001c2f33a90906f2410c08935e66accc4c4c0561f6799577f40306f4"
+    },
+    ".#auditEventViewSchema": {
+      "typeName": "ZodObject",
+      "sha256": "587e15e233c0275359a42fd5f01ae2bce0523f15b2a365eeaaa3f2021263a080"
+    },
+    ".#auditInboxResultSchema": {
+      "typeName": "ZodDiscriminatedUnion",
+      "sha256": "59ea313ce387124ce8693611a039b6226d6651ea4b1bab3a2fdf9e65ca528453"
+    }
+  },
+  "contentSha256": "8cddea727772950e6564e70a849b1a0a2a7aa013def22fb1a08473341eb5be17"
+}

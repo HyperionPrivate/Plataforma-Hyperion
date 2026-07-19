@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { pathToFileURL, URL } from "node:url";
+import { CELL_COMPOSE_SERVICES } from "./cell-policy.mjs";
 
 const DATABASE_IDENTITIES = {
-  "identity-service": "hyperion_access",
-  "tenant-service": "hyperion_access",
+  "identity-service": "hyperion_identity",
+  "tenant-service": "hyperion_tenant",
   "agent-service": "hyperion_sofia",
   "prompt-flow-service": "hyperion_sofia",
   "knowledge-service": "hyperion_knowledge",
@@ -19,7 +20,14 @@ const DATABASE_IDENTITIES = {
   "documents-service": "hyperion_documents"
 };
 
+export const PLATFORM_DATABASE_IDENTITIES = Object.freeze({
+  "identity-service": "hyperion_identity",
+  "tenant-service": "hyperion_tenant",
+  "audit-service": "hyperion_audit"
+});
+
 const NATS_IDENTITIES = {
+  "identity-service": "access",
   "agent-service": "sofia",
   "audit-service": "audit",
   "pulso-iris-service": "pulso",
@@ -30,6 +38,7 @@ const NATS_IDENTITIES = {
 
 const NATS_SECRET_NAMES = [
   "NATS_TOPOLOGY_PASSWORD",
+  "NATS_ACCESS_PASSWORD",
   "NATS_CHANNEL_PASSWORD",
   "NATS_PULSO_PASSWORD",
   "NATS_SOFIA_PASSWORD",
@@ -38,6 +47,7 @@ const NATS_SECRET_NAMES = [
 ];
 
 const DURABLE_EVENT_SERVICES = [
+  "identity-service",
   "agent-service",
   "audit-service",
   "pulso-iris-service",
@@ -47,9 +57,55 @@ const DURABLE_EVENT_SERVICES = [
 
 const NODE_RUNTIME_SERVICES = [...Object.keys(DATABASE_IDENTITIES), "api-gateway"];
 
-export const DEPLOYMENT_ENVIRONMENT_BASE_SERVICES = ["migrations", "db-role-bootstrap", ...NODE_RUNTIME_SERVICES];
+const NOVA_DATABASE_SERVICES = new Set([
+  "nova-core-service",
+  "voice-channel-service",
+  "liwa-channel-service",
+  "documents-service"
+]);
+
+const PROVIDER_ROLE_BOOTSTRAPS = new Map([
+  ["audit-service", "audit-role-bootstrap"],
+  ...[...NOVA_DATABASE_SERVICES].map((serviceName) => [serviceName, "nova-role-bootstrap"])
+]);
+
+export const DEPLOYMENT_ENVIRONMENT_BASE_SERVICES = [
+  "migrations",
+  "db-role-bootstrap",
+  "access-database-bootstrap",
+  "access-migrations",
+  "access-role-bootstrap",
+  "nova-database-bootstrap",
+  "nova-migrations",
+  "nova-role-bootstrap",
+  ...NODE_RUNTIME_SERVICES,
+  "nova-bff",
+  "lumen-bff",
+  "pulso-bff",
+  "platform-admin-bff"
+];
 
 export const DEPLOYMENT_ENVIRONMENT_OVERLAY_SERVICES = ["nats", "jetstream-topology-bootstrap"];
+
+export const PLATFORM_DEPLOYMENT_ENVIRONMENT_SERVICES = Object.freeze([
+  "access-database-bootstrap",
+  "access-migrations",
+  "access-role-bootstrap",
+  "audit-database-bootstrap",
+  "audit-migrations",
+  "audit-role-bootstrap",
+  "identity-service",
+  "tenant-service",
+  "audit-service",
+  "platform-admin-bff"
+]);
+
+const PLATFORM_HTTP_EDGE_IDENTITIES = Object.freeze({
+  PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN: ["platform-admin-bff", "identity-service"],
+  PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN: ["platform-admin-bff", "identity-service"],
+  PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN: ["platform-admin-bff", "tenant-service"],
+  PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY: ["platform-admin-bff", "identity-service"]
+});
 
 const HTTP_EDGE_IDENTITIES = {
   GATEWAY_TO_IDENTITY_TOKEN: ["api-gateway", "identity-service"],
@@ -77,9 +133,14 @@ const HTTP_EDGE_IDENTITIES = {
   ],
   INTEGRATION_TO_CHANNEL_TOKEN: ["integration-service", "whatsapp-channel-service"],
   INTEGRATION_TO_SOFIA_TOKEN: ["integration-service", "agent-service"],
+  INTEGRATION_TO_PULSO_TOKEN: ["integration-service", "pulso-iris-service"],
   CHANNEL_TO_PULSO_TOKEN: ["whatsapp-channel-service", "pulso-iris-service"],
   PULSO_TO_CHANNEL_TOKEN: ["pulso-iris-service", "whatsapp-channel-service"],
   CHANNEL_TO_AUDIT_TOKEN: ["whatsapp-channel-service", "audit-service"],
+  ACCESS_TO_CHANNEL_TOKEN: [
+    { service: "identity-service", variable: "ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN" },
+    "whatsapp-channel-service"
+  ],
   PULSO_TO_SOFIA_TOKEN: ["pulso-iris-service", "agent-service"],
   PULSO_TO_AUDIT_TOKEN: ["pulso-iris-service", "audit-service"],
   PULSO_TO_LUMEN_TOKEN: ["pulso-iris-service", "lumen-service"],
@@ -99,7 +160,31 @@ const HTTP_EDGE_IDENTITIES = {
   LIWA_TO_AUDIT_TOKEN: ["liwa-channel-service", "audit-service"],
   LIWA_TO_NOVA_TOKEN: ["liwa-channel-service", "nova-core-service"],
   DOCUMENTS_TO_AUDIT_TOKEN: ["documents-service", "audit-service"],
-  DOCUMENTS_TO_NOVA_TOKEN: ["documents-service", "nova-core-service"]
+  DOCUMENTS_TO_NOVA_TOKEN: ["documents-service", "nova-core-service"],
+  NOVA_BFF_TO_ACCESS_TOKEN: ["nova-bff", "identity-service"],
+  NOVA_BFF_TO_NOVA_TOKEN: ["nova-bff", "nova-core-service"],
+  NOVA_BFF_TO_VOICE_TOKEN: ["nova-bff", "voice-channel-service"],
+  NOVA_BFF_TO_LIWA_TOKEN: ["nova-bff", "liwa-channel-service"],
+  NOVA_BFF_TO_DOCUMENTS_TOKEN: ["nova-bff", "documents-service"],
+  NOVA_OPERATOR_ASSERTION_KEY: [
+    "nova-bff",
+    "nova-core-service",
+    "voice-channel-service",
+    "liwa-channel-service",
+    "documents-service"
+  ],
+  LUMEN_BFF_TO_ACCESS_TOKEN: ["lumen-bff", "identity-service"],
+  LUMEN_BFF_TO_LUMEN_TOKEN: ["lumen-bff", "lumen-service"],
+  LUMEN_OPERATOR_ASSERTION_KEY: ["lumen-bff", "lumen-service"],
+  PULSO_BFF_TO_ACCESS_TOKEN: ["pulso-bff", "identity-service"],
+  PULSO_BFF_TO_CORE_TOKEN: ["pulso-bff", "pulso-iris-service"],
+  PULSO_BFF_TO_INTEGRATION_TOKEN: ["pulso-bff", "integration-service"],
+  PULSO_OPERATOR_ASSERTION_KEY: ["pulso-bff", "pulso-iris-service", "integration-service"],
+  PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN: ["platform-admin-bff", "identity-service"],
+  PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN: ["platform-admin-bff", "identity-service"],
+  PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN: ["platform-admin-bff", "tenant-service"],
+  PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN: ["platform-admin-bff", "audit-service"],
+  PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY: ["platform-admin-bff", "identity-service"]
 };
 
 export function validateComposeIdentities(base, overlay) {
@@ -124,7 +209,42 @@ export function validateComposeIdentities(base, overlay) {
     }
   }
 
-  for (const serviceName of ["api-gateway", "web-console"]) {
+  const novaMigrationEnvironment = requireService(base, "nova-migrations", problems)?.environment ?? {};
+  const novaMigrationUser = connectionUsername(
+    novaMigrationEnvironment.NOVA_MIGRATOR_DATABASE_URL,
+    "nova-migrations.NOVA_MIGRATOR_DATABASE_URL",
+    problems
+  );
+  if (novaMigrationUser !== "hyperion_nova_migrator") {
+    problems.push("nova-migrations must authenticate as hyperion_nova_migrator");
+  }
+
+  for (const serviceName of ["nova-database-bootstrap", "nova-role-bootstrap"]) {
+    const environment = requireService(base, serviceName, problems)?.environment ?? {};
+    const databaseUser = connectionUsername(
+      environment.NOVA_POSTGRES_ADMIN_URL,
+      `${serviceName}.NOVA_POSTGRES_ADMIN_URL`,
+      problems
+    );
+    if (
+      !databaseUser ||
+      databaseUser === "hyperion_nova_migrator" ||
+      Object.values(DATABASE_IDENTITIES).includes(databaseUser)
+    ) {
+      problems.push(`${serviceName} must use the separate PostgreSQL administrator identity`);
+    }
+  }
+
+  problems.push(...novaBootstrapEnvironmentProblems(base));
+
+  for (const serviceName of [
+    "api-gateway",
+    "web-console",
+    "nova-bff",
+    "lumen-bff",
+    "pulso-bff",
+    "platform-admin-bff"
+  ]) {
     const environment = requireService(base, serviceName, problems)?.environment ?? {};
     if (environment.DATABASE_URL) problems.push(`${serviceName} must not receive DATABASE_URL`);
   }
@@ -167,6 +287,244 @@ export function validateComposeIdentities(base, overlay) {
   }
 }
 
+// The global descriptor remains a temporary coexistence gate. Platform release
+// identity is validated independently so it cannot inherit the legacy gateway,
+// global migrator or shared Access runtime role.
+export function validatePlatformComposeIdentities(configuration) {
+  const problems = platformComposeIdentityProblems(configuration);
+  if (problems.length > 0) {
+    throw new Error(`Standalone Platform Compose identity check failed:\n- ${problems.join("\n- ")}`);
+  }
+}
+
+export function platformComposeIdentityProblems(configuration) {
+  const services = configuration.services ?? {};
+  const problems = [];
+  const requiredServices = ["postgres", ...CELL_COMPOSE_SERVICES.platform];
+  const requiredServiceSet = new Set(requiredServices);
+
+  for (const serviceName of requiredServices) requireService(configuration, serviceName, problems);
+  for (const serviceName of Object.keys(services)) {
+    if (!requiredServiceSet.has(serviceName)) {
+      problems.push(`Standalone Platform Compose must not include service ${serviceName}`);
+    }
+  }
+
+  for (const [serviceName, expectedRole] of Object.entries(PLATFORM_DATABASE_IDENTITIES)) {
+    const environment = services[serviceName]?.environment ?? {};
+    if (environment.EXPECTED_DATABASE_ROLE !== expectedRole) {
+      problems.push(`${serviceName} must declare EXPECTED_DATABASE_ROLE=${expectedRole}`);
+    }
+    const databaseUser = connectionUsername(environment.DATABASE_URL, `${serviceName}.DATABASE_URL`, problems);
+    if (databaseUser !== expectedRole) {
+      problems.push(`${serviceName} DATABASE_URL must authenticate as ${expectedRole}`);
+    }
+  }
+
+  const providerDatabaseRoles = new Set([
+    "hyperion_access_migrator",
+    "hyperion_identity",
+    "hyperion_tenant",
+    "hyperion_audit_migrator",
+    "hyperion_audit"
+  ]);
+  const migrators = [
+    ["access-migrations", "ACCESS_MIGRATOR_DATABASE_URL", "hyperion_access_migrator"],
+    ["audit-migrations", "AUDIT_MIGRATOR_DATABASE_URL", "hyperion_audit_migrator"]
+  ];
+  for (const [serviceName, variableName, expectedRole] of migrators) {
+    const databaseUser = connectionUsername(
+      services[serviceName]?.environment?.[variableName],
+      `${serviceName}.${variableName}`,
+      problems
+    );
+    if (databaseUser !== expectedRole) {
+      problems.push(`${serviceName} must authenticate as ${expectedRole}`);
+    }
+  }
+
+  for (const [provider, oneShots] of [
+    ["Access", ["access-database-bootstrap", "access-role-bootstrap"]],
+    ["Audit", ["audit-database-bootstrap", "audit-role-bootstrap"]]
+  ]) {
+    const variableName = `${provider.toUpperCase()}_POSTGRES_ADMIN_URL`;
+    for (const serviceName of oneShots) {
+      const databaseUser = connectionUsername(
+        services[serviceName]?.environment?.[variableName],
+        `${serviceName}.${variableName}`,
+        problems
+      );
+      if (!databaseUser || providerDatabaseRoles.has(databaseUser)) {
+        problems.push(`${serviceName} must use the separate PostgreSQL administrator identity`);
+      }
+    }
+  }
+
+  problems.push(...accessBootstrapEnvironmentProblems(configuration));
+  problems.push(...auditBootstrapEnvironmentProblems(configuration));
+  problems.push(...roleBootstrapDependencyProblems(configuration));
+  problems.push(
+    ...deploymentEnvironmentProblems(configuration, { services: {} }, PLATFORM_DEPLOYMENT_ENVIRONMENT_SERVICES, [])
+  );
+  problems.push(...httpWorkloadIdentityProblems(configuration, PLATFORM_HTTP_EDGE_IDENTITIES));
+  problems.push(...shutdownLifecycleProblems(configuration, ["identity-service", "tenant-service", "audit-service"]));
+
+  for (const serviceName of ["platform-admin-bff", "platform-admin-console"]) {
+    if (services[serviceName]?.environment?.DATABASE_URL) {
+      problems.push(`${serviceName} must not receive DATABASE_URL`);
+    }
+  }
+  for (const [serviceName, service] of Object.entries(services)) {
+    for (const variableName of Object.keys(service.environment ?? {})) {
+      if (variableName.startsWith("GATEWAY_")) {
+        problems.push(`${serviceName} must not receive legacy gateway credential ${variableName}`);
+      }
+      if (variableName === "PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN") {
+        problems.push(`${serviceName} must not receive the retired Platform Admin→Audit credential`);
+      }
+    }
+  }
+  if (services.nats) problems.push("Standalone Platform Compose must not include NATS");
+  if (services["identity-service"]?.environment?.ACCESS_LUMEN_PROJECTION_TRANSPORT !== "disabled") {
+    problems.push("identity-service must disable the Access→LUMEN projection in standalone Platform Compose");
+  }
+  if (services["identity-service"]?.environment?.ACCESS_TENANT_SNAPSHOT_TRANSPORT !== "disabled") {
+    problems.push("identity-service must disable the Access→Channel tenant projection in standalone Platform Compose");
+  }
+  for (const variableName of ["ACCESS_TO_LUMEN_TOKEN", "LUMEN_SERVICE_URL"]) {
+    if (Object.prototype.hasOwnProperty.call(services["identity-service"]?.environment ?? {}, variableName)) {
+      problems.push(`identity-service must not receive product-specific ${variableName} when projection is disabled`);
+    }
+  }
+  for (const variableName of [
+    "ACCESS_TENANT_SNAPSHOT_HTTP_URL",
+    "ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN",
+    "ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP"
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(services["identity-service"]?.environment ?? {}, variableName)) {
+      problems.push(`identity-service must not receive ${variableName} when the tenant projection is disabled`);
+    }
+  }
+  if (services["audit-service"]?.environment?.DURABLE_EVENT_TRANSPORT !== "http") {
+    problems.push("audit-service must use the HTTP rollback transport in standalone Platform Compose");
+  }
+
+  return problems;
+}
+
+export function accessBootstrapEnvironmentProblems(configuration) {
+  return providerBootstrapEnvironmentProblems(configuration, {
+    "access-database-bootstrap": {
+      required: ["ACCESS_POSTGRES_ADMIN_URL", "ACCESS_POSTGRES_DB", "ACCESS_MIGRATOR_DATABASE_PASSWORD"],
+      forbidden: ["ACCESS_MIGRATOR_DATABASE_URL", "IDENTITY_DATABASE_PASSWORD", "TENANT_DATABASE_PASSWORD"]
+    },
+    "access-migrations": {
+      required: ["ACCESS_POSTGRES_DB", "ACCESS_MIGRATOR_DATABASE_URL"],
+      forbidden: [
+        "ACCESS_POSTGRES_ADMIN_URL",
+        "ACCESS_MIGRATOR_DATABASE_PASSWORD",
+        "IDENTITY_DATABASE_PASSWORD",
+        "TENANT_DATABASE_PASSWORD"
+      ]
+    },
+    "access-role-bootstrap": {
+      required: [
+        "ACCESS_POSTGRES_ADMIN_URL",
+        "ACCESS_POSTGRES_DB",
+        "ACCESS_MIGRATOR_DATABASE_PASSWORD",
+        "IDENTITY_DATABASE_PASSWORD",
+        "TENANT_DATABASE_PASSWORD"
+      ],
+      forbidden: ["ACCESS_MIGRATOR_DATABASE_URL"]
+    }
+  });
+}
+
+export function auditBootstrapEnvironmentProblems(configuration) {
+  return providerBootstrapEnvironmentProblems(configuration, {
+    "audit-database-bootstrap": {
+      required: ["AUDIT_POSTGRES_ADMIN_URL", "AUDIT_POSTGRES_DB", "AUDIT_MIGRATOR_DATABASE_PASSWORD"],
+      forbidden: ["AUDIT_MIGRATOR_DATABASE_URL", "AUDIT_DATABASE_PASSWORD"]
+    },
+    "audit-migrations": {
+      required: ["AUDIT_MIGRATOR_DATABASE_URL"],
+      forbidden: [
+        "AUDIT_POSTGRES_ADMIN_URL",
+        "AUDIT_POSTGRES_DB",
+        "AUDIT_MIGRATOR_DATABASE_PASSWORD",
+        "AUDIT_DATABASE_PASSWORD"
+      ]
+    },
+    "audit-role-bootstrap": {
+      required: ["AUDIT_POSTGRES_ADMIN_URL", "AUDIT_POSTGRES_DB", "AUDIT_DATABASE_PASSWORD"],
+      forbidden: ["AUDIT_MIGRATOR_DATABASE_URL", "AUDIT_MIGRATOR_DATABASE_PASSWORD"]
+    }
+  });
+}
+
+function providerBootstrapEnvironmentProblems(configuration, policy) {
+  const services = configuration.services ?? {};
+  const problems = [];
+  for (const [serviceName, { required, forbidden }] of Object.entries(policy)) {
+    const environment = services[serviceName]?.environment ?? {};
+    for (const variable of required) {
+      if (typeof environment[variable] !== "string" || environment[variable].length === 0) {
+        problems.push(`${serviceName} must receive ${variable}`);
+      }
+    }
+    for (const variable of forbidden) {
+      if (Object.prototype.hasOwnProperty.call(environment, variable)) {
+        problems.push(`${serviceName} must not receive ${variable}`);
+      }
+    }
+  }
+  return problems;
+}
+
+export function novaBootstrapEnvironmentProblems(configuration) {
+  const services = configuration.services ?? {};
+  const problems = [];
+  const runtimePasswords = [
+    "NOVA_DATABASE_PASSWORD",
+    "VOICE_DATABASE_PASSWORD",
+    "LIWA_DATABASE_PASSWORD",
+    "DOCUMENTS_DATABASE_PASSWORD"
+  ];
+  const requiredByService = {
+    "db-role-bootstrap": [],
+    "nova-database-bootstrap": ["NOVA_POSTGRES_ADMIN_URL", "NOVA_POSTGRES_DB", "NOVA_MIGRATOR_DATABASE_PASSWORD"],
+    "nova-migrations": ["NOVA_MIGRATOR_DATABASE_URL"],
+    "nova-role-bootstrap": ["NOVA_POSTGRES_ADMIN_URL", "NOVA_POSTGRES_DB", ...runtimePasswords]
+  };
+  const forbiddenByService = {
+    "db-role-bootstrap": runtimePasswords,
+    "nova-database-bootstrap": ["NOVA_MIGRATOR_DATABASE_URL", ...runtimePasswords],
+    "nova-migrations": [
+      "NOVA_POSTGRES_ADMIN_URL",
+      "NOVA_POSTGRES_DB",
+      "NOVA_MIGRATOR_DATABASE_PASSWORD",
+      ...runtimePasswords
+    ],
+    "nova-role-bootstrap": ["NOVA_MIGRATOR_DATABASE_URL", "NOVA_MIGRATOR_DATABASE_PASSWORD"]
+  };
+
+  for (const [serviceName, requiredVariables] of Object.entries(requiredByService)) {
+    const environment = services[serviceName]?.environment ?? {};
+    for (const variable of requiredVariables) {
+      if (typeof environment[variable] !== "string" || environment[variable].length === 0) {
+        problems.push(`${serviceName} must receive ${variable}`);
+      }
+    }
+    for (const variable of forbiddenByService[serviceName]) {
+      if (Object.prototype.hasOwnProperty.call(environment, variable)) {
+        problems.push(`${serviceName} must not receive ${variable}`);
+      }
+    }
+  }
+
+  return problems;
+}
+
 export function gatewayDependencyProblems(configuration) {
   const gateway = configuration.services?.["api-gateway"];
   if (!gateway) return ["Compose service api-gateway is missing"];
@@ -203,19 +561,107 @@ export function roleBootstrapDependencyProblems(configuration) {
   const migrations = services.migrations;
   const bootstrap = services["db-role-bootstrap"];
 
-  if (migrations?.depends_on?.postgres?.condition !== "service_healthy") {
-    problems.push("migrations must wait for healthy postgres");
+  const hasGlobalDatabaseBoundary = Boolean(migrations || bootstrap);
+  if (hasGlobalDatabaseBoundary) {
+    if (migrations?.depends_on?.postgres?.condition !== "service_healthy") {
+      problems.push("migrations must wait for healthy postgres");
+    }
+    if (migrations?.depends_on?.["db-role-bootstrap"] !== undefined) {
+      problems.push("migrations must run before db-role-bootstrap");
+    }
+    if (bootstrap?.depends_on?.migrations?.condition !== "service_completed_successfully") {
+      problems.push("db-role-bootstrap must wait for successful migrations");
+    }
   }
-  if (migrations?.depends_on?.["db-role-bootstrap"] !== undefined) {
-    problems.push("migrations must run before db-role-bootstrap");
+
+  const accessDatabaseServices = new Set(["identity-service", "tenant-service"]);
+  const hasAccessDatabaseBoundary = ["access-database-bootstrap", "access-migrations", "access-role-bootstrap"].some(
+    (serviceName) => services[serviceName]
+  );
+  if (hasAccessDatabaseBoundary) {
+    if (services["access-database-bootstrap"]?.depends_on?.postgres?.condition !== "service_healthy") {
+      problems.push("access-database-bootstrap must wait for healthy postgres");
+    }
+    if (
+      services["access-migrations"]?.depends_on?.["access-database-bootstrap"]?.condition !==
+      "service_completed_successfully"
+    ) {
+      problems.push("access-migrations must wait for successful access-database-bootstrap");
+    }
+    if (
+      services["access-role-bootstrap"]?.depends_on?.["access-migrations"]?.condition !==
+      "service_completed_successfully"
+    ) {
+      problems.push("access-role-bootstrap must wait for successful access-migrations");
+    }
   }
-  if (bootstrap?.depends_on?.migrations?.condition !== "service_completed_successfully") {
-    problems.push("db-role-bootstrap must wait for successful migrations");
+
+  const hasNovaDatabaseBoundary = [
+    "nova-database-bootstrap",
+    "nova-migrations",
+    "nova-role-bootstrap",
+    ...NOVA_DATABASE_SERVICES
+  ].some((serviceName) => services[serviceName]);
+  if (hasNovaDatabaseBoundary) {
+    if (services["nova-database-bootstrap"]?.depends_on?.postgres?.condition !== "service_healthy") {
+      problems.push("nova-database-bootstrap must wait for healthy postgres");
+    }
+    if (
+      services["nova-migrations"]?.depends_on?.["nova-database-bootstrap"]?.condition !==
+      "service_completed_successfully"
+    ) {
+      problems.push("nova-migrations must wait for successful nova-database-bootstrap");
+    }
+    if (
+      services["nova-role-bootstrap"]?.depends_on?.["nova-migrations"]?.condition !== "service_completed_successfully"
+    ) {
+      problems.push("nova-role-bootstrap must wait for successful nova-migrations");
+    }
+  }
+
+  const hasAuditDatabaseBoundary = [
+    "audit-database-bootstrap",
+    "audit-migrations",
+    "audit-role-bootstrap",
+    "audit-service"
+  ].some((serviceName) => services[serviceName]);
+  if (hasAuditDatabaseBoundary) {
+    if (services["audit-database-bootstrap"]?.depends_on?.postgres?.condition !== "service_healthy") {
+      problems.push("audit-database-bootstrap must wait for healthy postgres");
+    }
+    if (
+      services["audit-migrations"]?.depends_on?.["audit-database-bootstrap"]?.condition !==
+      "service_completed_successfully"
+    ) {
+      problems.push("audit-migrations must wait for successful audit-database-bootstrap");
+    }
+    if (
+      services["audit-role-bootstrap"]?.depends_on?.["audit-migrations"]?.condition !== "service_completed_successfully"
+    ) {
+      problems.push("audit-role-bootstrap must wait for successful audit-migrations");
+    }
   }
 
   for (const serviceName of Object.keys(DATABASE_IDENTITIES).filter((name) => services[name])) {
-    if (!dependsTransitivelyOn(services, serviceName, "db-role-bootstrap", new Set())) {
-      problems.push(`${serviceName} must not start before db-role-bootstrap completes`);
+    const requiredBootstrap =
+      hasAccessDatabaseBoundary && accessDatabaseServices.has(serviceName)
+        ? "access-role-bootstrap"
+        : (PROVIDER_ROLE_BOOTSTRAPS.get(serviceName) ?? "db-role-bootstrap");
+    if (!dependsTransitivelyOn(services, serviceName, requiredBootstrap, new Set())) {
+      problems.push(`${serviceName} must not start before ${requiredBootstrap} completes`);
+    }
+    if (
+      serviceName === "audit-service" &&
+      dependsTransitivelyOn(services, serviceName, "db-role-bootstrap", new Set())
+    ) {
+      problems.push("audit-service must not depend on the global db-role-bootstrap");
+    }
+    if (
+      hasAccessDatabaseBoundary &&
+      accessDatabaseServices.has(serviceName) &&
+      dependsTransitivelyOn(services, serviceName, "db-role-bootstrap", new Set())
+    ) {
+      problems.push(`${serviceName} must not depend on the global db-role-bootstrap`);
     }
   }
   return problems;
@@ -233,6 +679,20 @@ export function eventTransportProblems(base, overlay) {
     if (overlay.services?.[serviceName]?.environment?.DURABLE_EVENT_TRANSPORT !== "jetstream") {
       problems.push(`${serviceName} must use JetStream when the overlay is active`);
     }
+  }
+  if (base.services?.["identity-service"]?.environment?.ACCESS_LUMEN_PROJECTION_TRANSPORT !== "http") {
+    problems.push("identity-service must use the HTTP Access→LUMEN rollback transport in base Compose");
+  }
+  if (overlay.services?.["identity-service"]?.environment?.ACCESS_LUMEN_PROJECTION_TRANSPORT !== "jetstream") {
+    problems.push("identity-service must use the Access JetStream publisher when the overlay is active");
+  }
+  if (base.services?.["identity-service"]?.environment?.ACCESS_TENANT_SNAPSHOT_TRANSPORT !== "disabled") {
+    problems.push("identity-service must keep the Access→Channel tenant projection disabled in base Compose");
+  }
+  if (overlay.services?.["identity-service"]?.environment?.ACCESS_TENANT_SNAPSHOT_TRANSPORT !== "jetstream") {
+    problems.push(
+      "identity-service must publish the Access→Channel tenant projection through JetStream in the overlay"
+    );
   }
   return problems;
 }
@@ -287,28 +747,40 @@ export function httpWorkloadIdentityProblems(configuration, edges = HTTP_EDGE_ID
   }
 
   for (const [variableName, endpoints] of Object.entries(edges)) {
-    const expectedServices = new Set(endpoints);
-    const placements = Object.entries(services)
-      .filter(([, service]) => Object.prototype.hasOwnProperty.call(service.environment ?? {}, variableName))
-      .map(([serviceName]) => serviceName);
+    const endpointDescriptors = endpoints.map((endpoint) =>
+      typeof endpoint === "string"
+        ? { service: endpoint, variable: variableName }
+        : { service: endpoint.service, variable: endpoint.variable ?? variableName }
+    );
+    const expectedByVariable = new Map();
+    for (const endpoint of endpointDescriptors) {
+      const expectedServices = expectedByVariable.get(endpoint.variable) ?? new Set();
+      expectedServices.add(endpoint.service);
+      expectedByVariable.set(endpoint.variable, expectedServices);
+    }
 
-    for (const serviceName of endpoints) {
-      const value = services[serviceName]?.environment?.[variableName];
+    for (const { service: serviceName, variable: endpointVariable } of endpointDescriptors) {
+      const value = services[serviceName]?.environment?.[endpointVariable];
       if (typeof value !== "string" || value.length === 0) {
-        problems.push(`${serviceName} must receive ${variableName}`);
+        problems.push(`${serviceName} must receive ${endpointVariable}`);
       }
     }
-    for (const serviceName of placements) {
-      if (!expectedServices.has(serviceName)) {
-        problems.push(`${serviceName} must not receive unrelated credential ${variableName}`);
+    for (const [endpointVariable, expectedServices] of expectedByVariable) {
+      const placements = Object.entries(services)
+        .filter(([, service]) => Object.prototype.hasOwnProperty.call(service.environment ?? {}, endpointVariable))
+        .map(([serviceName]) => serviceName);
+      for (const serviceName of placements) {
+        if (!expectedServices.has(serviceName)) {
+          problems.push(`${serviceName} must not receive unrelated credential ${endpointVariable}`);
+        }
       }
     }
 
-    const values = endpoints
-      .map((serviceName) => services[serviceName]?.environment?.[variableName])
+    const values = endpointDescriptors
+      .map((endpoint) => services[endpoint.service]?.environment?.[endpoint.variable])
       .filter((value) => typeof value === "string");
     const value = values[0];
-    if (values.length === endpoints.length && new Set(values).size !== 1) {
+    if (values.length === endpointDescriptors.length && new Set(values).size !== 1) {
       problems.push(`${variableName} must resolve to the same value at both edge endpoints`);
       continue;
     }
@@ -408,11 +880,12 @@ function connectionUsername(value, label, problems, allowNoUser = false) {
   }
 }
 
-function renderCompose(files) {
+function renderCompose(files, envFile = ".env.example", profiles = []) {
   const argumentsList = [
     "compose",
     "--env-file",
-    ".env.example",
+    envFile,
+    ...profiles.flatMap((profile) => ["--profile", profile]),
     ...files.flatMap((file) => ["-f", file]),
     "config",
     "--format",
@@ -426,10 +899,22 @@ function renderCompose(files) {
 }
 
 async function main() {
-  const base = renderCompose(["infra/docker-compose.yml"]);
-  const overlay = renderCompose(["infra/docker-compose.yml", "infra/docker-compose.jetstream.yml"]);
+  const defaultBase = renderCompose(["infra/docker-compose.yml"]);
+  if (defaultBase.services?.["api-gateway"]) {
+    throw new Error("Default Compose model must exclude the legacy api-gateway profile");
+  }
+
+  // Compatibility only: validate the complete bearer topology behind its
+  // explicit profile without making it part of normal Compose execution.
+  const base = renderCompose(["infra/docker-compose.yml"], ".env.example", ["legacy-gateway"]);
+  const overlay = renderCompose(["infra/docker-compose.yml", "infra/docker-compose.jetstream.yml"], ".env.example", [
+    "legacy-gateway"
+  ]);
   validateComposeIdentities(base, overlay);
-  process.stdout.write("Compose service identities OK\n");
+
+  const platform = renderCompose(["infra/docker-compose.platform.yml"], "infra/platform.env.example");
+  validatePlatformComposeIdentities(platform);
+  process.stdout.write("Default, legacy-profile coexistence and standalone Platform Compose identities OK\n");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

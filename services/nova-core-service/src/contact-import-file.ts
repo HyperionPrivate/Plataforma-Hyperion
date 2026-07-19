@@ -1,4 +1,3 @@
-import { novaCatalog } from "@hyperion/contracts";
 import { normalizeE164, normalizeSegment } from "./domain.js";
 
 const MAX_FILE_BYTES = 2_000_000;
@@ -28,7 +27,7 @@ export interface ContactImportParseResult {
   errors: ContactImportParseError[];
 }
 
-/** Pilot-compatible column aliases (CoopFuturo Excel/CSV exports). */
+/** Common aliases; agency resolution remains tenant-owned and requires an explicit code. */
 const COLUMN_ALIASES: Record<keyof ContactImportRow | "phone" | "name" | "agency", string[]> = {
   phone: ["phone", "telefono", "teléfono", "celular", "movil", "móvil", "phone_e164"],
   name: ["name", "full_name", "nombre", "nombres", "estudiante", "first_name"],
@@ -216,17 +215,10 @@ function normalizeHeader(value: string): string {
 }
 
 function resolveAgencyCode(agencyRaw?: string, ciudad?: string): string | undefined {
+  void ciudad;
   if (agencyRaw) {
     const upper = agencyRaw.trim().toUpperCase();
-    const byCode = novaCatalog.agencies.find((agency) => agency.code === upper);
-    if (byCode) return byCode.code;
-    const byCity = novaCatalog.agencies.find((agency) => normalizeHeader(agency.city) === normalizeHeader(agencyRaw));
-    if (byCity) return byCity.code;
-    if (/^[A-Z]{2,8}$/.test(upper)) return upper;
-  }
-  if (ciudad) {
-    const byCity = novaCatalog.agencies.find((agency) => normalizeHeader(agency.city) === normalizeHeader(ciudad));
-    return byCity?.code;
+    if (/^[A-Z0-9][A-Z0-9_-]{1,39}$/.test(upper)) return upper;
   }
   return undefined;
 }

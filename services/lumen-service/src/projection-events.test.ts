@@ -1,14 +1,13 @@
 import type { DatabaseClient } from "@hyperion/database";
+import { lumenProjectionEventSchema, type LumenProjectionResult } from "@hyperion/lumen-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import {
   createLumenProjectionJetStreamHandler,
-  lumenProjectionEventSchema,
   registerLumenProjectionEventRoutes,
   sha256CanonicalJson,
-  type LumenProjectionReceiver,
-  type LumenProjectionResult
+  type LumenProjectionReceiver
 } from "./projection-events.js";
 
 const TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";

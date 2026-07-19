@@ -60,7 +60,7 @@ export default function ReportesPage() {
       const stamp = new Date().toISOString().slice(0, 10);
       if (format === "json") {
         downloadBlob(
-          `pulso-${id}-${stamp}.json`,
+          `nova-coopfuturo-${id}-${stamp}.json`,
           JSON.stringify(res.report, null, 2),
           "application/json",
         );
@@ -70,7 +70,7 @@ export default function ReportesPage() {
         const headers = Object.keys(flat);
         const row = headers.map((h) => `"${String(flat[h]).replace(/"/g, '""')}"`).join(",");
         downloadBlob(
-          `pulso-${id}-${stamp}.csv`,
+          `nova-coopfuturo-${id}-${stamp}.csv`,
           `${headers.join(",")}\n${row}\n`,
           "text/csv;charset=utf-8",
         );

@@ -4,15 +4,20 @@ import type campaigns from "@/data/campaigns.json";
 import type conversation from "@/data/conversation.json";
 import type crm from "@/data/crm.json";
 import type handoff from "@/data/handoff.json";
-import { authHeaders, pilotCoreBaseUrl } from "@/lib/auth";
+import { pilotCoreBaseUrl, redirectToLogin, sessionHeaders } from "@/lib/auth";
 
 const base = pilotCoreBaseUrl();
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${base}${path}`, {
-    headers: authHeaders({ Accept: "application/json" }),
+    credentials: "include",
+    headers: sessionHeaders({ Accept: "application/json" }),
     cache: "no-store",
   });
+  if (res.status === 401) {
+    redirectToLogin("expired");
+    throw new Error("Sesión NOVA expirada");
+  }
   if (!res.ok) {
     throw new Error(`pilot-core ${path} → HTTP ${res.status}`);
   }

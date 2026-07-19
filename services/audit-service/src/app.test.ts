@@ -4,6 +4,8 @@ import { registerRoutes } from "./app.js";
 
 const TEST_TOKEN = "test-sofia-to-audit-token";
 const GATEWAY_TOKEN = "test-gateway-to-audit-token";
+const PLATFORM_ADMIN_TOKEN = "test-platform-admin-audit-token";
+const PULSO_TOKEN = "test-pulso-to-audit-token";
 const CALLER = "agent-service";
 
 describe("audit-service without internal token configured", () => {
@@ -44,6 +46,7 @@ describe("audit-service with internal token configured", () => {
   beforeAll(async () => {
     delete process.env.DATABASE_URL;
     process.env.SOFIA_TO_AUDIT_TOKEN = TEST_TOKEN;
+    process.env.PULSO_TO_AUDIT_TOKEN = PULSO_TOKEN;
     const handle = await createService({
       serviceName: "audit-service",
       databaseRequired: true,
@@ -56,6 +59,8 @@ describe("audit-service with internal token configured", () => {
     await app.close();
     delete process.env.SOFIA_TO_AUDIT_TOKEN;
     delete process.env.GATEWAY_TO_AUDIT_TOKEN;
+    delete process.env.PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN;
+    delete process.env.PULSO_TO_AUDIT_TOKEN;
   });
 
   it("rejects writes without a bearer token", async () => {
@@ -100,6 +105,29 @@ describe("audit-service with internal token configured", () => {
     });
 
     expect(response.statusCode).toBe(403);
+  });
+
+  it("scopes entity history to the authenticated producer and requires Audit storage", async () => {
+    const acceptedIdentity = await app.inject({
+      method: "GET",
+      url: "/internal/v1/tenants/22222222-2222-4222-8222-222222222222/audit/entities/appointment/33333333-3333-4333-8333-333333333333/events",
+      headers: {
+        authorization: `Bearer ${PULSO_TOKEN}`,
+        "x-hyperion-caller": "pulso-iris-service"
+      }
+    });
+    const crossedIdentity = await app.inject({
+      method: "GET",
+      url: "/internal/v1/tenants/22222222-2222-4222-8222-222222222222/audit/entities/appointment/33333333-3333-4333-8333-333333333333/events",
+      headers: {
+        authorization: `Bearer ${PULSO_TOKEN}`,
+        "x-hyperion-caller": "agent-service"
+      }
+    });
+
+    expect(acceptedIdentity.statusCode).toBe(503);
+    expect(acceptedIdentity.json().data.error).toContain("DATABASE_URL");
+    expect(crossedIdentity.statusCode).toBe(401);
   });
 
   it("rejects anonymous GET /v1/audit/events", async () => {
@@ -160,5 +188,27 @@ describe("audit-service with internal token configured", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().data).toEqual([]);
+  });
+
+  it("allows GET /v1/audit/events only with the dedicated platform-admin edge", async () => {
+    process.env.PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN = PLATFORM_ADMIN_TOKEN;
+    const accepted = await app.inject({
+      method: "GET",
+      url: "/v1/audit/events",
+      headers: {
+        authorization: `Bearer ${PLATFORM_ADMIN_TOKEN}`,
+        "x-hyperion-caller": "platform-admin-bff"
+      }
+    });
+    const crossed = await app.inject({
+      method: "GET",
+      url: "/v1/audit/events",
+      headers: {
+        authorization: `Bearer ${GATEWAY_TOKEN}`,
+        "x-hyperion-caller": "platform-admin-bff"
+      }
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(crossed.statusCode).toBe(401);
   });
 });

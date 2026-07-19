@@ -3,15 +3,18 @@ import { createDatabase, type DatabaseClient } from "@hyperion/database";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("SOFIA ordered job workers", () => {
   let db: DatabaseClient;
+  let fixtureDb: DatabaseClient;
   let tenantId = "";
 
   beforeAll(async () => {
     db = createDatabase(TEST_DATABASE_URL ?? "");
-    const tenant = await db.query<{ id: string }>(
+    fixtureDb = createDatabase(TEST_PULSO_FIXTURE_DATABASE_URL ?? "");
+    const tenant = await fixtureDb.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name)
        values ($1, 'SOFIA ordered workers test') returning id`,
       [`sofia-worker-order-${randomUUID()}`]
@@ -23,9 +26,10 @@ describeIntegration("SOFIA ordered job workers", () => {
     if (tenantId) {
       await db.query("delete from agent_runtime.jobs where tenant_id = $1", [tenantId]);
       await db.query("delete from agent_runtime.job_stream_positions where tenant_id = $1", [tenantId]);
-      await db.query("delete from platform.tenants where id = $1", [tenantId]);
+      await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
+    await fixtureDb.close();
   });
 
   it("does not let a second worker claim the successor while the head retries", async () => {

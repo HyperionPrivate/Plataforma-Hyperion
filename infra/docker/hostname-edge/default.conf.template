@@ -1,0 +1,331 @@
+# Local provider-neutral routing edge. DNS, TLS certificates and WAF/rate-limit
+# policy are deliberately external; see docs/operations/HOSTNAME-EDGE.md.
+server_tokens off;
+
+# Only an explicitly configured TLS terminator may replace the socket peer
+# with its sanitized client IP. Direct clients cannot make X-Forwarded-For
+# authoritative.
+set_real_ip_from ${EDGE_TRUSTED_PROXY_CIDR};
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+
+log_format hostname_edge_json escape=json
+  '{"time":"$time_iso8601","requestId":"$request_id","cell":"$edge_cell",'
+  '"host":"$host","method":"$request_method","uri":"$uri",'
+  '"status":$status,"requestTime":$request_time}';
+
+map $host $edge_cell {
+  default "unknown";
+  "${PLATFORM_ADMIN_HOST}" "platform";
+  "${NOVA_HOST}" "nova";
+  "${COOPFUTURO_HOST}" "nova";
+  "${LUMEN_HOST}" "lumen";
+  "${PULSO_HOST}" "pulso";
+}
+
+map $host $edge_forwarded_proto {
+  default "${EDGE_FORWARDED_PROTO}";
+}
+
+# Matching the raw request target closes encoded aliases, trailing query
+# strings and method variants before provider authentication reaches NOVA.
+map "$request_method:$request_uri" $nova_provider_request_allowed {
+  default 0;
+  "POST:/v1/liwa/webhooks" 1;
+  "POST:/v1/voice/webhooks/dialer" 1;
+  "POST:/v1/voice/webhooks/elevenlabs" 1;
+}
+
+# Docker's embedded DNS keeps independently deployed cell endpoints resolvable
+# without making startup depend on every upstream being healthy at that instant.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+server {
+  listen 8080 default_server;
+  server_name "";
+
+  access_log /dev/stdout hostname_edge_json;
+  error_log /dev/stderr warn;
+
+  location / {
+    default_type application/json;
+    return 404 '{"error":"unknown hostname"}';
+  }
+}
+
+server {
+  listen 8080;
+  server_name ${PLATFORM_ADMIN_HOST};
+
+  set $cell_console "${PLATFORM_ADMIN_CONSOLE_UPSTREAM}";
+  set $cell_bff "${PLATFORM_ADMIN_BFF_UPSTREAM}";
+
+  access_log /dev/stdout hostname_edge_json;
+  error_log /dev/stderr warn;
+
+  include /etc/nginx/snippets/security-response-headers.conf;
+
+  location = /healthz {
+    access_log off;
+    default_type application/json;
+    return 200 '{"status":"ok","cell":"platform","surface":"hostname-edge"}';
+  }
+
+  location = /api {
+    return 404;
+  }
+
+  location /api/ {
+    include /etc/nginx/snippets/browser-bff-proxy.conf;
+  }
+
+  location = / {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location ^~ /assets/ {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location ~ ^/(?:operators|tenants|grants|catalog)/?$ {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location / {
+    return 404;
+  }
+}
+
+server {
+  listen 8080;
+  server_name ${NOVA_HOST};
+
+  set $cell_console "${NOVA_CONSOLE_UPSTREAM}";
+  set $cell_bff "${NOVA_BFF_UPSTREAM}";
+  set $nova_provider_edge_token "${NOVA_PROVIDER_EDGE_TOKEN}";
+
+  access_log /dev/stdout hostname_edge_json;
+  error_log /dev/stderr warn;
+
+  include /etc/nginx/snippets/security-response-headers.conf;
+
+  location = /healthz {
+    access_log off;
+    default_type application/json;
+    return 200 '{"status":"ok","cell":"nova","surface":"hostname-edge"}';
+  }
+
+  # Provider callbacks are not browser API aliases. These exact paths retain
+  # the raw body and only the provider-specific signature/secret headers.
+  location = /v1/liwa/webhooks {
+    if ($nova_provider_request_allowed = 0) {
+      return 404;
+    }
+    include /etc/nginx/snippets/provider-proxy-base.conf;
+    proxy_set_header X-Liwa-Webhook-Secret $http_x_liwa_webhook_secret;
+  }
+
+  location = /v1/voice/webhooks/dialer {
+    if ($nova_provider_request_allowed = 0) {
+      return 404;
+    }
+    include /etc/nginx/snippets/provider-proxy-base.conf;
+    proxy_set_header X-Dialer-Signature $http_x_dialer_signature;
+    proxy_set_header X-Webhook-Signature $http_x_webhook_signature;
+  }
+
+  location = /v1/voice/webhooks/elevenlabs {
+    if ($nova_provider_request_allowed = 0) {
+      return 404;
+    }
+    include /etc/nginx/snippets/provider-proxy-base.conf;
+    proxy_set_header X-Elevenlabs-Signature $http_x_elevenlabs_signature;
+    proxy_set_header Elevenlabs-Signature $http_elevenlabs_signature;
+    proxy_set_header X-Webhook-Signature $http_x_webhook_signature;
+  }
+
+  # No callback may be reached through the browser-facing /api aperture.
+  location ~ ^/api/v1/(?:liwa|voice)/webhooks(?:/|$) {
+    return 404;
+  }
+
+  location = /api {
+    return 404;
+  }
+
+  location /api/ {
+    include /etc/nginx/snippets/browser-bff-proxy.conf;
+  }
+
+  # Any non-canonical /v1 alias (including /simulate) is closed here.
+  location ^~ /v1/ {
+    return 404;
+  }
+
+  location = / {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location ^~ /assets/ {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location / {
+    return 404;
+  }
+}
+
+server {
+  listen 8080;
+  server_name ${COOPFUTURO_HOST};
+
+  set $coopfuturo_console "${COOPFUTURO_CONSOLE_UPSTREAM}";
+
+  access_log /dev/stdout hostname_edge_json;
+  error_log /dev/stderr warn;
+
+  include /etc/nginx/snippets/security-response-headers.conf;
+
+  # The customer Next application owns both its UI and the server-only
+  # /pilot-core adapter. No separate browser BFF aperture exists on this host.
+  client_max_body_size 21m;
+
+  location = /healthz {
+    access_log off;
+    default_type application/json;
+    return 200 '{"status":"ok","cell":"nova","surface":"coopfuturo-console"}';
+  }
+
+  # Source maps, dotfiles and development endpoints stay closed even when a
+  # future Next build happens to emit or serve them.
+  location ~* \.map$ {
+    return 404;
+  }
+
+  location ~ (?:^|/)\. {
+    return 404;
+  }
+
+  location = /_next/webpack-hmr {
+    return 404;
+  }
+
+  location = / {
+    include /etc/nginx/snippets/coopfuturo-next-proxy.conf;
+  }
+
+  location = /favicon.ico {
+    include /etc/nginx/snippets/coopfuturo-next-proxy.conf;
+  }
+
+  location /_next/static/ {
+    include /etc/nginx/snippets/coopfuturo-next-proxy.conf;
+  }
+
+  location = /_next/image {
+    include /etc/nginx/snippets/coopfuturo-next-proxy.conf;
+  }
+
+  location ~ ^/(?:login|dashboard|campanas(?:/nueva)?|configuracion|conversaciones|crm|handoff|importar|laboratorio|reportes|revision-post-llamada|segmentacion)/?$ {
+    include /etc/nginx/snippets/coopfuturo-next-proxy.conf;
+  }
+
+  location = /pilot-core {
+    return 404;
+  }
+
+  location /pilot-core/ {
+    include /etc/nginx/snippets/coopfuturo-next-proxy.conf;
+  }
+
+  # This closes /api, /v1, /dev, public-template assets and every foreign UI.
+  location / {
+    return 404;
+  }
+}
+
+server {
+  listen 8080;
+  server_name ${LUMEN_HOST};
+
+  set $cell_console "${LUMEN_CONSOLE_UPSTREAM}";
+  set $cell_bff "${LUMEN_BFF_UPSTREAM}";
+
+  access_log /dev/stdout hostname_edge_json;
+  error_log /dev/stderr warn;
+
+  include /etc/nginx/snippets/security-response-headers.conf;
+
+  location = /healthz {
+    access_log off;
+    default_type application/json;
+    return 200 '{"status":"ok","cell":"lumen","surface":"hostname-edge"}';
+  }
+
+  location = /api {
+    return 404;
+  }
+
+  location /api/ {
+    include /etc/nginx/snippets/browser-bff-proxy.conf;
+  }
+
+  location = / {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location ^~ /assets/ {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location ~ ^/lumen(?:/[^/]+)?/?$ {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location / {
+    return 404;
+  }
+}
+
+server {
+  listen 8080;
+  server_name ${PULSO_HOST};
+
+  set $cell_console "${PULSO_CONSOLE_UPSTREAM}";
+  set $cell_bff "${PULSO_BFF_UPSTREAM}";
+
+  access_log /dev/stdout hostname_edge_json;
+  error_log /dev/stderr warn;
+
+  include /etc/nginx/snippets/security-response-headers.conf;
+
+  location = /healthz {
+    access_log off;
+    default_type application/json;
+    return 200 '{"status":"ok","cell":"pulso","surface":"hostname-edge"}';
+  }
+
+  location = /api {
+    return 404;
+  }
+
+  location /api/ {
+    include /etc/nginx/snippets/browser-bff-proxy.conf;
+  }
+
+  location = / {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location ^~ /assets/ {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location ~ ^/(?:operacion|conversaciones|agenda|rpa|campanas|bi|configuracion)/?$ {
+    include /etc/nginx/snippets/console-proxy.conf;
+  }
+
+  location / {
+    return 404;
+  }
+}

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/data/stat-card";
 import { ChartCard } from "@/components/data/chart-card";
 import { GaugeChart } from "@/components/charts";
-import { useHandoff } from "@/hooks/use-pulso";
+import { useHandoff } from "@/hooks/use-nova";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Filter, RefreshCw, X } from "lucide-react";

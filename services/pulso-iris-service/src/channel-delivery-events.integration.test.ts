@@ -11,9 +11,11 @@ import {
 
 const { Client } = pg;
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 let client: pg.Client;
+let fixtureClient: pg.Client;
 let db: DatabaseClient;
 let tenantId: string;
 let conversationId: string;
@@ -21,12 +23,14 @@ let conversationId: string;
 describeIntegration("durable Channel delivery projection", () => {
   beforeAll(async () => {
     client = new Client({ connectionString: TEST_DATABASE_URL });
+    fixtureClient = new Client({ connectionString: TEST_PULSO_FIXTURE_DATABASE_URL });
     await client.connect();
+    await fixtureClient.connect();
     db = createDatabase(TEST_DATABASE_URL ?? "");
 
     tenantId = randomUUID();
     conversationId = randomUUID();
-    await client.query(
+    await fixtureClient.query(
       `insert into platform.tenants (id, slug, display_name)
        values ($1::uuid, $2, 'Channel delivery event integration')`,
       [tenantId, `channel-delivery-${tenantId}`]
@@ -43,9 +47,12 @@ describeIntegration("durable Channel delivery projection", () => {
     if (client) {
       if (tenantId) {
         await client.query("delete from pulso_iris.inbox_events where tenant_id = $1::uuid", [tenantId]);
-        await client.query("delete from platform.tenants where id = $1::uuid", [tenantId]);
       }
       await client.end();
+    }
+    if (fixtureClient) {
+      if (tenantId) await fixtureClient.query("delete from platform.tenants where id = $1::uuid", [tenantId]);
+      await fixtureClient.end();
     }
   });
 

@@ -1,20 +1,19 @@
 import { createHash } from "node:crypto";
 import { readServiceUrls } from "@hyperion/config";
+import { productModules, serviceCatalog } from "@hyperion/contracts";
 import {
-  authMeSchema,
+  accessMeSchema,
   envelope,
   platformHealthSchema,
-  productModules,
-  serviceCatalog,
   serviceHealthSchema,
   tenantIdSchema,
-  type AuthMe,
+  type AccessPrincipal,
   type HealthStatus,
-  type OperatorRole,
   type PlatformHealth,
+  type PlatformRole,
   type ServiceHealth,
   type ServiceName
-} from "@hyperion/contracts";
+} from "@hyperion/platform-contracts";
 import {
   createInternalAuthorizationHeaders,
   createOperatorAssertion,
@@ -24,13 +23,19 @@ import {
   type RouteRegistrar
 } from "@hyperion/service-runtime";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import {
+  authorizeLegacyProductRequest,
+  isLegacyCustomerProductId,
+  readLegacyProductRequestScope,
+  type LegacyHttpMethod
+} from "./legacy-product-policy.js";
 
 interface DownstreamService {
   name: ServiceName;
   url: string;
 }
 
-export type SessionResolver = ((token: string) => Promise<AuthMe | undefined>) & {
+export type SessionResolver = ((token: string) => Promise<AccessPrincipal | undefined>) & {
   invalidate?: (token: string) => void;
 };
 
@@ -38,7 +43,7 @@ declare module "fastify" {
   interface FastifyRequest {
     canonicalPath: string;
     canonicalQuery?: string;
-    session?: AuthMe;
+    session?: AccessPrincipal;
   }
 }
 
@@ -49,7 +54,6 @@ const LUMEN_AI_TIMEOUT_MS = 130_000;
 const LUMEN_REQUEST_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const HEALTH_CACHE_TTL_MS = 5_000;
 
-type HttpMethod = "GET" | "POST" | "PATCH" | "PUT";
 const NOVA_REQUEST_BODY_LIMIT_BYTES = 2_100_000;
 
 const PUBLIC_PATHS = new Set([
@@ -130,18 +134,17 @@ export function createGatewayRoutes(overrides?: {
 
       request.session = session;
 
-      const denial = authorizeRequest(request.method as HttpMethod, path, session.operator.role);
-      if (denial) {
-        return reply.code(403).send(envelope({ error: denial }, request.id));
+      const productDenial = authorizeLegacyProductRequest(request.method as LegacyHttpMethod, path, session);
+      if (productDenial) {
+        return reply.code(productDenial.statusCode).send(envelope({ error: productDenial.message }, request.id));
       }
 
-      const tenantMatch = path.match(/^\/v1\/tenants\/([^/]+)\//);
-      if (tenantMatch) {
-        const requestedTenant = decodeURIComponent(tenantMatch[1] ?? "");
-        const isAdmin = session.operator.role === "admin";
-        if (!isAdmin && !session.tenantIds.includes(requestedTenant)) {
-          return reply.code(403).send(envelope({ error: "Forbidden for this tenant" }, request.id));
-        }
+      const productScope = readLegacyProductRequestScope(path);
+      const denial = productScope?.tenantId
+        ? undefined
+        : authorizeNeutralPlatformRequest(request.method as LegacyHttpMethod, path, session.operator.role);
+      if (denial) {
+        return reply.code(403).send(envelope({ error: denial }, request.id));
       }
     });
 
@@ -221,37 +224,16 @@ export function createGatewayRoutes(overrides?: {
       );
     });
 
-    app.get("/v1/pulso-iris/health", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.pulsoIris, request));
-    });
-
-    app.get("/v1/pulso-iris/catalog", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.pulsoIris, request));
-    });
-
-    app.get("/v1/lumen/health", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.lumen, request));
-    });
-
-    app.get("/v1/lumen/catalog", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.lumen, request));
-    });
-
-    app.get("/v1/nova/health", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.novaCore, request));
-    });
-
-    app.get("/v1/nova/catalog", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.novaCore, request));
-    });
-
-    app.get("/v1/voice/health", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.voiceChannel, request));
-    });
-
-    app.get("/v1/liwa/health", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.liwaChannel, request));
-    });
+    const removedProductRoute = async (request: FastifyRequest, reply: FastifyReply) =>
+      reply.code(404).send(envelope({ error: "Legacy product discovery moved to the product-owned BFF" }, request.id));
+    app.get("/v1/pulso-iris/health", removedProductRoute);
+    app.get("/v1/pulso-iris/catalog", removedProductRoute);
+    app.get("/v1/lumen/health", removedProductRoute);
+    app.get("/v1/lumen/catalog", removedProductRoute);
+    app.get("/v1/nova/health", removedProductRoute);
+    app.get("/v1/nova/catalog", removedProductRoute);
+    app.get("/v1/voice/health", removedProductRoute);
+    app.get("/v1/liwa/health", removedProductRoute);
 
     // Public LIWA provider webhooks (auth = X-LIWA-WEBHOOK-SECRET upstream).
     const liwaWebhookOk = async (
@@ -285,9 +267,7 @@ export function createGatewayRoutes(overrides?: {
       );
     });
 
-    app.get("/v1/documents/health", async (request, reply) => {
-      return proxyGet(request, reply, buildUpstreamUrl(urls.documents, request));
-    });
+    app.get("/v1/documents/health", removedProductRoute);
 
     app.get("/v1/tenants", async (request, reply) => {
       try {
@@ -301,6 +281,7 @@ export function createGatewayRoutes(overrides?: {
             "x-request-id": request.id,
             ...createInternalAuthorizationHeaders("api-gateway", gatewayCredentials.tenant)
           },
+          redirect: "error",
           signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
         });
         const payload = (await response.json()) as { data?: unknown };
@@ -310,15 +291,14 @@ export function createGatewayRoutes(overrides?: {
 
         const rows = Array.isArray(payload.data) ? payload.data : [];
         const session = request.session;
-        const visible =
-          session && session.operator.role !== "admin"
-            ? rows.filter(
-                (row) =>
-                  typeof row === "object" &&
-                  row !== null &&
-                  session.tenantIds.includes(String((row as { id?: unknown }).id))
-              )
-            : rows;
+        const grantedTenantIds = new Set(
+          session?.grants
+            .filter((grant) => grant.active && isLegacyCustomerProductId(grant.productId))
+            .map((grant) => grant.tenantId) ?? []
+        );
+        const visible = rows.filter(
+          (row) => typeof row === "object" && row !== null && grantedTenantIds.has(String((row as { id?: unknown }).id))
+        );
 
         return envelope(visible, request.id);
       } catch {
@@ -641,6 +621,10 @@ function readCanonicalTenantId(path: string): string | undefined {
   return match ? decodeURIComponent(match[1] ?? "") : undefined;
 }
 
+function readCanonicalProductId(path: string): string | undefined {
+  return readLegacyProductRequestScope(path)?.productId;
+}
+
 function buildUpstreamUrl(baseUrl: string, request: FastifyRequest, includeQuery = false): string {
   const query = includeQuery && request.canonicalQuery !== undefined ? `?${request.canonicalQuery}` : "";
   return `${baseUrl}${request.canonicalPath}${query}`;
@@ -655,7 +639,11 @@ function readBearerToken(authorization: string | undefined): string | undefined 
   return token.length >= 20 ? token : undefined;
 }
 
-function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole): string | undefined {
+function authorizeNeutralPlatformRequest(
+  method: LegacyHttpMethod,
+  path: string,
+  role: PlatformRole
+): string | undefined {
   if (role === "admin") {
     return undefined;
   }
@@ -664,12 +652,7 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
     return "Admin role required";
   }
 
-  if (method === "GET") {
-    if (path.includes("/integrations/whatsapp/") || path.endsWith("/pulso-iris/sofia/readiness")) {
-      return role === "coordinator" ? undefined : "Admin or coordinator role required";
-    }
-    return undefined;
-  }
+  if (method === "GET" || method === "HEAD") return undefined;
 
   if (path === "/v1/auth/logout") {
     return undefined;
@@ -677,49 +660,6 @@ function authorizeRequest(method: HttpMethod, path: string, role: OperatorRole):
 
   if (role === "auditor") {
     return "Read-only role";
-  }
-
-  if (path.includes("/integrations/whatsapp/")) {
-    return "Admin role required";
-  }
-
-  if (path.includes("/pulso-iris/config/")) {
-    return role === "coordinator" ? undefined : "Coordinator role required";
-  }
-
-  const appointmentAction = /\/pulso-iris\/appointments\/[^/]+\/(manual-verify|reject|cancel|reschedule)$/.test(path);
-  const appointmentPatch = method === "PATCH" && /\/pulso-iris\/appointments\/[^/]+$/.test(path);
-  if (appointmentAction || appointmentPatch) {
-    return role === "coordinator" ? undefined : "Coordinator role required";
-  }
-
-  if (path.includes("/pulso-iris/campaigns") || path.includes("/pulso-iris/rpa/actions")) {
-    return role === "coordinator" ? undefined : "Coordinator role required";
-  }
-
-  if (path.includes("/pulso-iris/")) {
-    return role === "coordinator" || role === "advisor" ? undefined : "Forbidden";
-  }
-
-  if (path.includes("/lumen/")) {
-    return role === "coordinator" || role === "advisor" ? undefined : "Forbidden";
-  }
-
-  // NOVA product roles: coordinator≈supervisor, advisor≈asesor (admin ya pasó arriba).
-  if (path.includes("/nova/") || path.includes("/voice/") || path.includes("/liwa/") || path.includes("/documents/")) {
-    if (
-      path.includes("/nova/contacts/import") ||
-      path.includes("/nova/campaigns") ||
-      path.includes("/voice/campaigns") ||
-      path.includes("/nova/leads") ||
-      path.includes("/nova/compliance/settings") ||
-      path.includes("/nova/agent-configs") ||
-      path.includes("/nova/outbox/dlq") ||
-      path.includes("/voice/outbox/dlq")
-    ) {
-      return role === "coordinator" ? undefined : "Supervisor role required";
-    }
-    return role === "coordinator" || role === "advisor" ? undefined : "Forbidden";
   }
 
   return "Forbidden";
@@ -737,6 +677,7 @@ function createFreshSessionResolver(identityUrl: string): SessionResolver {
     try {
       const response = await fetch(`${identityUrl}/v1/auth/me`, {
         headers: { authorization: `Bearer ${token}` },
+        redirect: "error",
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
       });
 
@@ -745,7 +686,7 @@ function createFreshSessionResolver(identityUrl: string): SessionResolver {
       }
 
       const payload = (await response.json()) as { data?: unknown };
-      const session = authMeSchema.parse(payload.data);
+      const session = accessMeSchema.parse(payload.data);
 
       // A logout completed while this lookup was in flight. Do not authorize
       // the request or repopulate a token that has just been invalidated.
@@ -794,20 +735,6 @@ function buildRegistry(): DownstreamService[] {
   ];
 }
 
-async function proxyGet(request: FastifyRequest, reply: FastifyReply, url: string): Promise<unknown> {
-  try {
-    const response = await fetch(url, {
-      headers: { "x-request-id": request.id },
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
-    });
-    const payload = await response.json();
-
-    return reply.code(response.status).send(payload);
-  } catch {
-    return reply.code(502).send(envelope({ error: "Upstream service unavailable" }, request.id));
-  }
-}
-
 async function proxyRaw(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -836,11 +763,13 @@ async function proxyRaw(
       const assertionKey = readOperatorAssertionKey(process.env);
       if (assertionKey) {
         const tenantId = readCanonicalTenantId(request.canonicalPath);
+        const productId = readCanonicalProductId(request.canonicalPath);
         headers[OPERATOR_ASSERTION_HEADER] = createOperatorAssertion(
           {
             operatorId: request.session.operator.id,
             role: request.session.operator.role,
             ...(tenantId ? { tenantId } : {}),
+            ...(tenantId && productId ? { productId } : {}),
             expiresAtUnix: Math.floor(Date.now() / 1000) + 60
           },
           assertionKey
@@ -852,6 +781,7 @@ async function proxyRaw(
       method,
       headers,
       body: new Uint8Array(body),
+      redirect: "error",
       signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(timeoutMs)])
     });
     const payload = await response.json();
@@ -892,6 +822,7 @@ async function proxyLiwaWebhook(
       method: "POST",
       headers,
       body: JSON.stringify(request.body ?? {}),
+      redirect: "error",
       signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)])
     });
     const payload = await response.json();
@@ -931,11 +862,13 @@ async function proxyJson(
       const assertionKey = readOperatorAssertionKey(process.env);
       if (assertionKey) {
         const tenantId = readCanonicalTenantId(request.canonicalPath);
+        const productId = readCanonicalProductId(request.canonicalPath);
         headers[OPERATOR_ASSERTION_HEADER] = createOperatorAssertion(
           {
             operatorId: request.session.operator.id,
             role: request.session.operator.role,
             ...(tenantId ? { tenantId } : {}),
+            ...(tenantId && productId ? { productId } : {}),
             expiresAtUnix: Math.floor(Date.now() / 1000) + 60
           },
           assertionKey
@@ -950,6 +883,7 @@ async function proxyJson(
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      redirect: "error",
       signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(timeoutMs)])
     });
     if (response.ok) {
@@ -993,6 +927,7 @@ async function fetchServiceHealth(service: DownstreamService): Promise<ServiceHe
 
   try {
     const response = await fetch(`${service.url}/ready`, {
+      redirect: "error",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
     });
     const payload = await response.json();

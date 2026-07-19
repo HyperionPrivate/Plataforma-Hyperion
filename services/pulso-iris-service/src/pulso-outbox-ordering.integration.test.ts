@@ -4,15 +4,18 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostgresPulsoOutbox } from "./pulso-outbox.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("PULSO ordered outbox workers", () => {
   let db: DatabaseClient;
+  let fixtureDb: DatabaseClient;
   let tenantId = "";
 
   beforeAll(async () => {
     db = createDatabase(TEST_DATABASE_URL ?? "");
-    const tenant = await db.query<{ id: string }>(
+    fixtureDb = createDatabase(TEST_PULSO_FIXTURE_DATABASE_URL ?? "");
+    const tenant = await fixtureDb.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name)
        values ($1, 'PULSO ordered outbox test') returning id`,
       [`pulso-outbox-order-${randomUUID()}`]
@@ -25,9 +28,10 @@ describeIntegration("PULSO ordered outbox workers", () => {
       await db.query("delete from pulso_iris.outbox_events where tenant_id = $1", [tenantId]);
       await db.query("delete from pulso_iris.outbox_event_positions where tenant_id = $1", [tenantId]);
       await db.query("delete from pulso_iris.outbox_stream_positions where tenant_id = $1", [tenantId]);
-      await db.query("delete from platform.tenants where id = $1", [tenantId]);
+      await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
+    await fixtureDb.close();
   });
 
   it("keeps the successor blocked across competing workers and a head retry", async () => {

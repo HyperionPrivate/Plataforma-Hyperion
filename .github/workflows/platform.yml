@@ -1,0 +1,60 @@
+name: platform-cell
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-cell-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  impact:
+    name: platform / affected
+    runs-on: ubuntu-latest
+    outputs:
+      affected: ${{ steps.impact.outputs.affected }}
+    steps:
+      - name: Checkout dependency graph
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve affected cell
+        id: impact
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          node scripts/ci/resolve-cell-impact.mjs --cell platform
+          --base "$BASE_SHA" --head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+
+  cell:
+    if: needs.impact.outputs.affected == 'true'
+    needs: impact
+    uses: ./.github/workflows/_cell-ci.yml
+    with:
+      cell: platform
+
+  required:
+    name: platform / required
+    if: always()
+    needs: [impact, cell]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout required gate
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Require affected cell success
+        env:
+          CELL: platform
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          AFFECTED: ${{ needs.impact.outputs.affected }}
+          CELL_RESULT: ${{ needs.cell.result }}
+        run: node scripts/ci/verify-required-cell-result.mjs

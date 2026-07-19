@@ -7,10 +7,12 @@ import { registerConfigRoutes } from "./config-routes.js";
 
 const { Client } = pg;
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 let app: ServiceHandle["app"];
 let client: pg.Client;
+let fixtureClient: pg.Client;
 let tenantA: string;
 let tenantB: string;
 let siteA: string;
@@ -28,7 +30,9 @@ describeIntegration("pulso-iris configurable agenda", () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
     client = new Client({ connectionString: TEST_DATABASE_URL });
+    fixtureClient = new Client({ connectionString: TEST_PULSO_FIXTURE_DATABASE_URL });
     await client.connect();
+    await fixtureClient.connect();
 
     tenantA = await createTenant("agenda-config-a");
     tenantB = await createTenant("agenda-config-b");
@@ -86,14 +90,23 @@ describeIntegration("pulso-iris configurable agenda", () => {
   afterAll(async () => {
     await app?.close();
     if (client) {
-      if (tenantA) await client.query("delete from platform.tenants where id = $1", [tenantA]);
-      if (tenantB) await client.query("delete from platform.tenants where id = $1", [tenantB]);
       await client.end();
+    }
+    if (fixtureClient) {
+      if (tenantA) await fixtureClient.query("delete from platform.tenants where id = $1", [tenantA]);
+      if (tenantB) await fixtureClient.query("delete from platform.tenants where id = $1", [tenantB]);
+      await fixtureClient.end();
     }
     delete process.env.DATABASE_URL;
   });
 
   it("keeps settings tenant-scoped and blocks active legacy mode", async () => {
+    const beforeFirstPulsoUse = await client.query<{ count: number }>(
+      "select count(*)::int as count from pulso_iris.agenda_settings where tenant_id = $1",
+      [tenantA]
+    );
+    expect(beforeFirstPulsoUse.rows[0]?.count).toBe(0);
+
     const defaults = await app.inject({
       method: "GET",
       url: `/v1/tenants/${tenantA}/pulso-iris/config/agenda-settings`
@@ -105,6 +118,11 @@ describeIntegration("pulso-iris configurable agenda", () => {
       externalReferenceRequired: true,
       capacityPolicy: "strict"
     });
+    const afterFirstPulsoUse = await client.query<{ count: number }>(
+      "select count(*)::int as count from pulso_iris.agenda_settings where tenant_id = $1",
+      [tenantA]
+    );
+    expect(afterFirstPulsoUse.rows[0]?.count).toBe(1);
 
     const updated = await app.inject({
       method: "PATCH",
@@ -339,7 +357,7 @@ describeIntegration("pulso-iris configurable agenda", () => {
 
 async function createTenant(prefix: string): Promise<string> {
   const slug = `${prefix}-${randomUUID()}`;
-  const result = await client.query<{ id: string }>(
+  const result = await fixtureClient.query<{ id: string }>(
     `insert into platform.tenants (slug, display_name, status)
      values ($1, $2, 'active') returning id`,
     [slug, slug]

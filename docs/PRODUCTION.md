@@ -1,4 +1,18 @@
-# Produccion
+---
+documentType: runbook
+status: not-current
+owner: platform-operations
+issue: HYP-OPS-001
+reviewDue: 2026-09-30
+---
+
+# Producción
+
+> **No vigente para ejecutar despliegues o cortes.** Este documento conserva procedimientos de la topología
+> global transicional y no ha sido revalidado frente a las celdas provider-owned. PULSO ya tiene migrador, base,
+> roles, Compose y manifiesto propios en el repositorio, pero no existe aquí evidencia de cutover ni de un drill
+> ejecutado sobre el ambiente objetivo. Este texto no autoriza un cambio productivo hasta validar backup/restore y
+> el release exacto.
 
 Este repositorio contiene controles y procedimientos para ambientes con datos operativos. La habilitación
 productiva exige validar el despliegue, los backups y la recuperación del ambiente concreto. Este runbook no
@@ -20,7 +34,9 @@ registros no se presentan como reales ni deben entrar en los flujos operativos d
   `HYPERION_ALLOW_EXAMPLE_SECRETS` no reducen las barreras. En VPS real se fija
   `HYPERION_ENVIRONMENT=production` y se sustituyen todos los `replace-*`; Compose propaga esa clase de despliegue
   al gateway, migraciones, bootstrap y cada runtime.
-- `POSTGRES_PASSWORD`, las ocho contraseñas PostgreSQL, las credenciales HTTP por vínculo
+- `POSTGRES_PASSWORD`, las siete contraseñas runtime que aún rota el bootstrap global, las credenciales
+  provider-owned por célula y las de sus migradores deben permanecer separadas. Para PULSO son cinco contraseñas runtime más
+  `PULSO_MIGRATOR_DATABASE_PASSWORD`; las credenciales HTTP por vínculo
   `*_TO_*_TOKEN` y las credenciales de proveedores deben vivir fuera del repositorio.
 - Cada `*_TO_*_TOKEN` se entrega únicamente a su productor y consumidor, tiene al menos 24 caracteres
   seguros y no se reutiliza en otro vínculo, en PostgreSQL, en NATS ni con proveedores.
@@ -28,8 +44,8 @@ registros no se presentan como reales ni deben entrar en los flujos operativos d
   gestionada, mTLS y rotación externa sin retirar la autorización específica por productor/ruta.
 - **A-02 (mitigado, no eliminado):** el gateway emite `x-hyperion-operator-assertion` (HMAC-SHA256 con
   `GATEWAY_OPERATOR_ASSERTION_KEY`) junto a `x-operator-id` / `x-operator-role`. Identity exige coincidencia
-  exacta de operador y rol; PULSO IRIS, LUMEN e Integration exigen además que la aserción vigente esté ligada
-  al tenant de la ruta. La clave es obligatoria y su ausencia impide arrancar esos runtimes en staging y
+  exacta de operador y rol; PULSO IRIS, LUMEN, Integration, NOVA core, Voice, LIWA y Documents exigen además que
+  la aserción vigente esté ligada al tenant y producto de la ruta. La clave es obligatoria y su ausencia impide arrancar esos runtimes en staging y
   producción; el fallback histórico sin firma queda limitado a local/CI. Así, un token de arista estático solo
   no basta para fabricar identidad, rol o tenant. Riesgo residual: quien robe **el token del vínculo y la clave
   de aserción** aún puede forjar claims hasta que se adopten mTLS e identidad de workload. Una aserción capturada
@@ -44,9 +60,46 @@ El VPS debe quedar con acceso por llave SSH, firewall activo y login root por pa
 
 ## Puertos
 
-- Gateway: `${API_GATEWAY_HOST_PORT:-8080}`.
+- Fachada gateway heredada: `127.0.0.1:${API_GATEWAY_HOST_PORT:-8080}`, sólo con el perfil `legacy-gateway`.
 - Consola web: `${WEB_CONSOLE_HOST_PORT:-3000}`.
 - PostgreSQL no se publica al host; solo queda disponible dentro de la red Docker.
+
+La definición standalone PULSO enlaza por defecto BFF en `127.0.0.1:8097`, consola en `3000` y PostgreSQL de
+desarrollo en `127.0.0.1:55440`; los nombres de sus variables están inventariados en
+`infra/pulso.env.example`. Esa publicación de PostgreSQL es sólo para entorno aislado; un despliegue real debe
+mantenerlo en red privada.
+
+### Topología PULSO versionada
+
+`infra/docker-compose.pulso.yml` describe una base lógica `hyperion_pulso` y esta secuencia obligatoria:
+
+1. `pulso-database-bootstrap` crea el owner y cinco roles como `NOLOGIN`;
+2. `pulso-migrations` aplica el manifiesto provider-owned como `hyperion_pulso_migrator`; y
+3. `pulso-role-bootstrap` valida estructura/ACL, rota credenciales distintas y activa los roles runtime.
+
+Después arrancan Agent, Prompt Flow, Knowledge, Integration, PULSO y WhatsApp; BFF y consola dependen sólo de la
+célula y de URLs externas explícitas hacia Access/Audit. La configuración puede renderizarse sin mutar estado:
+
+```bash
+node scripts/docker/generate-cell-contexts.mjs --cell pulso
+docker compose --env-file infra/pulso.env.example -f infra/docker-compose.pulso.yml config --quiet
+```
+
+No ejecutar `up` con `infra/pulso.env.example`: sus valores son placeholders y el render correcto no prueba
+migración, arranque, backup, restore, RPO/RTO ni rollback.
+
+### Topología Audit provider-owned
+
+En el Compose transicional, `audit-service` depende sólo de
+`audit-database-bootstrap` → `audit-migrations` → `audit-role-bootstrap` y PostgreSQL. Ejecutar
+`docker compose --env-file .env.example -f infra/docker-compose.yml up audit-service` no incorpora
+`migrations`, `db-role-bootstrap` ni `platform-migrations` a esa clausura. Los one-shots usan la base lógica
+`hyperion_audit`, el owner `hyperion_audit_migrator` y el runtime append-only `hyperion_audit`; la readiness lee
+exclusivamente `audit_runtime.migration_ledger`.
+
+Esto describe el artefacto versionado, no autoriza un cutover de datos. El ledger global histórico y las tablas
+Audit antiguas deben permanecer intactos hasta definir exportación, verificación de conteos/checksums, ventana de
+doble lectura y rollback. El migrador nuevo sólo acepta una base fresh o una repetición con su checksum exacto.
 
 ## Runtime compartido
 
@@ -94,9 +147,9 @@ esas variables no sustituyen una topología real. Levantar el gate exige primero
 repositorio el cluster, las réplicas, TLS, capacidad, alertas/redrive, recuperación y sus pruebas/ADR. Hasta
 entonces el overlay sólo se admite con `HYPERION_ENVIRONMENT=local|ci`; no existe un atajo declarativo que simule
 alta disponibilidad.
-Cuando se evalua en un ambiente aislado, los seis `NATS_*_PASSWORD` deben ser distintos y nunca
-reutilizar credenciales HTTP `*_TO_*_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea trece durables
-administrados: diez activos, dos de compatibilidad v1 y el drenaje temporal `audit_event_record_v1`. Audit consume
+Cuando se evalua en un ambiente aislado, los siete `NATS_*_PASSWORD` deben ser distintos y nunca
+reutilizar credenciales HTTP `*_TO_*_TOKEN` ni contraseñas PostgreSQL. El bootstrap crea catorce durables
+administrados: once activos, dos de compatibilidad v1 y el drenaje temporal `audit_event_record_v1`. Audit consume
 por separado `sofia.audit.event.record.v1`, `lumen.audit.event.record.v1`, `pulso.audit.event.record.v1` y
 `channel.audit.event.record.v1`; el durable genérico sólo drena mensajes publicados antes de la migración y los
 marca `legacy-unknown`. Ninguna identidad runtime puede publicar nuevos eventos en el subject genérico. Cuando
@@ -109,7 +162,8 @@ razón por la que el overlay actual no se declara productivo.
 ### Ensayo local aislado de JetStream
 
 Este ensayo valida la secuencia de activacion sin tocar el proyecto Compose habitual ni datos operativos. Crear
-`.env.rehearsal.local` a partir de `.env.example`, completar las ocho contraseñas PostgreSQL, las seis de NATS,
+`.env.rehearsal.local` a partir de `.env.example`, completar las siete contraseñas runtime aún globales, las dos
+credenciales provider-owned de Audit, las cuatro runtime NOVA, la credencial del migrador NOVA, las siete de NATS,
 todos los vínculos HTTP `*_TO_*_TOKEN` enumerados allí y `POSTGRES_PASSWORD`, y mantener el archivo fuera de Git.
 Todas las contraseñas PostgreSQL, incluida la administrativa, deben usar al menos 24 caracteres URI no reservados.
 Para impedir llamadas a proveedores durante el ensayo se fijan además:
@@ -123,7 +177,7 @@ INITIAL_ADMIN_EMAIL=
 INITIAL_ADMIN_PASSWORD=
 VITE_API_BASE_URL=/api
 CORS_ALLOWED_ORIGINS=http://localhost:13000
-API_GATEWAY_HOST_PORT=127.0.0.1:18080
+API_GATEWAY_HOST_PORT=18080
 WEB_CONSOLE_HOST_PORT=127.0.0.1:13000
 ```
 
@@ -136,6 +190,7 @@ $EnvFile = (Resolve-Path ".env.rehearsal.local").Path
 $Compose = @(
   "--project-name", $Project,
   "--env-file", $EnvFile,
+  "--profile", "legacy-gateway",
   "-f", "infra/docker-compose.yml",
   "-f", "infra/docker-compose.jetstream.yml"
 )
@@ -149,7 +204,7 @@ docker compose @Compose run --rm --no-deps db-role-bootstrap
 docker compose @Compose run --rm --no-deps jetstream-topology-bootstrap
 ```
 
-No iniciar ningún runtime con base de datos entre `migrations` y `db-role-bootstrap`: la migración deja las ocho
+No iniciar ningún runtime de la unidad heredada entre `migrations` y `db-role-bootstrap`: la migración deja las ocho
 identidades como `NOLOGIN` y el bootstrap sólo las activa cuando toda la matriz ya quedó validada y confirmada.
 
 El E2E comparte los durables reales del piloto. Channel, PULSO, SOFIA, Audit y LUMEN deben permanecer detenidos
@@ -187,7 +242,8 @@ Para Channel → PULSO, tanto el mensaje inbound como el delivery deben devolver
 `deliveryCount=1`; una segunda lectura debe quedar en `idle`, sin NAK, redelivery ni DLQ. El inbound también debe
 dejar vinculados en Channel el paciente, la conversación y el mensaje propietarios; comprobar sólo filas PULSO no
 es evidencia suficiente.
-Después se levantan consumidores de aguas abajo hacia aguas arriba, y finalmente el gateway y la consola:
+Después se levantan consumidores de aguas abajo hacia aguas arriba, y finalmente la fachada opt-in y la consola.
+`$Compose` activa `legacy-gateway` de forma explícita; sin ese perfil el build/up normal no incluye la fachada:
 
 ```powershell
 docker compose @Compose up -d --no-deps --no-build --wait audit-service
@@ -312,13 +368,13 @@ El dump local no basta ante fallo de disco/host. Ver [`ops/OFFSITE-BACKUP.md`](o
 stub `scripts/ops/postgres-offsite-copy.sh`: la infraestructura externa (objeto, otro host o agente del
 proveedor) es obligatoria; el repositorio no inventa un destino.
 
-`migrations` crea o desactiva primero como `NOLOGIN` las identidades PostgreSQL de servicio, exige que no queden
+`migrations` crea o desactiva primero como `NOLOGIN` las ocho identidades PostgreSQL de la unidad heredada, exige que no queden
 sesiones de runtime, aplica la matriz de privilegios y confirma su validación. Después, `db-role-bootstrap` toma
 un mutex con espera acotada, vuelve a confirmar el fence `NOLOGIN` y, en una transacción final, repara la matriz,
-valida que no haya sesiones antiguas y activa o rota juntas las ocho identidades. Si cualquier alteración falla,
-PostgreSQL revierte la rotación completa y los roles permanecen `NOLOGIN`. Solo esos dos procesos reciben la conexión
-administrativa; los diez runtimes usan su URL restringida y verifican `EXPECTED_DATABASE_ROLE` antes de registrar
-rutas o workers. El orden obligatorio es:
+valida que no haya sesiones antiguas y activa o rota juntas esas ocho identidades. Si cualquier alteración falla,
+PostgreSQL revierte la rotación completa y los roles permanecen `NOLOGIN`. El bootstrap global no recibe ninguna
+contraseña NOVA. Los runtimes heredados usan su URL restringida y verifican `EXPECTED_DATABASE_ROLE` antes de registrar
+rutas o workers. El orden obligatorio para esta unidad es:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml stop \
@@ -335,6 +391,24 @@ servicios y se validan sus endpoints de readiness. Si el bootstrap informa sesio
 La matriz y sus denegaciones esperadas están descritas en
 [`architecture/POSTGRESQL-SERVICE-ROLES.md`](architecture/POSTGRESQL-SERVICE-ROLES.md).
 
+NOVA usa una ventana independiente y no se incluye en los comandos anteriores: se drenan sus cuatro runtimes y se
+ejecuta `nova-database-bootstrap` → `nova-migrations` → `nova-role-bootstrap`. Sólo el último one-shot recibe
+`NOVA_DATABASE_PASSWORD`, `VOICE_DATABASE_PASSWORD`, `LIWA_DATABASE_PASSWORD` y `DOCUMENTS_DATABASE_PASSWORD`.
+
+PULSO también tiene una secuencia independiente en `infra/docker-compose.pulso.yml`:
+`pulso-database-bootstrap` → `pulso-migrations` → `pulso-role-bootstrap`. El runner recibe sólo
+`PULSO_MIGRATOR_DATABASE_URL`; el último one-shot recibe `PULSO_DATABASE_PASSWORD`, `SOFIA_DATABASE_PASSWORD`,
+`KNOWLEDGE_DATABASE_PASSWORD`, `INTEGRATION_DATABASE_PASSWORD` y `CHANNEL_DATABASE_PASSWORD`. Agent y Prompt Flow
+validan `agent_runtime.schema_version/service_name=sofia`; Core, Knowledge, Integration y Channel continúan
+temporalmente sobre `pulso_iris.schema_version/service_name=pulso`. SOFÍA conserva lectura del marker global sólo
+para una futura imagen N−1 publicada; el runtime current no usa ese fallback. La secuencia global anterior se
+conserva para compatibilidad y no debe mezclarse con la provider-owned en una misma ventana improvisada.
+
+El artefacto PULSO revoca los grants históricos de readiness y de SOFÍA → PULSO en su propia matriz. Esos grants
+todavía existen en la cadena global congelada para binarios N−1; sólo pueden retirarse allí durante un cutover
+rehearsado. El trigger Access → PULSO ya no forma parte del camino current: plataforma lo elimina y PULSO crea sus
+defaults de agenda idempotentemente en el primer uso autorizado.
+
 El runner aplica por defecto `lock_timeout=10000ms` y `statement_timeout=300000ms` a cada migración. Sólo se
 ajustan con enteros positivos en `MIGRATION_LOCK_TIMEOUT_MS` y `MIGRATION_STATEMENT_TIMEOUT_MS`, después de medir
 la ventana; aumentar un valor no sustituye revisar el lock esperado. La migración 021 se divide en bloques
@@ -350,8 +424,9 @@ tenant/servicio/stream/secuencia y 046 valida el check y el catálogo. Un índic
 antes de que el ledger avance, pero el cutover sigue requiriendo medir locks y duración sobre una copia
 representativa.
 
-En cada PR, CI construye todas las imágenes y resuelve de forma fail-closed el contrato del SHA base desde
-`infra/compatibility-policy.json`. Si la base ya contiene el descriptor usa sus capacidades `current_v2`,
+Los PR ejecutan los workflows de celda `platform`, `nova`, `lumen` y `pulso` solo cuando el grafo los marca como
+afectados; el stack completo queda en `main` y en la ejecución programada. El rehearsal completo resuelve de forma
+fail-closed el contrato del SHA base desde `infra/compatibility-policy.json`. Si la base ya contiene el descriptor usa sus capacidades `current_v2`,
 `deterministic_v2` y `owner_api_v2`; la única excepción bootstrap está ligada al SHA histórico exacto y declara
 por separado Channel pre-outbox, audio efímero, acceso SOFÍA → PULSO y validación de delivery Channel → PULSO por
 SQL heredado. Una base legacy deja un
@@ -421,11 +496,13 @@ roles, el único seed autorizado para este vertical es:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  -e LUMEN_DEMO_TENANT_ID=<tenant-uuid> \
   migrations node packages/migrations/dist/seed-lumen-demo.js
 ```
 
 Este comando usa `DATABASE_URL` solo dentro de la red privada de Compose; no se debe construir ni
-exportar esa variable en el host. El seed usa una transaccion y un advisory lock, es idempotente y crea
+exportar esa variable en el host. `LUMEN_DEMO_TENANT_ID` es obligatorio, debe ser el UUID opaco provisionado
+por Access y no puede sustituirse por un slug de cliente. El seed usa una transaccion y un advisory lock, es idempotente y crea
 un paciente, un profesional y un encuentro marcados como demo. Para retirarlos se ejecuta el mismo
 comando con `--clear` al final, siempre antes de aprobar una HC. Un encuentro aprobado es inmutable y
 el clear falla cerrado; su retencion o purga requiere un procedimiento clinico separado y controlado.
@@ -511,7 +588,8 @@ exclusiva y destruible en conjunto, como `tmpfs` privados. Un volumen persistent
 invalida este procedimiento.
 
 Antes de abrir, se detienen los workloads current que serán reemplazados, se drena toda sesión `hyperion_lumen` y
-se confirma que el bootstrap normal dejó los ocho roles completos, seguros y en `LOGIN`. El operador calcula fuera
+se confirma que el bootstrap global dejó sus ocho roles completos, seguros y en `LOGIN`; los cinco roles NOVA no
+forman parte de esta ventana LUMEN. El operador calcula fuera
 de PostgreSQL el SHA-256 de la evidencia aprobada del rollback y abre la ventana con la imagen actual de migraciones
 y su conexión administrativa privada:
 
@@ -568,7 +646,7 @@ evidencia cruda permanecen en el sistema operativo autorizado, no en PostgreSQL.
 compatibilidad del contrato de base de datos con N-1; no demuestra al proveedor real, carga representativa ni
 autoriza audio clínico real.
 
-La atestación debe terminar antes de retornar a current. Sólo entonces se ejecuta el bootstrap completo de los ocho
+La atestación debe terminar antes de retornar a current. Sólo entonces se ejecuta el bootstrap global de los ocho
 roles para restaurar `LOGIN`; ejecutarlo antes hace que la atestación falle cerrada. Como recuperación adicional, el
 bootstrap vuelve a aplicar la allow-list normal, revoca grants transitorios y marca cualquier ventana abierta como
 `bootstrap_reconciled`. Un `close` repetido sobre una ventana ya cerrada vuelve a comprobar las revocaciones sin
@@ -613,22 +691,22 @@ docker compose --env-file .env -f infra/docker-compose.yml build \
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 lumen-service
 # Si también cambió gateway o consola, construir y recrear sólo esos artefactos.
-docker compose --env-file .env -f infra/docker-compose.yml build \
+docker compose --env-file .env --profile legacy-gateway -f infra/docker-compose.yml build \
   api-gateway web-console
-docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
+docker compose --env-file .env --profile legacy-gateway -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 api-gateway
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 web-console
 ```
 
-Si el release incluye cualquier migración o cambio de roles, deja de ser un despliegue acotado. Se usa la ventana
-global descrita en “Migraciones y roles”: detener y drenar los diez runtimes con base de datos, ejecutar primero
-`migrations` y después `db-role-bootstrap`, y sólo entonces volver a iniciar todos los servicios detenidos. Nunca
+Si el release incluye cualquier migración o cambio de roles heredado, deja de ser un despliegue acotado. Se usa la
+ventana global descrita en “Migraciones y roles”: detener y drenar los diez runtimes heredados con base de datos,
+ejecutar primero `migrations` y después `db-role-bootstrap`, y sólo entonces volver a iniciar todos los servicios detenidos. Nunca
 ejecutar esos one-shots mientras queden sesiones runtime.
 
 ```bash
 # Construir todo antes del corte evita reiniciar un runtime modificado con una imagen anterior.
-docker compose --env-file .env -f infra/docker-compose.yml build
+docker compose --env-file .env --profile legacy-gateway -f infra/docker-compose.yml build
 docker compose --env-file .env -f infra/docker-compose.yml stop \
   identity-service tenant-service agent-service prompt-flow-service knowledge-service \
   audit-service integration-service pulso-iris-service whatsapp-channel-service lumen-service
@@ -639,13 +717,14 @@ docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-
   identity-service tenant-service agent-service prompt-flow-service knowledge-service \
   audit-service integration-service pulso-iris-service whatsapp-channel-service lumen-service
 # Ejecutar cada comando siguiente sólo si cambió ese artefacto.
-docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
+docker compose --env-file .env --profile legacy-gateway -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 api-gateway
 docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-build \
   --wait --wait-timeout 120 web-console
 ```
 
-Esperar `healthy` antes de continuar y confirmar migraciones/checksums, readiness, rutas profundas y logs
+El perfil sólo conserva coexistencia; no resuelve `DEBT-032`, no convierte el gateway en borde objetivo y no
+autoriza tráfico público nuevo. Esperar `healthy` antes de continuar y confirmar migraciones/checksums, readiness, rutas profundas y logs
 sanitizados. Comparar IDs e imágenes antes/después: PostgreSQL nunca debe recrearse; PULSO y WhatsApp tampoco deben
 cambiar salvo que el release los incluya explícitamente. Si gateway o consola no cambiaron, omitir únicamente su
 `up`; la construcción completa anterior es deliberada para que ningún runtime modificado quede con una imagen vieja.
@@ -699,6 +778,9 @@ Estos limites evitan que actividad historica o manual del linked device agote la
 
 ## Comando base
 
+El comando siguiente levanta el stack global de compatibilidad descrito por este runbook no vigente; no es el
+comando de despliegue de la célula PULSO provider-owned.
+
 ```bash
-docker compose --env-file .env -f infra/docker-compose.yml up --build -d
+docker compose --profile legacy-gateway --env-file .env -f infra/docker-compose.yml up --build -d
 ```

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isRestrictedDeploymentEnvironment } from "@hyperion/config";
+import { isRestrictedDeploymentEnvironment } from "@hyperion/nova-config";
 
 export interface DialerCampaignInput {
   name: string;

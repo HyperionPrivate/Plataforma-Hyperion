@@ -1,0 +1,31 @@
+{
+  "name": "@hyperion/platform-admin-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/check-bundle.mjs",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "dev": "vite --host 0.0.0.0 --port 3003",
+    "lint": "eslint --max-warnings 0 src vite.config.ts scripts",
+    "preview": "vite preview --host 0.0.0.0 --port 3003",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hyperion/platform-contracts": "1.1.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.18.1"
+  },
+  "devDependencies": {
+    "@hyperion/frontend-build-provenance": "0.1.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2",
+    "vitest": "^3.0.8"
+  }
+}

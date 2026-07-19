@@ -1,4 +1,5 @@
-import { envelope, pulsoIrisAvailabilitySlotQuerySchema } from "@hyperion/contracts";
+import { envelope } from "@hyperion/platform-contracts";
+import { pulsoIrisAvailabilitySlotQuerySchema } from "@hyperion/pulso-contracts";
 import type { RouteRegistrar } from "@hyperion/service-runtime";
 import { listAvailabilitySlots } from "./availability-engine.js";
 import { requireTenantDb } from "./shared.js";

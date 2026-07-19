@@ -8,7 +8,7 @@ import {
   readServiceConfig,
   type ServiceConfig
 } from "@hyperion/config";
-import { type ServiceHealth, type ServiceName, serviceHealthSchema } from "@hyperion/contracts";
+import { type ServiceHealth, type ServiceName, serviceHealthSchema } from "@hyperion/platform-contracts";
 import { checkDatabase, createDatabase, type DatabaseClient } from "@hyperion/database";
 import { createLogger, type Logger } from "@hyperion/logger";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
@@ -30,6 +30,7 @@ export {
   createOperatorAssertion,
   readOperatorAssertionKey,
   validateOperatorAssertionContext,
+  validateProductOperatorAssertionContext,
   verifyOperatorAssertion,
   type OperatorAssertionClaims,
   type OperatorAssertionFailure,
@@ -73,7 +74,13 @@ export type RouteRegistrar = (app: FastifyInstance, context: ServiceContext) => 
 export interface RuntimeOptions {
   serviceName: ServiceName;
   databaseRequired?: boolean;
-  requiredMigrations?: string[];
+  /** Provider-owned migration ledger. The global platform ledger is forbidden. */
+  requiredMigrationLedger?: MigrationLedgerRequirement;
+  /**
+   * Transitional exception for Audit while its migrator is still extracted.
+   * The runtime rejects this option for every other service.
+   */
+  requiredLegacyMigrationNames?: readonly string[];
   requiredSchemaVersion?: SchemaVersionRequirement;
   /**
    * Marks the service as the public HTTP surface: enables security headers
@@ -97,12 +104,28 @@ export interface SchemaVersionRequirement {
   minimumVersion: number;
 }
 
+export interface MigrationLedgerRequirement {
+  /** Provider-owned schema; `platform` is deliberately forbidden. */
+  schema: string;
+  /** Exact provider migration names that must exist in `<schema>.migration_ledger`. */
+  migrationNames: readonly string[];
+  /** Exact immutable ledger. When present, extra, mixed or changed rows fail readiness. */
+  exactMigrationLedger?: readonly Readonly<{ name: string; checksum: string }>[];
+  /** Complete N-1 provider sets accepted during an explicit rolling cutover. */
+  compatibleMigrationNameSets?: readonly (readonly string[])[];
+}
+
 const ACCESS_LOG_EXCLUDED_PATHS = new Set(["/health", "/ready"]);
-const RESERVED_READINESS_NAMES = new Set(["postgres", "postgres_role", "schema_migrations"]);
+const RESERVED_READINESS_NAMES = new Set([
+  "postgres",
+  "postgres_role",
+  "schema_migrations",
+  "legacy.platform.schema_migrations"
+]);
 const READINESS_NAME_PATTERN = /^[a-z][a-z0-9_.-]{0,127}$/;
 const DATABASE_ROLE_BY_SERVICE: Partial<Record<ServiceName, string>> = {
-  "identity-service": "hyperion_access",
-  "tenant-service": "hyperion_access",
+  "identity-service": "hyperion_identity",
+  "tenant-service": "hyperion_tenant",
   "agent-service": "hyperion_sofia",
   "prompt-flow-service": "hyperion_sofia",
   "knowledge-service": "hyperion_knowledge",
@@ -121,6 +144,21 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
   assertNoPlaceholderSecrets(process.env);
   assertJetStreamProductionGate(process.env);
   const requiredSchemaVersion = normalizeSchemaVersionRequirement(options.requiredSchemaVersion);
+  const requiredMigrationLedger = normalizeMigrationLedgerRequirement(options.requiredMigrationLedger);
+  const requiredLegacyMigrationNames = normalizeLegacyMigrationNames(
+    options.serviceName,
+    options.requiredLegacyMigrationNames
+  );
+  const databaseReadinessRequirementCount =
+    Number(requiredSchemaVersion !== undefined) +
+    Number(requiredMigrationLedger !== undefined) +
+    Number(requiredLegacyMigrationNames.length > 0);
+  if (databaseReadinessRequirementCount > 1) {
+    throw new TypeError("configure exactly one database schema readiness requirement");
+  }
+  if (databaseReadinessRequirementCount > 0 && options.databaseRequired !== true) {
+    throw new TypeError("database schema readiness requirements require databaseRequired: true");
+  }
   const config = readServiceConfig(options.serviceName);
   const expectedDatabaseRole = normalizeExpectedDatabaseRole(process.env.EXPECTED_DATABASE_ROLE);
   const normativeDatabaseRole = DATABASE_ROLE_BY_SERVICE[options.serviceName];
@@ -263,25 +301,48 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
         });
       }
 
-      const missingMigration = await findMissingMigration(db, options.requiredMigrations ?? []);
-      if (missingMigration) {
-        dependencies.push({
-          name: "schema_migrations",
-          status: "down",
-          detail: `missing migration: ${missingMigration}`
-        });
+      if (requiredMigrationLedger) {
+        const missingMigration = await findMissingMigration(db, requiredMigrationLedger);
+        const dependencyName = `${requiredMigrationLedger.schema}.migration_ledger`;
+        if (missingMigration) {
+          dependencies.push({
+            name: dependencyName,
+            status: "down",
+            detail: `missing migration: ${missingMigration}`
+          });
 
-        return sendReadiness(
-          reply,
-          buildReadinessHealth(options.serviceName, config.serviceVersion, "down", dependencies, readinessChecks)
-        );
+          return sendReadiness(
+            reply,
+            buildReadinessHealth(options.serviceName, config.serviceVersion, "down", dependencies, readinessChecks)
+          );
+        }
+
+        dependencies.push({
+          name: dependencyName,
+          status: "ok",
+          detail: "required provider migrations applied"
+        });
       }
 
-      if ((options.requiredMigrations ?? []).length > 0) {
+      if (requiredLegacyMigrationNames.length > 0) {
+        const missingMigration = await findMissingLegacyMigration(db, requiredLegacyMigrationNames);
+        if (missingMigration) {
+          dependencies.push({
+            name: "legacy.platform.schema_migrations",
+            status: "down",
+            detail: `missing legacy migration: ${missingMigration}`
+          });
+
+          return sendReadiness(
+            reply,
+            buildReadinessHealth(options.serviceName, config.serviceVersion, "down", dependencies, readinessChecks)
+          );
+        }
+
         dependencies.push({
-          name: "schema_migrations",
+          name: "legacy.platform.schema_migrations",
           status: "ok",
-          detail: "required migrations applied"
+          detail: "transitional Audit migrations applied"
         });
       }
 
@@ -369,7 +430,12 @@ function registerRuntimeReadinessCheck(
   ) {
     throw new TypeError("readiness check must have a safe name and a check function");
   }
-  if (RESERVED_READINESS_NAMES.has(value.name) || checks.has(value.name)) {
+  if (
+    RESERVED_READINESS_NAMES.has(value.name) ||
+    value.name.endsWith(".migration_ledger") ||
+    value.name.endsWith(".schema_version") ||
+    checks.has(value.name)
+  ) {
     throw new Error("readiness check name is reserved or already registered");
   }
   checks.set(value.name, value.check);
@@ -405,26 +471,31 @@ async function buildReadinessHealth(
 
 async function findDatabaseRoleProblem(db: DatabaseClient, expectedRole: string): Promise<string | undefined> {
   try {
+    await db.query("select pg_catalog.set_config('search_path', 'pg_catalog', false)");
     const result = await db.query<{
       currentRole: string;
       hasMemberships: boolean;
       rolbypassrls: boolean;
       rolcanlogin: boolean;
+      rolconfig: string[] | null;
+      rolconnlimit: number;
       rolcreatedb: boolean;
       rolcreaterole: boolean;
       rolinherit: boolean;
       rolreplication: boolean;
       rolsuper: boolean;
+      rolvaliduntil: string | null;
       sessionRole: string;
     }>(
       `select current_user as "currentRole", session_user as "sessionRole",
               database_role.rolcanlogin, database_role.rolsuper, database_role.rolcreatedb,
               database_role.rolcreaterole, database_role.rolinherit, database_role.rolreplication,
-              database_role.rolbypassrls,
-              exists(select 1 from pg_auth_members membership
+              database_role.rolbypassrls, database_role.rolconnlimit,
+              database_role.rolvaliduntil, database_role.rolconfig,
+              exists(select 1 from pg_catalog.pg_auth_members membership
                       where membership.member = database_role.oid
                          or membership.roleid = database_role.oid) as "hasMemberships"
-         from pg_roles database_role
+         from pg_catalog.pg_roles database_role
         where database_role.rolname = current_user`
     );
     const identity = result.rows[0];
@@ -439,7 +510,10 @@ async function findDatabaseRoleProblem(db: DatabaseClient, expectedRole: string)
       identity.rolcreaterole ||
       identity.rolinherit ||
       identity.rolreplication ||
-      identity.rolbypassrls
+      identity.rolbypassrls ||
+      identity.rolconnlimit !== -1 ||
+      identity.rolvaliduntil !== null ||
+      identity.rolconfig !== null
     ) {
       return "database role has unsafe PostgreSQL capabilities";
     }
@@ -449,20 +523,53 @@ async function findDatabaseRoleProblem(db: DatabaseClient, expectedRole: string)
   }
 }
 
-async function findMissingMigration(db: DatabaseClient, requiredMigrations: string[]): Promise<string | undefined> {
-  if (requiredMigrations.length === 0) {
-    return undefined;
+async function findMissingMigration(
+  db: DatabaseClient,
+  requirement: MigrationLedgerRequirement
+): Promise<string | undefined> {
+  try {
+    if (requirement.exactMigrationLedger) {
+      const result = await db.query<{ name: string; checksum: string }>(
+        `select name, checksum from "${requirement.schema}".migration_ledger order by name`
+      );
+      const expected = requirement.exactMigrationLedger;
+      if (
+        result.rows.length !== expected.length ||
+        result.rows.some(
+          (row, index) => row.name !== expected[index]?.name || row.checksum !== expected[index]?.checksum
+        )
+      ) {
+        return requirement.migrationNames[0];
+      }
+      return undefined;
+    }
+    const acceptedSets = [requirement.migrationNames, ...(requirement.compatibleMigrationNameSets ?? [])];
+    const queriedNames = [...new Set(acceptedSets.flat())];
+    const result = await db.query<{ name: string }>(
+      `select name from "${requirement.schema}".migration_ledger where name = any($1::text[])`,
+      [queriedNames]
+    );
+    const applied = new Set(result.rows.map((row) => row.name));
+    if (acceptedSets.some((migrationNames) => migrationNames.every((name) => applied.has(name)))) return undefined;
+    return requirement.migrationNames.find((name) => !applied.has(name));
+  } catch {
+    return requirement.migrationNames[0];
   }
+}
 
+async function findMissingLegacyMigration(
+  db: DatabaseClient,
+  requiredMigrationNames: readonly string[]
+): Promise<string | undefined> {
   try {
     const result = await db.query<{ name: string }>(
       "select name from platform.schema_migrations where name = any($1::text[])",
-      [requiredMigrations]
+      [requiredMigrationNames]
     );
     const applied = new Set(result.rows.map((row) => row.name));
-    return requiredMigrations.find((name) => !applied.has(name));
+    return requiredMigrationNames.find((name) => !applied.has(name));
   } catch {
-    return requiredMigrations[0];
+    return requiredMigrationNames[0];
   }
 }
 
@@ -501,6 +608,69 @@ function normalizeSchemaVersionRequirement(
     throw new TypeError("requiredSchemaVersion must contain safe identifiers and a positive integer version");
   }
   return { ...value };
+}
+
+function normalizeMigrationLedgerRequirement(
+  value: MigrationLedgerRequirement | undefined
+): MigrationLedgerRequirement | undefined {
+  if (value === undefined) return undefined;
+  const compatibleSets = value.compatibleMigrationNameSets ?? [];
+  const exactLedger = value.exactMigrationLedger ?? [];
+  const validMigrationNames = (names: readonly string[]) =>
+    Array.isArray(names) &&
+    names.length > 0 &&
+    names.length <= 256 &&
+    names.every((name) => typeof name === "string" && /^[0-9]{3}-[a-z0-9][a-z0-9-]*\.sql$/.test(name)) &&
+    new Set(names).size === names.length;
+  if (
+    !/^[a-z_][a-z0-9_]*$/.test(value.schema) ||
+    value.schema === "platform" ||
+    !validMigrationNames(value.migrationNames) ||
+    !Array.isArray(exactLedger) ||
+    (exactLedger.length > 0 &&
+      (compatibleSets.length > 0 ||
+        exactLedger.length !== value.migrationNames.length ||
+        exactLedger.some(
+          (entry, index) =>
+            typeof entry !== "object" ||
+            entry === null ||
+            entry.name !== value.migrationNames[index] ||
+            !/^[a-f0-9]{64}$/.test(entry.checksum)
+        ))) ||
+    !Array.isArray(compatibleSets) ||
+    compatibleSets.length > 4 ||
+    compatibleSets.some((names) => !validMigrationNames(names))
+  ) {
+    throw new TypeError("requiredMigrationLedger must identify a provider-owned ledger and safe migration names");
+  }
+  return {
+    schema: value.schema,
+    migrationNames: [...value.migrationNames],
+    ...(exactLedger.length > 0
+      ? { exactMigrationLedger: exactLedger.map(({ name, checksum }) => ({ name, checksum })) }
+      : {}),
+    ...(compatibleSets.length > 0 ? { compatibleMigrationNameSets: compatibleSets.map((names) => [...names]) } : {})
+  };
+}
+
+function normalizeLegacyMigrationNames(
+  serviceName: ServiceName,
+  value: readonly string[] | undefined
+): readonly string[] {
+  if (value === undefined) return [];
+  if (serviceName !== "audit-service") {
+    throw new TypeError("requiredLegacyMigrationNames is restricted to audit-service");
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 256 ||
+    value.some((name) => typeof name !== "string" || !/^[0-9]{3}-[a-z0-9][a-z0-9-]*\.sql$/.test(name)) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new TypeError("requiredLegacyMigrationNames must contain unique safe migration names");
+  }
+  return [...value];
 }
 
 function normalizeExpectedDatabaseRole(value: string | undefined): string | undefined {

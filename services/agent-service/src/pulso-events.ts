@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { envelope } from "@hyperion/contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import { readInternalCredential, validateInternalAuthorization, type RouteRegistrar } from "@hyperion/service-runtime";
 import { z } from "zod";

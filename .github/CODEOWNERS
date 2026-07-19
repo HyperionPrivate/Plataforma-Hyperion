@@ -1,0 +1,4 @@
+# Propiedad transitoria mientras las celdas se trasladan a la organización.
+# La segunda cuenta permite revisión CODEOWNER independiente del autor del PR.
+# Sustituir ambas cuentas por equipos por celda cuando existan los repositorios federados.
+* @AdministracionHyperion @mateo181230-cmyk

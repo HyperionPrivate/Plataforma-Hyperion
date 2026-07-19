@@ -7,22 +7,25 @@ import { createDatabasePulsoDeliveryGuard } from "./pulso-delivery.integration.t
 import { WHATSAPP_PROVIDER_MODE } from "./types.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("Channel outbox conversation ordering", () => {
   let db: DatabaseClient;
+  let fixtureDb: DatabaseClient;
   let tenantId = "";
   let repository: PostgresChannelRepository;
 
   beforeAll(async () => {
     db = createDatabase(TEST_DATABASE_URL ?? "");
-    const tenant = await db.query<{ id: string }>(
+    fixtureDb = createDatabase(TEST_PULSO_FIXTURE_DATABASE_URL ?? "");
+    const tenant = await fixtureDb.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name)
        values ($1, 'Channel ordering integration test') returning id`,
       [`channel-ordering-${randomUUID()}`]
     );
     tenantId = tenant.rows[0]?.id ?? "";
-    repository = new PostgresChannelRepository(db, createDatabasePulsoDeliveryGuard(db));
+    repository = new PostgresChannelRepository(db, createDatabasePulsoDeliveryGuard(fixtureDb));
     await repository.projectConnection(tenantId, {
       providerMode: WHATSAPP_PROVIDER_MODE,
       state: "ready",
@@ -34,9 +37,10 @@ describeIntegration("Channel outbox conversation ordering", () => {
   afterAll(async () => {
     if (tenantId) {
       await db.query("delete from channel_runtime.outbox_events where tenant_id = $1", [tenantId]);
-      await db.query("delete from platform.tenants where id = $1", [tenantId]);
+      await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
+    await fixtureDb.close();
   });
 
   it("serializes concurrent allocation and prevents another worker from overtaking a retry", async () => {

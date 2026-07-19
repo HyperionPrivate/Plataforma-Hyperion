@@ -1,12 +1,12 @@
 import type { DatabaseExecutor } from "@hyperion/database";
 
-export type NovaProductFlow = "renovacion" | "reactivacion";
+export type NovaProductFlow = string;
 
 /**
  * Resolve LIWA flow id for outbound WhatsApp:
  * 1) explicit override
  * 2) nova.agent_configs.liwa_flow_id for product_flow
- * 3) env LIWA_FLOW_ID_B / LIWA_DEFAULT_FLOW_ID by flow
+ * 3) tenant-neutral emergency default from LIWA_DEFAULT_FLOW_ID
  */
 export async function resolveLiwaFlowId(
   db: DatabaseExecutor,
@@ -31,11 +31,9 @@ export async function resolveLiwaFlowId(
   if (fromConfig) return fromConfig;
 
   const env = options.env ?? process.env;
-  if (productFlow === "reactivacion") {
-    const flowB = env.LIWA_FLOW_ID_B?.trim();
-    if (flowB) return flowB;
-  }
-  return env.LIWA_DEFAULT_FLOW_ID?.trim() || "1782399915832";
+  const fallback = env.LIWA_DEFAULT_FLOW_ID?.trim();
+  if (fallback) return fallback;
+  throw new Error(`No LIWA flow is configured for NOVA flow ${productFlow}`);
 }
 
 export async function resolveProductFlowForContact(
@@ -53,14 +51,17 @@ export async function resolveProductFlowForContact(
       limit 1`,
     [tenantId, contactId]
   );
-  const flow = fromCampaign.rows[0]?.product_flow;
-  if (flow === "reactivacion" || flow === "renovacion") return flow;
+  const campaignFlow = fromCampaign.rows[0]?.product_flow?.trim();
+  if (campaignFlow) return campaignFlow;
 
-  const segment = await db.query<{ segment: string | null }>(
-    `select segment from nova.contacts where tenant_id = $1 and contact_id = $2`,
-    [tenantId, contactId]
+  const configured = await db.query<{ product_flow: string }>(
+    `select product_flow from nova.agent_configs
+      where tenant_id = $1 and coalesce(is_active, true) = true
+      order by product_flow
+      limit 1`,
+    [tenantId]
   );
-  const seg = (segment.rows[0]?.segment ?? "").toLowerCase();
-  if (seg.includes("reactiv")) return "reactivacion";
-  return "renovacion";
+  const configuredFlow = configured.rows[0]?.product_flow?.trim();
+  if (configuredFlow) return configuredFlow;
+  throw new Error(`No active NOVA flow is configured for tenant ${tenantId}`);
 }

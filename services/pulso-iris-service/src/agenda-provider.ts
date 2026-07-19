@@ -1,4 +1,4 @@
-import type { PulsoIrisAvailabilitySlots } from "@hyperion/contracts";
+import type { PulsoIrisAvailabilitySlots } from "@hyperion/pulso-contracts";
 import type { AvailabilitySlotFilters } from "./availability-engine.js";
 
 export type AgendaProviderErrorCode =

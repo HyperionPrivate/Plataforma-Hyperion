@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { envelope, productModules } from "@hyperion/contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import {
   HttpOutboxDispatcher,
   JetStreamOutboxDispatcher,
@@ -71,25 +71,6 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       });
     });
   }
-
-  app.get("/v1/products", async (request, reply) => {
-    const authError = validateInternalAuthorization(request.headers, {
-      "api-gateway": readInternalCredential(process.env, "GATEWAY_TO_SOFIA_TOKEN")
-    });
-    if (authError) {
-      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
-    }
-    // Catalogo de producto versionado en contracts (sin SQL cruzado a access/platform.products).
-    return envelope(
-      productModules.map((module) => ({
-        code: module.code,
-        name: module.name,
-        status: module.status,
-        owner_service: module.ownerService
-      })),
-      request.id
-    );
-  });
 
   app.get("/v1/agents", async (request, reply) => {
     const authError = validateInternalAuthorization(request.headers, {
@@ -291,6 +272,6 @@ function createWorkloadFetch(caller: string, token: string): typeof fetch {
     for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
       headers.set(name, value);
     }
-    return fetch(input, { ...init, headers });
+    return fetch(input, { ...init, headers, redirect: "error" });
   };
 }

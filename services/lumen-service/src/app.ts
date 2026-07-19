@@ -1,4 +1,10 @@
-import { lumenCatalog } from "@hyperion/contracts";
+import { lumenCatalog } from "@hyperion/lumen-contracts";
+import {
+  assertLumenRuntimeDatabaseBoundary,
+  LUMEN_CURRENT_MIGRATION,
+  LUMEN_CURRENT_SCHEMA_VERSION,
+  type LumenSchemaClient
+} from "@hyperion/lumen-migrations/schema-manifest";
 import {
   HttpOutboxDispatcher,
   JetStreamOutboxDispatcher,
@@ -9,10 +15,12 @@ import {
 import {
   createInternalAuthorizationHeaders,
   isRestrictedDeploymentEnvironment,
+  readInternalCaller,
   readInternalCredential,
   readOperatorAssertionKey,
   validateOperatorAssertionContext,
   validateInternalAuthorization,
+  validateProductOperatorAssertionContext,
   type RouteRegistrar,
   type ServiceContext
 } from "@hyperion/service-runtime";
@@ -28,7 +36,12 @@ import { ElevenLabsSpeechToTextProvider } from "./speech-to-text.js";
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const durableOutbox = readDurableOutboxConfiguration(process.env);
   const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_LUMEN_TOKEN");
-  const operatorAssertionKey = readOperatorAssertionKey(process.env);
+  const lumenBffToken = readInternalCredential(process.env, "LUMEN_BFF_TO_LUMEN_TOKEN");
+  const gatewayAssertionKey = readOperatorAssertionKey(process.env);
+  const lumenAssertionKey = readInternalCredential(process.env, "LUMEN_OPERATOR_ASSERTION_KEY");
+  if (lumenBffToken && !lumenAssertionKey) {
+    throw new Error("LUMEN_OPERATOR_ASSERTION_KEY is required with LUMEN_BFF_TO_LUMEN_TOKEN");
+  }
   const auditToken = readInternalCredential(process.env, "LUMEN_TO_AUDIT_TOKEN");
   if (context.db) await verifyLumenSchema(context);
 
@@ -56,11 +69,17 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     if (!request.routeOptions.url?.startsWith("/v1/tenants/")) return;
     const tenantId = readTenantParam(request.params);
     if (tenantId === undefined) return;
-    const authError = validateInternalAuthorization(request.headers, { "api-gateway": gatewayToken });
+    const authError = validateInternalAuthorization(request.headers, {
+      "lumen-bff": lumenBffToken,
+      "api-gateway": gatewayToken
+    });
     if (authError) {
       return reply.code(authError.statusCode).send({ data: { error: authError.message }, requestId: request.id });
     }
-    const assertionError = validateOperatorAssertionContext(request.headers, operatorAssertionKey, tenantId);
+    const assertionError =
+      readInternalCaller(request.headers) === "lumen-bff"
+        ? validateProductOperatorAssertionContext(request.headers, lumenAssertionKey, tenantId, "LUMEN")
+        : validateOperatorAssertionContext(request.headers, gatewayAssertionKey, tenantId);
     if (assertionError) {
       return reply
         .code(assertionError.statusCode)
@@ -145,13 +164,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       status: "ok",
       providers: {
         transcriptionConfigured: transcriber.isConfigured(),
-        transcriptionProvider: transcriber.name,
-        transcriptionModel: transcriber.model,
-        transcriptionLanguage: transcriber.language,
-        zeroRetentionRequired: true,
-        structuringConfigured: structurer.isConfigured(),
-        structuringProvider: structurer.name,
-        structuringModel: structurer.model
+        structuringConfigured: structurer.isConfigured()
       }
     },
     requestId: request.id
@@ -170,21 +183,21 @@ function readTenantParam(params: unknown): string | undefined {
 }
 
 export async function verifyLumenSchema(context: ServiceContext): Promise<void> {
-  const result = await context.db!.query<{
-    encounters: string | null;
-    records: string | null;
-    currentVersion: number | string | null;
-  }>(
-    `select to_regclass('lumen.encounters')::text as encounters,
-            to_regclass('lumen.clinical_records')::text as records,
-            (
-              select current_version from lumen.schema_version
-              where service_name = 'lumen'
-            ) as "currentVersion"`
-  );
-  const currentVersion = Number(result.rows[0]?.currentVersion ?? 0);
-  if (!result.rows[0]?.encounters || !result.rows[0]?.records || currentVersion < 39) {
-    throw new Error("LUMEN schema is incomplete; run migrations");
+  const database = context.db!;
+  const schemaClient: LumenSchemaClient = {
+    query: async <T = Record<string, unknown>>(sql: string, values?: unknown[]) => {
+      const result = await database.query(sql, values);
+      return { rows: result.rows as unknown as T[] };
+    }
+  };
+  const { schema: inspection } = await assertLumenRuntimeDatabaseBoundary(schemaClient);
+  if (
+    inspection.state !== "managed" ||
+    inspection.currentVersion !== LUMEN_CURRENT_SCHEMA_VERSION ||
+    inspection.migrationName !== LUMEN_CURRENT_MIGRATION
+  ) {
+    const detail = inspection.issues.length > 0 ? `: ${inspection.issues.join("; ")}` : "";
+    throw new Error(`LUMEN runtime schema integrity verification failed${detail}`);
   }
 }
 
@@ -256,6 +269,6 @@ function createWorkloadFetch(caller: string, token: string): typeof fetch {
     for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
       headers.set(name, value);
     }
-    return fetch(input, { ...init, headers });
+    return fetch(input, { ...init, headers, redirect: "error" });
   };
 }

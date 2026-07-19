@@ -1,0 +1,129 @@
+name: access-channel-projection-boundary
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: access-channel-projection-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  impact:
+    name: access-channel / affected
+    runs-on: ubuntu-latest
+    outputs:
+      affected: ${{ steps.impact.outputs.affected }}
+    steps:
+      - name: Checkout dependency graph
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Prove the impact policy and install planner fail closed
+        run: >-
+          node --test scripts/ci/resolve-access-channel-impact.test.mjs
+          scripts/ci/cell-install-plan.test.mjs
+      - name: Resolve the Platform ↔ PULSO boundary impact
+        id: impact
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          node scripts/ci/resolve-access-channel-impact.mjs
+          --base "$BASE_SHA" --head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+      - name: Reject a skipped boundary-policy change
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          AFFECTED: ${{ steps.impact.outputs.affected }}
+        shell: bash
+        run: |
+          set -eu
+          if test -z "$BASE_SHA" || printf '%s' "$BASE_SHA" | grep -Eq '^0+$'; then
+            test "$AFFECTED" = "true"
+            exit 0
+          fi
+          for boundary_policy in \
+            .github/workflows/access-channel-projection.yml \
+            scripts/architecture/cell-policy.mjs \
+            scripts/ci/cell-install-plan.mjs \
+            scripts/ci/cell-install-plan.test.mjs \
+            scripts/ci/resolve-access-channel-impact.mjs \
+            scripts/ci/resolve-access-channel-impact.test.mjs \
+            scripts/ci/resolve-cell-impact.mjs \
+            scripts/ci/resolve-cell-impact.test.mjs
+          do
+            if ! git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- "$boundary_policy"; then
+              test "$AFFECTED" = "true"
+            fi
+          done
+
+  acceptance:
+    name: access-channel / real-postgres-http-parity
+    if: needs.impact.outputs.affected == 'true'
+    needs: impact
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout boundary source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install the isolated Access producer closure
+        run: >-
+          node scripts/ci/cell-install-plan.mjs --cell platform
+          --package @hyperion/access-migrations
+          --package @hyperion/identity-service --execute
+      - name: Install the isolated Channel consumer closure
+        run: >-
+          node scripts/ci/cell-install-plan.mjs --cell pulso
+          --package @hyperion/pulso-migrations
+          --package @hyperion/whatsapp-channel-service --execute
+      - name: Run real two-database authenticated parity acceptance
+        env:
+          RUN_ACCESS_CHANNEL_ACCEPTANCE: "1"
+        run: >-
+          node scripts/autonomy/access-channel-projection.e2e.mjs
+          --receipt access-channel-projection-receipt.json
+      - name: Upload the canonical non-secret receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: access-channel-projection-receipt-${{ github.run_id }}
+          path: access-channel-projection-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  required:
+    name: access-channel / required
+    if: always()
+    needs: [impact, acceptance]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require affected boundary acceptance success
+        env:
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          AFFECTED: ${{ needs.impact.outputs.affected }}
+          ACCEPTANCE_RESULT: ${{ needs.acceptance.result }}
+        run: |
+          test "$IMPACT_RESULT" = "success"
+          if test "$AFFECTED" = "true"; then
+            test "$ACCEPTANCE_RESULT" = "success"
+          else
+            test "$ACCEPTANCE_RESULT" = "skipped"
+          fi

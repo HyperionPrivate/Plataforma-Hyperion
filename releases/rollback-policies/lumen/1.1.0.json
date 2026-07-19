@@ -1,0 +1,22 @@
+{
+  "$schema": "../../schemas/rollback-policy.schema.json",
+  "schemaVersion": 1,
+  "cell": "lumen",
+  "policyVersion": "1.1.0",
+  "catalogVersion": "1.1.0",
+  "ociComponents": ["lumen-service", "lumen-bff", "lumen-console", "lumen-migrations"],
+  "migration": {
+    "componentId": "lumen-migrations",
+    "sourcePath": "packages/lumen-migrations",
+    "files": [
+      {
+        "path": "sql/001-lumen-autonomous-baseline.sql",
+        "sha256": "13230af492402c616bf1657788af89a99409e9e890620795d3b7ae76102c442a"
+      },
+      {
+        "path": "sql/002-lumen-runtime-role.sql",
+        "sha256": "0548de2684b066f48af4133f916ffb7548195dc6d6be3d883482384f7b6f89fd"
+      }
+    ]
+  }
+}

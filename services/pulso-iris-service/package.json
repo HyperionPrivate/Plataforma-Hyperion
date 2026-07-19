@@ -12,9 +12,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hyperion/contracts": "workspace:*",
+    "@hyperion/audit-contracts": "1.1.0",
     "@hyperion/database": "workspace:*",
     "@hyperion/durable-events": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
+    "@hyperion/pulso-contracts": "1.1.0",
+    "@hyperion/pulso-migrations": "workspace:*",
     "@hyperion/service-runtime": "workspace:*",
     "fastify": "^5.2.1",
     "pg": "^8.22.0",

@@ -1,7 +1,11 @@
 # ADR-0001: Límites de producto y de servicio
 
-- Estado: Aceptada
+- Estado: Aceptada; reemplazada parcialmente por [ADR-0006](ADR-0006-federated-product-cells.md)
 - Fecha: 2026-07-13
+
+> ADR-0006 reemplaza la autorización de una consola _customer-facing_ multiproducto, el gateway de dominio
+> común y la obligación de conservar una consola compartida. Los demás criterios y clasificaciones de este ADR
+> permanecen vigentes.
 
 ## Contexto
 

@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/release-manifest.schema.json",
+  "schemaVersion": 1,
+  "cell": "lumen",
+  "catalogVersion": "1.0.0",
+  "releaseVersion": "0.1.0-dev.0",
+  "status": "draft",
+  "generatedAt": "2026-07-17T00:00:00Z",
+  "imagesVerified": false,
+  "components": [
+    {
+      "id": "lumen-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/lumen-service@sha256:6e20014fbb77a4c1ad0709a3ddc823816040fc221c0126f81123cc926f18b684"
+    },
+    {
+      "id": "lumen-bff",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/lumen-bff@sha256:3203193b7168103a805613810dd05d3f0e879480502382e9d99cf745bd30bdb1"
+    },
+    {
+      "id": "lumen-console",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/lumen-console@sha256:dade103bc591c31a50f9942d92f98b803c763e3fc16b49ee3ee0e0767157d0c7"
+    },
+    {
+      "id": "lumen-contracts",
+      "version": "1.0.0",
+      "package": "@hyperion/lumen-contracts@1.0.0"
+    }
+  ]
+}

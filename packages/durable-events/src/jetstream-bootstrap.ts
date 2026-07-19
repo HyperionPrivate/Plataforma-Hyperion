@@ -22,6 +22,7 @@ export const HYPERION_KNOWN_CONSUMERS = [
   { eventType: "pulso.audit.event.record.v1", durableName: "audit_pulso_event_record_v1" },
   { eventType: "channel.audit.event.record.v1", durableName: "audit_channel_event_record_v1" },
   { eventType: "audit.event.record.v1", durableName: "audit_event_record_v1" },
+  { eventType: "access.tenant.snapshot.v1", durableName: "channel_access_tenant_snapshot_v1" },
   { eventType: "access.lumen.tenant-snapshot.v1", durableName: "lumen_tenant_snapshot_v1" },
   { eventType: "access.lumen.operator-grant.v1", durableName: "lumen_operator_grant_v1" },
   { eventType: "pulso.lumen.encounter-reference.v1", durableName: "lumen_encounter_reference_v1" }

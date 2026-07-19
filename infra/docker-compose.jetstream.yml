@@ -1,12 +1,12 @@
 services:
   nats:
-    image: nats:2.14.3-alpine
+    image: nats:2.14.3-alpine@sha256:c11af972c99ae542de8925e6a7d9c533aa1eb039660420d2074beed6089b3bf0
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
         environment_lower="$$(printf '%s' "$${HYPERION_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
-        set -- "$${NATS_TOPOLOGY_PASSWORD}" "$${NATS_CHANNEL_PASSWORD}" "$${NATS_PULSO_PASSWORD}" "$${NATS_SOFIA_PASSWORD}" "$${NATS_AUDIT_PASSWORD}" "$${NATS_LUMEN_PASSWORD}"
+        set -- "$${NATS_TOPOLOGY_PASSWORD}" "$${NATS_ACCESS_PASSWORD}" "$${NATS_CHANNEL_PASSWORD}" "$${NATS_PULSO_PASSWORD}" "$${NATS_SOFIA_PASSWORD}" "$${NATS_AUDIT_PASSWORD}" "$${NATS_LUMEN_PASSWORD}"
         while [ "$${#}" -gt 0 ]; do
           current="$${1}"
           shift
@@ -44,6 +44,7 @@ services:
     environment:
       HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
       NATS_TOPOLOGY_PASSWORD: ${NATS_TOPOLOGY_PASSWORD:?NATS_TOPOLOGY_PASSWORD is required for JetStream}
+      NATS_ACCESS_PASSWORD: ${NATS_ACCESS_PASSWORD:?NATS_ACCESS_PASSWORD is required for JetStream}
       NATS_CHANNEL_PASSWORD: ${NATS_CHANNEL_PASSWORD:?NATS_CHANNEL_PASSWORD is required for JetStream}
       NATS_PULSO_PASSWORD: ${NATS_PULSO_PASSWORD:?NATS_PULSO_PASSWORD is required for JetStream}
       NATS_SOFIA_PASSWORD: ${NATS_SOFIA_PASSWORD:?NATS_SOFIA_PASSWORD is required for JetStream}
@@ -67,6 +68,8 @@ services:
       context: ..
       dockerfile: infra/docker/node-service.Dockerfile
       target: jetstream-topology-bootstrap
+      args:
+        BUILD_FILTER: "@hyperion/durable-events"
     restart: "no"
     command: ["node", "packages/durable-events/dist/jetstream-bootstrap.js"]
     environment:
@@ -78,6 +81,18 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+
+  identity-service:
+    environment:
+      DURABLE_EVENT_TRANSPORT: jetstream
+      ACCESS_TENANT_SNAPSHOT_TRANSPORT: jetstream
+      ACCESS_LUMEN_PROJECTION_TRANSPORT: jetstream
+      NATS_URL: nats://nats:4222
+      NATS_USERNAME: access
+      NATS_PASSWORD: ${NATS_ACCESS_PASSWORD:?NATS_ACCESS_PASSWORD is required for JetStream}
+    depends_on:
+      jetstream-topology-bootstrap:
+        condition: service_completed_successfully
 
   agent-service:
     environment:

@@ -1,4 +1,4 @@
-import { envelope } from "@hyperion/contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import { readInternalCredential, validateInternalAuthorization, type RouteRegistrar } from "@hyperion/service-runtime";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {

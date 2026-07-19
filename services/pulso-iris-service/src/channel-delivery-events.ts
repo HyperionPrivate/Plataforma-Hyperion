@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { envelope } from "@hyperion/contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import type { DatabaseClient } from "@hyperion/database";
 import { validateInternalAuthorization, type ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance } from "fastify";

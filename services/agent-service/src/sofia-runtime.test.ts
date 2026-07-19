@@ -72,6 +72,7 @@ describe("SOFIA runtime lifecycle", () => {
     const conversationId = "00000000-0000-4000-8000-000000000202";
     const jobId = "00000000-0000-4000-8000-000000000203";
     const messageId = "00000000-0000-4000-8000-000000000204";
+    const patientId = "00000000-0000-4000-8000-000000000206";
     const promptStarted = deferred<void>();
     let failedJobParameters: unknown[] | undefined;
     let queuedConversation = false;
@@ -88,7 +89,7 @@ describe("SOFIA runtime lifecycle", () => {
             attemptCount: 4,
             maxAttempts: 4,
             input: {
-              patientId: "00000000-0000-4000-8000-000000000206",
+              patientId,
               messageId,
               threadBindingId: "00000000-0000-4000-8000-000000000207",
               occurredAt: new Date().toISOString()
@@ -96,7 +97,6 @@ describe("SOFIA runtime lifecycle", () => {
           }
         ]);
       }
-      if (sql.includes("select m.body")) return dbResult([{ body: "Necesito una cita", conversationStatus: "active" }]);
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000208" }]);
       }
@@ -114,6 +114,19 @@ describe("SOFIA runtime lifecycle", () => {
       async (url: string | URL | Request, init?: RequestInit) =>
         new Promise<Response>((resolve, reject) => {
           const target = String(url);
+          if (target.includes("/sofia/inbound-message")) {
+            resolve(
+              jsonResponse({
+                found: true,
+                tenantId,
+                conversationId,
+                patientId,
+                conversationStatus: "active",
+                message: { id: messageId, sender: "patient", body: "Necesito una cita" }
+              })
+            );
+            return;
+          }
           if (target.includes("/sofia-runtime")) {
             const body = JSON.parse(String(init?.body ?? "{}")) as { sofiaStatus?: string };
             if (body.sofiaStatus === "queued") queuedConversation = true;
@@ -226,6 +239,26 @@ describe("SOFIA deterministic urgency guard", () => {
     expect(isUrgencySignal("Quiero una consulta de optometría en Sotomayor")).toBe(false);
   });
 
+  it("preserves the provider-owned handoff status without creating a duplicate handoff", async () => {
+    const existingHandoff = await runConfirmationScenario({
+      body: "Perdí la visión de forma repentina",
+      conversationStatus: "handoff_required",
+      state: {},
+      toolResults: {}
+    });
+    const newUrgency = await runConfirmationScenario({
+      body: "Perdí la visión de forma repentina",
+      conversationStatus: "active",
+      state: {},
+      toolResults: {}
+    });
+
+    expect(existingHandoff.processed).toBe(true);
+    expect(existingHandoff.complete).not.toHaveBeenCalled();
+    expect(existingHandoff.toolCalls).not.toContain("create_urgent_handoff");
+    expect(newUrgency.toolCalls).toContain("create_urgent_handoff");
+  });
+
   it("does not downgrade a completed conversation when an inbound event is redelivered", async () => {
     const event = {
       id: "00000000-0000-4000-8000-000000000001",
@@ -325,11 +358,16 @@ describe("SOFIA deterministic urgency guard", () => {
         id: "controlled-readiness"
       },
       {}
-    )) as { data: { ready: boolean; workerEnabled: boolean; workerRunning: boolean } };
+    )) as { data: { ready: boolean; workerEnabled: boolean; workerRunning: boolean; promptFlowReady: boolean } };
 
-    expect(response.data).toMatchObject({ ready: true, workerEnabled: true, workerRunning: true });
+    expect(response.data).toMatchObject({
+      ready: true,
+      workerEnabled: true,
+      workerRunning: true,
+      promptFlowReady: true
+    });
     expect(String(query.mock.calls[0]?.[0])).toContain("sofia_whatsapp_internal_v5");
-    expect(String(query.mock.calls[0]?.[0])).toContain("016-sofia-search-constraints.sql");
+    expect(String(query.mock.calls[0]?.[0])).not.toContain("platform.schema_migrations");
     expect(String(query.mock.calls[0]?.[0])).toContain("order by f.version desc, f.updated_at desc");
   });
 
@@ -728,6 +766,7 @@ describe("SOFIA fresh availability guard", () => {
     const conversationId = "00000000-0000-4000-8000-000000000012";
     const jobId = "00000000-0000-4000-8000-000000000013";
     const messageId = "00000000-0000-4000-8000-000000000014";
+    const patientId = "00000000-0000-4000-8000-000000000016";
     const currentBody = "Quiero la cita del lunes 13 de julio a las 9:00 a. m.";
     const selection = {
       siteId: "00000000-0000-4000-8000-000000000021",
@@ -738,7 +777,7 @@ describe("SOFIA fresh availability guard", () => {
     let persistedResponse = "";
     let enqueuedResponse = "";
     const durableResponse = "Respuesta durable del primer intento.";
-    const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
+    const query = vi.fn(async (sql: string, _parameters?: unknown[]) => {
       if (sql.includes("claim_next_job")) {
         return dbResult([
           {
@@ -749,7 +788,7 @@ describe("SOFIA fresh availability guard", () => {
             attemptCount: 1,
             maxAttempts: 4,
             input: {
-              patientId: "00000000-0000-4000-8000-000000000016",
+              patientId,
               messageId,
               threadBindingId: "00000000-0000-4000-8000-000000000017",
               occurredAt
@@ -757,33 +796,8 @@ describe("SOFIA fresh availability guard", () => {
           }
         ]);
       }
-      if (sql.includes("select m.body")) {
-        return dbResult([{ body: currentBody, conversationStatus: "active" }]);
-      }
-      if (sql.includes("select sender, body from")) {
-        return dbResult([
-          { sender: "sofia", body: "Los horarios antiguos eran 2:00 p. m. y 2:20 p. m." },
-          { sender: "patient", body: currentBody }
-        ]);
-      }
-      if (sql.includes("coalesce(metadata->'sofiaState'")) {
-        return dbResult([
-          {
-            sofiaState: {
-              lastAvailability: { slots: [{ localTime: "14:00" }] },
-              lastAvailabilityAt: "2026-07-09T20:00:00.000Z",
-              agendaSelection: selection
-            }
-          }
-        ]);
-      }
-      if (sql.includes("select full_name")) return dbResult([{ fullName: "Paciente controlado" }]);
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
-      }
-      if (sql.includes("insert into pulso_iris.messages")) {
-        persistedResponse = String(parameters?.[2] ?? "");
-        return dbResult([{ id: "00000000-0000-4000-8000-000000000019", body: durableResponse }]);
       }
       return dbResult([]);
     });
@@ -800,6 +814,24 @@ describe("SOFIA fresh availability guard", () => {
     }));
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
+      const contextResponse = pulsoSofiaContextResponse(target, {
+        tenantId,
+        conversationId,
+        patientId,
+        messageId,
+        body: currentBody,
+        patientName: "Paciente controlado",
+        sofiaState: {
+          lastAvailability: { slots: [{ localTime: "14:00" }] },
+          lastAvailabilityAt: "2026-07-09T20:00:00.000Z",
+          agendaSelection: selection
+        },
+        history: [
+          { sender: "sofia", body: "Los horarios antiguos eran 2:00 p. m. y 2:20 p. m." },
+          { sender: "patient", body: currentBody }
+        ]
+      });
+      if (contextResponse) return contextResponse;
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
           id: "00000000-0000-4000-8000-000000000020",
@@ -861,6 +893,7 @@ describe("SOFIA fresh availability guard", () => {
     const jobId = "00000000-0000-4000-8000-000000000013";
     const messageId = "00000000-0000-4000-8000-000000000014";
     const patientId = "00000000-0000-4000-8000-000000000016";
+    const currentBody = "Consulta disponibilidad del lunes 13 de julio a las 9:00 a. m.";
     const slot = {
       siteId: "00000000-0000-4000-8000-000000000021",
       siteName: "Sede Principal Sotomayor",
@@ -896,32 +929,6 @@ describe("SOFIA fresh availability guard", () => {
           }
         ]);
       }
-      if (sql.includes("select m.body")) {
-        return dbResult([
-          { body: "Consulta disponibilidad del lunes 13 de julio a las 9:00 a. m.", conversationStatus: "active" }
-        ]);
-      }
-      if (sql.includes("select sender, body from")) {
-        return dbResult([
-          { sender: "sofia", body: "Antes se mostraron horarios de la tarde." },
-          { sender: "patient", body: "Consulta disponibilidad del lunes 13 de julio a las 9:00 a. m." }
-        ]);
-      }
-      if (sql.includes("coalesce(metadata->'sofiaState'")) {
-        return dbResult([
-          {
-            sofiaState: {
-              agendaSelection: {
-                siteId: slot.siteId,
-                professionalId: slot.professionalId,
-                payerId: slot.payerId,
-                appointmentTypeId: slot.appointmentTypeId
-              }
-            }
-          }
-        ]);
-      }
-      if (sql.includes("select full_name")) return dbResult([{ fullName: "Paciente controlado" }]);
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
       }
@@ -961,6 +968,27 @@ describe("SOFIA fresh availability guard", () => {
       });
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
+      const contextResponse = pulsoSofiaContextResponse(target, {
+        tenantId,
+        conversationId,
+        patientId,
+        messageId,
+        body: currentBody,
+        patientName: "Paciente controlado",
+        sofiaState: {
+          agendaSelection: {
+            siteId: slot.siteId,
+            professionalId: slot.professionalId,
+            payerId: slot.payerId,
+            appointmentTypeId: slot.appointmentTypeId
+          }
+        },
+        history: [
+          { sender: "sofia", body: "Antes se mostraron horarios de la tarde." },
+          { sender: "patient", body: currentBody }
+        ]
+      });
+      if (contextResponse) return contextResponse;
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
           id: "00000000-0000-4000-8000-000000000020",
@@ -1029,6 +1057,7 @@ describe("SOFIA fresh availability guard", () => {
     const jobId = "00000000-0000-4000-8000-000000000013";
     const messageId = "00000000-0000-4000-8000-000000000014";
     const patientId = "00000000-0000-4000-8000-000000000016";
+    const currentBody = "Quiero la cita del lunes 13 de julio a las 9:00 a. m.";
     const slot = {
       siteId: "00000000-0000-4000-8000-000000000021",
       siteName: "Sede Principal Sotomayor",
@@ -1065,30 +1094,6 @@ describe("SOFIA fresh availability guard", () => {
           }
         ]);
       }
-      if (sql.includes("select m.body")) {
-        return dbResult([
-          { body: "Quiero la cita del lunes 13 de julio a las 9:00 a. m.", conversationStatus: "active" }
-        ]);
-      }
-      if (sql.includes("select sender, body from")) {
-        return dbResult([{ sender: "patient", body: "Quiero la cita del lunes 13 de julio a las 9:00 a. m." }]);
-      }
-      if (sql.includes("coalesce(metadata->'sofiaState'")) {
-        return dbResult([
-          {
-            sofiaState: {
-              agendaSelection: {
-                siteId: slot.siteId,
-                professionalId: slot.professionalId,
-                payerId: slot.payerId,
-                appointmentTypeId: slot.appointmentTypeId
-              }
-            },
-            state: {}
-          }
-        ]);
-      }
-      if (sql.includes("select full_name")) return dbResult([{ fullName: "Paciente controlado" }]);
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
       }
@@ -1134,6 +1139,23 @@ describe("SOFIA fresh availability guard", () => {
     let searchPayload: Record<string, unknown> | undefined;
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
+      const contextResponse = pulsoSofiaContextResponse(target, {
+        tenantId,
+        conversationId,
+        patientId,
+        messageId,
+        body: currentBody,
+        patientName: "Paciente controlado",
+        sofiaState: {
+          agendaSelection: {
+            siteId: slot.siteId,
+            professionalId: slot.professionalId,
+            payerId: slot.payerId,
+            appointmentTypeId: slot.appointmentTypeId
+          }
+        }
+      });
+      if (contextResponse) return contextResponse;
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
           id: "00000000-0000-4000-8000-000000000020",
@@ -1223,6 +1245,7 @@ describe("SOFIA fresh availability guard", () => {
     const jobId = "00000000-0000-4000-8000-000000000013";
     const messageId = "00000000-0000-4000-8000-000000000014";
     const patientId = "00000000-0000-4000-8000-000000000016";
+    const currentBody = "Quiero reagendar mi cita al lunes 13 de julio de 2026 a las 9:00 a. m.";
     const appointmentId = "00000000-0000-4000-8000-000000000026";
     const exactSlot = {
       siteId: "00000000-0000-4000-8000-000000000021",
@@ -1266,33 +1289,9 @@ describe("SOFIA fresh availability guard", () => {
           }
         ]);
       }
-      if (sql.includes("select m.body")) {
-        return dbResult([
-          {
-            body: "Quiero reagendar mi cita al lunes 13 de julio de 2026 a las 9:00 a. m.",
-            conversationStatus: "active"
-          }
-        ]);
-      }
-      if (sql.includes("select sender, body from")) return dbResult([]);
-      if (sql.includes('as "sofiaState"')) {
-        return dbResult([
-          {
-            sofiaState: {
-              agendaSelection: {
-                siteId: exactSlot.siteId,
-                professionalId: exactSlot.professionalId,
-                payerId: exactSlot.payerId,
-                appointmentTypeId: exactSlot.appointmentTypeId
-              }
-            }
-          }
-        ]);
-      }
       if (sql.includes(" as state,")) {
         return dbResult([{ state: {}, pendingExpired: false, grantExpired: false }]);
       }
-      if (sql.includes("select full_name")) return dbResult([{ fullName: "Paciente controlado" }]);
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
       }
@@ -1311,6 +1310,23 @@ describe("SOFIA fresh availability guard", () => {
     });
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
+      const contextResponse = pulsoSofiaContextResponse(target, {
+        tenantId,
+        conversationId,
+        patientId,
+        messageId,
+        body: currentBody,
+        patientName: "Paciente controlado",
+        sofiaState: {
+          agendaSelection: {
+            siteId: exactSlot.siteId,
+            professionalId: exactSlot.professionalId,
+            payerId: exactSlot.payerId,
+            appointmentTypeId: exactSlot.appointmentTypeId
+          }
+        }
+      });
+      if (contextResponse) return contextResponse;
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
           id: "00000000-0000-4000-8000-000000000020",
@@ -1403,6 +1419,7 @@ describe("SOFIA fresh availability guard", () => {
     const jobId = "00000000-0000-4000-8000-000000000013";
     const messageId = "00000000-0000-4000-8000-000000000014";
     const patientId = "00000000-0000-4000-8000-000000000016";
+    const currentBody = "Quiero reagendar mi cita al 13 de julio de 2026 a las 9:00 a. m.";
     const searchArguments = {
       siteId: "00000000-0000-4000-8000-000000000021",
       professionalId: "00000000-0000-4000-8000-000000000022",
@@ -1443,31 +1460,6 @@ describe("SOFIA fresh availability guard", () => {
           }
         ]);
       }
-      if (sql.includes("select m.body")) {
-        return dbResult([
-          { body: "Quiero reagendar mi cita al 13 de julio de 2026 a las 9:00 a. m.", conversationStatus: "active" }
-        ]);
-      }
-      if (sql.includes("select sender, body from")) {
-        return dbResult([
-          { sender: "patient", body: "Quiero reagendar mi cita al 13 de julio de 2026 a las 9:00 a. m." }
-        ]);
-      }
-      if (sql.includes("coalesce(metadata->'sofiaState'")) {
-        return dbResult([
-          {
-            sofiaState: {
-              agendaSelection: {
-                siteId: searchArguments.siteId,
-                professionalId: searchArguments.professionalId,
-                payerId: searchArguments.payerId,
-                appointmentTypeId: searchArguments.appointmentTypeId
-              }
-            }
-          }
-        ]);
-      }
-      if (sql.includes("select full_name")) return dbResult([{ fullName: "Paciente controlado" }]);
       if (sql.includes("insert into agent_runtime.executions")) {
         return dbResult([{ id: "00000000-0000-4000-8000-000000000018" }]);
       }
@@ -1492,6 +1484,23 @@ describe("SOFIA fresh availability guard", () => {
     let searchCalls = 0;
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
+      const contextResponse = pulsoSofiaContextResponse(target, {
+        tenantId,
+        conversationId,
+        patientId,
+        messageId,
+        body: currentBody,
+        patientName: "Paciente controlado",
+        sofiaState: {
+          agendaSelection: {
+            siteId: searchArguments.siteId,
+            professionalId: searchArguments.professionalId,
+            payerId: searchArguments.payerId,
+            appointmentTypeId: searchArguments.appointmentTypeId
+          }
+        }
+      });
+      if (contextResponse) return contextResponse;
       if (target.includes("prompt-flows/SOFIA/active")) {
         return jsonResponse({
           id: "00000000-0000-4000-8000-000000000020",
@@ -1901,16 +1910,16 @@ describe("SOFIA deterministic confirmation execution", () => {
         [CONFIRMATION_IDS.message]: { outcome: "completed", action: "reschedule" }
       }
     });
-    expect(result.recoveryCandidateSql).toContain("for update of j skip locked");
-    expect(result.recoveryCandidateSql).toContain("patient.tenant_id = j.tenant_id");
-    expect(result.recoveryCandidateSql).toContain("patient.conversation_id = j.conversation_id");
-    expect(result.recoveryCandidateSql).toContain("patient.id::text = j.input->>'messageId'");
+    expect(result.recoveryCandidateSql).not.toContain("for update");
+    expect(result.recoveryCandidateSql).not.toContain("pulso_iris.");
     expect(result.recoveryCandidateSql).toContain("predecessor.stream_id = j.stream_id");
     expect(result.recoveryCandidateSql).toContain("predecessor.stream_sequence < j.stream_sequence");
     expect(result.recoveryCandidateSql).toContain("predecessor.status <> 'completed'");
     expect(result.recoveryClaimSql).toContain("j.tenant_id = $2");
     expect(result.recoveryClaimSql).toContain("j.conversation_id = $4");
     expect(result.recoveryClaimSql).toContain("j.input->>'messageId' = $5");
+    expect(result.recoveryClaimSql).toContain("j.input->>'patientId' = $6");
+    expect(result.recoveryClaimSql).not.toContain("pulso_iris.");
     expect(result.recoveryClaimSql).toContain("predecessor.stream_id = j.stream_id");
     expect(result.recoveryClaimSql).toContain("predecessor.stream_sequence < j.stream_sequence");
     expect(result.recoveryClaimSql).toContain("predecessor.status <> 'completed'");
@@ -1920,28 +1929,118 @@ describe("SOFIA deterministic confirmation execution", () => {
       CONFIRMATION_IDS.conversation,
       CONFIRMATION_IDS.message
     ]);
+    expect(result.recoveryClaimParameters?.[5]).toBe(CONFIRMATION_IDS.patient);
   });
 
-  it("does not recover an exhausted confirmation when its idempotent outbound already exists", async () => {
+  it("pages past a full batch of ineligible jobs without starving a recoverable confirmation", async () => {
     const result = await runConfirmationScenario({
-      recovery: "outbound_exists",
+      recovery: "available",
+      recoveryDistractors: 10,
       attemptCount: 2,
       maxAttempts: 2,
       state: {},
       toolResults: {}
     });
 
-    expect(result.processed).toBe(false);
+    expect(result.processed).toBe(true);
+    expect(result.recoveryCandidateCalls).toBe(2);
     expect(result.recoveryClaimCalls).toBe(1);
-    expect(result.normalClaimCalls).toBe(1);
-    expect(result.mutationCalls).toEqual([]);
-    expect(result.responseText).toBe("");
-    expect(result.recoveryCandidateSql).toContain("and not exists");
-    expect(result.recoveryCandidateSql).toContain("from channel_runtime.outbound_messages outbound");
-    expect(result.recoveryCandidateSql).toContain("outbound.tenant_id = j.tenant_id");
-    expect(result.recoveryCandidateSql).toContain("outbound.provider = 'whatsapp_web_test'");
-    expect(result.recoveryCandidateSql).toContain("outbound.idempotency_key = 'sofia-job:' || j.id::text");
-    expect(result.recoveryClaimSql).toContain("and not exists");
+    expect(result.normalClaimCalls).toBe(0);
+    expect(result.recoveryCandidateSql).toContain("(j.updated_at, j.created_at, j.id) >");
+    expect(result.recoveryCandidateSql).toContain("order by j.updated_at, j.created_at, j.id");
+  });
+
+  it("isolates a malformed recovery candidate and defers recovery when PULSO is unavailable", async () => {
+    const malformed = await runConfirmationScenario({
+      recovery: "available",
+      recoveryMalformedFirst: true,
+      state: {},
+      toolResults: {}
+    });
+    const unavailable = await runConfirmationScenario({
+      recovery: "available",
+      recoveryProviderUnavailable: true,
+      state: {},
+      toolResults: {}
+    });
+
+    expect(malformed.processed).toBe(true);
+    expect(malformed.recoveryClaimCalls).toBe(1);
+    expect(malformed.inboundLookupCalls).toBe(3);
+    expect(unavailable.processed).toBe(false);
+    expect(unavailable.recoveryClaimCalls).toBe(0);
+    expect(unavailable.normalClaimCalls).toBe(1);
+  });
+
+  it("replays an exhausted confirmation idempotently after a crash between channel enqueue and completion", async () => {
+    const scheduledAt = "2026-07-14T15:20:00.000Z";
+    const result = await runConfirmationScenario({
+      recovery: "available",
+      replayAfterEnqueueCrash: true,
+      attemptCount: 2,
+      maxAttempts: 2,
+      state: {
+        confirmationExecution: {
+          actionId: CONFIRMATION_IDS.action,
+          tool: "reschedule_appointment",
+          arguments: {
+            appointmentId: CONFIRMATION_IDS.appointment,
+            siteId: CONFIRMATION_IDS.site,
+            professionalId: CONFIRMATION_IDS.professional,
+            payerId: CONFIRMATION_IDS.payer,
+            appointmentTypeId: CONFIRMATION_IDS.appointmentType,
+            scheduledAt,
+            reason: "Solicitud del paciente"
+          },
+          confirmationMessageId: CONFIRMATION_IDS.message,
+          claimedAt: new Date(Date.now() - 180_000).toISOString()
+        }
+      },
+      toolResults: {
+        reschedule_appointment: appointmentMutationResult({
+          localDate: "2026-07-14",
+          localTime: "10:20",
+          scheduledAt
+        })
+      }
+    });
+
+    expect(result.firstProcessError).toBe("simulated_worker_crash_after_channel_enqueue");
+    expect(result.processed).toBe(true);
+    expect(result.recoveryClaimCalls).toBe(2);
+    expect(result.normalClaimCalls).toBe(0);
+    expect(result.mutationCalls.map((call) => call.tool)).toEqual(["reschedule_appointment"]);
+    expect(result.responsePersistCalls).toBe(2);
+    expect(result.responsePersistRequests).toHaveLength(2);
+    expect(result.responsePersistRequests.map(({ body, externalMessageId }) => ({ body, externalMessageId }))).toEqual([
+      {
+        body: result.responseText,
+        externalMessageId: `sofia-job:${CONFIRMATION_IDS.job}`
+      },
+      {
+        body: result.responseText,
+        externalMessageId: `sofia-job:${CONFIRMATION_IDS.job}`
+      }
+    ]);
+    expect(result.channelEnqueueRequests).toHaveLength(2);
+    expect(result.channelEnqueueRequests[0]).toEqual(result.channelEnqueueRequests[1]);
+    expect(result.channelLogicalOutbounds).toEqual([
+      {
+        threadBindingId: CONFIRMATION_IDS.threadBinding,
+        messageId: CONFIRMATION_IDS.responseMessage,
+        text: result.responseText,
+        idempotencyKey: `sofia-job:${CONFIRMATION_IDS.job}`
+      }
+    ]);
+    expect(result.executionStatus).toBe("completed");
+    expect(result.confirmationState).toMatchObject({
+      confirmationExecution: null,
+      confirmationReceipts: {
+        [CONFIRMATION_IDS.message]: { outcome: "completed", action: "reschedule" }
+      }
+    });
+    expect(result.recoveryCandidateSql).not.toContain("channel_runtime.outbound_messages");
+    expect(result.recoveryClaimSql).not.toContain("channel_runtime.outbound_messages");
   });
 
   it("answers an active appointment query from authoritative data and excludes historical appointments", async () => {
@@ -2158,10 +2257,15 @@ function appointmentMutationResult(overrides: { localDate: string; localTime: st
 
 async function runConfirmationScenario(input: {
   body?: string;
+  conversationStatus?: "active" | "resolved" | "handoff_required" | "closed";
   occurredAt?: string;
   attemptCount?: number;
   maxAttempts?: number;
-  recovery?: "available" | "outbound_exists";
+  recovery?: "available";
+  recoveryDistractors?: number;
+  recoveryMalformedFirst?: boolean;
+  recoveryProviderUnavailable?: boolean;
+  replayAfterEnqueueCrash?: boolean;
   pendingExpired?: boolean;
   confirmationStateError?: Error;
   promptError?: Error;
@@ -2177,35 +2281,71 @@ async function runConfirmationScenario(input: {
   let jobFailure = "";
   let confirmationStateErrorThrown = false;
   let recoveryCandidateSql = "";
+  let recoveryCandidateCalls = 0;
   let recoveryClaimSql = "";
   let recoveryClaimParameters: unknown[] | undefined;
   let recoveryClaimCalls = 0;
   let normalClaimCalls = 0;
+  let responsePersistCalls = 0;
+  let inboundLookupCalls = 0;
+  let crashInjected = false;
+  let hardCrashActive = false;
+  let persistedResponse: { id: string; body: string } | undefined;
   const mutationCalls: Array<{ tool: string; body: Record<string, unknown> }> = [];
   const toolCalls: string[] = [];
   const auditOutboxPayloads: Array<Record<string, unknown>> = [];
+  const responsePersistRequests: Array<{ body?: string; externalMessageId?: string }> = [];
+  const channelEnqueueRequests: Array<{
+    threadBindingId: string;
+    messageId: string;
+    text: string;
+    idempotencyKey: string;
+  }> = [];
+  const channelLogicalOutbounds = new Map<
+    string,
+    { threadBindingId: string; messageId: string; text: string; idempotencyKey: string }
+  >();
   const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
     if (sql.includes("sofia-confirmation:recovery-candidates")) {
       recoveryCandidateSql = sql;
+      recoveryCandidateCalls += 1;
       if (!input.recovery) return dbResult([]);
-      return dbResult([
-        {
-          id: CONFIRMATION_IDS.job,
-          tenantId: CONFIRMATION_IDS.tenant,
-          conversationId: CONFIRMATION_IDS.conversation,
-          inboundEventId: CONFIRMATION_IDS.inboundEvent,
-          attemptCount: input.attemptCount ?? 2,
-          maxAttempts: input.maxAttempts ?? 2,
-          input: {
-            patientId: CONFIRMATION_IDS.patient,
-            messageId: CONFIRMATION_IDS.message,
-            threadBindingId: CONFIRMATION_IDS.threadBinding,
-            occurredAt: input.occurredAt ?? new Date().toISOString()
-          },
+      if (input.recoveryDistractors && recoveryCandidateCalls === 1) {
+        return dbResult(
+          Array.from({ length: input.recoveryDistractors }, (_, index) => ({
+            id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+            tenantId: CONFIRMATION_IDS.tenant,
+            conversationId: CONFIRMATION_IDS.conversation,
+            inboundEventId: CONFIRMATION_IDS.inboundEvent,
+            attemptCount: 2,
+            maxAttempts: 2,
+            input: {},
+            updatedAt: "2026-07-18T08:00:00.000Z",
+            createdAt: "2026-07-18T07:00:00.000Z"
+          }))
+        );
+      }
+      const recoverable = {
+        id: CONFIRMATION_IDS.job,
+        tenantId: CONFIRMATION_IDS.tenant,
+        conversationId: CONFIRMATION_IDS.conversation,
+        inboundEventId: CONFIRMATION_IDS.inboundEvent,
+        attemptCount: input.attemptCount ?? 2,
+        maxAttempts: input.maxAttempts ?? 2,
+        input: {
+          patientId: CONFIRMATION_IDS.patient,
           messageId: CONFIRMATION_IDS.message,
-          messageBody: input.body ?? "CONFIRMO"
-        }
-      ]);
+          threadBindingId: CONFIRMATION_IDS.threadBinding,
+          occurredAt: input.occurredAt ?? new Date().toISOString()
+        },
+        updatedAt: "2026-07-18T09:00:00.000Z",
+        createdAt: "2026-07-18T06:00:00.000Z"
+      };
+      return dbResult(
+        input.recoveryMalformedFirst
+          ? [{ ...recoverable, id: "10000000-0000-4000-8000-000000000099" }, recoverable]
+          : [recoverable]
+      );
     }
     if (sql.includes("sofia-confirmation:claim-recovered")) {
       recoveryClaimSql = sql;
@@ -2250,13 +2390,6 @@ async function runConfirmationScenario(input: {
         }
       ]);
     }
-    if (sql.includes("select m.body")) {
-      return dbResult([{ body: input.body ?? "CONFIRMO", conversationStatus: "active" }]);
-    }
-    if (sql.includes("select sender, body from")) {
-      return dbResult([{ sender: "patient", body: input.body ?? "CONFIRMO" }]);
-    }
-    if (sql.includes('as "sofiaState"')) return dbResult([{ sofiaState: confirmationState }]);
     if (sql.includes(" as state,")) {
       if (input.confirmationStateError && !confirmationStateErrorThrown) {
         confirmationStateErrorThrown = true;
@@ -2266,7 +2399,6 @@ async function runConfirmationScenario(input: {
         { state: confirmationState, pendingExpired: input.pendingExpired ?? false, grantExpired: false }
       ]);
     }
-    if (sql.includes("select full_name")) return dbResult([{ fullName: "Paciente controlado" }]);
     if (sql.includes("insert into agent_runtime.executions")) return dbResult([{ id: CONFIRMATION_IDS.execution }]);
     if (sql.includes("'confirmationExecution', $5::jsonb")) {
       confirmationState = {
@@ -2328,16 +2460,18 @@ async function runConfirmationScenario(input: {
       confirmationState = { ...confirmationState, pendingAction: null, confirmationGrant: null };
       return dbResult([]);
     }
-    if (sql.includes("insert into pulso_iris.messages")) {
-      responseText = String(parameters?.[2] ?? "");
-      return dbResult([{ id: CONFIRMATION_IDS.responseMessage, body: responseText }]);
-    }
     if (sql.includes("update agent_runtime.executions") && sql.includes("set status = $3")) {
+      if (input.replayAfterEnqueueCrash && !crashInjected && channelEnqueueRequests.length === 1) {
+        crashInjected = true;
+        hardCrashActive = true;
+        throw new Error("simulated_worker_crash_after_channel_enqueue");
+      }
       executionStatus = String(parameters?.[2] ?? "");
       executionToolNames = JSON.parse(String(parameters?.[7] ?? "[]")) as string[];
       return dbResult([]);
     }
     if (sql.includes("update agent_runtime.executions") && sql.includes("set status = 'failed'")) {
+      if (hardCrashActive) throw new Error("simulated_worker_crash_after_channel_enqueue");
       failedExecutionStatus = "failed";
       failedExecutionCode = String(parameters?.[3] ?? "");
       return dbResult([]);
@@ -2368,6 +2502,34 @@ async function runConfirmationScenario(input: {
   }));
   const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const target = String(url);
+    if (target.includes("/sofia/inbound-message")) {
+      inboundLookupCalls += 1;
+      if (input.recoveryProviderUnavailable && inboundLookupCalls === 1) {
+        return new Response(null, { status: 503 });
+      }
+      if (input.recoveryMalformedFirst && inboundLookupCalls === 1) {
+        return jsonResponse({ found: true });
+      }
+    }
+    if (
+      target.includes("/sofia/conversation-context") &&
+      input.confirmationStateError &&
+      !confirmationStateErrorThrown
+    ) {
+      confirmationStateErrorThrown = true;
+      throw input.confirmationStateError;
+    }
+    const contextResponse = pulsoSofiaContextResponse(target, {
+      tenantId: CONFIRMATION_IDS.tenant,
+      conversationId: CONFIRMATION_IDS.conversation,
+      patientId: CONFIRMATION_IDS.patient,
+      messageId: CONFIRMATION_IDS.message,
+      body: input.body ?? "CONFIRMO",
+      conversationStatus: input.conversationStatus,
+      patientName: "Paciente controlado",
+      sofiaState: confirmationState
+    });
+    if (contextResponse) return contextResponse;
     if (target.includes("prompt-flows/SOFIA/active")) {
       if (input.promptError) throw input.promptError;
       return jsonResponse({
@@ -2377,9 +2539,12 @@ async function runConfirmationScenario(input: {
       });
     }
     if (target.includes("/messages/sofia-outbound")) {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
-      responseText = String(body.body ?? "");
-      return jsonResponse({ id: CONFIRMATION_IDS.responseMessage, body: responseText });
+      const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string; externalMessageId?: string };
+      responsePersistCalls += 1;
+      responsePersistRequests.push(body);
+      persistedResponse ??= { id: CONFIRMATION_IDS.responseMessage, body: String(body.body ?? "") };
+      responseText = persistedResponse.body;
+      return jsonResponse(persistedResponse);
     }
     if (target.includes("/sofia-runtime")) {
       return jsonResponse({ updated: true });
@@ -2481,6 +2646,10 @@ async function runConfirmationScenario(input: {
     if (target.includes("/sofia/tools/get_catalog")) {
       return jsonResponse({ sites: [], professionals: [], payers: [], appointmentTypes: [] });
     }
+    if (target.includes("/sofia/tools/create_urgent_handoff")) {
+      toolCalls.push("create_urgent_handoff");
+      return jsonResponse({ accepted: true });
+    }
     const toolMatch =
       /\/sofia\/tools\/(create_appointment_hold|book_appointment|cancel_appointment|reschedule_appointment|list_patient_appointments)$/.exec(
         target
@@ -2492,21 +2661,42 @@ async function runConfirmationScenario(input: {
       if (tool !== "list_patient_appointments") mutationCalls.push({ tool, body });
       return jsonResponse(input.toolResults[tool] ?? {});
     }
+    if (target.includes("/whatsapp/messages")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        threadBindingId: string;
+        messageId: string;
+        text: string;
+        idempotencyKey: string;
+      };
+      channelEnqueueRequests.push(body);
+      channelLogicalOutbounds.set(body.idempotencyKey, channelLogicalOutbounds.get(body.idempotencyKey) ?? body);
+      return jsonResponse({ accepted: true });
+    }
     return jsonResponse({ accepted: true });
   });
-  const runtime = new SofiaRuntime({
-    db,
-    logger: { warn: vi.fn() },
-    llm: { name: "controlled", model: "controlled", isConfigured: () => true, complete },
-    internalServiceToken: "controlled-token",
-    channelUrl: "http://channel.test",
-    promptFlowUrl: "http://prompt.test",
-    pulsoIrisUrl: "http://pulso.test",
-    auditUrl: "http://audit.test",
-    fetchImpl: fetchImpl as typeof fetch
-  });
+  const createRuntime = () =>
+    new SofiaRuntime({
+      db,
+      logger: { warn: vi.fn() },
+      llm: { name: "controlled", model: "controlled", isConfigured: () => true, complete },
+      internalServiceToken: "controlled-token",
+      channelUrl: "http://channel.test",
+      promptFlowUrl: "http://prompt.test",
+      pulsoIrisUrl: "http://pulso.test",
+      auditUrl: "http://audit.test",
+      fetchImpl: fetchImpl as typeof fetch
+    });
 
-  const processed = await runtime.processOne();
+  let firstProcessError = "";
+  if (input.replayAfterEnqueueCrash) {
+    try {
+      await createRuntime().processOne();
+    } catch (error) {
+      firstProcessError = error instanceof Error ? error.message : String(error);
+    }
+    hardCrashActive = false;
+  }
+  const processed = await createRuntime().processOne();
   return {
     processed,
     complete,
@@ -2521,15 +2711,62 @@ async function runConfirmationScenario(input: {
     confirmationState,
     jobFailure,
     recoveryCandidateSql,
+    recoveryCandidateCalls,
     recoveryClaimSql,
     recoveryClaimParameters,
     recoveryClaimCalls,
-    normalClaimCalls
+    normalClaimCalls,
+    firstProcessError,
+    responsePersistCalls,
+    inboundLookupCalls,
+    responsePersistRequests,
+    channelEnqueueRequests,
+    channelLogicalOutbounds: [...channelLogicalOutbounds.values()]
   };
 }
 
 function jsonResponse(data: unknown): Response {
-  return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
+  return new Response(
+    JSON.stringify({ data, meta: { requestId: "runtime-test", generatedAt: new Date().toISOString() } }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+}
+
+function pulsoSofiaContextResponse(
+  target: string,
+  input: {
+    tenantId: string;
+    conversationId: string;
+    patientId: string;
+    messageId: string;
+    body: string;
+    conversationStatus?: "active" | "resolved" | "handoff_required" | "closed";
+    patientName?: string | null;
+    sofiaState?: Record<string, unknown>;
+    history?: Array<{ sender: "sofia" | "patient" | "advisor" | "system"; body: string }>;
+  }
+): Response | undefined {
+  if (target.includes("/sofia/inbound-message")) {
+    return jsonResponse({
+      found: true,
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      patientId: input.patientId,
+      conversationStatus: input.conversationStatus ?? "active",
+      message: { id: input.messageId, sender: "patient", body: input.body }
+    });
+  }
+  if (target.includes("/sofia/conversation-context")) {
+    return jsonResponse({
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      patientId: input.patientId,
+      patientName: input.patientName ?? null,
+      sofiaState: input.sofiaState ?? {},
+      history: input.history ?? [{ sender: "patient", body: input.body }]
+    });
+  }
+  return undefined;
 }
 
 function dbResult<T>(rows: T[]) {

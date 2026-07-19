@@ -4,6 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { EmitAuditEventInput } from "./audit-client.js";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
+import { ensureAgendaSettingsExist } from "./agenda-settings.js";
 import { registerAppointmentRoutes } from "./appointment-routes.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
 import { registerConfigRoutes } from "./config-routes.js";
@@ -12,10 +13,12 @@ import { registerOperationsRoutes } from "./operations-routes.js";
 const { Client } = pg;
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 let app: ServiceHandle["app"];
 let client: pg.Client;
+let fixtureClient: pg.Client;
 let tenantA: string;
 let tenantB: string;
 let patientA: string;
@@ -32,10 +35,14 @@ describeIntegration("pulso-iris tenant isolation", () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
     client = new Client({ connectionString: TEST_DATABASE_URL });
+    fixtureClient = new Client({ connectionString: TEST_PULSO_FIXTURE_DATABASE_URL });
     await client.connect();
+    await fixtureClient.connect();
     await resetTenantFixtures();
     tenantA = await createTenant("isolation-a");
     tenantB = await createTenant("isolation-b");
+    await ensureAgendaSettingsExist(client, tenantA);
+    await ensureAgendaSettingsExist(client, tenantB);
     const catalogA = await createCoreCatalog(tenantA, "A");
     const catalogB = await createCoreCatalog(tenantB, "B");
     patientA = catalogA.patientId;
@@ -68,6 +75,7 @@ describeIntegration("pulso-iris tenant isolation", () => {
     await app?.close();
     await resetTenantFixtures();
     await client?.end();
+    await fixtureClient?.end();
     delete process.env.DATABASE_URL;
   });
 
@@ -649,11 +657,11 @@ describeIntegration("pulso-iris tenant isolation", () => {
 });
 
 async function resetTenantFixtures(): Promise<void> {
-  await client.query("delete from platform.tenants where slug in ('isolation-a', 'isolation-b')");
+  await fixtureClient.query("delete from platform.tenants where slug in ('isolation-a', 'isolation-b')");
 }
 
 async function createTenant(slug: string): Promise<string> {
-  const result = await client.query<{ id: string }>(
+  const result = await fixtureClient.query<{ id: string }>(
     "insert into platform.tenants (slug, display_name) values ($1, $2) returning id",
     [slug, slug]
   );

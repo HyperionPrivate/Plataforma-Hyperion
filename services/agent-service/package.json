@@ -1,6 +1,6 @@
 {
   "name": "@hyperion/agent-service",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,9 +12,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hyperion/contracts": "workspace:*",
     "@hyperion/database": "workspace:*",
     "@hyperion/durable-events": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
+    "@hyperion/pulso-contracts": "1.1.0",
+    "@hyperion/pulso-migrations": "workspace:*",
     "@hyperion/service-runtime": "workspace:*",
     "zod": "^3.24.2"
   }

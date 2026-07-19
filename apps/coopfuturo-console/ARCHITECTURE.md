@@ -1,46 +1,42 @@
-# apps/web — Ops UI (PULSO)
+# Coopfuturo Console — cliente NOVA
 
-## Decisión arquitectónica
+## Alcance
 
-El monorepo en `feat/architecture-foundation` es **modular-first multi-service** (4 unidades FastAPI + `platform-kit`), **no** microfrontends. La UI aparece en C4 como *Cliente / UI* detrás de Traefik ([docs/architecture.md](../../docs/architecture.md)) y en el backlog como **ops UI** ([PRODUCT_BACKLOG.md](../../docs/PRODUCT_BACKLOG.md) #13).
+Esta aplicación es un cliente específico de Coopfuturo dentro de NOVA. Puede
+contener copy, flujos y vistas propias del cliente, pero no rutas, contexto ni
+endpoints de LUMEN o PULSO.
 
-Esta app es esa UI:
+## Frontera HTTP
 
-| Aspecto | Elección |
-|---|---|
-| Ubicación | `apps/web` (misma convención `apps/*` que las unidades desplegables) |
-| Stack | Next.js 15 App Router, TypeScript, Tailwind |
-| Datos hoy | **Mock** (`NEXT_PUBLIC_API_MODE=mock`, JSON en `src/data`) |
-| Gateway | Dev local `:3000`. En `docker-compose.dev.yml`, servicio `web` detrás de Traefik en `/` (excluye `/pilot-core`, `/whatsapp`, `/documents`, `/handoff`) |
-| Relación con pilot-core | Futuro: BFF/API vía Traefik; hoy cero llamadas HTTP a backends |
-
-## Por qué no se metió dentro de pilot-core
-
-- Separación de concerns: Python/FastAPI ≠ React/Next.
-- Ciclo de release y tooling distintos (npm vs uv).
-- ADR-005 permite unidades desplegables por evidencia; la UI es un cliente, no un módulo de dominio.
-
-## Arranque
-
-```powershell
-cd apps/web
-npm install
-npm run dev
+```text
+navegador
+  └─ /pilot-core/* (same-origin)
+       └─ adapter Coopfuturo server-only
+            └─ NOVA_BFF_URL
+                 ├─ Access/session
+                 ├─ nova-core
+                 ├─ voice
+                 ├─ liwa
+                 └─ documents
 ```
 
-Abrir http://localhost:3000 → `/dashboard`.
+`src/app/pilot-core/[...slug]/route.ts` es un delegador mínimo. Las formas
+customer-facing `/ops/*` se adaptan en `src/server/coopfuturo-nova-adapter.ts`.
+Una allowlist por método y ruta rechaza cualquier superficie desconocida con
+404 antes de consultar la sesión.
 
-Con stack Docker (`make up` / `docker compose -f docker-compose.dev.yml up`):
+El tenant se deriva de un único grant NOVA activo. Nunca se selecciona por slug,
+variable pública o valor por defecto. Si existen varios tenants, se requiere un
+selector explícito validado por grant.
 
-- UI vía Traefik: `http://127.0.0.1:8088/dashboard` (puerto `TRAEFIK_HTTP_PORT`, default 8088)
-- APIs siguen en `/pilot-core`, `/whatsapp`, etc.
+## Sesión
 
-Imagen: `apps/web/Dockerfile` (`output: "standalone"`).
+NOVA BFF conserva el JWT en una cookie `__Host-*` HttpOnly. El navegador solo
+envía cookies con `credentials: "include"`; las mutaciones presentan el token
+CSRF de double-submit. No se admiten tokens en URL, storage del navegador,
+headers bearer creados por JavaScript ni OAuth implicit flow.
 
-## Design system
+## Modo mock
 
-Referencias en `/design` (raíz del monorepo), mockups en `design/mockups/`. Kit en vivo: `/dev/kit`.
-
-## White-label
-
-Sin nombres de proveedores externos (ElevenLabs, Meta, Evolution) en UI.
+Los fixtures locales son solo para desarrollo y pruebas. Los despliegues live
+deben usar `NOVA_BFF_URL` server-only y `NEXT_PUBLIC_REQUIRE_AUTH=true`.

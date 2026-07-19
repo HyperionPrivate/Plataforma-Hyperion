@@ -1,5 +1,3 @@
-import { novaCatalog } from "@hyperion/contracts";
-
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
 const BOGOTA_TIMEZONE = "America/Bogota";
 
@@ -9,13 +7,6 @@ export type EligibilityDecision =
 export interface EligibilityResult {
   eligibility: EligibilityDecision;
   reason?: string;
-}
-
-export interface AgencySeed {
-  code: string;
-  name: string;
-  city: string;
-  advisorGroup: string;
 }
 
 export interface ComplianceSettings {
@@ -137,8 +128,7 @@ export function scoreContact(features: ScoreFeatures): ScoreResult {
   if (features.universidad) propensity += 10;
   if ((features.saldoTotal ?? 0) > 0) propensity += 8;
 
-  if (segment === "Renovacion") urgency += 25;
-  else urgency += 15;
+  if (segment) urgency += 15;
   if ((features.moraActual ?? 0) > 0) urgency += 20;
   if (features.universidad) urgency += 8;
 
@@ -154,32 +144,7 @@ export function scoreContact(features: ScoreFeatures): ScoreResult {
 }
 
 export function normalizeSegment(raw?: string | null): string {
-  const value = (raw ?? "").trim().toLowerCase();
-  if (value === "b" || value.includes("reactiva")) return "Reactivacion";
-  return "Renovacion";
-}
-
-/** Agency seed rows for tenant bootstrap from the NOVA catalog. */
-export function buildAgencySeedList(): AgencySeed[] {
-  return novaCatalog.agencies.map((agency) => ({
-    code: agency.code,
-    name: agency.city,
-    city: agency.city,
-    advisorGroup: agency.group
-  }));
-}
-
-export function agencyCodeFromTag(tag?: string | null): string | undefined {
-  if (!tag) return undefined;
-  const normalized = tag.trim().toUpperCase();
-  const found = novaCatalog.agencies.find((agency) => agency.tag === normalized);
-  return found?.code;
-}
-
-export function agencyTagFromCode(code?: string | null): string | undefined {
-  if (!code) return undefined;
-  const found = novaCatalog.agencies.find((agency) => agency.code === code.toUpperCase());
-  return found?.tag;
+  return (raw ?? "").trim();
 }
 
 function hourInTimeZone(at: Date, timeZone: string): number {

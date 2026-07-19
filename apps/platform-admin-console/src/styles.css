@@ -1,0 +1,370 @@
+:root {
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: #172033;
+  background: #f5f7fb;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button,
+a {
+  outline-offset: 3px;
+}
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 3px solid #73a7ff;
+}
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #73a7ff;
+  outline-offset: 3px;
+}
+
+.skip-link {
+  position: fixed;
+  left: 1rem;
+  top: -5rem;
+  z-index: 10;
+  background: white;
+  padding: 0.75rem 1rem;
+}
+.skip-link:focus {
+  top: 1rem;
+}
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+}
+aside {
+  padding: 1.5rem 1rem;
+  color: white;
+  background: #172033;
+}
+.brand {
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.brand span {
+  color: #9dbef8;
+}
+nav {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 2rem;
+}
+nav a {
+  color: #dce7fa;
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  border-radius: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  text-decoration: none;
+}
+nav a:hover,
+nav a.active {
+  color: white;
+  background: #293b5b;
+}
+.workspace > header {
+  min-height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 2rem;
+  background: white;
+  border-bottom: 1px solid #dce2ec;
+}
+h1,
+p {
+  margin-top: 0;
+}
+header h1 {
+  margin-bottom: 0.2rem;
+  font-size: 1.45rem;
+}
+header p {
+  margin-bottom: 0;
+  color: #657086;
+}
+.operator {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.icon-button {
+  border: 1px solid #cbd3df;
+  background: white;
+  border-radius: 0.6rem;
+  padding: 0.55rem;
+  cursor: pointer;
+}
+.workspace main {
+  padding: 2rem;
+  display: grid;
+  gap: 1rem;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+.card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid #dce2ec;
+  border-radius: 0.8rem;
+  background: white;
+  box-shadow: 0 8px 24px rgb(23 32 51 / 5%);
+}
+.card span,
+.card code,
+.lead {
+  color: #657086;
+  overflow-wrap: anywhere;
+}
+.admin-panel,
+.inline-editor {
+  border: 1px solid #dce2ec;
+  border-radius: 0.8rem;
+  background: white;
+}
+.admin-panel > summary,
+.inline-editor > summary {
+  padding: 0.9rem 1rem;
+  color: #244f92;
+  font-weight: 750;
+  cursor: pointer;
+}
+.inline-editor {
+  margin-top: 0.35rem;
+  box-shadow: none;
+}
+.inline-editor > summary {
+  padding: 0.55rem 0.7rem;
+  font-size: 0.9rem;
+}
+.admin-form {
+  display: grid;
+  gap: 1rem;
+  padding: 0 1rem 1rem;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.9rem;
+}
+.admin-form label {
+  display: grid;
+  gap: 0.4rem;
+  color: #29364d;
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+.admin-form input,
+.admin-form select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0.65rem 0.7rem;
+  color: #172033;
+  background: white;
+  border: 1px solid #aeb8c8;
+  border-radius: 0.55rem;
+}
+.checkbox-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.8rem;
+  border: 1px solid #dce2ec;
+  border-radius: 0.65rem;
+}
+.checkbox-group legend {
+  padding: 0 0.35rem;
+  font-weight: 750;
+}
+.checkbox-group label {
+  display: flex;
+  align-items: start;
+  gap: 0.55rem;
+  padding: 0.5rem;
+  border-radius: 0.45rem;
+  background: #f5f7fb;
+}
+.checkbox-group input {
+  width: 1rem;
+  min-height: auto;
+  margin-top: 0.15rem;
+}
+.checkbox-group small {
+  display: block;
+  color: #657086;
+  font-weight: 450;
+}
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+.primary-button,
+.danger-button {
+  border: 0;
+  border-radius: 0.55rem;
+  padding: 0.7rem 0.9rem;
+  color: white;
+  background: #315da8;
+  font-weight: 700;
+  cursor: pointer;
+}
+.danger-button {
+  justify-self: start;
+  background: #9b2938;
+}
+.primary-button:disabled,
+.danger-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.mutation-feedback {
+  min-height: 1.25rem;
+}
+.form-error {
+  color: #8d2430;
+  font-weight: 650;
+}
+.form-success {
+  color: #17633a;
+  font-weight: 650;
+}
+.field-help {
+  color: #657086;
+  font-size: 0.82rem;
+  font-weight: 450;
+}
+.tag {
+  justify-self: start;
+  border-radius: 99px;
+  padding: 0.25rem 0.55rem;
+  background: #e8f0ff;
+  color: #244f92 !important;
+}
+.notice,
+.alert {
+  padding: 1rem;
+  border-radius: 0.7rem;
+  background: #fff7df;
+  border: 1px solid #ead38c;
+}
+.alert {
+  color: #8d2430;
+  background: #fff0f1;
+  border-color: #efb4ba;
+}
+.centered,
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+.error-code {
+  font-size: 4rem;
+  font-weight: 900;
+  color: #315da8;
+}
+.login-card {
+  width: min(420px, calc(100vw - 2rem));
+  display: grid;
+  gap: 1.2rem;
+  padding: 2rem;
+  text-align: left;
+  background: white;
+  border: 1px solid #dce2ec;
+  border-radius: 1rem;
+  box-shadow: 0 20px 60px rgb(23 32 51 / 12%);
+}
+.login-card label {
+  display: grid;
+  gap: 0.45rem;
+  font-weight: 650;
+}
+.login-card input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #aeb8c8;
+  border-radius: 0.55rem;
+}
+.login-card button[type="submit"] {
+  border: 0;
+  border-radius: 0.55rem;
+  padding: 0.8rem 1rem;
+  color: white;
+  background: #315da8;
+  cursor: pointer;
+}
+.login-card button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  aside {
+    padding-bottom: 0.75rem;
+  }
+  nav {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-top: 1rem;
+    overflow-x: auto;
+  }
+  nav a {
+    justify-content: center;
+    font-size: 0.8rem;
+  }
+  .workspace > header,
+  .workspace main {
+    padding: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

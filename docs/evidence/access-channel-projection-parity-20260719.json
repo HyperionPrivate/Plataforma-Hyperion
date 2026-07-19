@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 2,
+  "kind": "access-channel-tenant-projection-parity",
+  "operationId": "20260719T081325429Z",
+  "provenance": {
+    "scope": "local-working-tree-rehearsal",
+    "publicationClaimed": false,
+    "registryReadbackPerformed": false,
+    "source": {
+      "branch": "feat/federated-separation",
+      "revision": "1d77f380a5684d4de3a072c1aa4c8714a2ed023c",
+      "workingTreeIncluded": true,
+      "workingTreeDirty": true,
+      "workingTreeStatusSha256": "7a77cb7bf3aba083f51f23eda12b755a56287814da1e61956193bf832eef4f6e",
+      "workingTreePatchSha256": "8142e747515cf03ecb6b4ce4d3f41ab67b1f70dd0272717d4b36689ba74dadd5",
+      "harnessSha256": "05679d879283cf3311955b0213c22736cf67ec836c593577d34cb626921b424c",
+      "closure": {
+        "files": 170,
+        "sha256": "f94702b15fe6dc451c3fafe5b6287e8a33e4bbfbc6688a8c8b5dedba036c6e79"
+      },
+      "packageVersions": [
+        {
+          "name": "@hyperion/access-migrations",
+          "version": "1.2.0"
+        },
+        {
+          "name": "@hyperion/config",
+          "version": "0.1.0"
+        },
+        {
+          "name": "@hyperion/database",
+          "version": "0.1.0"
+        },
+        {
+          "name": "@hyperion/durable-events",
+          "version": "0.1.0"
+        },
+        {
+          "name": "@hyperion/identity-service",
+          "version": "0.2.0"
+        },
+        {
+          "name": "@hyperion/logger",
+          "version": "0.1.0"
+        },
+        {
+          "name": "@hyperion/platform-contracts",
+          "version": "1.1.0"
+        },
+        {
+          "name": "@hyperion/pulso-contracts",
+          "version": "1.1.0"
+        },
+        {
+          "name": "@hyperion/pulso-migrations",
+          "version": "1.2.0"
+        },
+        {
+          "name": "@hyperion/service-runtime",
+          "version": "0.1.0"
+        },
+        {
+          "name": "@hyperion/whatsapp-channel-service",
+          "version": "0.2.0"
+        }
+      ]
+    },
+    "toolchain": {
+      "node": {
+        "executable": "node.exe",
+        "version": "v24.15.0",
+        "binarySha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5"
+      },
+      "pnpm": {
+        "executable": "pnpm.exe",
+        "version": "11.7.0",
+        "binarySha256": "3d1af71e9da7081efd58f95942e1f7e2107bf8fcdae03eb2331c0b6cea59510b"
+      },
+      "docker": {
+        "executable": "docker.exe",
+        "version": "Docker version 29.4.3, build 055a478",
+        "binarySha256": "850c158855d3abb867c5d607fb1799596a32f1509a93e0ae041309357fbe600a"
+      },
+      "git": {
+        "executable": "git.exe",
+        "version": "git version 2.55.0.windows.2",
+        "binarySha256": "22fead8244ef3a7225fb800099a4e43eca8bcec0466774917669599c2f19a05a"
+      },
+      "platform": "win32",
+      "architecture": "x64"
+    },
+    "buildArtifacts": {
+      "files": 405,
+      "sha256": "ca1f99824898ab5539111b46e70e8b3aa1782ac479d1826f2fdbd8efdec676de"
+    },
+    "postgresRuntime": {
+      "requestedReference": "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "pinnedDigest": "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "localImageId": "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "repoDigestVerified": true,
+      "postgresVersion": "postgres (PostgreSQL) 16.14"
+    }
+  },
+  "transport": {
+    "protocol": "http",
+    "network": "loopback-tcp",
+    "producer": "identity-service",
+    "consumer": "whatsapp-channel-service",
+    "authenticated": true
+  },
+  "contract": {
+    "eventType": "access.tenant.snapshot.v1",
+    "eventVersion": 1
+  },
+  "fixtures": {
+    "eligibleTenantCount": 3,
+    "bootstrapTenantsExcluded": true,
+    "primaryTenantId": "05605688-a72e-43e3-b11a-19db59959a4d",
+    "tenantIds": [
+      "05605688-a72e-43e3-b11a-19db59959a4d",
+      "7b7f90f7-b5c3-4297-af7d-a4bad5a362b1",
+      "8bf5a0d6-ccd5-4d18-9f1d-a793e8aaa8b5"
+    ]
+  },
+  "auth": {
+    "unauthenticatedStatus": 401,
+    "wrongTokenStatus": 401,
+    "forbiddenCallerStatus": 403,
+    "malformedBodyStatus": 400
+  },
+  "outage": {
+    "failedAttempts": 3,
+    "eventsAffected": 3,
+    "recovered": true,
+    "eventIdentityPreserved": true,
+    "payloadPreserved": true,
+    "sourceVersionPreserved": true
+  },
+  "lifecycle": [
+    {
+      "eventId": "eaf87286-d69d-402a-93f7-f8c5977077e1",
+      "sourceVersion": 1784448828598,
+      "payloadSha256": "0da63e9367842ece27df8c7c0d84d4a9f51956f3b65c0473a37703f9daf4f48b",
+      "tenantStatus": "active"
+    },
+    {
+      "eventId": "bbf40906-74d1-4e26-a66b-09a85c6cdec7",
+      "sourceVersion": 1784448828599,
+      "payloadSha256": "7b576cf998516a80ae2491ea626b0029b2ba7c949019cc5df987f7a039c6ba86",
+      "tenantStatus": "paused"
+    },
+    {
+      "eventId": "4f190e6d-71c1-4658-a2c9-cc664bcf9f74",
+      "sourceVersion": 1784448828600,
+      "payloadSha256": "c1500f308b6936f9d3913013f6cf6a6b058270686aa16185220b5c8fbae77fb8",
+      "tenantStatus": "archived"
+    }
+  ],
+  "replay": {
+    "result": "duplicate",
+    "eventId": "4f190e6d-71c1-4658-a2c9-cc664bcf9f74",
+    "sourceVersion": 1784448828600,
+    "payloadSha256": "c1500f308b6936f9d3913013f6cf6a6b058270686aa16185220b5c8fbae77fb8",
+    "exactIdentityPreserved": true,
+    "inboxRowsBefore": 3,
+    "inboxRowsAfter": 3,
+    "uniqueEvents": 3,
+    "replayDidNotGrowInbox": true,
+    "snapshotUnchanged": true
+  },
+  "parity": {
+    "expectedTenants": 3,
+    "destinationTenants": 3,
+    "matchedTenants": 3,
+    "coverageBasisPoints": 10000,
+    "missingTenants": 0,
+    "extraTenants": 0,
+    "statusMismatches": 0,
+    "sourceVersionMismatches": 0,
+    "currentEventIdMismatches": 0,
+    "incompleteSourceRows": 0,
+    "incompleteDestinationRows": 0,
+    "bootstrapTenantsExcluded": 1,
+    "referencedTenantIds": 3,
+    "referencedTenantIdsMissingSnapshot": 0,
+    "pendingOrDeadLetterEvents": 0,
+    "sourceVersionConflicts": 0
+  },
+  "isolation": {
+    "logicalDatabases": 2,
+    "runtimeRolesSeparated": true,
+    "crossDatabaseConnectDenied": true,
+    "identityCanMutateTenant": false,
+    "channelProjectionDelete": false,
+    "projectionForeignKeysToPlatformTenants": 0,
+    "legacyChannelForeignKeysToPlatformTenants": 5,
+    "hardDeleteSqlState": "55000"
+  },
+  "ledgers": {
+    "access": [
+      {
+        "name": "001-access-fresh-baseline.sql",
+        "checksum": "e24c32b0055a84f319328ed524a25f6ccd348db0bbd1dbd864dbb29bd7b42328"
+      },
+      {
+        "name": "002-access-runtime-role-boundary.sql",
+        "checksum": "3abcdfac4af18a3cbb4066741198d601a6e1b4a57c014c41dba7f5fc849ce24d"
+      },
+      {
+        "name": "003-access-tenant-projection.sql",
+        "checksum": "5fb558a7d36899e98e532b22e0134665187f3c4db75f63a155cfe9d31821e7c8"
+      },
+      {
+        "name": "004-access-tenant-lifecycle-integrity.sql",
+        "checksum": "c17283b147bcc57cd66e040e4b8f91e20285667f4c2dd1d23c16671b55d61a08"
+      }
+    ],
+    "pulso": [
+      {
+        "name": "001-pulso-autonomous-baseline.sql",
+        "checksum": "78166aae10fc425e1d16718c39e387e1d0fdbb3227c7a9a08528fb95379a3904"
+      },
+      {
+        "name": "002-pulso-runtime-roles.sql",
+        "checksum": "260599d3c39cd77619a4bb28d68db087ff6e7b38999eca1553f4fb14079ea11c"
+      },
+      {
+        "name": "003-sofia-readiness-marker.sql",
+        "checksum": "d972b08edbfdb44225f8de1a25892d449dddfb6f3c29bb918b9581107c1bba84"
+      },
+      {
+        "name": "004-access-channel-tenant-projection.sql",
+        "checksum": "cffde8ed7621c40ae9ba4e80969928b705654e530019edf49dacf81730d57c77"
+      }
+    ]
+  },
+  "cleanup": {
+    "exactContainerRemoved": true,
+    "labelNamespaceEmpty": true,
+    "removedOwnedContainers": ["hyperion-access-channel-acceptance-7c354470ea79"],
+    "matchedByLabel": ["hyperion-access-channel-acceptance-7c354470ea79"],
+    "preexistingContainerCount": 17,
+    "finalContainerCount": 17,
+    "preexistingInventorySha256": "b2bf35cf5c4dd955718fc95e07b9602d11ff61b99ca31f5b2a83a94dc48ce113",
+    "finalInventorySha256": "b2bf35cf5c4dd955718fc95e07b9602d11ff61b99ca31f5b2a83a94dc48ce113",
+    "preexistingResourcesPreserved": true
+  },
+  "receiptSha256": "4ac5c89fb5d61277d7eab9600905d031e8434f6b909176fce30983a5376dd14f"
+}

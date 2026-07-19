@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { extractMultipartFile, parseContactsCsv } from "./contact-import-file.js";
 
 describe("parseContactsCsv", () => {
-  it("maps pilot columns and normalizes phones", () => {
+  it("maps common columns without inferring tenant routing from a city", () => {
     const csv = [
       "Celular,Nombres,Ciudad,documento,cupo,mora,saldo,universidad,segment",
-      "3001234567,Ana Perez,Bucaramanga,123,si,1000,50000,UIS,Renovacion",
-      "bad,No Phone,Barranquilla,,,,,,",
+      "3001234567,Ana Perez,Example City,123,si,1000,50000,Example U,priority",
+      "bad,No Phone,Other City,,,,,,",
       ",Empty,,,,,,,"
     ].join("\n");
 
@@ -15,14 +15,14 @@ describe("parseContactsCsv", () => {
     expect(result.rows[0]).toMatchObject({
       phone_e164: "+573001234567",
       full_name: "Ana Perez",
-      agency_code: "BGA",
-      ciudad: "Bucaramanga",
+      agency_code: undefined,
+      ciudad: "Example City",
       documento: "123",
       cupo_preaprobado: true,
       mora_actual: 1000,
       saldo_total: 50000,
-      universidad: "UIS",
-      segment: "Renovacion"
+      universidad: "Example U",
+      segment: "priority"
     });
     expect(result.errors).toEqual(
       expect.arrayContaining([

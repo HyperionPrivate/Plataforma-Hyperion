@@ -1,10 +1,9 @@
 /**
- * Post-call intent inference ported from coopfuturo pilot_core/modules/post_call/service.py
+ * Provider-neutral post-call intent inference used by the NOVA cell.
  */
 
 const CONTINUE = new Set([
   "interesado",
-  "renovar",
   "continuar",
   "si",
   "sí",
@@ -13,7 +12,6 @@ const CONTINUE = new Set([
   "1",
   "qualified",
   "lead_qualified",
-  "quiere_renovar",
   "follow_up",
   "follow_up_whatsapp",
   "pedir_whatsapp",
@@ -24,9 +22,6 @@ const CONTINUE = new Set([
   "enviar_documento",
   "doc_solicitado",
   "success_interested",
-  "reactivar",
-  "reactivacion",
-  "quiere_reactivar",
   "retomar",
   "retoma_estudios",
   // Soft-positive: still send the LIWA flow so the associate gets the template.

@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/layout/page-header";
 export default function DevKitPage() {
   return (
     <div className="min-h-screen bg-[var(--bg)] p-8 text-[var(--text)]">
-      <PageHeader title="Design kit" subtitle="/dev/kit — componentes PULSO" />
+      <PageHeader title="Design kit" subtitle="/dev/kit — componentes NOVA Coopfuturo" />
       <div className="mb-6 flex flex-wrap gap-2">
         <Button>Primario</Button>
         <Button variant="secondary">Secundario</Button>

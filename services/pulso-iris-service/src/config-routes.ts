@@ -1,5 +1,4 @@
 import {
-  envelope,
   pulsoIrisAgendaBlockInputSchema,
   pulsoIrisAgendaBlockListSchema,
   pulsoIrisAgendaSettingsPatchSchema,
@@ -27,7 +26,8 @@ import {
   pulsoIrisProfessionalSiteListSchema,
   pulsoIrisSiteInputSchema,
   pulsoIrisSiteListSchema
-} from "@hyperion/contracts";
+} from "@hyperion/pulso-contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
@@ -39,6 +39,7 @@ import {
   parseAgendaImportResource,
   previewAgendaImport
 } from "./agenda-config-csv.js";
+import { ensureAgendaSettingsExist } from "./agenda-settings.js";
 import type { AuditEmitter } from "./audit-client.js";
 import { readOperatorId } from "./audit-client.js";
 import {
@@ -1485,12 +1486,7 @@ function asTransactionalDatabase(transaction: TransactionExecutor): Database {
 }
 
 async function ensureAgendaSettings(db: Database, tenantId: string): Promise<AgendaSettingsRow> {
-  await db.query(
-    `insert into pulso_iris.agenda_settings (tenant_id, mode, external_reference_required)
-     values ($1, 'hybrid_manual', true)
-     on conflict (tenant_id) do nothing`,
-    [tenantId]
-  );
+  await ensureAgendaSettingsExist(db, tenantId);
   const result = await db.query<AgendaSettingsRow>(
     `select ${AGENDA_SETTINGS_COLUMNS} from pulso_iris.agenda_settings where tenant_id = $1`,
     [tenantId]

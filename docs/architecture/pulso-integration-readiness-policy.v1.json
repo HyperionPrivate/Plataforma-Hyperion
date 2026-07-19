@@ -1,0 +1,100 @@
+{
+  "policyVersion": "1.6.0",
+  "owner": "pulso-data",
+  "issue": "HYP-DEBT-027",
+  "reviewBy": "2026-10-31",
+  "provider": {
+    "service": "pulso-iris-service",
+    "contract": "pulsoAgendaReadinessSchema",
+    "route": "GET /internal/v1/tenants/:tenantId/pulso-iris/agenda/readiness"
+  },
+  "consumer": {
+    "service": "integration-service",
+    "caller": "integration-service",
+    "credential": "INTEGRATION_TO_PULSO_TOKEN",
+    "failureMode": "fail-closed-502",
+    "timeoutMs": 3000
+  },
+  "runtimeSqlPolicy": {
+    "consumerAccess": "forbidden",
+    "objects": [
+      "pulso_iris.agenda_settings",
+      "pulso_iris.availability_rules",
+      "pulso_iris.professionals",
+      "platform.agents",
+      "platform.prompt_flows",
+      "platform.products",
+      "platform.audit_events",
+      "platform.schema_migrations",
+      "channel_runtime.outbound_messages"
+    ]
+  },
+  "readinessMarkers": {
+    "phase": "expand",
+    "sofiaCurrent": {
+      "schema": "agent_runtime",
+      "serviceName": "sofia",
+      "minimumVersion": 1,
+      "migration": "003-sofia-readiness-marker.sql",
+      "role": "hyperion_sofia",
+      "consumers": ["agent-service", "prompt-flow-service"]
+    },
+    "globalTransition": {
+      "schema": "pulso_iris",
+      "serviceName": "pulso",
+      "minimumVersion": 4,
+      "migration": "004-access-channel-tenant-projection.sql",
+      "currentConsumers": [
+        "pulso-iris-service",
+        "knowledge-service",
+        "integration-service",
+        "whatsapp-channel-service"
+      ],
+      "retainedFor": "current PULSO, Knowledge, Integration and Channel runtimes plus SOFIA N-1 compatibility"
+    },
+    "futureOwnerMarkers": {
+      "status": "not-yet-created",
+      "owners": ["pulso", "knowledge", "integration", "channel"],
+      "rule": "Each current global-marker consumer requires its own later expand/rehearsal/contract cut; migration 003 moved only current SOFIA workloads."
+    }
+  },
+  "databasePrivilegeRevocation": {
+    "status": "provider-owned-expand-complete-contract-pending",
+    "reason": "The standalone PULSO migrator revokes and verifies cross-owner domain grants. Current PULSO, Knowledge, Integration and Channel runtimes still read the global marker; only hyperion_sofia reads it solely as an N-1 compatibility grant while current SOFIA workloads use the owner-local marker. The frozen global 001-046 path retains its historical grants until cutover.",
+    "evidence": [
+      "packages/pulso-migrations/sql/002-pulso-runtime-roles.sql",
+      "packages/pulso-migrations/sql/003-sofia-readiness-marker.sql",
+      "packages/pulso-migrations/sql/004-access-channel-tenant-projection.sql",
+      "packages/pulso-migrations/src/schema-manifest.ts",
+      "packages/pulso-migrations/src/autonomy.integration.test.ts",
+      "packages/service-runtime/src/sofia-n-minus-one-readiness.integration.test.ts"
+    ],
+    "retainedCompatibilityGrants": [
+      {
+        "grant": "USAGE ON SCHEMA pulso_iris TO hyperion_sofia",
+        "consumer": "SOFIA N-1 images",
+        "status": "retiring-after-n-minus-one-rehearsal"
+      },
+      {
+        "grant": "SELECT ON pulso_iris.schema_version TO hyperion_sofia",
+        "consumer": "SOFIA N-1 images",
+        "currentRuntimeMarker": "agent_runtime.schema_version/service_name=sofia",
+        "status": "retiring-after-n-minus-one-rehearsal"
+      }
+    ],
+    "requiredRevocations": [
+      "SELECT ON pulso_iris.agenda_settings FROM hyperion_integration",
+      "SELECT ON pulso_iris.availability_rules FROM hyperion_integration",
+      "SELECT ON pulso_iris.professionals FROM hyperion_integration",
+      "USAGE ON SCHEMA pulso_iris FROM hyperion_integration",
+      "SELECT ON platform.agents FROM hyperion_integration",
+      "SELECT ON platform.prompt_flows FROM hyperion_integration",
+      "SELECT ON platform.products FROM hyperion_sofia",
+      "SELECT ON platform.audit_events FROM hyperion_pulso",
+      "SELECT ON platform.schema_migrations FROM hyperion_integration",
+      "SELECT ON platform.schema_migrations FROM hyperion_sofia",
+      "SELECT ON channel_runtime.outbound_messages FROM hyperion_sofia"
+    ],
+    "completionGate": "Retire both retained SOFIA compatibility grants only after telemetry and a real N-1 rehearsal from a published, digest-pinned manifest confirm Agent and Prompt current use the provider-owned logical database and owner-local SOFIA marker. Do not claim marker autonomy for PULSO, Knowledge, Integration or Channel until each receives a separate owner-local marker cut."
+  }
+}

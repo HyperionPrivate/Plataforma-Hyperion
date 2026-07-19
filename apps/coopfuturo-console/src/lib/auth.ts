@@ -1,75 +1,81 @@
-/** Browser auth helpers for live pilot-core calls (Bearer from sessionStorage). */
+/** Browser session helpers. Credentials remain in customer-namespaced same-origin cookies. */
 
-const TOKEN_KEY = "pulso_access_token";
-const EXPIRES_KEY = "pulso_access_expires_at";
+const CSRF_COOKIE = "__Host-hyperion-coopfuturo-csrf";
 
 export function isLiveApiMode(): boolean {
   return (process.env.NEXT_PUBLIC_API_MODE ?? "mock").toLowerCase() === "live";
 }
 
-/** Contabo/prod UI sets NEXT_PUBLIC_REQUIRE_AUTH=true; local mock/live can omit. */
+/** Production enables this; local mock development may leave it disabled. */
 export function requireAuthEnabled(): boolean {
-  return (process.env.NEXT_PUBLIC_REQUIRE_AUTH ?? "").toLowerCase() === "true";
+  return (
+    isLiveApiMode() ||
+    (process.env.NEXT_PUBLIC_REQUIRE_AUTH ?? "").toLowerCase() === "true"
+  );
 }
 
-export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  const raw = window.sessionStorage.getItem(TOKEN_KEY);
-  return raw?.trim() ? raw.trim() : null;
+/** The browser only talks to the same-origin customer adapter. */
+export function pilotCoreBaseUrl(): "/pilot-core" {
+  return "/pilot-core";
 }
 
-export function getAccessExpiresAt(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(EXPIRES_KEY);
-}
-
-export function setAccessToken(token: string, expiresAt?: string | null): void {
-  window.sessionStorage.setItem(TOKEN_KEY, token.trim());
-  if (expiresAt) {
-    window.sessionStorage.setItem(EXPIRES_KEY, expiresAt);
-  } else {
-    window.sessionStorage.removeItem(EXPIRES_KEY);
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  for (const part of document.cookie.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 1 || part.slice(0, separator).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
   }
+  return null;
 }
 
-export function clearAccessToken(): void {
-  window.sessionStorage.removeItem(TOKEN_KEY);
-  window.sessionStorage.removeItem(EXPIRES_KEY);
-}
-
-/** True when we have a token and (if known) it is not past expiresAt. */
-export function hasUsableSession(): boolean {
-  const token = getAccessToken();
-  if (!token) return false;
-  const expiresAt = getAccessExpiresAt();
-  if (!expiresAt) return true;
-  const ms = Date.parse(expiresAt);
-  if (Number.isNaN(ms)) return true;
-  // Refresh a minute early so Lab mutations don't race expiry.
-  return Date.now() < ms - 60_000;
-}
-
-export function authHeaders(extra?: HeadersInit): Headers {
+export function sessionHeaders(
+  extra?: HeadersInit,
+  options: { csrf?: boolean } = {},
+): Headers {
   const headers = new Headers(extra);
-  const token = getAccessToken();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+  if (options.csrf) {
+    const csrf = readCookie(CSRF_COOKIE);
+    if (csrf) headers.set("X-CSRF-Token", csrf);
   }
   return headers;
 }
 
-/** Resolve pilot-core base URL (same-origin relative path preferred). */
-export function pilotCoreBaseUrl(): string {
-  const raw = (process.env.NEXT_PUBLIC_PILOT_CORE_URL ?? "/pilot-core").replace(/\/$/, "");
-  return raw || "/pilot-core";
+export async function hasUsableSession(): Promise<boolean> {
+  if (!requireAuthEnabled()) return true;
+  try {
+    const response = await fetch(`${pilotCoreBaseUrl()}/auth/session`, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
-/** Clear local session and send the user back to /login (browser only). */
+export async function logoutSession(): Promise<void> {
+  const response = await fetch(`${pilotCoreBaseUrl()}/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+    cache: "no-store",
+    headers: sessionHeaders({ Accept: "application/json" }, { csrf: true }),
+  });
+  if (!response.ok && response.status !== 401) {
+    throw new Error("No fue posible cerrar la sesión NOVA");
+  }
+}
+
 export function redirectToLogin(reason?: string): void {
   if (typeof window === "undefined") return;
-  clearAccessToken();
   const next = `${window.location.pathname}${window.location.search}` || "/dashboard";
-  const qs = new URLSearchParams({ next });
-  if (reason) qs.set("reason", reason);
-  window.location.assign(`/login?${qs.toString()}`);
+  const params = new URLSearchParams({ next });
+  if (reason) params.set("reason", reason);
+  window.location.assign(`/login?${params.toString()}`);
 }

@@ -1,0 +1,191 @@
+name: hyperion-lumen
+
+# Standalone extraction model for the LUMEN product cell. Generate its source
+# closure first with `node scripts/docker/generate-cell-contexts.mjs --cell lumen`.
+x-lumen-build: &lumen-build
+  context: ../.docker-contexts/lumen
+  dockerfile: Dockerfile
+
+x-lumen-postgres-admin-url: &lumen-postgres-admin-url postgres://${LUMEN_POSTGRES_ADMIN_USER:?LUMEN_POSTGRES_ADMIN_USER is required}:${LUMEN_POSTGRES_ADMIN_PASSWORD:?LUMEN_POSTGRES_ADMIN_PASSWORD is required}@postgres:5432/postgres
+x-lumen-migrator-database-url: &lumen-migrator-database-url postgres://hyperion_lumen_migrator:${LUMEN_MIGRATOR_DATABASE_PASSWORD:?LUMEN_MIGRATOR_DATABASE_PASSWORD is required}@postgres:5432/${LUMEN_POSTGRES_DB:-hyperion_lumen}
+x-lumen-database-url: &lumen-database-url postgres://hyperion_lumen:${LUMEN_DATABASE_PASSWORD:?LUMEN_DATABASE_PASSWORD is required}@postgres:5432/${LUMEN_POSTGRES_DB:-hyperion_lumen}
+
+x-lumen-runtime-env: &lumen-runtime-env
+  NODE_ENV: ${LUMEN_NODE_ENV:?LUMEN_NODE_ENV is required}
+  HYPERION_ENVIRONMENT: ${LUMEN_DEPLOYMENT_ENVIRONMENT:?LUMEN_DEPLOYMENT_ENVIRONMENT is required}
+  SERVICE_VERSION: ${LUMEN_SERVICE_VERSION:-1.0.0}
+  SHUTDOWN_TIMEOUT_MS: ${LUMEN_SHUTDOWN_TIMEOUT_MS:-65000}
+  TRUST_PROXY: ${LUMEN_TRUST_PROXY:-false}
+  DURABLE_EVENT_TRANSPORT: http
+  DURABLE_OUTBOX_ENABLED: ${LUMEN_DURABLE_OUTBOX_ENABLED:-true}
+  DURABLE_HTTP_OUTBOX_ENABLED: ${LUMEN_DURABLE_HTTP_OUTBOX_ENABLED:-true}
+
+x-node-readycheck: &node-readycheck
+  test:
+    [
+      "CMD",
+      "node",
+      "-e",
+      "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/ready').then((r)=>r.json()).then((body)=>process.exit(body.status==='ok'?0:1)).catch(()=>process.exit(1))"
+    ]
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 20s
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LUMEN_POSTGRES_ADMIN_USER:?LUMEN_POSTGRES_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${LUMEN_POSTGRES_ADMIN_PASSWORD:?LUMEN_POSTGRES_ADMIN_PASSWORD is required}
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:${LUMEN_POSTGRES_HOST_PORT:-55439}:5432"
+    volumes:
+      - lumen_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${LUMEN_POSTGRES_ADMIN_USER:?LUMEN_POSTGRES_ADMIN_USER is required} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  lumen-database-bootstrap:
+    build:
+      <<: *lumen-build
+      target: lumen-migrations
+    restart: "no"
+    command: ["node", "packages/lumen-migrations/dist/bootstrap-database.js"]
+    environment:
+      NODE_ENV: ${LUMEN_NODE_ENV:?LUMEN_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${LUMEN_DEPLOYMENT_ENVIRONMENT:?LUMEN_DEPLOYMENT_ENVIRONMENT is required}
+      LUMEN_POSTGRES_ADMIN_URL: *lumen-postgres-admin-url
+      LUMEN_POSTGRES_DB: ${LUMEN_POSTGRES_DB:-hyperion_lumen}
+      LUMEN_MIGRATOR_DATABASE_PASSWORD: ${LUMEN_MIGRATOR_DATABASE_PASSWORD:?LUMEN_MIGRATOR_DATABASE_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  lumen-migrations:
+    build:
+      <<: *lumen-build
+      target: lumen-migrations
+    restart: "no"
+    command: ["node", "packages/lumen-migrations/dist/index.js"]
+    environment:
+      NODE_ENV: ${LUMEN_NODE_ENV:?LUMEN_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${LUMEN_DEPLOYMENT_ENVIRONMENT:?LUMEN_DEPLOYMENT_ENVIRONMENT is required}
+      LUMEN_MIGRATOR_DATABASE_URL: *lumen-migrator-database-url
+    depends_on:
+      lumen-database-bootstrap:
+        condition: service_completed_successfully
+
+  lumen-role-bootstrap:
+    build:
+      <<: *lumen-build
+      target: lumen-migrations
+    restart: "no"
+    command: ["node", "packages/lumen-migrations/dist/bootstrap-roles.js"]
+    environment:
+      NODE_ENV: ${LUMEN_NODE_ENV:?LUMEN_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${LUMEN_DEPLOYMENT_ENVIRONMENT:?LUMEN_DEPLOYMENT_ENVIRONMENT is required}
+      LUMEN_POSTGRES_ADMIN_URL: *lumen-postgres-admin-url
+      LUMEN_POSTGRES_DB: ${LUMEN_POSTGRES_DB:-hyperion_lumen}
+      LUMEN_DATABASE_PASSWORD: ${LUMEN_DATABASE_PASSWORD:?LUMEN_DATABASE_PASSWORD is required}
+    depends_on:
+      lumen-migrations:
+        condition: service_completed_successfully
+
+  lumen-service:
+    build:
+      <<: *lumen-build
+      target: lumen-service
+    restart: unless-stopped
+    stop_grace_period: ${LUMEN_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/lumen-service/dist/index.js"]
+    environment:
+      <<: *lumen-runtime-env
+      DATABASE_URL: *lumen-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_lumen
+      PORT: 8090
+      LUMEN_BFF_TO_LUMEN_TOKEN: ${LUMEN_BFF_TO_LUMEN_TOKEN:?LUMEN_BFF_TO_LUMEN_TOKEN is required}
+      LUMEN_OPERATOR_ASSERTION_KEY: ${LUMEN_OPERATOR_ASSERTION_KEY:?LUMEN_OPERATOR_ASSERTION_KEY is required}
+      ACCESS_TO_LUMEN_TOKEN: ${ACCESS_TO_LUMEN_TOKEN:?ACCESS_TO_LUMEN_TOKEN is required}
+      PULSO_TO_LUMEN_TOKEN: ${PULSO_TO_LUMEN_TOKEN:?PULSO_TO_LUMEN_TOKEN is required}
+      LUMEN_TO_AUDIT_TOKEN: ${LUMEN_TO_AUDIT_TOKEN:-}
+      AUDIT_SERVICE_URL: ${LUMEN_AUDIT_SERVICE_URL:-https://audit.example.invalid}
+      ELEVENLABS_API_KEY: ${LUMEN_ELEVENLABS_API_KEY:-}
+      ELEVENLABS_STT_MODEL: ${LUMEN_ELEVENLABS_STT_MODEL:-scribe_v2}
+      ELEVENLABS_STT_LANGUAGE: ${LUMEN_ELEVENLABS_STT_LANGUAGE:-spa}
+      ELEVENLABS_STT_TIMEOUT_MS: ${LUMEN_ELEVENLABS_STT_TIMEOUT_MS:-120000}
+      ELEVENLABS_ZERO_RETENTION_MODE: ${LUMEN_ELEVENLABS_ZERO_RETENTION_MODE:-true}
+      DEEPSEEK_API_KEY: ${LUMEN_DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${LUMEN_DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${LUMEN_DEEPSEEK_MODEL:-deepseek-v4-flash}
+      LUMEN_AUDIO_TEMP_DIR: /var/lib/hyperion/lumen-audio
+      LUMEN_INSTANCE_ID: ${LUMEN_INSTANCE_ID:?LUMEN_INSTANCE_ID is required}
+      LUMEN_AUDIO_CLEANUP_RETRY_MS: ${LUMEN_AUDIO_CLEANUP_RETRY_MS:-30000}
+      LUMEN_AUDIO_CLEANUP_BATCH_SIZE: ${LUMEN_AUDIO_CLEANUP_BATCH_SIZE:-25}
+      LUMEN_AUDIO_CLEANUP_LEASE_TTL_MS: ${LUMEN_AUDIO_CLEANUP_LEASE_TTL_MS:-1800000}
+      LUMEN_AUDIO_CLEANUP_HEARTBEAT_MS: ${LUMEN_AUDIO_CLEANUP_HEARTBEAT_MS:-30000}
+    expose:
+      - "8090"
+    tmpfs:
+      - /var/lib/hyperion/lumen-audio:rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=0700
+    healthcheck: *node-readycheck
+    depends_on:
+      lumen-role-bootstrap:
+        condition: service_completed_successfully
+
+  lumen-bff:
+    build:
+      <<: *lumen-build
+      target: lumen-bff
+    restart: unless-stopped
+    stop_grace_period: ${LUMEN_SHUTDOWN_GRACE_PERIOD:-75s}
+    environment:
+      NODE_ENV: ${LUMEN_NODE_ENV:?LUMEN_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${LUMEN_DEPLOYMENT_ENVIRONMENT:?LUMEN_DEPLOYMENT_ENVIRONMENT is required}
+      SERVICE_VERSION: ${LUMEN_BFF_VERSION:-1.0.0}
+      PORT: 8096
+      ACCESS_JWKS_URL: ${LUMEN_ACCESS_JWKS_URL:?LUMEN_ACCESS_JWKS_URL is required}
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: ${LUMEN_ACCESS_JWKS_ALLOW_PRIVATE_HTTP:-false}
+      ACCESS_TOKEN_ISSUER: ${LUMEN_ACCESS_TOKEN_ISSUER:?LUMEN_ACCESS_TOKEN_ISSUER is required}
+      ACCESS_TOKEN_AUDIENCE: lumen-bff
+      ACCESS_SERVICE_URL: ${LUMEN_ACCESS_SERVICE_URL:?LUMEN_ACCESS_SERVICE_URL is required}
+      LUMEN_BFF_TO_ACCESS_TOKEN: ${LUMEN_BFF_TO_ACCESS_TOKEN:?LUMEN_BFF_TO_ACCESS_TOKEN is required}
+      LUMEN_SERVICE_URL: http://lumen-service:8090
+      LUMEN_BFF_TO_LUMEN_TOKEN: ${LUMEN_BFF_TO_LUMEN_TOKEN:?LUMEN_BFF_TO_LUMEN_TOKEN is required}
+      LUMEN_OPERATOR_ASSERTION_KEY: ${LUMEN_OPERATOR_ASSERTION_KEY:?LUMEN_OPERATOR_ASSERTION_KEY is required}
+    ports:
+      - "127.0.0.1:${LUMEN_BFF_HOST_PORT:-8096}:8096"
+    healthcheck: *node-readycheck
+    depends_on:
+      lumen-service:
+        condition: service_healthy
+
+  lumen-console:
+    build:
+      <<: *lumen-build
+      target: lumen-console
+    restart: unless-stopped
+    environment:
+      BFF_UPSTREAM: http://lumen-bff:8096
+      CONSOLE_CELL: lumen
+      CONSOLE_ROUTE_PATTERN: ^(?:/|/lumen(?:/[^/]+)?/?)$
+    ports:
+      - "127.0.0.1:${LUMEN_CONSOLE_HOST_PORT:-3002}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      lumen-bff:
+        condition: service_healthy
+
+volumes:
+  lumen_postgres_data:

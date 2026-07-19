@@ -1,5 +1,4 @@
 import {
-  envelope,
   pulsoIrisAppointmentCancellationInputSchema,
   pulsoIrisAppointmentHoldInputSchema,
   pulsoIrisAppointmentHoldListSchema,
@@ -11,12 +10,13 @@ import {
   pulsoIrisAppointmentStatusHistoryListSchema,
   pulsoIrisExternalRejectionInputSchema,
   pulsoIrisManualVerificationInputSchema,
-  tenantIdSchema,
   type PulsoIrisAppointment
-} from "@hyperion/contracts";
+} from "@hyperion/pulso-contracts";
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { AgendaProviderError, type AgendaHold } from "./agenda-provider.js";
+import { AuditHistoryUnavailableError, type AuditHistoryReader } from "./audit-history-client.js";
 import type { AuditEmitter } from "./audit-client.js";
 import { readOperatorId, readOperatorRole } from "./audit-client.js";
 import { expireAppointmentHolds } from "./appointment-hold-expiration.js";
@@ -26,6 +26,7 @@ import {
   ensureTenantReferences,
   mapDatabaseError,
   parseBody,
+  readTenantId,
   readUuidParam,
   requireTenantDb,
   sendReferenceError
@@ -109,7 +110,10 @@ const HOLD_COLUMNS = `
 export async function registerAppointmentRoutes(
   app: FastifyInstance,
   context: ServiceContext,
-  emitAudit: AuditEmitter = async () => undefined
+  emitAudit: AuditEmitter = async () => undefined,
+  readAuditHistory: AuditHistoryReader = async () => {
+    throw new AuditHistoryUnavailableError("Audit history reader is not configured", 503);
+  }
 ): Promise<void> {
   const base = "/v1/tenants/:tenantId/pulso-iris";
 
@@ -426,19 +430,21 @@ export async function registerAppointmentRoutes(
   });
 
   app.get(`${base}/appointments/:appointmentId/audit`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
-    if (!scope) return;
+    const tenantId = readTenantId(request.params);
+    if (!tenantId) return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
     const appointmentId = readUuidParam(request.params, "appointmentId");
     if (!appointmentId) return reply.code(400).send(envelope({ error: "appointmentId must be a UUID" }, request.id));
-    const result = await scope.db.query(
-      `select id, event_type as "eventType", actor_id as "actorId", metadata,
-              created_at as "createdAt"
-       from platform.audit_events
-       where tenant_id = $1 and entity_type = 'appointment' and entity_id = $2
-       order by created_at`,
-      [scope.tenantId, appointmentId]
-    );
-    return envelope(result.rows, request.id);
+    try {
+      return envelope(await readAuditHistory(tenantId, "appointment", appointmentId), request.id);
+    } catch (error) {
+      context.logger.warn("appointment audit history lookup failed", {
+        tenantId,
+        appointmentId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      const statusCode = error instanceof AuditHistoryUnavailableError ? error.statusCode : 502;
+      return reply.code(statusCode).send(envelope({ error: "Audit history unavailable" }, request.id));
+    }
   });
 
   app.post(`${base}/appointments/:appointmentId/manual-verify`, async (request, reply) => {

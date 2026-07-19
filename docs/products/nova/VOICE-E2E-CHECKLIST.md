@@ -1,4 +1,15 @@
+---
+documentType: runbook
+status: not-current
+owner: nova-voice
+issue: HYP-NOVA-016
+reviewDue: 2026-09-30
+---
+
 # Voice E2E checklist (Neutral Dialer + ElevenLabs)
+
+> **No vigente para producción.** Solo puede reutilizarse como base de un nuevo ensayo con claves rotadas, webhook
+> HTTPS y evidencia ligada al digest del release NOVA.
 
 Código listo (adapter real + outcome poller). Las llamadas reales requieren **API key + agente Conversational AI + DDI** (Twilio/SIP importado en ElevenLabs).
 
@@ -87,9 +98,11 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.dialer.yml --
 3. Smoke (destino de prueba controlado; no campaña a los 10 DDI):
 
 ```bash
-NOVA_SMOKE_TOKEN=... NOVA_SMOKE_TENANT_ID=... NOVA_SMOKE_REQUIRE_VOICE=1 \
+NOVA_SMOKE_EMAIL=... NOVA_SMOKE_PASSWORD=... NOVA_SMOKE_TENANT_ID=... NOVA_SMOKE_REQUIRE_VOICE=1 \
   node scripts/autonomy/nova-smoke.e2e.mjs
 ```
+
+El smoke inicia sesión por `/v1/auth/login`, conserva sólo las cookies aisladas de NOVA y envía CSRF en mutaciones. No acepta el bearer compartido heredado. También exige `403` para un tenant sin grant y `404` para una ruta LUMEN.
 
 ## Aceptación (fase B)
 

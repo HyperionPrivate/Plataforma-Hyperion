@@ -8,6 +8,7 @@ import {
   lumenStructureInputSchema,
   lumenTranscriptionInputSchema,
   lumenWorklistEntrySchema,
+  novaCatalog,
   platformCatalogSchema,
   productModules,
   pulsoIrisAgendaBlockListSchema,
@@ -44,6 +45,58 @@ describe("platform contracts", () => {
         productModules
       })
     ).not.toThrow();
+  });
+
+  it("keeps N-1 catalog payloads valid while publishing federated ownership metadata", () => {
+    const legacyCatalog = platformCatalogSchema.parse({
+      services: [
+        {
+          name: "api-gateway",
+          port: 8080,
+          responsibility: "Legacy edge"
+        }
+      ],
+      productModules: []
+    });
+    expect(legacyCatalog.services[0]).not.toHaveProperty("cell");
+    expect(legacyCatalog.services[0]).not.toHaveProperty("lifecycle");
+
+    const servicesByName = new Map(serviceCatalog.map((service) => [service.name, service]));
+    expect(serviceCatalog.every((service) => service.cell && service.lifecycle)).toBe(true);
+    expect(
+      serviceCatalog.filter((service) => service.lifecycle === "deprecated").map((service) => service.name)
+    ).toEqual(["api-gateway"]);
+    expect(servicesByName.get("api-gateway")).toMatchObject({
+      cell: "PLATFORM",
+      lifecycle: "deprecated"
+    });
+    expect(servicesByName.get("api-gateway")?.responsibility).toMatch(/temporal.+hostname/i);
+
+    for (const serviceName of ["voice-channel-service", "liwa-channel-service", "documents-service"] as const) {
+      expect(servicesByName.get(serviceName)).toMatchObject({ cell: "NOVA", lifecycle: "active" });
+      expect(servicesByName.get(serviceName)?.responsibility).toMatch(/componente NOVA/i);
+      expect(servicesByName.get(serviceName)?.responsibility).not.toMatch(/compartid/i);
+    }
+
+    for (const serviceName of [
+      "prompt-flow-service",
+      "knowledge-service",
+      "integration-service",
+      "whatsapp-channel-service"
+    ] as const) {
+      expect(servicesByName.get(serviceName)).toMatchObject({ cell: "PULSO_IRIS", lifecycle: "active" });
+      expect(servicesByName.get(serviceName)?.responsibility).toMatch(/componente PULSO/i);
+    }
+  });
+
+  it("keeps the generic NOVA catalog tenant-neutral", () => {
+    const serializedCatalog = JSON.stringify({ novaCatalog, productModules }).toLowerCase();
+    expect(serializedCatalog).not.toContain("firsttenant");
+    expect(serializedCatalog).not.toContain("primer tenant");
+    expect(serializedCatalog).not.toContain("coopfuturo");
+    expect(productModules.find((product) => product.code === "CORE")).toMatchObject({
+      ownerService: "identity-service"
+    });
   });
 
   it("keeps the Pulso Iris catalog valid", () => {

@@ -1,0 +1,59 @@
+{
+  "$schema": "../../schemas/release-catalog.schema.json",
+  "schemaVersion": 1,
+  "cell": "lumen",
+  "catalogVersion": "1.1.0",
+  "owner": "@AdministracionHyperion",
+  "createdAt": "2026-07-18T02:35:00Z",
+  "rollbackPolicy": "releases/rollback-policies/lumen/1.1.0.json",
+  "rollbackPolicySha256": "848b603acd1fd1766fd73e27dc9e9abe0ed60f9463147c27b2a2638dae033651",
+  "components": [
+    {
+      "id": "lumen-service",
+      "kind": "service",
+      "distribution": "oci",
+      "sourcePath": "services/lumen-service",
+      "versionSource": "services/lumen-service/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/lumen-service"
+    },
+    {
+      "id": "lumen-bff",
+      "kind": "bff",
+      "distribution": "oci",
+      "sourcePath": "apps/lumen-bff",
+      "versionSource": "apps/lumen-bff/package.json",
+      "version": "1.0.0",
+      "imageRepository": "ghcr.io/administracionhyperion/lumen-bff"
+    },
+    {
+      "id": "lumen-console",
+      "kind": "console",
+      "distribution": "oci",
+      "sourcePath": "apps/lumen-console",
+      "versionSource": "apps/lumen-console/package.json",
+      "version": "0.1.0",
+      "imageRepository": "ghcr.io/administracionhyperion/lumen-console"
+    },
+    {
+      "id": "lumen-migrations",
+      "kind": "migrations",
+      "distribution": "oci",
+      "sourcePath": "packages/lumen-migrations",
+      "versionSource": "packages/lumen-migrations/package.json",
+      "version": "1.0.0",
+      "imageRepository": "ghcr.io/administracionhyperion/lumen-migrations",
+      "buildService": "lumen-migrations",
+      "composeServices": ["lumen-database-bootstrap", "lumen-migrations", "lumen-role-bootstrap"]
+    },
+    {
+      "id": "lumen-contracts",
+      "kind": "contract",
+      "distribution": "npm",
+      "sourcePath": "packages/lumen-contracts",
+      "versionSource": "packages/lumen-contracts/package.json",
+      "version": "1.1.0",
+      "packageName": "@hyperion/lumen-contracts"
+    }
+  ]
+}

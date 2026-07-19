@@ -1,0 +1,308 @@
+name: publish-provider-contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      contract:
+        description: Provider-owned contract package
+        required: true
+        type: choice
+        options:
+          - platform-contracts
+          - audit-contracts
+          - nova-contracts
+          - lumen-contracts
+          - pulso-contracts
+      version:
+        description: Exact package SemVer and canonical contract tag version
+        required: true
+        type: string
+      source_revision:
+        description: Exact protected-main commit to publish
+        required: true
+        type: string
+      registry_origin:
+        description: Credential-free HTTPS npm registry origin
+        required: true
+        default: https://registry.npmjs.org
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: publish-provider-contract-${{ inputs.contract }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: ${{ inputs.contract }} / ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    environment: release-publication
+    timeout-minutes: 30
+    steps:
+      - name: Require protected main and immutable inputs
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          VERSION: ${{ inputs.version }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "$SOURCE_REVISION" =~ ^0+$ ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          if [[ "$REGISTRY_ORIGIN" != "https://registry.npmjs.org" ]]; then
+            echo 'Provider contracts may publish only to the allowlisted npm registry.' >&2
+            exit 1
+          fi
+          if [[ "$REF_PROTECTED" != "true" || "$GITHUB_REF" != "refs/heads/main" || "$GITHUB_SHA" != "$SOURCE_REVISION" ]]; then
+            echo "Dispatch from protected main with source_revision equal to github.sha." >&2
+            exit 1
+          fi
+          node -e 'const u=new URL(process.argv[1]);if(u.protocol!=="https:"||u.username||u.password||u.search||u.hash||u.pathname!=="/")process.exit(1)' "$REGISTRY_ORIGIN"
+
+      - name: Checkout exact source and tags
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ inputs.source_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node and registry
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          registry-url: ${{ inputs.registry_origin }}
+
+      - name: Resolve provider package and canonical tag
+        shell: bash
+        env:
+          CONTRACT: ${{ inputs.contract }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          case "$CONTRACT" in
+            platform-contracts) package_name='@hyperion/platform-contracts' ;;
+            audit-contracts) package_name='@hyperion/audit-contracts' ;;
+            nova-contracts) package_name='@hyperion/nova-contracts' ;;
+            lumen-contracts) package_name='@hyperion/lumen-contracts' ;;
+            pulso-contracts) package_name='@hyperion/pulso-contracts' ;;
+            *) echo 'Unknown provider contract.' >&2; exit 1 ;;
+          esac
+          package_directory="packages/$CONTRACT"
+          canonical_tag="contracts/$CONTRACT/v$VERSION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          test "$(git rev-parse "$canonical_tag^{commit}")" = "$SOURCE_REVISION"
+          PACKAGE_NAME="$package_name" PACKAGE_DIRECTORY="$package_directory" CONTRACT="$CONTRACT" VERSION="$VERSION" node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const manifest = JSON.parse(await readFile(`${process.env.PACKAGE_DIRECTORY}/package.json`, 'utf8'));
+          const catalog = JSON.parse(await readFile('releases/registry/provider-artifacts.v1.json', 'utf8'));
+          const matches = catalog.artifacts.filter((entry) => entry.packageName === process.env.PACKAGE_NAME);
+          if (matches.length !== 1) throw new Error('provider contract must appear exactly once in the registry catalog');
+          const artifact = matches[0];
+          if (manifest.name !== process.env.PACKAGE_NAME || manifest.version !== process.env.VERSION) throw new Error('source manifest identity differs');
+          if (artifact.kind !== 'provider-contract' || artifact.sourcePath !== process.env.PACKAGE_DIRECTORY || artifact.currentVersion !== process.env.VERSION) throw new Error('provider contract differs from registry catalog');
+          if (!['ready', 'published'].includes(artifact.publication?.state)) throw new Error('provider contract publication is not approved');
+          if (artifact.publication.workflow !== '.github/workflows/publish-provider-contracts.yml') throw new Error('provider contract workflow differs from registry catalog');
+          if (artifact.publication.tagPattern !== `contracts/${process.env.CONTRACT}/v{version}`) throw new Error('provider contract tag pattern differs from registry catalog');
+          NODE
+          printf 'PACKAGE_NAME=%s\nPACKAGE_DIRECTORY=%s\nCANONICAL_TAG=%s\n' "$package_name" "$package_directory" "$canonical_tag" >> "$GITHUB_ENV"
+
+      - name: Install and verify the provider closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+          node scripts/releases/check-provider-artifact-catalog.mjs
+          pnpm --filter "$PACKAGE_NAME..." build
+          pnpm --filter "$PACKAGE_NAME" typecheck
+          pnpm --filter "$PACKAGE_NAME" test
+          pnpm exec eslint "$PACKAGE_DIRECTORY"
+          pnpm exec prettier --check "$PACKAGE_DIRECTORY"
+
+      - name: Require exact provider dependencies already published
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          import { spawnSync } from "node:child_process";
+
+          const manifest = JSON.parse(await readFile(`${process.env.PACKAGE_DIRECTORY}/package.json`, "utf8"));
+          const providerContracts = new Set([
+            "@hyperion/platform-contracts",
+            "@hyperion/audit-contracts",
+            "@hyperion/nova-contracts",
+            "@hyperion/lumen-contracts",
+            "@hyperion/pulso-contracts"
+          ]);
+          for (const group of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+            for (const [name, version] of Object.entries(manifest[group] ?? {})) {
+              if (!providerContracts.has(name)) continue;
+              if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(version)) {
+                throw new Error(`${manifest.name}: ${group}.${name} must be exact SemVer before publication`);
+              }
+              const result = spawnSync(
+                "npm",
+                ["view", `${name}@${version}`, "version", "--json", "--registry", process.env.REGISTRY_ORIGIN],
+                { encoding: "utf8", stdio: "pipe" }
+              );
+              if (result.error) throw result.error;
+              if (result.status !== 0) {
+                throw new Error(`${manifest.name}: publish ${name}@${version} and verify registry readback first`);
+              }
+              const publishedVersion = JSON.parse(result.stdout);
+              if (publishedVersion !== version) {
+                throw new Error(`${manifest.name}: registry returned ${publishedVersion} for ${name}@${version}`);
+              }
+            }
+          }
+          NODE
+
+      - name: Resolve and attest the real published N-1
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          CONTRACT: ${{ inputs.contract }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+        run: |
+          set -euo pipefail
+          resolution="$RUNNER_TEMP/provider-contract/n-minus-one-resolution.json"
+          node scripts/releases/provider-contract-registry.mjs \
+            --contract "$CONTRACT" \
+            --version "$VERSION" \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --registry-origin "$REGISTRY_ORIGIN" \
+            --output "$resolution"
+          printf 'N_MINUS_ONE_RESOLUTION=%s\n' "$resolution" >> "$GITHUB_ENV"
+
+      - name: Enforce provider contract N/N-1 compatibility
+        shell: bash
+        env:
+          CONTRACT: ${{ inputs.contract }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+        run: >-
+          node scripts/releases/check-provider-contract-compatibility.mjs
+          --skip-build
+          --package "$CONTRACT"
+          --registry-resolution "$N_MINUS_ONE_RESOLUTION"
+          --source-repository "$SOURCE_REPOSITORY"
+          --registry-origin "$REGISTRY_ORIGIN"
+
+      - name: Pack once and inspect the publishable manifest
+        id: pack
+        shell: bash
+        run: >-
+          node scripts/releases/npm-artifact-publication.mjs pack
+          --package-directory "$PACKAGE_DIRECTORY"
+          --package-name "$PACKAGE_NAME"
+          --version "${{ inputs.version }}"
+          --source-revision "${{ inputs.source_revision }}"
+          --catalog releases/registry/provider-artifacts.v1.json
+          --output-directory "$RUNNER_TEMP/provider-contract/local"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Check whether the exact version is already published
+        id: preflight
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: >-
+          node scripts/releases/npm-artifact-publication.mjs preflight
+          --package-name "$PACKAGE_NAME"
+          --version "${{ inputs.version }}"
+          --registry-origin "${{ inputs.registry_origin }}"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Attest the exact contract tarball
+        if: steps.preflight.outputs.already_published == 'false'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.pack.outputs.tarball }}
+
+      - name: Publish the same attested tarball without overwrite
+        if: steps.preflight.outputs.already_published == 'false'
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: npm publish "$TARBALL" --access public --ignore-scripts --registry "$REGISTRY_ORIGIN"
+
+      - name: Read back bytes, registry identity and provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          LOCAL_TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: >-
+          node scripts/releases/npm-artifact-publication.mjs readback
+          --package-name "$PACKAGE_NAME"
+          --version "${{ inputs.version }}"
+          --catalog releases/registry/provider-artifacts.v1.json
+          --registry-origin "${{ inputs.registry_origin }}"
+          --source-revision "${{ inputs.source_revision }}"
+          --source-repository "${{ github.repository }}"
+          --local-tarball "$LOCAL_TARBALL"
+          --output "$RUNNER_TEMP/provider-contract/registry-evidence.json"
+          --attempts 5
+          --retry-delay-ms 5000
+
+      - name: Capture the exact published-registry snapshot candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          CONTRACT: ${{ inputs.contract }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+        run: |
+          set -euo pipefail
+          current_resolution="$RUNNER_TEMP/provider-contract/current-resolution.json"
+          snapshot="$RUNNER_TEMP/provider-contract/published-registry/$CONTRACT/$VERSION.json"
+          node scripts/releases/provider-contract-registry.mjs \
+            --contract "$CONTRACT" \
+            --version "$VERSION" \
+            --exact-target \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --registry-origin "$REGISTRY_ORIGIN" \
+            --output "$current_resolution"
+          node scripts/releases/check-provider-contract-compatibility.mjs \
+            --skip-build \
+            --package "$CONTRACT" \
+            --registry-resolution "$current_resolution" \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --registry-origin "$REGISTRY_ORIGIN" \
+            --record-published-snapshot \
+            --published-tarball "${{ steps.pack.outputs.tarball }}" \
+            --published-snapshot-output "$snapshot"
+          printf 'PUBLISHED_SNAPSHOT=%s\n' "$snapshot" >> "$GITHUB_ENV"
+
+      - name: Attest the exact published-registry snapshot candidate
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ env.PUBLISHED_SNAPSHOT }}
+
+      - name: Upload immutable published-registry snapshot candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: provider-contract-${{ inputs.contract }}-${{ inputs.version }}-published-registry
+          path: ${{ env.PUBLISHED_SNAPSHOT }}
+          if-no-files-found: error
+          retention-days: 30

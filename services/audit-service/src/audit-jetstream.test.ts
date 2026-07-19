@@ -62,6 +62,22 @@ describe("audit JetStream adapter", () => {
     expect(receive).not.toHaveBeenCalled();
   });
 
+  it("binds the NOVA durable to the nova-core producer contract", async () => {
+    const receive = receiverReturning("accepted");
+    const nova = AUDIT_EVENT_CONSUMERS.find((entry) => entry.sourceService === "nova-core-service")!;
+    const event = { ...EVENT, type: nova.eventType };
+
+    await expect(
+      createAuditEventJetStreamHandler(database(), "nova-core-service", receive)(event, context())
+    ).resolves.toEqual({
+      action: "ack"
+    });
+    expect(receive).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sourceService: "nova-core-service", type: "nova.audit.event.record.v1" })
+    );
+  });
+
   it("drains the legacy durable without inventing producer provenance", async () => {
     const receive = receiverReturning("accepted");
     const legacy = AUDIT_EVENT_CONSUMERS.find((entry) => entry.sourceService === "legacy-unknown")!;
@@ -93,7 +109,7 @@ describe("audit JetStream adapter", () => {
     ).resolves.toEqual({ action: "retry" });
   });
 
-  it("starts both source-scoped durables plus the legacy drain and stops them through one close hook", async () => {
+  it("starts every source-scoped durable plus the legacy drain and stops them through one close hook", async () => {
     const start = vi.fn();
     const stop = vi.fn(async () => undefined);
     const initialize = vi.fn(async () => undefined);
@@ -114,10 +130,10 @@ describe("audit JetStream adapter", () => {
       factory
     );
 
-    expect(consumers).toHaveLength(5);
-    expect(initialize).toHaveBeenCalledTimes(5);
-    expect(start).toHaveBeenCalledTimes(5);
-    expect(factory).toHaveBeenCalledTimes(5);
+    expect(consumers).toHaveLength(AUDIT_EVENT_CONSUMERS.length);
+    expect(initialize).toHaveBeenCalledTimes(AUDIT_EVENT_CONSUMERS.length);
+    expect(start).toHaveBeenCalledTimes(AUDIT_EVENT_CONSUMERS.length);
+    expect(factory).toHaveBeenCalledTimes(AUDIT_EVENT_CONSUMERS.length);
     for (const definition of AUDIT_EVENT_CONSUMERS) {
       expect(factory).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -132,11 +148,11 @@ describe("audit JetStream adapter", () => {
       );
     }
     await closeHook?.();
-    expect(stop).toHaveBeenCalledTimes(5);
+    expect(stop).toHaveBeenCalledTimes(AUDIT_EVENT_CONSUMERS.length);
   });
 
   it("closes every source consumer and starts none when preflight fails", async () => {
-    const consumers = Array.from({ length: 5 }, () => managedConsumer());
+    const consumers = Array.from({ length: AUDIT_EVENT_CONSUMERS.length }, () => managedConsumer());
     consumers[1]!.initialize.mockRejectedValueOnce(new Error("topology unavailable"));
     const factory = vi.fn<ManagedJetStreamConsumerFactory>();
     for (const consumer of consumers) {

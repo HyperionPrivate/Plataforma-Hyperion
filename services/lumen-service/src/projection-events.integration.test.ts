@@ -1,21 +1,19 @@
 import { createDatabase, type DatabaseClient } from "@hyperion/database";
+import { lumenProjectionEventSchema, type LumenProjectionEvent } from "@hyperion/lumen-contracts";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  consumeLumenProjectionEvent,
-  lumenProjectionEventSchema,
-  sha256CanonicalJson,
-  type LumenProjectionEvent
-} from "./projection-events.js";
+import { consumeLumenProjectionEvent, sha256CanonicalJson } from "./projection-events.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_LUMEN_FIXTURE_DATABASE_URL = process.env.TEST_LUMEN_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_LUMEN_FIXTURE_DATABASE_URL ? describe : describe.skip;
 type TenantSnapshotEvent = Extract<LumenProjectionEvent, { type: "access.lumen.tenant-snapshot.v1" }>;
 type OperatorGrantEvent = Extract<LumenProjectionEvent, { type: "access.lumen.operator-grant.v1" }>;
 type EncounterReferenceEvent = Extract<LumenProjectionEvent, { type: "pulso.lumen.encounter-reference.v1" }>;
 
 describeIntegration("LUMEN autonomous projection persistence", () => {
   let db: DatabaseClient;
+  let fixtureDb: DatabaseClient;
   const tenantId = randomUUID();
   const operatorId = randomUUID();
   const encounterId = randomUUID();
@@ -25,10 +23,11 @@ describeIntegration("LUMEN autonomous projection persistence", () => {
 
   beforeAll(() => {
     db = createDatabase(TEST_DATABASE_URL ?? "");
+    fixtureDb = createDatabase(TEST_LUMEN_FIXTURE_DATABASE_URL ?? "");
   });
 
   afterAll(async () => {
-    await db.close();
+    await Promise.all([db.close(), fixtureDb.close()]);
   });
 
   it("handles accepted, replay, stale and contradictory source versions deterministically", async () => {
@@ -67,8 +66,13 @@ describeIntegration("LUMEN autonomous projection persistence", () => {
   });
 
   it("persists grants and reference snapshots without Access or PULSO table reads", async () => {
-    await expect(consumeLumenProjectionEvent(db, operatorEvent())).resolves.toEqual({
+    const operator = operatorEvent();
+    await expect(consumeLumenProjectionEvent(db, operator)).resolves.toEqual({
       status: "accepted",
+      projection: "operator_grant"
+    });
+    await expect(consumeLumenProjectionEvent(db, operator)).resolves.toEqual({
+      status: "duplicate",
       projection: "operator_grant"
     });
     const reference = referenceEvent({ sourceVersion: 20 });
@@ -143,14 +147,14 @@ describeIntegration("LUMEN autonomous projection persistence", () => {
   });
 
   it("terminates newer reference changes after clinical approval freezes the snapshot", async () => {
-    await db.query(
+    await fixtureDb.query(
       `insert into lumen.encounters (
          id, tenant_id, patient_id, professional_id, site_id, scheduled_at,
          status, is_demo, demo_key, metadata
        ) values ($1, $2, $3, $4, $5, now(), 'preconsultation', true, $6, '{"synthetic":true}'::jsonb)`,
       [encounterId, tenantId, patientId, professionalId, siteId, `projection-${encounterId}`]
     );
-    const dictation = await db.query<{ id: string }>(
+    const dictation = await fixtureDb.query<{ id: string }>(
       `insert into lumen.dictations (
          tenant_id, encounter_id, status, transcript, mime_type, provider,
          metadata, reviewed_at, reviewed_by
@@ -159,7 +163,7 @@ describeIntegration("LUMEN autonomous projection persistence", () => {
        returning id`,
       [tenantId, encounterId, operatorId]
     );
-    const record = await db.query<{ id: string }>(
+    const record = await fixtureDb.query<{ id: string }>(
       `insert into lumen.clinical_records (
          tenant_id, encounter_id, dictation_id, status, content, provider, model
        ) values ($1, $2, $3, 'draft', $4::jsonb, 'manual', 'manual')
@@ -171,11 +175,11 @@ describeIntegration("LUMEN autonomous projection persistence", () => {
         JSON.stringify({ reasonForVisit: "Control sintético", uncertainties: [] })
       ]
     );
-    await db.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
+    await fixtureDb.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
       tenantId,
       encounterId
     ]);
-    await db.query(
+    await fixtureDb.query(
       `update lumen.clinical_records
        set status = 'approved', approved_by = $3, approved_at = now(), updated_at = now()
        where tenant_id = $1 and id = $2`,

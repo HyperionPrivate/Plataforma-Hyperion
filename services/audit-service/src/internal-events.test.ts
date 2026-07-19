@@ -5,6 +5,7 @@ import { registerRoutes } from "./app.js";
 const SOFIA_TOKEN = "test-sofia-to-audit-token";
 const LUMEN_TOKEN = "test-lumen-to-audit-token";
 const CHANNEL_TOKEN = "test-channel-to-audit-token";
+const NOVA_TOKEN = "test-nova-to-audit-token";
 const EVENT_ID = "11111111-1111-4111-8111-111111111111";
 const TENANT_ID = "22222222-2222-4222-8222-222222222222";
 const OTHER_TENANT_ID = "33333333-3333-4333-8333-333333333333";
@@ -132,6 +133,7 @@ describe("POST /internal/v1/events", () => {
     process.env.SOFIA_TO_AUDIT_TOKEN = SOFIA_TOKEN;
     process.env.LUMEN_TO_AUDIT_TOKEN = LUMEN_TOKEN;
     process.env.CHANNEL_TO_AUDIT_TOKEN = CHANNEL_TOKEN;
+    process.env.NOVA_TO_AUDIT_TOKEN = NOVA_TOKEN;
     database = new FakeTransactionalDatabase();
     const handle = await createService({
       serviceName: "audit-service",
@@ -148,6 +150,7 @@ describe("POST /internal/v1/events", () => {
     delete process.env.SOFIA_TO_AUDIT_TOKEN;
     delete process.env.LUMEN_TO_AUDIT_TOKEN;
     delete process.env.CHANNEL_TO_AUDIT_TOKEN;
+    delete process.env.NOVA_TO_AUDIT_TOKEN;
   });
 
   it("requires the configured internal bearer token before touching the database", async () => {
@@ -246,6 +249,59 @@ describe("POST /internal/v1/events", () => {
       eventType: "channel.audit.event.record.v1"
     });
     expect(database.auditEvents).toHaveLength(1);
+  });
+
+  it("accepts the NOVA provider contract only from nova-core and records a replay once", async () => {
+    const novaEnvelope = {
+      ...buildEnvelope(),
+      type: "nova.audit.event.record.v1",
+      payload: {
+        tenantId: TENANT_ID,
+        actorId: "nova-core-service",
+        eventType: "contact.imported",
+        entityType: "contact",
+        entityId: "44444444-4444-4444-8444-444444444444",
+        metadata: { correlationId: "55555555-5555-4555-8555-555555555555" }
+      }
+    };
+
+    const first = await postEvent(app, novaEnvelope, "nova-core-service", NOVA_TOKEN);
+    const replay = await postEvent(app, novaEnvelope, "nova-core-service", NOVA_TOKEN);
+
+    expect(first.statusCode).toBe(201);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data).toEqual({ status: "duplicate", eventId: EVENT_ID });
+    expect(database.inboxEvents.get(EVENT_ID)).toMatchObject({
+      sourceService: "nova-core-service",
+      eventType: "nova.audit.event.record.v1"
+    });
+    expect(database.auditEvents).toHaveLength(1);
+    expect(database.auditEvents[0]).toMatchObject({
+      event_type: "contact.imported",
+      entity_type: "contact",
+      source_event_id: EVENT_ID
+    });
+  });
+
+  it("rejects a NOVA token paired with another producer contract", async () => {
+    const response = await postEvent(app, buildEnvelope(), "nova-core-service", NOVA_TOKEN);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().data.issues).toContain("type does not belong to nova-core-service");
+    expect(database.transactionCount).toBe(0);
+  });
+
+  it("rejects the NOVA contract from another authorized producer", async () => {
+    const response = await postEvent(
+      app,
+      { ...buildEnvelope(), type: "nova.audit.event.record.v1" },
+      "agent-service",
+      SOFIA_TOKEN
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().data.issues).toContain("type does not belong to sofia-automation");
+    expect(database.transactionCount).toBe(0);
   });
 
   it("derives direct-write provenance from the authenticated Sofía caller", async () => {

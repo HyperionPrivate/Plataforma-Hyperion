@@ -2,17 +2,20 @@ import { randomUUID } from "node:crypto";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensureAgendaSettingsExist } from "./agenda-settings.js";
 import type { EmitAuditEventInput } from "./audit-client.js";
 import { registerSofiaToolRoutes } from "./sofia-tools-routes.js";
 
 const { Client } = pg;
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 const INTERNAL_TOKEN = "controlled-internal-test-token";
 
 describeIntegration("SOFIA internal agenda tools", () => {
   let app: ServiceHandle["app"];
   let client: pg.Client;
+  let fixtureClient: pg.Client;
   let tenantId = "";
   let otherTenantId = "";
   let bindingId = "";
@@ -32,8 +35,10 @@ describeIntegration("SOFIA internal agenda tools", () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
     process.env.SOFIA_TO_PULSO_TOKEN = INTERNAL_TOKEN;
     client = new Client({ connectionString: TEST_DATABASE_URL });
+    fixtureClient = new Client({ connectionString: TEST_PULSO_FIXTURE_DATABASE_URL });
     await client.connect();
-    const fixtures = await createFixtures(client);
+    await fixtureClient.connect();
+    const fixtures = await createFixtures(client, fixtureClient);
     ({ tenantId, otherTenantId, bindingId, siteId, professionalId, payerId, appointmentTypeId, scheduledAt } =
       fixtures);
     const service = await createService({
@@ -52,7 +57,7 @@ describeIntegration("SOFIA internal agenda tools", () => {
           },
           {
             async getThread(lookupTenantId, threadBindingId) {
-              const result = await client.query<{
+              const result = await fixtureClient.query<{
                 id: string;
                 patientId: string | null;
                 conversationId: string | null;
@@ -68,30 +73,30 @@ describeIntegration("SOFIA internal agenda tools", () => {
               return row;
             },
             async bindThread(lookupTenantId, threadBindingId, input) {
-              await client.query("begin");
+              await fixtureClient.query("begin");
               try {
-                const binding = await client.query(
+                const binding = await fixtureClient.query(
                   `select id from channel_runtime.thread_bindings where tenant_id = $1 and id = $2 for update`,
                   [lookupTenantId, threadBindingId]
                 );
                 if (!binding.rows[0]) {
                   throw Object.assign(new Error("thread_binding_not_found"), { statusCode: 404 });
                 }
-                await client.query(
+                await fixtureClient.query(
                   `update channel_runtime.thread_bindings
                    set patient_id = $3, conversation_id = $4, last_inbound_at = now(), updated_at = now()
                    where tenant_id = $1 and id = $2`,
                   [lookupTenantId, threadBindingId, input.patientId, input.conversationId]
                 );
-                await client.query(
+                await fixtureClient.query(
                   `update channel_runtime.inbound_events
                    set thread_binding_id = $3, message_id = $4, updated_at = now()
                    where tenant_id = $1 and external_message_id = $2 and provider = 'whatsapp_web_test'`,
                   [lookupTenantId, input.externalMessageId, threadBindingId, input.messageId]
                 );
-                await client.query("commit");
+                await fixtureClient.query("commit");
               } catch (error) {
-                await client.query("rollback");
+                await fixtureClient.query("rollback");
                 throw error;
               }
             }
@@ -105,9 +110,14 @@ describeIntegration("SOFIA internal agenda tools", () => {
   afterAll(async () => {
     await app?.close();
     if (client) {
-      if (tenantId)
-        await client.query("delete from platform.tenants where id = any($1::uuid[])", [[tenantId, otherTenantId]]);
       await client.end();
+    }
+    if (fixtureClient) {
+      if (tenantId)
+        await fixtureClient.query("delete from platform.tenants where id = any($1::uuid[])", [
+          [tenantId, otherTenantId]
+        ]);
+      await fixtureClient.end();
     }
     delete process.env.DATABASE_URL;
     delete process.env.SOFIA_TO_PULSO_TOKEN;
@@ -603,19 +613,20 @@ function internalHeaders() {
   };
 }
 
-async function createFixtures(client: pg.Client) {
+async function createFixtures(client: pg.Client, fixtureClient: pg.Client) {
   const tenantId = (
-    await client.query<{ id: string }>(
+    await fixtureClient.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name) values ($1, 'SOFIA tools tenant') returning id`,
       [`sofia-tools-${randomUUID()}`]
     )
   ).rows[0]!.id;
   const otherTenantId = (
-    await client.query<{ id: string }>(
+    await fixtureClient.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name) values ($1, 'Other SOFIA tenant') returning id`,
       [`sofia-tools-other-${randomUUID()}`]
     )
   ).rows[0]!.id;
+  await ensureAgendaSettingsExist(client, tenantId);
   await client.query(
     `update pulso_iris.agenda_settings
      set mode = 'internal', external_reference_required = false, booking_horizon_days = 60, status = 'active'
@@ -623,13 +634,13 @@ async function createFixtures(client: pg.Client) {
     [tenantId]
   );
   const siteId = (
-    await client.query<{ id: string }>(
+    await fixtureClient.query<{ id: string }>(
       `insert into pulso_iris.sites (tenant_id, name, city) values ($1, 'Sede controlada', 'Prueba') returning id`,
       [tenantId]
     )
   ).rows[0]!.id;
   const professionalId = (
-    await client.query<{ id: string }>(
+    await fixtureClient.query<{ id: string }>(
       `insert into pulso_iris.professionals
          (tenant_id, name, professional_type, subspecialty, is_pilot)
        values ($1, 'Agenda piloto controlada', 'optometrist', 'Prueba', true) returning id`,
@@ -671,13 +682,13 @@ async function createFixtures(client: pg.Client) {
     [tenantId, siteId, professionalId, appointmentTypeId, slot.getUTCDay(), date]
   );
   const connectionId = (
-    await client.query<{ id: string }>(
+    await fixtureClient.query<{ id: string }>(
       `insert into channel_runtime.connections (tenant_id, state) values ($1, 'ready') returning id`,
       [tenantId]
     )
   ).rows[0]!.id;
   const bindingId = (
-    await client.query<{ id: string }>(
+    await fixtureClient.query<{ id: string }>(
       `insert into channel_runtime.thread_bindings
          (tenant_id, connection_id, provider, external_thread_id, phone_e164_hash, phone_masked)
        values ($1, $2, 'whatsapp_web_test', 'controlled@s.whatsapp.net', $3, '********4567') returning id`,

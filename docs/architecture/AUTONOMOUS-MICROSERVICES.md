@@ -2,15 +2,18 @@
 
 ## Estado y objetivo
 
-Hyperion conserva el monorepo, pero evoluciona desde servicios que comparten base de datos hacia contextos
-capaces de desplegarse, autorizar, migrar, respaldar y restaurarse de forma independiente. Un directorio o un
-puerto no constituye por si solo un microservicio: el propietario de un dato es el unico que puede consultarlo
-o modificarlo directamente. Los demas contextos usan contratos HTTP o eventos versionados.
+Hyperion usa el monorepo como etapa de transición mientras evoluciona desde servicios que comparten base de datos
+hacia células capaces de construir, desplegar, autorizar, migrar, respaldar y restaurarse de forma independiente.
+El destino es un repositorio por producto más un plano neutral mínimo de plataforma. Un directorio o un puerto no
+constituye por sí solo un microservicio: el propietario de un dato es el único que puede consultarlo o modificarlo
+directamente. Los demás contextos usan contratos HTTP o eventos versionados.
 
-Un producto comercial tampoco equivale necesariamente a un unico runtime. PULSO IRIS incluye la capacidad
-SOFIA, aunque `sofia-automation` mantiene un limite tecnico independiente; LUMEN si coincide con un contexto de
-producto propio. La regla completa esta en
-[`ADR-0001`](decisions/ADR-0001-product-service-boundaries.md) y el alcance verificable en
+Un producto comercial tampoco equivale necesariamente a un único runtime. NOVA contiene core, Voice, LIWA y
+Documents. PULSO IRIS incluye SOFÍA, Prompt Flow, Knowledge, Integration y WhatsApp, aunque esas capacidades
+mantengan límites técnicos separados. LUMEN coincide por ahora con un contexto de producto propio. Access/SSO,
+aprovisionamiento y Audit asíncrono forman el plano neutral. Las reglas completas están en
+[`ADR-0001`](decisions/ADR-0001-product-service-boundaries.md) y
+[`ADR-0006`](decisions/ADR-0006-federated-product-cells.md); el alcance verificable está en
 [`docs/products`](../products/README.md).
 
 La migracion es incremental. La deuda actual queda registrada en
@@ -19,21 +22,33 @@ Cada dependencia retirada debe eliminar su entrada del baseline en el mismo camb
 
 ## Contextos delimitados
 
-| Contexto              | Implementacion de transicion | Responsabilidad y datos propios                                                                      |
-| --------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `edge-gateway`        | `apps/api-gateway`           | Entrada publica, autenticacion de borde, cuotas y enrutamiento; sin datos de dominio.                |
-| `access`              | Identity + Tenant            | Tenants, operadores, sesiones, membresias, roles y productos habilitados.                            |
-| `pulso-core`          | PULSO IRIS                   | Pacientes administrativos, agenda, citas, conversaciones, mensajes, handoffs y operacion RPA actual. |
-| `sofia-automation`    | Agent + Prompt Flow          | Capacidad de PULSO IRIS: agentes, prompts, jobs, ejecuciones y estado privado de SOFIA.              |
-| `channel`             | WhatsApp Channel             | Conexiones, eventos inbound, mensajes outbound, bindings y comprobantes de entrega.                  |
-| `lumen`               | LUMEN                        | Encuentros, dictados, historias clinicas, resumenes y procesamiento de audio.                        |
-| `knowledge`           | Knowledge                    | Fuentes, corpus, ingestas, versiones y retrieval.                                                    |
-| `audit`               | Audit                        | Ledger append-only y evidencia durable recibida por contratos.                                       |
-| `integration-adapter` | Integration                  | Adaptadores externos durante la transicion; RPA se separa cuando exista un worker real.              |
-| `migration-control`   | Migrations                   | Historial tecnico de migraciones; no es una API de dominio.                                          |
+| Contexto              | Célula objetivo | Implementación de transición | Responsabilidad y datos propios                                                               |
+| --------------------- | --------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `edge-gateway`        | Compatibilidad  | `apps/api-gateway`           | Fachada temporal; el destino es routing por hostname sin lógica de dominio.                   |
+| `access`              | Plataforma      | Identity + Tenant            | Tenants, operadores, sesiones, membresías, grants y productos habilitados.                    |
+| `audit`               | Plataforma      | Audit                        | Ledger append-only y evidencia durable consumida de forma asíncrona.                          |
+| `pulso-core`          | PULSO IRIS      | PULSO IRIS                   | Pacientes administrativos, agenda, citas, conversaciones, mensajes, handoffs y operación RPA. |
+| `sofia-automation`    | PULSO IRIS      | Agent + Prompt Flow          | Agentes, prompts, jobs, ejecuciones y estado privado de SOFÍA.                                |
+| `channel`             | PULSO IRIS      | WhatsApp Channel             | Conexiones, eventos inbound, mensajes outbound, bindings y comprobantes de entrega.           |
+| `knowledge`           | PULSO IRIS      | Knowledge                    | Fuentes, corpus, ingestas, versiones y retrieval.                                             |
+| `integration-adapter` | PULSO IRIS      | Integration                  | Adaptadores externos durante la transición.                                                   |
+| `lumen`               | LUMEN           | LUMEN                        | Encuentros, dictados, historias clínicas, resúmenes y procesamiento de audio.                 |
+| `nova-core`           | NOVA            | NOVA Core                    | Contactos, campañas, compliance, segmentación, handoffs y analytics.                          |
+| `voice`               | NOVA            | Voice Channel                | Estado de llamadas y adaptación exclusiva hacia Neutral Dialer v3.                            |
+| `liwa`                | NOVA            | LIWA Channel                 | Mensajería, bindings y webhooks del proveedor LIWA.                                           |
+| `documents`           | NOVA            | Documents                    | Metadatos, referencias y almacenamiento de documentos.                                        |
+| `migration-control`   | Compatibilidad  | Migrations                   | Cadena global `001–046`, congelada para binarios y ventanas N/N−1.                            |
+| `pulso-migration`     | PULSO IRIS      | PULSO Migrations             | Base lógica, catálogo estructural, ledger, versión y roles provider-owned.                    |
 
 No se divide `pulso-core` por tablas. Solo se extrae un subdominio cuando tenga contrato, datos, pruebas,
-operacion y restauracion independientes. `integration-service` deja progresivamente de ser un agregador SQL.
+operación y restauración independientes. `integration-service` consume la readiness de agenda mediante la API
+propietaria de PULSO y la de workers/prompts mediante la API de SOFÍA, sin SQL cruzado ni fallback. SOFÍA también
+dejó de leer y escribir por SQL los pacientes, conversaciones y mensajes de PULSO: el runtime current usa rutas
+internas autenticadas del propietario.
+Voice, LIWA y Documents permanecen en NOVA mientras no exista un segundo consumidor real; Knowledge,
+Integration y WhatsApp permanecen en PULSO bajo la misma regla. Neutral Dialer v3 es externo y solo Voice lo
+consume. Las consolas y BFF se separan por célula según ADR-0006; la administración neutral no incluye flujos de
+producto.
 
 ## Propiedad de tablas
 
@@ -41,17 +56,21 @@ La fuente normativa y legible por herramientas es [`data-ownership.json`](data-o
 nueva de un esquema administrado debe agregarse alli en el mismo cambio que su migracion. Las funciones y
 procedimientos invocables por SQL tambien tienen propietario para impedir que se usen como acceso lateral.
 
-| Propietario           | Tablas                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------ |
-| `access`              | `platform.tenants`, `operators`, `operator_sessions`, `operator_tenants`, `products` |
-| `sofia-automation`    | `platform.agents`, `prompt_flows`; `agent_runtime.jobs`, `executions`                |
-| `knowledge`           | `platform.knowledge_sources`                                                         |
-| `audit`               | `platform.audit_events`                                                              |
-| `integration-adapter` | `platform.integrations`                                                              |
-| `pulso-core`          | Todas las tablas `pulso_iris.*` declaradas en el inventario JSON                     |
-| `channel`             | Todas las tablas `channel_runtime.*` declaradas en el inventario JSON                |
-| `lumen`               | Todas las tablas `lumen.*` declaradas en el inventario JSON                          |
-| `migration-control`   | `platform.schema_migrations`                                                         |
+| Propietario           | Tablas                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| `access`              | `platform.tenants`, `operators`, `operator_sessions`, `operator_tenants`, `products`  |
+| `sofia-automation`    | `platform.agents`, `prompt_flows`; tablas `agent_runtime.*`, incluido su marker local |
+| `knowledge`           | `platform.knowledge_sources`                                                          |
+| `audit`               | `platform.audit_events`                                                               |
+| `integration-adapter` | `platform.integrations`                                                               |
+| `pulso-core`          | Dominio y control provider-owned (`pulso_iris.*`) declarados en el inventario JSON    |
+| `channel`             | Todas las tablas `channel_runtime.*` declaradas en el inventario JSON                 |
+| `lumen`               | Todas las tablas `lumen.*` declaradas en el inventario JSON                           |
+| `nova-core`           | Todas las tablas `nova.*` declaradas en el inventario JSON                            |
+| `voice`               | Todas las tablas `voice.*` declaradas en el inventario JSON                           |
+| `liwa`                | Todas las tablas `liwa.*` declaradas en el inventario JSON                            |
+| `documents`           | Todas las tablas `documents.*` declaradas en el inventario JSON                       |
+| `migration-control`   | `platform.schema_migrations` (sólo compatibilidad heredada)                           |
 
 Reglas objetivo para código nuevo. La deuda heredada que todavía las incumple
 permanece inventariada explícitamente en el baseline y no se presenta como
@@ -60,17 +79,36 @@ aislamiento ya completado:
 - Solo el propietario ejecuta SQL sobre una tabla de dominio.
 - No se crean FKs, vistas ni triggers entre propietarios. Se conservan identificadores externos sin FK.
 - Cada contexto termina con base logica, usuario y migraciones propios; inicialmente pueden compartir cluster.
-- Los paquetes compartidos contienen contratos y runtime tecnico, nunca repositorios ni modelos de persistencia.
+- Los contratos son propiedad del proveedor y se publican por plataforma, Audit o producto con SemVer y soporte
+  N/N-1; ningún paquete obliga a conocer el catálogo completo.
+- Cada build e imagen contiene solo la clausura del componente. No se admite `pnpm -r build` en Docker ni un
+  contexto de NOVA con fuentes de PULSO o LUMEN.
 - Un cambio incompatible usa contratos N/N-1 y una migracion expandir/migrar/contraer.
 
-La primera barrera de ejecucion ya existe aunque el cluster siga compartido: las migraciones crean o desactivan
-como `NOLOGIN` las identidades PostgreSQL por contexto y validan toda la matriz; sólo después un bootstrap
-transaccional activa los ocho roles juntos. Cada runtime verifica tanto `current_user` como `session_user` antes
-de registrar rutas o workers y depende del éxito de ese bootstrap. Solo `db-role-bootstrap` y `migrations`
-conservan la conexion administrativa. La matriz vigente y su deuda transicional estan en
-[`POSTGRESQL-SERVICE-ROLES.md`](POSTGRESQL-SERVICE-ROLES.md).
+La primera barrera de ejecución ya existe aunque el clúster físico pueda seguir compartido: las migraciones crean
+o desactivan como `NOLOGIN` las identidades PostgreSQL por célula y validan toda la matriz; sólo después un
+bootstrap transaccional activa las identidades declaradas juntas. Cada runtime verifica tanto `current_user` como
+`session_user` antes de registrar rutas o workers y depende del éxito de ese bootstrap. La URL administrativa se
+limita a los one-shots de base y roles; cada runner provider-owned migra con su owner restringido.
+
+PULSO define `hyperion_pulso` como base lógica, `hyperion_pulso_migrator` como owner y cinco roles runtime. Agent y
+Prompt Flow validan el marcador owner-owned `agent_runtime.schema_version`; los otros cuatro servicios con base de
+datos continúan sobre `pulso_iris.schema_version`. El grant de lectura del marcador global para `hyperion_sofia`
+permanece de forma explícita y temporal para imágenes N−1, no como dependencia del runtime current. La matriz
+vigente y la distinción frente al stack de
+compatibilidad están en [`POSTGRESQL-SERVICE-ROLES.md`](POSTGRESQL-SERVICE-ROLES.md).
 El ledger Audit conserva `tenant_id` como identificador externo sin FK a Access; borrar un tenant no reescribe
 la evidencia historica.
+
+Access tampoco inicializa datos de producto al crear tenants. La migración provider-owned de plataforma retira
+`trg_initialize_agenda_settings`; PULSO materializa sus defaults de agenda de forma idempotente en el primer uso
+autorizado. Así, la escritura Access ya no ejecuta un trigger ni una función que conozca `pulso_iris`.
+
+La clausura de build PULSO se materializa desde una allowlist que incluye únicamente sus apps, seis servicios y
+paquetes transitivos autorizados. `infra/docker-compose.pulso.yml` ordena PostgreSQL → tres one-shots → runtimes →
+BFF → consola, usa URLs externas para Access/Audit y no declara servicios NOVA o LUMEN. Esta topología es evidencia
+versionada de separación dentro del monorepo; no sustituye el cutover, un drill de backup/restore ni la extracción
+con historial a otro repositorio.
 
 El runner fija por defecto `lock_timeout=10000ms` y `statement_timeout=300000ms`; ambos presupuestos se ajustan
 con `MIGRATION_LOCK_TIMEOUT_MS` y `MIGRATION_STATEMENT_TIMEOUT_MS`. Las migraciones que requieren operaciones
@@ -129,9 +167,10 @@ La migración 038 protege además escritores v1 durables de la transición: sus 
 posiciones desde los ledgers propietarios, comparan cualquier valor suministrado y fallan ante ausencia, versión o
 correlación incoherente. Son una excepción temporal explícita: funciones de trigger acotadas leen el ledger Channel
 desde PULSO y el ledger PULSO desde SOFÍA, sin conceder `SELECT` cruzado a los roles. Deben retirarse cuando ninguna
-revisión soportada emita v1. La barrera automática inventaría las rutinas y el SQL literal de runtime/FK, pero no
-interpreta sus cuerpos PL/pgSQL; por eso esta excepción requiere revisión manual mientras exista. Esta excepción de
-adaptadores v1 durables es distinta de las ventanas SQL directas y columnares que necesita exclusivamente la base
+revisión soportada emita v1. La barrera automática interpreta los cuerpos PL/pgSQL literales, triggers y
+`SECURITY DEFINER`: las excepciones de la cadena global 038 son temporales y los mismos adaptadores del baseline
+provider-owned PULSO permanecen visibles como DEBT-029–DEBT-031. El SQL dinámico requiere además política
+fail-closed y revisión manual. Esta excepción de adaptadores v1 durables es distinta de las ventanas SQL directas y columnares que necesita exclusivamente la base
 histórica pre-durable durante su polling y delivery N-1.
 
 Este recorrido N-1 cubre sólo el transporte HTTP; no demuestra mensajes JetStream pendientes entre binarios ni
@@ -212,9 +251,10 @@ Sobre de evento minimo y versionado:
 }
 ```
 
-El payload contiene el mínimo necesario para el handoff; eso no implica autonomía completa mientras persistan las
-consultas SQL transicionales inventariadas en `PUL-211`. Un cuerpo de mensaje puede viajar de Channel a PULSO porque
-PULSO es su propietario de negocio; no se transportan transcripts ni historias clínicas, y se prefiere un
+El payload contiene el mínimo necesario para el handoff. El runtime current ya cerró el SQL SOFÍA → PULSO, pero
+eso no implica autonomía operativa completa mientras el stack global, los adaptadores N/N−1 y el cutover de datos
+sigan pendientes. Un cuerpo de mensaje puede viajar de Channel a PULSO porque PULSO es su propietario de negocio;
+no se transportan transcripts ni historias clínicas, y se prefiere un
 identificador cuando existe una consulta autorizada y durable. Cada consumidor valida tipo, versión, tenant,
 caller/destino autorizados, tamaño e idempotencia. Al alcanzar el umbral de reintentos, el consumidor persiste
 primero una copia minima en DLQ y solo entonces termina el original. La alerta operativa y el redrive auditado
@@ -223,11 +263,11 @@ siguen pendientes antes de considerar este transporte apto para produccion.
 ### JetStream opt-in
 
 El overlay [`infra/docker-compose.jetstream.yml`](../../infra/docker-compose.jetstream.yml) fija NATS Server
-`2.14.3`, activa almacenamiento JetStream y exige seis passwords distintos: administracion de topologia,
-Channel, PULSO, SOFIA, Audit y LUMEN. Las credenciales no viajan en `NATS_URL` y token/password son mecanismos
+`2.14.3`, activa almacenamiento JetStream y exige siete passwords distintos: administracion de topologia,
+Access, Channel, PULSO, SOFIA, Audit y LUMEN. Las credenciales no viajan en `NATS_URL` y token/password son mecanismos
 mutuamente excluyentes. No publica puertos al host.
 
-`jetstream-topology-bootstrap` usa una imagen minima, crea el stream y trece durables administrados: diez
+`jetstream-topology-bootstrap` usa una imagen minima, crea el stream y catorce durables administrados: once
 activos, dos temporales de compatibilidad v1 para Channel/PULSO y uno de drenaje legado de Audit. Luego valida
 drift y sale.
 Las aplicaciones esperan su exito, se enlazan con `provisionTopology=false` y no reciben permisos CREATE/UPDATE.
@@ -248,7 +288,7 @@ un unico tipo, usa ACK explicito y procesa un mensaje a la vez. Los productores 
 `msgID = event.id` y solo completan su outbox despues del ACK de persistencia del servidor.
 
 ```powershell
-# Provisionar primero los seis NATS_*_PASSWORD distintos en .env; crean trece durables administrados.
+# Provisionar primero los siete NATS_*_PASSWORD distintos en .env; crean catorce durables administrados.
 docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml up --build
 ```
 

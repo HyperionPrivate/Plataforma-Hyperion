@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hyperion federated release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "cell",
+    "catalogVersion",
+    "releaseVersion",
+    "status",
+    "generatedAt",
+    "imagesVerified",
+    "components"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "../../schemas/release-manifest.schema.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "cell": {
+      "enum": ["platform", "nova", "lumen", "pulso"]
+    },
+    "catalogVersion": {
+      "$ref": "#/$defs/semver"
+    },
+    "releaseVersion": {
+      "$ref": "#/$defs/semver"
+    },
+    "status": {
+      "enum": ["draft", "published"]
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "releasedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceRevision": {
+      "type": "string",
+      "pattern": "^(?!0{40}$)[0-9a-f]{40}$"
+    },
+    "imagesVerified": {
+      "type": "boolean"
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/component"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "const": "published"
+          }
+        }
+      },
+      "then": {
+        "required": ["releasedAt", "sourceRevision"],
+        "properties": {
+          "imagesVerified": {
+            "const": true
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]*)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$"
+        },
+        "package": {
+          "type": "string",
+          "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["image"],
+          "not": {
+            "required": ["package"]
+          }
+        },
+        {
+          "required": ["package"],
+          "not": {
+            "required": ["image"]
+          }
+        }
+      ]
+    }
+  }
+}

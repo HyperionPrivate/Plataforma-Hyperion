@@ -318,6 +318,7 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
             "x-hyperion-worker-id": this.workerId
           },
           body,
+          redirect: "error",
           signal: controller.signal
         })
       )
