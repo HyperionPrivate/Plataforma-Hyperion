@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS nova-source
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS nova-source
 
 WORKDIR /app
 
@@ -65,7 +65,7 @@ COPY services/documents-service services/documents-service
 RUN pnpm install --frozen-lockfile --filter "@hyperion/documents-service..." \
   && pnpm --filter "@hyperion/documents-service..." build
 
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS nova-bff
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS nova-bff
 
 WORKDIR /app
 
@@ -92,7 +92,7 @@ EXPOSE 8095
 
 CMD ["node", "apps/nova-bff/dist/index.js"]
 
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS nova-service-runtime-source
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS nova-service-runtime-source
 
 WORKDIR /app
 
@@ -197,7 +197,7 @@ EXPOSE 8094
 
 CMD ["node", "services/documents-service/dist/index.js"]
 
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS nova-migrations
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS nova-migrations
 
 WORKDIR /app
 
