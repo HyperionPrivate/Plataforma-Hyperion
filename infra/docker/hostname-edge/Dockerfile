@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS hostname-edge
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:a718212f9cf21e241f14067333000a3f0930292f5354fe0db269e9a2a2596b9e AS hostname-edge
 
 # These defaults are intentionally local/non-routable. Production DNS and TLS
 # termination live outside this provider-neutral routing layer.
