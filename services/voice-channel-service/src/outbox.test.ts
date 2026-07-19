@@ -15,3 +15,18 @@ describe("PostgresVoiceOutbox.fail", () => {
     expect(params).toEqual(["22222222-2222-4222-8222-222222222222", "voice-worker", "webhook_delivery_failed"]);
   });
 });
+
+describe("PostgresVoiceOutbox.claim", () => {
+  it("reclaims an expired dispatching lease after a worker crash", async () => {
+    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const outbox = new PostgresVoiceOutbox({ query } as never, "replacement-worker");
+
+    await outbox.claim(10);
+
+    const [sql, params] = query.mock.calls[0]! as unknown as [string, unknown[]];
+    expect(sql).toMatch(/status = 'pending' and available_at <= now\(\)/i);
+    expect(sql).toMatch(/status = 'dispatching' and locked_at < now\(\) - interval '2 minutes'/i);
+    expect(sql).toMatch(/for update skip locked/i);
+    expect(params).toEqual(["replacement-worker", 10]);
+  });
+});

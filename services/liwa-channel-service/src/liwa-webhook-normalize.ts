@@ -42,7 +42,6 @@ export interface NormalizedLiwaPayload {
   phone: string;
   contactId?: string;
   externalId: string;
-  tenantIdHint?: string;
   ciudad?: string;
   agencia?: string;
   agencyTag?: string;
@@ -182,7 +181,6 @@ export function normalizeLiwaPayload(raw: Record<string, unknown>): NormalizedLi
     phone,
     contactId,
     externalId,
-    tenantIdHint: String(body.tenant_id ?? "").trim() || undefined,
     ciudad,
     agencia,
     agencyTag: geo.tag,

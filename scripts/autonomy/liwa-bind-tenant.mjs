@@ -4,19 +4,23 @@
  * Prints SQL (always). If DATABASE_URL is set and `psql` is on PATH, executes it.
  *
  * Uso:
- *   LIWA_BIND_TENANT_ID=<uuid> node scripts/autonomy/liwa-bind-tenant.mjs
- *   DATABASE_URL=postgres://... LIWA_BIND_TENANT_ID=<uuid> node scripts/autonomy/liwa-bind-tenant.mjs
+ *   LIWA_ACCOUNT_ID=<account> LIWA_BIND_TENANT_ID=<uuid> node scripts/autonomy/liwa-bind-tenant.mjs
+ *   DATABASE_URL=postgres://... LIWA_ACCOUNT_ID=<account> LIWA_BIND_TENANT_ID=<uuid> node scripts/autonomy/liwa-bind-tenant.mjs
  */
 
 import { spawnSync } from "node:child_process";
 
-const accountId = (process.env.LIWA_ACCOUNT_ID ?? "1656233").trim();
-const tenantId = (process.env.LIWA_BIND_TENANT_ID ?? process.env.LIWA_WEBHOOK_DEFAULT_TENANT_ID ?? "").trim();
+const accountId = (process.env.LIWA_ACCOUNT_ID ?? "").trim();
+const tenantId = (process.env.LIWA_BIND_TENANT_ID ?? "").trim();
 const defaultAgency = (process.env.LIWA_DEFAULT_AGENCY_CODE ?? "BGA").trim();
 const databaseUrl = process.env.DATABASE_URL?.trim();
 
-if (!tenantId) {
-  console.error("LIWA_BIND_TENANT_ID (tenant UUID) is required");
+if (!accountId) {
+  console.error("LIWA_ACCOUNT_ID is required");
+  process.exit(64);
+}
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantId)) {
+  console.error("LIWA_BIND_TENANT_ID must be a tenant UUID");
   process.exit(64);
 }
 

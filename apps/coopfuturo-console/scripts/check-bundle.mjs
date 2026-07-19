@@ -66,7 +66,6 @@ export const COOPFUTURO_NEXT_POLICY = Object.freeze({
     "/conversaciones",
     "/crm",
     "/dashboard",
-    "/dev/kit",
     "/favicon.ico",
     "/handoff",
     "/importar",

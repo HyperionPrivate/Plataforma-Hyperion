@@ -78,7 +78,6 @@ function ConsoleShell({ session, onLogout }: { session: PulsoSession; onLogout: 
     }
     api
       .get<PulsoIrisSite[]>(tenantPath(selected.id, "config/sites"))
-      .catch(() => [])
       .then((rows) => {
         if (!active) return;
         setTenant(selected);
@@ -86,8 +85,15 @@ function ConsoleShell({ session, onLogout }: { session: PulsoSession; onLogout: 
         setReady(true);
       })
       .catch((reason) => {
+        if (!active) return;
         if (reason instanceof SessionExpiredError) onLogout();
-        else setReady(true);
+        else {
+          // Preserve the valid product grant when the optional site catalog is
+          // temporarily unavailable; the shell can still render with no sites.
+          setTenant(selected);
+          setSites([]);
+          setReady(true);
+        }
       });
     return () => {
       active = false;

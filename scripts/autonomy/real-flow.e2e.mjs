@@ -71,7 +71,7 @@ async function run() {
   const channelDb = createDatabase(channelDatabaseUrl);
   const pulsoDb = createDatabase(pulsoDatabaseUrl);
   const sofiaDb = createDatabase(serviceDatabaseUrl(configuration, "hyperion_sofia", "SOFIA_DATABASE_PASSWORD"));
-  const auditDb = createDatabase(serviceDatabaseUrl(configuration, "hyperion_audit", "AUDIT_DATABASE_PASSWORD"));
+  const auditDb = createDatabase(configuration.auditDatabaseUrl);
   const databases = [channelDb, pulsoDb, sofiaDb, auditDb, adminDb];
   const consumers = [];
   const dispatchers = [];
@@ -738,6 +738,22 @@ function readConfiguration(environment) {
     throw new Error("invalid_database_protocol");
   }
 
+  const auditDatabaseUrl = requiredEnvironment(environment, "TEST_AUDIT_DATABASE_URL");
+  const parsedAuditDatabaseUrl = safeUrl(auditDatabaseUrl, "TEST_AUDIT_DATABASE_URL");
+  if (
+    (parsedAuditDatabaseUrl.protocol !== "postgres:" && parsedAuditDatabaseUrl.protocol !== "postgresql:") ||
+    parsedAuditDatabaseUrl.username !== "hyperion_audit" ||
+    !/^[A-Za-z0-9._~-]{24,}$/.test(parsedAuditDatabaseUrl.password) ||
+    parsedAuditDatabaseUrl.pathname === "/"
+  ) {
+    throw new Error("invalid_audit_database_url");
+  }
+  const sharedDatabaseLocation = `${parsedDatabaseUrl.hostname.toLowerCase()}:${parsedDatabaseUrl.port || "5432"}${parsedDatabaseUrl.pathname}`;
+  const auditDatabaseLocation = `${parsedAuditDatabaseUrl.hostname.toLowerCase()}:${parsedAuditDatabaseUrl.port || "5432"}${parsedAuditDatabaseUrl.pathname}`;
+  if (auditDatabaseLocation === sharedDatabaseLocation) {
+    throw new Error("audit_database_must_be_logically_isolated");
+  }
+
   const natsUrl = requiredEnvironment(environment, "NATS_URL");
   const parsedNatsUrl = safeUrl(natsUrl, "NATS_URL");
   if (
@@ -761,18 +777,16 @@ function readConfiguration(environment) {
   assert.equal(new Set(Object.values(natsPasswords)).size, Object.keys(natsPasswords).length);
 
   const databasePasswords = [
-    "CHANNEL_DATABASE_PASSWORD",
-    "PULSO_DATABASE_PASSWORD",
-    "SOFIA_DATABASE_PASSWORD",
-    "AUDIT_DATABASE_PASSWORD"
-  ].map((name) => {
-    const password = requiredEnvironment(environment, name);
-    if (!/^[A-Za-z0-9._~-]{24,}$/.test(password)) throw new Error(`invalid_${name.toLowerCase()}`);
-    return password;
-  });
+    parsedAuditDatabaseUrl.password,
+    ...["CHANNEL_DATABASE_PASSWORD", "PULSO_DATABASE_PASSWORD", "SOFIA_DATABASE_PASSWORD"].map((name) => {
+      const password = requiredEnvironment(environment, name);
+      if (!/^[A-Za-z0-9._~-]{24,}$/.test(password)) throw new Error(`invalid_${name.toLowerCase()}`);
+      return password;
+    })
+  ];
   assert.equal(new Set(databasePasswords).size, databasePasswords.length);
 
-  return { adminDatabaseUrl, parsedDatabaseUrl, natsUrl, natsPasswords, environment };
+  return { adminDatabaseUrl, parsedDatabaseUrl, auditDatabaseUrl, natsUrl, natsPasswords, environment };
 }
 
 function serviceDatabaseUrl(configuration, role, passwordName) {

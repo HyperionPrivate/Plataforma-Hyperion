@@ -131,6 +131,20 @@ test("a shared package change follows reverse workspace dependencies", async () 
   }
 });
 
+test("the transitional global migrator exercises every cell until schema ownership is separated", async () => {
+  const root = await fixture();
+  try {
+    await packageAt(root, "packages/migrations", "@hyperion/migrations");
+    const impact = await resolveCellImpact(root, ["packages/migrations/src/service-database-roles.ts"]);
+    assert.deepEqual(impact.cells, { platform: true, nova: true, lumen: true, pulso: true });
+    for (const cell of Object.keys(impact.cells)) {
+      assert.match(impact.reasons[cell].join("\n"), /transitional global package @hyperion\/migrations/);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an undeclared internal import fails closed before calculating affected cells", async () => {
   const root = await fixture();
   try {

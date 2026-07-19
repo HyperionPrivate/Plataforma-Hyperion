@@ -8,6 +8,7 @@ const scriptPath = join(dirname(fileURLToPath(import.meta.url)), "real-flow.e2e.
 const source = readFileSync(scriptPath, "utf8");
 const workflowPath = join(dirname(fileURLToPath(import.meta.url)), "../../.github/workflows/check.yml");
 const workflow = readFileSync(workflowPath, "utf8");
+const liwaBindingSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "liwa-bind-tenant.mjs"), "utf8");
 
 test("autonomy E2E wires the real PULSO-to-Channel thread contract into the consumer", () => {
   assert.match(source, /import \{ createChannelThreadClient \} from/);
@@ -83,6 +84,22 @@ test("CI runs the real autonomy flow before destructive NATS ACL probes", () => 
   assert.ok(bootstrap < autonomy);
   assert.ok(autonomy < acl);
   assert.ok(acl < stop);
+});
+
+test("the real autonomy flow uses the provider-owned Audit database instead of the shared database", () => {
+  assert.match(source, /requiredEnvironment\(environment, "TEST_AUDIT_DATABASE_URL"\)/);
+  assert.match(source, /createDatabase\(configuration\.auditDatabaseUrl\)/);
+  assert.doesNotMatch(source, /serviceDatabaseUrl\(configuration, "hyperion_audit"/);
+  assert.match(source, /audit_database_must_be_logically_isolated/);
+  assert.match(source, /const databasePasswords = \[\s*parsedAuditDatabaseUrl\.password/);
+  assert.match(workflow, /TEST_AUDIT_DATABASE_URL=/);
+});
+
+test("LIWA tenant provisioning requires explicit account and tenant configuration", () => {
+  assert.match(liwaBindingSource, /process\.env\.LIWA_ACCOUNT_ID \?\? ""/);
+  assert.match(liwaBindingSource, /process\.env\.LIWA_BIND_TENANT_ID \?\? ""/);
+  assert.doesNotMatch(liwaBindingSource, /LIWA_WEBHOOK_DEFAULT_TENANT_ID|1656233/);
+  assert.match(liwaBindingSource, /LIWA_BIND_TENANT_ID must be a tenant UUID/);
 });
 
 test("autonomy E2E verifies Channel-owned binding fields before advancing the flow", () => {

@@ -1449,7 +1449,7 @@ export async function registerNovaRoutes(
 
     const handoffRow = handoff.rows[0];
     const handoffDetected = Boolean(handoffRow && ["queued", "claimed"].includes(handoffRow.status));
-    const accountId = process.env.LIWA_ACCOUNT_ID?.trim() || "1656233";
+    const accountId = process.env.LIWA_ACCOUNT_ID?.trim();
 
     return envelope(
       {
@@ -1468,7 +1468,7 @@ export async function registerNovaRoutes(
         live_chat: handoffDetected,
         mode: "nova_db",
         poll_liwa: false,
-        inbox_url: `https://chat.liwa.co/?acc=${accountId}`,
+        inbox_url: accountId ? `https://chat.liwa.co/?acc=${encodeURIComponent(accountId)}` : undefined,
         note: "Webhook-first: estado desde NOVA (no poll LIWA). Configure POST /v1/liwa/webhooks para sync en vivo."
       },
       request.id
@@ -1717,31 +1717,15 @@ export async function registerNovaRoutes(
     }
 
     const event = parsed.data;
-    const duplicate = await context.db.query(`select event_id from nova.inbox_events where event_id = $1`, [
-      event.event_id
-    ]);
-    if ((duplicate.rowCount ?? 0) > 0) {
-      return envelope({ status: "duplicate", event_id: event.event_id }, request.id);
+    try {
+      const status = await acceptNovaInboxEvent(context.db, event, serviceUrls);
+      return envelope({ status, event_id: event.event_id }, request.id);
+    } catch (error) {
+      if (error instanceof Error && error.message === "nova_inbox_event_conflict") {
+        return reply.code(409).send(envelope({ error: "Event idempotency identity conflict" }, request.id));
+      }
+      throw error;
     }
-
-    await context.db.query(
-      `insert into nova.inbox_events (event_id, event_type, tenant_id, correlation_id, business_idempotency_key, payload)
-       values ($1, $2, $3, $4, $5, $6::jsonb)`,
-      [
-        event.event_id,
-        event.event_type,
-        event.tenant_id,
-        event.correlation_id ?? randomUUID(),
-        event.business_idempotency_key,
-        JSON.stringify(event.payload)
-      ]
-    );
-
-    await processInboundEvent(context.db, event.tenant_id, event.event_type, event.payload, serviceUrls);
-
-    await context.db.query(`update nova.inbox_events set processed_at = now() where event_id = $1`, [event.event_id]);
-
-    return envelope({ status: "accepted", event_id: event.event_id }, request.id);
   });
 
   app.get("/v1/tenants/:tenantId/nova/outbox/dlq", async (request, reply) => {
@@ -1791,8 +1775,84 @@ export async function registerNovaRoutes(
   });
 }
 
-async function processInboundEvent(
+type NovaIngressEvent = z.infer<typeof novaIngressEventSchema>;
+
+/**
+ * Atomically claims, applies and marks a provider event. A crash rolls back
+ * both the inbox receipt and every domain effect, so a retry can safely resume.
+ */
+export async function acceptNovaInboxEvent(
   db: DatabaseClient,
+  event: NovaIngressEvent,
+  serviceUrls: ReturnType<typeof readServiceUrls>
+): Promise<"accepted" | "duplicate"> {
+  const correlationId = event.correlation_id ?? randomUUID();
+  const payload = JSON.stringify(event.payload);
+
+  return db.transaction(async (tx) => {
+    const inserted = await tx.query<{ eventId: string }>(
+      `insert into nova.inbox_events (
+         event_id, event_type, tenant_id, correlation_id, business_idempotency_key, payload
+       ) values ($1, $2, $3, $4, $5, $6::jsonb)
+       on conflict do nothing
+       returning event_id as "eventId"`,
+      [
+        event.event_id,
+        event.event_type,
+        event.tenant_id,
+        correlationId,
+        event.business_idempotency_key ?? null,
+        payload
+      ]
+    );
+
+    let inboxEventId = inserted.rows[0]?.eventId;
+    if (!inboxEventId) {
+      const existing = await tx.query<{
+        eventId: string;
+        identityMatches: boolean;
+        processedAt: Date | null;
+      }>(
+        `select event_id as "eventId",
+                processed_at as "processedAt",
+                (event_type = $2
+                  and tenant_id is not distinct from $3::uuid
+                  and business_idempotency_key is not distinct from $5::text
+                  and payload = $6::jsonb) as "identityMatches"
+           from nova.inbox_events
+          where event_id = $1
+             or ($5::text is not null and business_idempotency_key = $5::text)
+          order by (event_id = $1) desc
+          limit 1
+          for update`,
+        [
+          event.event_id,
+          event.event_type,
+          event.tenant_id,
+          correlationId,
+          event.business_idempotency_key ?? null,
+          payload
+        ]
+      );
+      const row = existing.rows[0];
+      if (!row?.identityMatches) throw new Error("nova_inbox_event_conflict");
+      if (row.processedAt) return "duplicate";
+      inboxEventId = row.eventId;
+    }
+
+    await processInboundEvent(tx, event.tenant_id, event.event_type, event.payload, serviceUrls);
+    await tx.query(
+      `update nova.inbox_events
+          set processed_at = now()
+        where event_id = $1 and processed_at is null`,
+      [inboxEventId]
+    );
+    return "accepted";
+  });
+}
+
+async function processInboundEvent(
+  db: DatabaseExecutor,
   tenantId: string,
   eventType: string,
   payload: Record<string, unknown>,
@@ -2067,7 +2127,7 @@ async function processInboundEvent(
 }
 
 async function upsertWhatsappConversation(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   tenantId: string,
   contactId: string,
   agencyCodeHint?: string
@@ -2105,7 +2165,7 @@ async function upsertWhatsappConversation(
 }
 
 async function insertConversationMessage(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   input: {
     tenantId: string;
     conversationId: string;
@@ -2149,7 +2209,7 @@ async function insertConversationMessage(
 }
 
 async function resolveContactId(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   tenantId: string,
   contactId?: string,
   contactRef?: string
@@ -2166,7 +2226,7 @@ async function resolveContactId(
 }
 
 async function ensureContactFromRef(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   tenantId: string,
   contactId?: string,
   contactRef?: string,
@@ -2190,7 +2250,7 @@ async function ensureContactFromRef(
 }
 
 async function upsertLeadStage(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   tenantId: string,
   contactId: string,
   stage: CrmStage,
@@ -2221,7 +2281,7 @@ async function upsertLeadStage(
 }
 
 async function bumpAnalytics(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   tenantId: string,
   deltas: Partial<Record<string, number>>
 ): Promise<void> {

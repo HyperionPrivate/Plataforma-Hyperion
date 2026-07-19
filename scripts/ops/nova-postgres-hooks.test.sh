@@ -43,6 +43,10 @@ elif [[ "${arguments}" == *"pg_restore --clean"* ]]; then
   [[ "$(cat)" == "MOCK_NOVA_DUMP" ]] || exit 45
 elif [[ "${arguments}" == *" exec -T postgres "* ]]; then
   [[ "${arguments}" == *"hyperion_nova_restore_drill"* && "${arguments}" == *"hyperion_nova_migrator"* ]] || exit 46
+  [[ "${arguments}" == *"REVOKE ALL ON DATABASE"* && "${arguments}" == *"FROM PUBLIC"* ]] || exit 47
+  for role in hyperion_nova hyperion_voice hyperion_liwa hyperion_documents; do
+    [[ "${arguments}" == *"${role}"* ]] || exit 48
+  done
 else
   printf 'Unexpected docker invocation: %s\n' "${arguments}" >&2
   exit 64

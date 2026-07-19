@@ -21,17 +21,17 @@ function existingRoleRows(): Array<{ rolname: string }> {
 }
 
 describe("service database role bootstrap configuration", () => {
-  it("rotates shared-database service roles including Audit while excluding NOVA provider roles", () => {
+  it("rotates only legacy shared-database roles and excludes provider-owned Audit and NOVA roles", () => {
     expect(SERVICE_DATABASE_ROLES).toEqual([
       { environmentVariable: "ACCESS_DATABASE_PASSWORD", role: "hyperion_access" },
       { environmentVariable: "SOFIA_DATABASE_PASSWORD", role: "hyperion_sofia" },
       { environmentVariable: "KNOWLEDGE_DATABASE_PASSWORD", role: "hyperion_knowledge" },
-      { environmentVariable: "AUDIT_DATABASE_PASSWORD", role: "hyperion_audit" },
       { environmentVariable: "INTEGRATION_DATABASE_PASSWORD", role: "hyperion_integration" },
       { environmentVariable: "PULSO_DATABASE_PASSWORD", role: "hyperion_pulso" },
       { environmentVariable: "CHANNEL_DATABASE_PASSWORD", role: "hyperion_channel" },
       { environmentVariable: "LUMEN_DATABASE_PASSWORD", role: "hyperion_lumen" }
     ]);
+    expect(SERVICE_DATABASE_ROLES.map(({ role }) => role)).not.toContain("hyperion_audit");
   });
 
   it("does not replay NOVA schema grants from the global bootstrap", async () => {

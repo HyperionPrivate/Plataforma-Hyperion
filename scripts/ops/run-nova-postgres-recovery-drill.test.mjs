@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   DRILL_CONFIRMATION,
+  assertRestoredDatabaseAcl,
   assertProjectAbsent,
   assertSafeProjectName,
   expectedMigrationFiles,
@@ -16,6 +17,12 @@ test("requires an exact opt-in confirmation and generates a scoped project", () 
   assert.equal(options.operationId, "20260717T235958Z");
   assert.equal(options.project, "hyperion-nova-recovery-acceptance-20260717t235958z-deadbeef");
   assert.throws(() => parseArguments(["--confirm", "yes"]), /--confirm must equal/);
+});
+
+test("requires the restored NOVA database to preserve its exact provider ACL", () => {
+  const exact = ["t", "t", "t", "t", ...Array.from({ length: 4 }, () => ["t", "f", "f"]).flat()].join("\t");
+  assert.doesNotThrow(() => assertRestoredDatabaseAcl(exact));
+  assert.throws(() => assertRestoredDatabaseAcl(exact.replace(/^t/, "f")), /least-privilege provider boundary/);
 });
 
 test("accepts only a narrowly scoped Compose project and refuses existing resources", () => {

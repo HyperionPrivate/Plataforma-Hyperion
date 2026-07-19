@@ -366,7 +366,12 @@ describe("service runtime", () => {
   it("accepts bootstrap VALID UNTIL infinity as a never-expiring password", async () => {
     process.env.DATABASE_URL = "postgres://runtime-test";
     process.env.EXPECTED_DATABASE_ROLE = "hyperion_channel";
-    for (const rolvaliduntil of ["infinity", "Infinity", new Date(Number.POSITIVE_INFINITY)]) {
+    for (const rolvaliduntil of [
+      "infinity",
+      "Infinity",
+      Number.POSITIVE_INFINITY,
+      new Date(Number.POSITIVE_INFINITY)
+    ]) {
       const db = createFakeDatabase([], {}, { currentRole: "hyperion_channel", rolvaliduntil });
       ({ app } = await createService({
         serviceName: "whatsapp-channel-service",
@@ -388,6 +393,8 @@ describe("service runtime", () => {
       { currentRole: "hyperion_tenant", rolsuper: true },
       { currentRole: "hyperion_tenant", rolconnlimit: 10 },
       { currentRole: "hyperion_tenant", rolvaliduntil: "2099-01-01T00:00:00Z" },
+      { currentRole: "hyperion_tenant", rolvaliduntil: Date.now() },
+      { currentRole: "hyperion_tenant", rolvaliduntil: Number.NEGATIVE_INFINITY },
       { currentRole: "hyperion_tenant", rolvaliduntil: new Date("2099-01-01T00:00:00Z") },
       { currentRole: "hyperion_tenant", rolconfig: ["search_path=attacker,pg_catalog"] }
     ]) {
@@ -743,7 +750,7 @@ function createFakeDatabase(
     rolinherit: boolean;
     rolreplication: boolean;
     rolsuper: boolean;
-    rolvaliduntil: string | Date | null;
+    rolvaliduntil: string | number | Date | null;
     sessionRole: string;
   }> = {}
 ): DatabaseClient {

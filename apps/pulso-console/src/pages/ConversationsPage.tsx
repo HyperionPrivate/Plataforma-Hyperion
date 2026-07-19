@@ -206,7 +206,7 @@ function ConversationDetail({
   onExpired: () => void;
 }) {
   const timelineState = usePolling<Timeline>(
-    tenantPath(tenantId, `conversations/${conversationId}/timeline`),
+    tenantPath(tenantId, `conversations/${encodeURIComponent(conversationId)}/timeline`),
     5_000,
     onExpired
   );

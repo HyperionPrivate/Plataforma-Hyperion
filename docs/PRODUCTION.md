@@ -588,7 +588,7 @@ exclusiva y destruible en conjunto, como `tmpfs` privados. Un volumen persistent
 invalida este procedimiento.
 
 Antes de abrir, se detienen los workloads current que serán reemplazados, se drena toda sesión `hyperion_lumen` y
-se confirma que el bootstrap global dejó sus ocho roles completos, seguros y en `LOGIN`; los cinco roles NOVA no
+se confirma que el bootstrap global dejó sus siete roles completos, seguros y en `LOGIN`; Audit y los cinco roles NOVA no
 forman parte de esta ventana LUMEN. El operador calcula fuera
 de PostgreSQL el SHA-256 de la evidencia aprobada del rollback y abre la ventana con la imagen actual de migraciones
 y su conexión administrativa privada:
@@ -646,7 +646,7 @@ evidencia cruda permanecen en el sistema operativo autorizado, no en PostgreSQL.
 compatibilidad del contrato de base de datos con N-1; no demuestra al proveedor real, carga representativa ni
 autoriza audio clínico real.
 
-La atestación debe terminar antes de retornar a current. Sólo entonces se ejecuta el bootstrap global de los ocho
+La atestación debe terminar antes de retornar a current. Sólo entonces se ejecuta el bootstrap global de los siete
 roles para restaurar `LOGIN`; ejecutarlo antes hace que la atestación falle cerrada. Como recuperación adicional, el
 bootstrap vuelve a aplicar la allow-list normal, revoca grants transitorios y marca cualquier ventana abierta como
 `bootstrap_reconciled`. Un `close` repetido sobre una ventana ya cerrada vuelve a comprobar las revocaciones sin

@@ -100,7 +100,14 @@ Los webhooks **no se listan ni configuran por API** (ausentes en Swagger). Se co
 | `csat`              | store CSAT / outcome                    |
 | `opt_out`           | compliance suppress + CRM no_interes    |
 
-Binding de tenant: `liwa.tenant_bindings.liwa_account_id = 1656233`.
+El binding de tenant es provider-owned: la instancia recibe un `LIWA_ACCOUNT_ID` configurado y exige exactamente
+una fila `liwa.tenant_bindings.liwa_account_id = LIWA_ACCOUNT_ID`. Un `account_id`/`page_id` enviado por LIWA sólo
+puede confirmar ese valor; si difiere, el webhook se rechaza. `tenant_id`, teléfono y contacto del payload nunca
+seleccionan tenant ni funcionan como fallback.
+
+El receipt idempotente y todos los efectos/outbox del evento se escriben en una sola transacción. Una repetición de
+`external_id` se acepta como `deduped` sin volver a emitir; si falla cualquier efecto, el receipt también se revierte
+y LIWA puede reintentar el mismo evento.
 
 ## Modos de despliegue
 

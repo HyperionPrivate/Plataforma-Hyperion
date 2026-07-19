@@ -41,9 +41,8 @@ export class PostgresVoiceOutbox {
       `with candidates as (
          select event_id
          from voice.outbox_events
-         where status = 'pending'
-           and available_at <= now()
-           and (locked_at is null or locked_at < now() - interval '2 minutes')
+         where (status = 'pending' and available_at <= now())
+            or (status = 'dispatching' and locked_at < now() - interval '2 minutes')
          order by available_at, created_at
          for update skip locked
          limit $2

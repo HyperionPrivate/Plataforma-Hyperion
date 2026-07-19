@@ -13,6 +13,10 @@ import {
 import { validateWorkspaceDependencyGraph } from "../architecture/workspace-dependency-graph.mjs";
 
 const ZERO_SHA = /^0+$/;
+// This migrator still owns schemas consumed by every cell. Until those schemas
+// are fully provider-owned, changes to it must exercise every cell even though
+// the package itself is classified under the transitional platform boundary.
+const GLOBAL_CELL_PACKAGE_NAMES = new Set(["@hyperion/migrations"]);
 
 export async function resolveCellImpact(root, changedFiles) {
   const packages = await discoverPackages(root);
@@ -35,7 +39,12 @@ export async function resolveCellImpact(root, changedFiles) {
     const packageEntry = packageForPath(packages, changedFile);
     if (packageEntry?.name) {
       changedPackages.add(packageEntry.name);
-      if (packageEntry.cell) {
+      if (GLOBAL_CELL_PACKAGE_NAMES.has(packageEntry.name)) {
+        for (const cell of CELL_NAMES) {
+          affectedCells.add(cell);
+          reasons.get(cell)?.add(`${changedFile} belongs to transitional global package ${packageEntry.name}`);
+        }
+      } else if (packageEntry.cell) {
         affectedCells.add(packageEntry.cell);
         reasons.get(packageEntry.cell)?.add(`${changedFile} belongs to ${packageEntry.name}`);
       }

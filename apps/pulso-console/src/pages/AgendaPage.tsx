@@ -425,7 +425,7 @@ function AgendaQueue({
                   {item.conversationId ? (
                     <Link
                       className="btn btn-outline btn-sm"
-                      to={`/conversaciones?conversationId=${item.conversationId}`}
+                      to={`/conversaciones?${new URLSearchParams({ conversationId: item.conversationId })}`}
                     >
                       <ExternalLink size={15} /> Conversacion
                     </Link>

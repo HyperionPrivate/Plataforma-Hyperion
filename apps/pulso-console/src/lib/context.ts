@@ -24,5 +24,5 @@ export function useConsole(): ConsoleContextValue {
 }
 
 export function tenantPath(tenantId: string, suffix: string): string {
-  return `/v1/tenants/${tenantId}/pulso-iris/${suffix}`;
+  return `/v1/tenants/${encodeURIComponent(tenantId)}/pulso-iris/${suffix}`;
 }
