@@ -13,6 +13,7 @@ describeIntegration("011 configurable agenda migration", () => {
   let siteB = "";
   let professionalA = "";
   let appointmentTypeA = "";
+  let settingsBeforePulsoInitialization = -1;
   let savepoint = 0;
 
   beforeAll(async () => {
@@ -27,6 +28,21 @@ describeIntegration("011 configurable agenda migration", () => {
     );
     tenantA = tenants.rows[0]!.id;
     tenantB = tenants.rows[1]!.id;
+
+    settingsBeforePulsoInitialization = (
+      await client.query<{ count: number }>(
+        `select count(*)::int as count
+           from pulso_iris.agenda_settings
+          where tenant_id = any($1::uuid[])`,
+        [[tenantA, tenantB]]
+      )
+    ).rows[0]!.count;
+    await client.query(
+      `insert into pulso_iris.agenda_settings (tenant_id, mode, external_reference_required)
+       values ($1, 'hybrid_manual', true), ($2, 'hybrid_manual', true)
+       on conflict (tenant_id) do nothing`,
+      [tenantA, tenantB]
+    );
 
     const sites = await client.query<{ id: string; tenantId: string }>(
       `insert into pulso_iris.sites (tenant_id, name)
@@ -74,13 +90,14 @@ describeIntegration("011 configurable agenda migration", () => {
     expect(caught).toMatchObject({ code });
   }
 
-  it("initializes every tenant safely in hybrid_manual mode", async () => {
+  it("leaves Access tenant writes decoupled and accepts PULSO-owned idempotent defaults", async () => {
     const result = await client.query<{ mode: string; referenceRequired: boolean }>(
       `select mode, external_reference_required as "referenceRequired"
        from pulso_iris.agenda_settings where tenant_id = $1`,
       [tenantA]
     );
 
+    expect(settingsBeforePulsoInitialization).toBe(0);
     expect(result.rows[0]).toEqual({ mode: "hybrid_manual", referenceRequired: true });
   });
 

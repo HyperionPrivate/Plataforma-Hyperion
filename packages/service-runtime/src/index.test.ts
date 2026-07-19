@@ -111,13 +111,16 @@ describe("service runtime", () => {
     ).rejects.toThrow("reserved or already registered");
   });
 
-  it("reports /ready as ok when required migrations are applied", async () => {
+  it("reports /ready as ok from a provider-owned migration ledger", async () => {
     process.env.DATABASE_URL = "postgres://runtime-test";
-    const db = createFakeDatabase(["003-identity-auth.sql", "007-operator-roles.sql"]);
+    const db = createFakeDatabase(["005-remove-pulso-agenda-trigger.sql"]);
     ({ app } = await createService({
       serviceName: "identity-service",
       databaseRequired: true,
-      requiredMigrations: ["003-identity-auth.sql", "007-operator-roles.sql"],
+      requiredMigrationLedger: {
+        schema: "access_runtime",
+        migrationNames: ["005-remove-pulso-agenda-trigger.sql"]
+      },
       createDatabase: () => db
     }));
 
@@ -129,18 +132,27 @@ describe("service runtime", () => {
     expect(body.dependencies).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "postgres", status: "ok" }),
-        expect.objectContaining({ name: "schema_migrations", status: "ok" })
+        expect.objectContaining({ name: "access_runtime.migration_ledger", status: "ok" })
       ])
     );
+    expect(
+      vi
+        .mocked(db.query)
+        .mock.calls.map(([sql]) => String(sql))
+        .join("\n")
+    ).not.toContain("platform.schema_migrations");
   });
 
-  it("reports /ready as down when a required migration is missing", async () => {
+  it("reports /ready as down when a provider migration is missing", async () => {
     process.env.DATABASE_URL = "postgres://runtime-test";
-    const db = createFakeDatabase(["003-identity-auth.sql"]);
+    const db = createFakeDatabase([]);
     ({ app } = await createService({
       serviceName: "identity-service",
       databaseRequired: true,
-      requiredMigrations: ["003-identity-auth.sql", "007-operator-roles.sql"],
+      requiredMigrationLedger: {
+        schema: "access_runtime",
+        migrationNames: ["005-remove-pulso-agenda-trigger.sql"]
+      },
       createDatabase: () => db
     }));
 
@@ -152,18 +164,159 @@ describe("service runtime", () => {
     expect(body.dependencies).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "schema_migrations",
+          name: "access_runtime.migration_ledger",
           status: "down",
-          detail: "missing migration: 007-operator-roles.sql"
+          detail: "missing migration: 005-remove-pulso-agenda-trigger.sql"
         })
       ])
     );
   });
 
+  it("accepts a complete N-1 provider ledger but rejects a forged shared terminal row", async () => {
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    const legacy = ["001-legacy-access.sql", "002-legacy-access.sql", "006-access-ready.sql"];
+    const requirement = {
+      schema: "access_runtime",
+      migrationNames: ["001-fresh-access.sql", "006-access-ready.sql"],
+      compatibleMigrationNameSets: [legacy]
+    } as const;
+
+    const legacyDb = createFakeDatabase(legacy);
+    ({ app } = await createService({
+      serviceName: "identity-service",
+      databaseRequired: true,
+      requiredMigrationLedger: requirement,
+      createDatabase: () => legacyDb
+    }));
+    expect((await app.inject({ method: "GET", url: "/ready" })).statusCode).toBe(200);
+    await app.close();
+
+    const forgedDb = createFakeDatabase(["006-access-ready.sql"]);
+    ({ app } = await createService({
+      serviceName: "identity-service",
+      databaseRequired: true,
+      requiredMigrationLedger: requirement,
+      createDatabase: () => forgedDb
+    }));
+    const forged = await app.inject({ method: "GET", url: "/ready" });
+    expect(forged.statusCode).toBe(503);
+    expect(forged.json().dependencies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ detail: "missing migration: 001-fresh-access.sql" })])
+    );
+  });
+
+  it("requires an exact checksum ledger and rejects mixed rows", async () => {
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    const requirement = {
+      schema: "access_runtime",
+      migrationNames: ["001-access.sql", "002-access.sql"],
+      exactMigrationLedger: [
+        { name: "001-access.sql", checksum: "a".repeat(64) },
+        { name: "002-access.sql", checksum: "b".repeat(64) }
+      ]
+    } as const;
+    const exact = createFakeDatabase([...requirement.exactMigrationLedger]);
+    ({ app } = await createService({
+      serviceName: "identity-service",
+      databaseRequired: true,
+      requiredMigrationLedger: requirement,
+      createDatabase: () => exact
+    }));
+    expect((await app.inject({ method: "GET", url: "/ready" })).statusCode).toBe(200);
+    await app.close();
+
+    const mixed = createFakeDatabase([
+      ...requirement.exactMigrationLedger,
+      { name: "999-foreign.sql", checksum: "f".repeat(64) }
+    ]);
+    ({ app } = await createService({
+      serviceName: "identity-service",
+      databaseRequired: true,
+      requiredMigrationLedger: requirement,
+      createDatabase: () => mixed
+    }));
+    expect((await app.inject({ method: "GET", url: "/ready" })).statusCode).toBe(503);
+  });
+
+  it("forbids the global migration ledger as a provider-owned requirement", async () => {
+    await expect(
+      createService({
+        serviceName: "identity-service",
+        requiredMigrationLedger: { schema: "platform", migrationNames: ["001-platform.sql"] }
+      })
+    ).rejects.toThrow("provider-owned ledger");
+  });
+
+  it("limits the transitional global ledger gate to Audit", async () => {
+    await expect(
+      createService({
+        serviceName: "identity-service",
+        requiredLegacyMigrationNames: ["001-platform.sql"]
+      })
+    ).rejects.toThrow("restricted to audit-service");
+
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    const db = createFakeDatabase(["025-audit-ledger-autonomy.sql"]);
+    ({ app } = await createService({
+      serviceName: "audit-service",
+      databaseRequired: true,
+      requiredLegacyMigrationNames: ["025-audit-ledger-autonomy.sql"],
+      createDatabase: () => db
+    }));
+
+    const response = await app.inject({ method: "GET", url: "/ready" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().dependencies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "legacy.platform.schema_migrations", status: "ok" })])
+    );
+  });
+
+  it("keeps Audit down when its transitional migration gate is incomplete", async () => {
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    const db = createFakeDatabase(["025-audit-ledger-autonomy.sql"]);
+    ({ app } = await createService({
+      serviceName: "audit-service",
+      databaseRequired: true,
+      requiredLegacyMigrationNames: ["025-audit-ledger-autonomy.sql", "026-audit-source-provenance.sql"],
+      createDatabase: () => db
+    }));
+
+    const response = await app.inject({ method: "GET", url: "/ready" });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().dependencies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "legacy.platform.schema_migrations",
+          status: "down",
+          detail: "missing legacy migration: 026-audit-source-provenance.sql"
+        })
+      ])
+    );
+  });
+
+  it("rejects ambiguous database schema readiness requirements", async () => {
+    await expect(
+      createService({
+        serviceName: "lumen-service",
+        requiredMigrationLedger: { schema: "lumen", migrationNames: ["001-lumen.sql"] },
+        requiredSchemaVersion: { schema: "lumen", serviceName: "lumen", minimumVersion: 40 }
+      })
+    ).rejects.toThrow("exactly one database schema readiness requirement");
+  });
+
+  it("does not silently ignore a schema requirement on an optional database", async () => {
+    await expect(
+      createService({
+        serviceName: "lumen-service",
+        requiredSchemaVersion: { schema: "lumen", serviceName: "lumen", minimumVersion: 40 }
+      })
+    ).rejects.toThrow("require databaseRequired: true");
+  });
+
   it("verifies the configured non-administrative database identity", async () => {
     process.env.DATABASE_URL = "postgres://runtime-test";
-    process.env.EXPECTED_DATABASE_ROLE = "hyperion_access";
-    const db = createFakeDatabase([], {}, { currentRole: "hyperion_access" });
+    process.env.EXPECTED_DATABASE_ROLE = "hyperion_tenant";
+    const db = createFakeDatabase([], {}, { currentRole: "hyperion_tenant" });
     ({ app } = await createService({
       serviceName: "tenant-service",
       databaseRequired: true,
@@ -180,22 +333,48 @@ describe("service runtime", () => {
           expect.objectContaining({
             name: "postgres_role",
             status: "ok",
-            detail: "connected as hyperion_access"
+            detail: "connected as hyperion_tenant"
           })
         ])
       })
     );
   });
 
+  it("keeps Identity and Tenant on distinct provider runtime roles", async () => {
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    process.env.EXPECTED_DATABASE_ROLE = "hyperion_identity";
+    const db = createFakeDatabase([], {}, { currentRole: "hyperion_identity" });
+    ({ app } = await createService({
+      serviceName: "identity-service",
+      databaseRequired: true,
+      createDatabase: () => db
+    }));
+
+    const response = await app.inject({ method: "GET", url: "/ready" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().dependencies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "postgres_role",
+          status: "ok",
+          detail: "connected as hyperion_identity"
+        })
+      ])
+    );
+  });
+
   it("fails closed before route or worker registration for a wrong or administrative database identity", async () => {
     for (const identity of [
       { currentRole: "hyperion_audit" },
-      { currentRole: "hyperion_access", sessionRole: "hyperion" },
-      { currentRole: "hyperion_access", hasMemberships: true },
-      { currentRole: "hyperion_access", rolsuper: true }
+      { currentRole: "hyperion_tenant", sessionRole: "hyperion" },
+      { currentRole: "hyperion_tenant", hasMemberships: true },
+      { currentRole: "hyperion_tenant", rolsuper: true },
+      { currentRole: "hyperion_tenant", rolconnlimit: 10 },
+      { currentRole: "hyperion_tenant", rolvaliduntil: "2099-01-01T00:00:00Z" },
+      { currentRole: "hyperion_tenant", rolconfig: ["search_path=attacker,pg_catalog"] }
     ]) {
       process.env.DATABASE_URL = "postgres://runtime-test";
-      process.env.EXPECTED_DATABASE_ROLE = "hyperion_access";
+      process.env.EXPECTED_DATABASE_ROLE = "hyperion_tenant";
       const db = createFakeDatabase([], {}, identity);
       let routesRegistered = false;
       await expect(
@@ -367,6 +546,77 @@ describe("service runtime", () => {
     );
   });
 
+  it("fails SOFIA readiness closed when its local marker is absent or zero despite a current global marker", async () => {
+    for (const localVersion of [undefined, 0] as const) {
+      process.env.DATABASE_URL = "postgres://runtime-test";
+      const schemaVersions: Record<string, number> = { pulso_iris: 3 };
+      if (localVersion !== undefined) schemaVersions.agent_runtime = localVersion;
+      const db = createFakeDatabase([], schemaVersions);
+      ({ app } = await createService({
+        serviceName: "agent-service",
+        databaseRequired: true,
+        requiredSchemaVersion: { schema: "agent_runtime", serviceName: "sofia", minimumVersion: 1 },
+        createDatabase: () => db
+      }));
+
+      const response = await app.inject({ method: "GET", url: "/ready" });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual(
+        expect.objectContaining({
+          status: "down",
+          dependencies: expect.arrayContaining([
+            expect.objectContaining({
+              name: "agent_runtime.schema_version",
+              status: "down",
+              detail: "schema version is missing; require >= 1"
+            })
+          ])
+        })
+      );
+      expect(db.query).toHaveBeenCalledWith(expect.stringContaining('from "agent_runtime".schema_version'), ["sofia"]);
+      expect(
+        vi
+          .mocked(db.query)
+          .mock.calls.map(([sql]) => String(sql))
+          .join("\n")
+      ).not.toContain('from "pulso_iris".schema_version');
+
+      await app.close();
+      app = undefined;
+    }
+  });
+
+  it("ignores a stale global PULSO marker when SOFIA's local marker is current", async () => {
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    const db = createFakeDatabase([], { agent_runtime: 1, pulso_iris: 1 });
+    ({ app } = await createService({
+      serviceName: "prompt-flow-service",
+      databaseRequired: true,
+      requiredSchemaVersion: { schema: "agent_runtime", serviceName: "sofia", minimumVersion: 1 },
+      createDatabase: () => db
+    }));
+
+    const response = await app.inject({ method: "GET", url: "/ready" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().dependencies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "agent_runtime.schema_version",
+          status: "ok",
+          detail: "schema version >= 1"
+        })
+      ])
+    );
+    expect(
+      vi
+        .mocked(db.query)
+        .mock.calls.map(([sql]) => String(sql))
+        .join("\n")
+    ).not.toContain('from "pulso_iris".schema_version');
+  });
+
   it("rejects unsafe service-owned schema identifiers", async () => {
     await expect(
       createService({
@@ -461,32 +711,37 @@ describe("service runtime", () => {
 });
 
 function createFakeDatabase(
-  appliedMigrations: string[],
+  appliedMigrations: Array<string | { name: string; checksum: string }>,
   schemaVersions: Record<string, number> = {},
   databaseIdentity: Partial<{
     currentRole: string;
     hasMemberships: boolean;
     rolbypassrls: boolean;
     rolcanlogin: boolean;
+    rolconfig: string[] | null;
+    rolconnlimit: number;
     rolcreatedb: boolean;
     rolcreaterole: boolean;
     rolinherit: boolean;
     rolreplication: boolean;
     rolsuper: boolean;
+    rolvaliduntil: string | null;
     sessionRole: string;
   }> = {}
 ): DatabaseClient {
   const database: DatabaseClient = {
-    query: async (text: string) => {
+    query: vi.fn(async (text: string) => {
       if (text === "select 1") {
         return { rows: [{ "?column?": 1 }] } as never;
       }
 
-      if (text.includes("platform.schema_migrations")) {
-        return { rows: appliedMigrations.map((name) => ({ name })) } as never;
+      if (text.includes("platform.schema_migrations") || text.includes(".migration_ledger")) {
+        return {
+          rows: appliedMigrations.map((entry) => (typeof entry === "string" ? { name: entry } : entry))
+        } as never;
       }
 
-      if (text.includes("from pg_roles")) {
+      if (text.includes("from pg_catalog.pg_roles")) {
         const currentRole = databaseIdentity.currentRole ?? "hyperion_access";
         return {
           rows: [
@@ -495,11 +750,14 @@ function createFakeDatabase(
               hasMemberships: false,
               rolbypassrls: false,
               rolcanlogin: true,
+              rolconfig: null,
+              rolconnlimit: -1,
               rolcreatedb: false,
               rolcreaterole: false,
               rolinherit: false,
               rolreplication: false,
               rolsuper: false,
+              rolvaliduntil: null,
               sessionRole: currentRole,
               ...databaseIdentity
             }
@@ -514,7 +772,7 @@ function createFakeDatabase(
       }
 
       return { rows: [] } as never;
-    },
+    }),
     transaction: async (work) => work(database as never),
     close: vi.fn(async () => undefined)
   };

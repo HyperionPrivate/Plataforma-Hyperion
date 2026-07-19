@@ -8,6 +8,7 @@ export type OperatorAssertionClaims = {
   readonly operatorId: string;
   readonly role: string;
   readonly tenantId?: string;
+  readonly productId?: string;
   readonly expiresAtUnix: number;
 };
 
@@ -39,14 +40,18 @@ export function createOperatorAssertion(claims: OperatorAssertionClaims, secret:
     !CLAIM_PART_PATTERN.test(claims.operatorId) ||
     !CLAIM_PART_PATTERN.test(claims.role) ||
     (claims.tenantId !== undefined && !CLAIM_PART_PATTERN.test(claims.tenantId)) ||
+    (claims.productId !== undefined && !CLAIM_PART_PATTERN.test(claims.productId)) ||
+    (claims.productId !== undefined && claims.tenantId === undefined) ||
     !Number.isSafeInteger(claims.expiresAtUnix) ||
     claims.expiresAtUnix <= 0
   ) {
     throw new Error("Operator assertion claims are invalid");
   }
-  const payload = claims.tenantId
-    ? `${claims.operatorId}|${claims.role}|${claims.tenantId}|${claims.expiresAtUnix}`
-    : `${claims.operatorId}|${claims.role}|${claims.expiresAtUnix}`;
+  const payload = claims.productId
+    ? `${claims.operatorId}|${claims.role}|${claims.tenantId}|${claims.productId}|${claims.expiresAtUnix}`
+    : claims.tenantId
+      ? `${claims.operatorId}|${claims.role}|${claims.tenantId}|${claims.expiresAtUnix}`
+      : `${claims.operatorId}|${claims.role}|${claims.expiresAtUnix}`;
   const signature = createHmac("sha256", secret).update(payload).digest("base64url");
   return `${payload}|${signature}`;
 }
@@ -58,10 +63,11 @@ export function verifyOperatorAssertion(
 ): OperatorAssertionClaims | undefined {
   if (!raw || !secret || secret.length < 24) return undefined;
   const parts = raw.split("|");
-  if (parts.length !== 4 && parts.length !== 5) return undefined;
+  if (parts.length !== 4 && parts.length !== 5 && parts.length !== 6) return undefined;
   const operatorId = parts[0];
   const role = parts[1];
-  const tenantId = parts.length === 5 ? parts[2] : undefined;
+  const tenantId = parts.length >= 5 ? parts[2] : undefined;
+  const productId = parts.length === 6 ? parts[3] : undefined;
   const expiresRaw = parts.at(-2);
   const signature = parts.at(-1);
   if (
@@ -72,6 +78,7 @@ export function verifyOperatorAssertion(
     !CLAIM_PART_PATTERN.test(operatorId) ||
     !CLAIM_PART_PATTERN.test(role) ||
     (tenantId !== undefined && !CLAIM_PART_PATTERN.test(tenantId)) ||
+    (productId !== undefined && !CLAIM_PART_PATTERN.test(productId)) ||
     !/^\d+$/u.test(expiresRaw)
   ) {
     return undefined;
@@ -84,7 +91,11 @@ export function verifyOperatorAssertion(
   const left = Buffer.from(signature);
   const right = Buffer.from(expected);
   if (left.length !== right.length || !timingSafeEqual(left, right)) return undefined;
-  return tenantId ? { operatorId, role, tenantId, expiresAtUnix } : { operatorId, role, expiresAtUnix };
+  return productId
+    ? { operatorId, role, tenantId: tenantId!, productId, expiresAtUnix }
+    : tenantId
+      ? { operatorId, role, tenantId, expiresAtUnix }
+      : { operatorId, role, expiresAtUnix };
 }
 
 /**
@@ -112,6 +123,34 @@ export function validateOperatorAssertionContext(
   expectedTenantId: string | null | undefined,
   nowUnix = Math.floor(Date.now() / 1000)
 ): OperatorAssertionFailure | undefined {
+  return validateAssertionContext(headers, secret, expectedTenantId, undefined, nowUnix);
+}
+
+/**
+ * Product-scoped variant used by customer-facing product services. The signed
+ * product claim prevents a valid assertion for one product from being replayed
+ * against another service that shares the gateway attestation key.
+ */
+export function validateProductOperatorAssertionContext(
+  headers: OperatorAssertionHeaders,
+  secret: string | undefined,
+  expectedTenantId: string,
+  expectedProductId: string,
+  nowUnix = Math.floor(Date.now() / 1000)
+): OperatorAssertionFailure | undefined {
+  if (!secret) {
+    return { statusCode: 403, message: "Operator assertion mismatch" };
+  }
+  return validateAssertionContext(headers, secret, expectedTenantId, expectedProductId, nowUnix);
+}
+
+function validateAssertionContext(
+  headers: OperatorAssertionHeaders,
+  secret: string | undefined,
+  expectedTenantId: string | null | undefined,
+  expectedProductId: string | undefined,
+  nowUnix: number
+): OperatorAssertionFailure | undefined {
   if (!secret) return undefined;
 
   const rawAssertion = readSingleHeader(headers[OPERATOR_ASSERTION_HEADER]);
@@ -125,7 +164,8 @@ export function validateOperatorAssertionContext(
     expectedTenantId === undefined ||
     claims.operatorId !== operatorId ||
     claims.role !== role ||
-    (expectedTenantId === null ? claims.tenantId !== undefined : claims.tenantId !== expectedTenantId)
+    (expectedTenantId === null ? claims.tenantId !== undefined : claims.tenantId !== expectedTenantId) ||
+    (expectedProductId !== undefined && claims.productId !== expectedProductId)
   ) {
     return { statusCode: 403, message: "Operator assertion mismatch" };
   }

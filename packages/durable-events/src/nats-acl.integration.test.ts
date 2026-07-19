@@ -3,6 +3,7 @@ import { PermissionViolationError, RequestError, connect, type NatsConnection } 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const testUrl = process.env.TEST_NATS_ACL_URL;
+const accessPassword = process.env.TEST_NATS_ACCESS_PASSWORD;
 const channelPassword = process.env.TEST_NATS_CHANNEL_PASSWORD;
 const pulsoPassword = process.env.TEST_NATS_PULSO_PASSWORD;
 const sofiaPassword = process.env.TEST_NATS_SOFIA_PASSWORD;
@@ -10,11 +11,19 @@ const auditPassword = process.env.TEST_NATS_AUDIT_PASSWORD;
 const lumenPassword = process.env.TEST_NATS_LUMEN_PASSWORD;
 const topologyPassword = process.env.TEST_NATS_TOPOLOGY_PASSWORD;
 const enabled = Boolean(
-  testUrl && channelPassword && pulsoPassword && sofiaPassword && auditPassword && lumenPassword && topologyPassword
+  testUrl &&
+  accessPassword &&
+  channelPassword &&
+  pulsoPassword &&
+  sofiaPassword &&
+  auditPassword &&
+  lumenPassword &&
+  topologyPassword
 );
 
 describe.skipIf(!enabled)("NATS service ACLs", () => {
   let channel: NatsConnection;
+  let access: NatsConnection;
   let pulso: NatsConnection;
   let sofia: NatsConnection;
   let audit: NatsConnection;
@@ -22,7 +31,15 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
   let topology: NatsConnection;
 
   beforeAll(async () => {
-    [channel, pulso, sofia, audit, lumen, topology] = await Promise.all([
+    [access, channel, pulso, sofia, audit, lumen, topology] = await Promise.all([
+      connect({
+        servers: testUrl!,
+        user: "access",
+        pass: accessPassword!,
+        inboxPrefix: "_INBOX.access",
+        name: "access-acl-integration-test",
+        timeout: 5_000
+      }),
       connect({
         servers: testUrl!,
         user: "channel",
@@ -76,7 +93,7 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
 
   afterAll(async () => {
     await Promise.all(
-      [channel, pulso, sofia, audit, lumen, topology].map(async (connection) => {
+      [access, channel, pulso, sofia, audit, lumen, topology].map(async (connection) => {
         if (!connection?.isClosed()) await connection.close();
       })
     );
@@ -98,6 +115,52 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
 
   it("rejects publishing another service event subject", async () => {
     await expectPublishDenied(channel, "hyperion.events.sofia.audit.event.record.v1", "acl-denied-channel-sofia-audit");
+  });
+
+  it("allows Access to publish only its neutral tenant and LUMEN projection contracts", async () => {
+    await expectPublishAllowed(
+      access,
+      "hyperion.events.access.tenant.snapshot.v1",
+      `acl-allowed-access-neutral-tenant-${Date.now()}`
+    );
+    await expectPublishAllowed(
+      access,
+      "hyperion.events.access.lumen.tenant-snapshot.v1",
+      `acl-allowed-access-tenant-${Date.now()}`
+    );
+    await expectPublishAllowed(
+      access,
+      "hyperion.events.access.lumen.operator-grant.v1",
+      `acl-allowed-access-operator-${Date.now()}`
+    );
+    await expectPublishDenied(access, "hyperion.events.lumen.audit.event.record.v1", "acl-denied-access-audit");
+    await expectPublishDenied(access, "hyperion.events.pulso.lumen.encounter-reference.v1", "acl-denied-access-pulso");
+  });
+
+  it("allows Channel to pull and ACK the Access tenant projection durable", async () => {
+    const subject = "hyperion.events.access.tenant.snapshot.v1";
+    const messageId = `acl-allowed-access-channel-tenant-${Date.now()}`;
+    await expectPublishAllowed(access, subject, messageId);
+
+    const consumer = await jetstream(channel, { timeout: 2_000 }).consumers.get(
+      "HYPERION_EVENTS",
+      "channel_access_tenant_snapshot_v1"
+    );
+    const message = await consumer.next({ expires: 2_000 });
+    expect(message).not.toBeNull();
+    expect(message?.subject).toBe(subject);
+    await expect(message!.ackAck()).resolves.toBe(true);
+  });
+
+  it("limits the Access tenant projection event, durable API and DLQ to their owning identities", async () => {
+    const eventSubject = "hyperion.events.access.tenant.snapshot.v1";
+    const dlqSubject = "hyperion.dlq.access.tenant.snapshot.v1";
+    const pullSubject = "$JS.API.CONSUMER.MSG.NEXT.HYPERION_EVENTS.channel_access_tenant_snapshot_v1";
+
+    await expectPublishDenied(channel, eventSubject, "acl-denied-channel-as-access-tenant");
+    await expectRequestPublishDenied(access, pullSubject);
+    await expectPublishAllowed(channel, dlqSubject, `acl-allowed-channel-access-tenant-dlq-${Date.now()}`);
+    await expectPublishDenied(access, dlqSubject, "acl-denied-access-own-channel-dlq");
   });
 
   it("allows Channel to publish its durable audit contract", async () => {

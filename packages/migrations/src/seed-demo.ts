@@ -1,5 +1,5 @@
 /**
- * Dataset DEMO sintetico para PULSO IRIS (tenant CEDCO).
+ * Dataset DEMO sintético para PULSO IRIS (tenant UUID explícito).
  *
  * - Todo lo insertado queda marcado con metadata.is_demo = true (o colgado de
  *   filas demo), y se elimina completo con `--clear`.
@@ -7,10 +7,11 @@
  * - Las cifras siguen el orden de magnitud del documento de requerimientos
  *   (absorcion ~82-87%, no-show decreciente hacia ~9%, verificacion RPA ~97%).
  *
- * Uso: node packages/migrations/dist/seed-demo.js [--clear]
+ * Uso: PULSO_DEMO_TENANT_ID=<uuid> node packages/migrations/dist/seed-demo.js [--clear]
  */
 import { createLogger } from "@hyperion/logger";
 import pg from "pg";
+import { requireDemoTenantId } from "./demo-tenant-context.js";
 
 const { Client } = pg;
 
@@ -95,16 +96,19 @@ async function main(): Promise<void> {
     logger.error("DATABASE_URL is required");
     process.exit(1);
   }
+  const requestedTenantId = requireDemoTenantId(process.env, "PULSO_DEMO_TENANT_ID");
 
   const clearOnly = process.argv.includes("--clear");
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 
   try {
-    const tenantResult = await client.query<{ id: string }>("select id from platform.tenants where slug = 'cedco'");
+    const tenantResult = await client.query<{ id: string }>("select id from platform.tenants where id = $1::uuid", [
+      requestedTenantId
+    ]);
     const tenantId = tenantResult.rows[0]?.id;
     if (!tenantId) {
-      throw new Error("CEDCO tenant not found; run migrations first");
+      throw new Error(`PULSO demo tenant ${requestedTenantId} not found; provision it through Access first`);
     }
 
     await clearDemoData(client, tenantId);

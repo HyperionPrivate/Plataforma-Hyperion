@@ -56,7 +56,7 @@ describe("HttpOutboxDispatcher", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     const [destination, init] = fetch.mock.calls[0]!;
     expect(destination).toBe(EVENT.destination);
-    expect(init).toMatchObject({ method: "POST" });
+    expect(init).toMatchObject({ method: "POST", redirect: "error" });
     expect(init?.headers).toEqual({
       authorization: "Bearer controlled-internal-token",
       "content-type": "application/json",

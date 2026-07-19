@@ -2,8 +2,18 @@ import { z } from "zod";
 
 export const novaProductCode = "NOVA" as const;
 
+/**
+ * @deprecated Transitional compatibility mirror. New NOVA consumers should use
+ * `@hyperion/nova-contracts`; remove after the legacy contract package is drained.
+ */
+export const novaAuditEventRecordContract = {
+  eventType: "nova.audit.event.record.v1",
+  sourceService: "nova-core-service"
+} as const;
+
 export const novaProductRoleSchema = z.enum(["admin", "supervisor", "asesor"]);
 export type NovaProductRole = z.infer<typeof novaProductRoleSchema>;
+export const novaFlowIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{1,79}$/);
 
 export const dataClassificationSchema = z.enum(["public", "internal", "confidential", "restricted"]);
 
@@ -102,7 +112,7 @@ export const voiceCallRequestedPayloadSchema = z.object({
   campaign_id: z.string().uuid().optional(),
   enrollment_id: z.string().uuid().optional(),
   agent_config_ref: z.string().max(160).optional(),
-  product_flow: z.enum(["renovacion", "reactivacion"]).optional()
+  product_flow: novaFlowIdSchema.optional()
 });
 
 export const voiceCallDispatchedPayloadSchema = z.object({
@@ -137,8 +147,7 @@ export const waSendRequestedPayloadSchema = z.object({
   text: z.string().max(2000).optional(),
   agency_tag: z.string().max(40).optional(),
   review_id: z.string().uuid().optional(),
-  /** Product line for VIP tag / flow context (renovacion | reactivacion). */
-  product_flow: z.enum(["renovacion", "reactivacion"]).optional()
+  product_flow: novaFlowIdSchema.optional()
 });
 
 export const waMessageSentPayloadSchema = z.object({
@@ -268,39 +277,13 @@ export const handoffRequestedEventSchema = envelopeEvent("handoff.requested", ha
 export const leadQualifiedEventSchema = envelopeEvent("lead.qualified", leadQualifiedPayloadSchema);
 export const coreOutcomeRecordedEventSchema = envelopeEvent("core.outcome.recorded", coreOutcomeRecordedPayloadSchema);
 
-export const novaAgencyCodes = ["BAQ", "BGA", "CUC", "FDS", "PDC", "SGL", "BMB", "VUP", "VVC"] as const;
-
-export const novaAgencyTagByCode: Record<(typeof novaAgencyCodes)[number], string> = {
-  BAQ: "AG_BARRANQUILLA",
-  BGA: "AG_BUCARAMANGA",
-  CUC: "AG_CUCUTA",
-  FDS: "AG_FLORIDABLANCA",
-  PDC: "AG_PIEDECUESTA",
-  SGL: "AG_SAN GIL",
-  BMB: "AG_BARRANCABERMEJA",
-  VUP: "AG_VALLEDUPAR",
-  VVC: "AG_VILLAVICENCIO"
-};
-
 export const novaCatalog = {
   product: {
     code: novaProductCode,
     name: "NOVA",
-    firstTenant: "coopfuturo",
     description: "Campañas de contacto proactivo por voz IA y WhatsApp."
   },
   roles: ["admin", "supervisor", "asesor"] as const,
-  agencies: [
-    { code: "BAQ", city: "Barranquilla", group: "costa", tag: "AG_BARRANQUILLA" },
-    { code: "BGA", city: "Bucaramanga", group: "santander", tag: "AG_BUCARAMANGA" },
-    { code: "CUC", city: "Cúcuta", group: "norte", tag: "AG_CUCUTA" },
-    { code: "FDS", city: "Floridablanca", group: "santander", tag: "AG_FLORIDABLANCA" },
-    { code: "PDC", city: "Piedecuesta", group: "santander", tag: "AG_PIEDECUESTA" },
-    { code: "SGL", city: "San Gil", group: "santander", tag: "AG_SAN GIL" },
-    { code: "BMB", city: "Barrancabermeja", group: "magdalena", tag: "AG_BARRANCABERMEJA" },
-    { code: "VUP", city: "Valledupar", group: "costa", tag: "AG_VALLEDUPAR" },
-    { code: "VVC", city: "Villavicencio", group: "llanos", tag: "AG_VILLAVICENCIO" }
-  ],
   contexts: ["nova-core", "voice-channel", "liwa-channel", "documents"] as const,
   eventTypes: [
     "contact.imported",

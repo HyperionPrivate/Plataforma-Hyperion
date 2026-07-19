@@ -1,5 +1,6 @@
 import { createLogger } from "@hyperion/logger";
 import pg from "pg";
+import { requireDemoTenantId } from "./demo-tenant-context.js";
 
 const { Client } = pg;
 const logger = createLogger("lumen-demo-seed");
@@ -15,12 +16,15 @@ const clearOnly = process.argv.includes("--clear");
 let transactionOpen = false;
 
 try {
+  const requestedTenantId = requireDemoTenantId(process.env, "LUMEN_DEMO_TENANT_ID");
   await client.connect();
   await client.query("begin");
   transactionOpen = true;
-  const tenant = await client.query<{ id: string }>(`select id from platform.tenants where slug = 'cedco'`);
+  const tenant = await client.query<{ id: string }>("select id from platform.tenants where id = $1::uuid", [
+    requestedTenantId
+  ]);
   const tenantId = tenant.rows[0]?.id;
-  if (!tenantId) throw new Error("CEDCO tenant not found");
+  if (!tenantId) throw new Error(`LUMEN demo tenant ${requestedTenantId} not found; provision it through Access first`);
   await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${tenantId}|lumen-demo-001`]);
 
   if (clearOnly) {
@@ -100,7 +104,7 @@ async function seedLumenDemo(tenantId: string): Promise<void> {
      limit 1`,
     [tenantId]
   );
-  if (!site.rows[0]) throw new Error("CEDCO requires an active site before seeding the isolated LUMEN demo");
+  if (!site.rows[0]) throw new Error("The selected tenant requires an active site before seeding the LUMEN demo");
 
   let professional = await client.query<{ id: string }>(
     `select id from pulso_iris.professionals

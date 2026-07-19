@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyServiceRolePrivilegeMatrix,
   applyServiceRolePasswords,
   readServiceRolePasswords,
   SERVICE_DATABASE_ROLES,
@@ -20,6 +21,28 @@ function existingRoleRows(): Array<{ rolname: string }> {
 }
 
 describe("service database role bootstrap configuration", () => {
+  it("excludes the provider-owned Audit role from the seven-role global rotation unit", () => {
+    expect(SERVICE_DATABASE_ROLES).toEqual([
+      { environmentVariable: "ACCESS_DATABASE_PASSWORD", role: "hyperion_access" },
+      { environmentVariable: "SOFIA_DATABASE_PASSWORD", role: "hyperion_sofia" },
+      { environmentVariable: "KNOWLEDGE_DATABASE_PASSWORD", role: "hyperion_knowledge" },
+      { environmentVariable: "INTEGRATION_DATABASE_PASSWORD", role: "hyperion_integration" },
+      { environmentVariable: "PULSO_DATABASE_PASSWORD", role: "hyperion_pulso" },
+      { environmentVariable: "CHANNEL_DATABASE_PASSWORD", role: "hyperion_channel" },
+      { environmentVariable: "LUMEN_DATABASE_PASSWORD", role: "hyperion_lumen" }
+    ]);
+  });
+
+  it("does not replay NOVA schema grants from the global bootstrap", async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [] }));
+    const fakeClient = { query } as unknown as Parameters<typeof applyServiceRolePrivilegeMatrix>[0];
+
+    await applyServiceRolePrivilegeMatrix(fakeClient);
+
+    const matrix = String(query.mock.calls[0]?.[0] ?? "");
+    expect(matrix).not.toMatch(/hyperion_(?:nova|voice|liwa|documents)/);
+  });
+
   it("loads one distinct password for every fixed service role", () => {
     const passwords = readServiceRolePasswords(validEnvironment());
 
