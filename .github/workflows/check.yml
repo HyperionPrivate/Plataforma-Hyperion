@@ -215,6 +215,7 @@ jobs:
           TEST_AUDIT_DATABASE_URL="$audit_runtime_url" pnpm autonomy:e2e
         env:
           TEST_DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_test
+          TEST_AUDIT_ADMIN_DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_audit_ci
           NATS_URL: nats://127.0.0.1:4222
       - name: Verify NATS service ACL denials
         shell: bash
