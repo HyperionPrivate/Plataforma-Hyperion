@@ -172,7 +172,8 @@ export function createPulsoRuntimeSuiteExecution(suite, environment, outputFile,
   const fixtureDatabaseUrl = validatedFixtureDatabaseUrl(suite, environment, databaseUrl);
   const childEnvironment = { ...environment };
   for (const name of DATABASE_URL_ENVIRONMENTS) delete childEnvironment[name];
-  childEnvironment.TEST_DATABASE_URL = databaseUrl;
+  delete childEnvironment.TEST_DATABASE_URL;
+  childEnvironment[suite.databaseUrlEnvironment] = databaseUrl;
   if (fixtureDatabaseUrl) childEnvironment.TEST_PULSO_FIXTURE_DATABASE_URL = fixtureDatabaseUrl;
   childEnvironment.EXPECTED_DATABASE_ROLE = suite.expectedDatabaseRole;
   childEnvironment.CI = "true";

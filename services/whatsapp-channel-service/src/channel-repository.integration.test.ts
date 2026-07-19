@@ -6,7 +6,7 @@ import { PostgresChannelRepository } from "./channel-repository.js";
 import { createDatabasePulsoDeliveryGuard } from "./pulso-delivery.integration.test.support.js";
 import { WHATSAPP_PROVIDER_MODE } from "./types.js";
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.TEST_CHANNEL_DATABASE_URL;
 const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
 const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 

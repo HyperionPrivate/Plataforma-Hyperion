@@ -12,7 +12,7 @@ import { registerOperationsRoutes } from "./operations-routes.js";
 
 const { Client } = pg;
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.TEST_PULSO_DATABASE_URL;
 const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
 const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
