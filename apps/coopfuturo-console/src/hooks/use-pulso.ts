@@ -6,7 +6,12 @@ import { api, createLiveEvent } from "@/services";
 import type { LiveEvent } from "@/components/domain/live-feed";
 
 export function useDashboard() {
-  return useQuery({ queryKey: ["dashboard"], queryFn: () => api.getDashboard() });
+  return useQuery({
+    queryKey: ["dashboard"],
+    queryFn: () => api.getDashboard(),
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
+  });
 }
 
 export function useCampaigns() {

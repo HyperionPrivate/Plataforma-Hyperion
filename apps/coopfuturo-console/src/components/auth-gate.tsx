@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { clearAccessToken, getAccessToken, requireAuthEnabled } from "@/lib/auth";
+import {
+  clearAccessToken,
+  hasUsableSession,
+  requireAuthEnabled,
+} from "@/lib/auth";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -18,8 +22,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       setReady(true);
       return;
     }
-    if (!getAccessToken()) {
-      router.replace(`/login?next=${encodeURIComponent(pathname || "/dashboard")}`);
+    if (!hasUsableSession()) {
+      clearAccessToken();
+      router.replace(
+        `/login?next=${encodeURIComponent(pathname || "/dashboard")}&reason=expired`,
+      );
       return;
     }
     setReady(true);

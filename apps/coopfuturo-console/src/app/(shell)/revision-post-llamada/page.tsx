@@ -66,17 +66,20 @@ export default function RevisionPostLlamadaPage() {
     try {
       if (action === "approve") {
         await sendWhatsAppPending({
+          id: selected.id ? String(selected.id) : undefined,
+          review_id: selected.review_id ? String(selected.review_id) : undefined,
           conversation_id: conversationId,
           phone,
           flow_id: selected.flow_id ? String(selected.flow_id) : undefined,
         });
         toast.success("WhatsApp enviado / aprobado");
       } else {
-        if (!conversationId) {
-          toast.error("Omitir requiere conversation_id");
-          return;
-        }
-        await skipWhatsAppPending({ conversation_id: conversationId });
+        await skipWhatsAppPending({
+          id: selected.id ? String(selected.id) : undefined,
+          review_id: selected.review_id ? String(selected.review_id) : undefined,
+          conversation_id: conversationId,
+          phone,
+        });
         toast.success("Omitido");
       }
       await qc.invalidateQueries({ queryKey: ["whatsapp-pending-review"] });

@@ -18,10 +18,10 @@ import {
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   generateSessionToken,
+  getSessionTtlHours,
   hashPassword,
   hashSessionToken,
   readBearerToken,
-  SESSION_TTL_HOURS,
   verifyPassword
 } from "./auth.js";
 
@@ -190,7 +190,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     }
 
     const token = generateSessionToken();
-    const expiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 3_600_000);
+    const expiresAt = new Date(Date.now() + getSessionTtlHours() * 3_600_000);
 
     await context.db.query(
       "insert into platform.operator_sessions (operator_id, token_hash, expires_at) values ($1, $2, $3)",

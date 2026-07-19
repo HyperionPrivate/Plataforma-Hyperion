@@ -19,7 +19,12 @@ const EVENT_ALIASES: Record<string, string> = {
   message: "message",
   mensaje: "message",
   text: "message",
-  chat: "message"
+  chat: "message",
+  bot_message: "bot_message",
+  bot: "bot_message",
+  botmessage: "bot_message",
+  outbound_message: "bot_message",
+  agent_message: "bot_message"
 };
 
 const CITY_TAG: Record<string, string> = {
@@ -46,6 +51,7 @@ export type NormalizedLiwaEventKind =
   | "opt_out"
   | "tipificacion"
   | "message"
+  | "bot_message"
   | "unknown";
 
 export interface NormalizedLiwaPayload {
@@ -315,6 +321,16 @@ export function mapEventKind(event: string): NormalizedLiwaEventKind {
   if (event === "csat" || event.includes("csat") || event === "nps") return "csat";
   if (event === "opt_out" || event.includes("opt")) return "opt_out";
   if (event === "tipificacion" || event.includes("tipif")) return "tipificacion";
+  if (
+    event === "bot_message" ||
+    event === "botmessage" ||
+    event === "outbound_message" ||
+    event === "agent_message" ||
+    event.includes("bot_message") ||
+    (event.includes("bot") && event.includes("message"))
+  ) {
+    return "bot_message";
+  }
   if (event === "message" || event.includes("mensaje") || event === "chat") return "message";
   return "unknown";
 }

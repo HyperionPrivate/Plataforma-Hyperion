@@ -17,16 +17,29 @@ Relacionado: [LIWA-WEBHOOK-CUTOVER.md](LIWA-WEBHOOK-CUTOVER.md) · [CONTABO-TEST
 LIWA no expone historial por API. NOVA solo muestra:
 
 1. Lo que el asesor envía desde Conversaciones (`send/text`), o
-2. Lo que LIWA notifica por webhook.
+2. Lo que LIWA notifica por webhook (`message` / `bot_message` / documento / handoff), o
+3. El placeholder al disparar un flow desde Hyperion (`Flujo <nombre> enviado`).
+
+### Hallazgo sonda historial (2026-07-17, cuenta `1656233`)
+
+Se probaron (GET, solo lectura, `X-ACCESS-TOKEN`) los candidatos:
+
+`/contacts/{id}/messages`, `/conversation`, `/conversations`, `/history`, `/chat`, `/conversations/{id}/messages`, `/accounts/messages?contact_id=`, `/messages?contact_id=`, variantes con `+phone`.
+
+**Resultado:** todos responden HTTP 200 con cuerpo `{"error":{"code":404,"message":"The requested resource doesn't exist..."}}`.  
+`GET /contacts/{id}` y `GET /accounts/flows` sí funcionan.
+
+**Consecuencia:** no hay sync-messages / poller de transcript. El clon exacto de burbujas del bot depende de nodos External Request en el flow LIWA (`event=bot_message` tras cada burbuja) + `event=message` para el usuario. Ver guía abajo y [LIWA-WEBHOOK-CUTOVER.md](LIWA-WEBHOOK-CUTOVER.md).
 
 Sin nodo External API `event=message` en el flujo, el celular puede estar perfecto y Conversaciones incompleto.
 
-| En WhatsApp                   | En Conversaciones NOVA           |
-| ----------------------------- | -------------------------------- |
-| Plantillas del flujo          | No llegan (LIWA no las notifica) |
-| Texto del asociado            | Solo con webhook `message`       |
-| Reply desde consola           | Sí                               |
-| Documento / handoff cableados | Sí                               |
+| En WhatsApp                   | En Conversaciones NOVA                                      |
+| ----------------------------- | ----------------------------------------------------------- |
+| Plantillas / burbujas del bot | Solo con webhook `bot_message` (texto exacto de la burbuja) |
+| Texto del asociado            | Solo con webhook `message`                                  |
+| Disparo de flow desde Ops     | Placeholder `Flujo <nombre> enviado` (nombre vía listFlows) |
+| Reply desde consola           | Sí                                                          |
+| Documento / handoff cableados | Sí                                                          |
 
 ---
 
@@ -107,9 +120,52 @@ https://<host-publico>/v1/liwa/webhooks
 | **Texto usuario (obligatorio para chat)** | `{"event":"message","phone":"{{phone}}","text":"{{text}}"}`                   |
 | Documento                                 | `{"event":"document_received","phone":"{{phone}}","filename":"{{filename}}"}` |
 | Handoff                                   | `{"event":"handoff_requested","phone":"{{phone}}","ciudad":"{{ciudad}}"}`     |
-| Bot (opcional)                            | `{"event":"bot_message","phone":"{{phone}}","text":"{{text}}"}`               |
+| **Bot (obligatorio para clon exacto)**    | `{"event":"bot_message","phone":"{{phone}}","text":"<texto de la burbuja>"}`  |
 
-**Probar Ahora** en LIWA → HTTP 200. Sin nodo `message`, Conversaciones no ve al asociado.
+**Probar Ahora** en LIWA → HTTP 200. Sin nodo `message`, Conversaciones no ve al asociado. Sin `bot_message`, solo verás el placeholder del flow / replies del asesor.
+
+### Guía paso a paso — nodos `message` / `bot_message` (flujo Renovación)
+
+1. Abre el flow builder LIWA del flujo Renovación (o copia de prueba).
+2. **Mensajes del asociado:** en el trigger / paso donde el usuario escribe, agrega External Request → URL Hyperion webhook + header secret → body:
+
+```json
+{ "event": "message", "phone": "{{phone}}", "text": "{{text}}", "external_id": "{{message_id}}" }
+```
+
+3. **Cada burbuja del bot:** inmediatamente después de cada nodo Message / Bot Message del flow, agrega External Request con el **texto literal** de esa burbuja (o variable si LIWA la expone):
+
+```json
+{
+  "event": "bot_message",
+  "phone": "{{phone}}",
+  "text": "Hola, soy el asistente de CoopFuturo. ¿En qué te ayudo?",
+  "external_id": "renov-bot-1"
+}
+```
+
+Repite con `external_id` distinto por burbuja (`renov-bot-2`, …) para dedup en Hyperion.
+
+4. Guarda el flow. **Probar Ahora** en cada nodo → HTTP 200.
+5. Smoke E2E: tipify / Lab envía flow → en Conversaciones aparece `Flujo <nombre> enviado` → el bot habla en WhatsApp → cada `bot_message` aparece como burbuja **Bot** con el texto exacto → el asociado responde → burbuja **Asociado** → reply asesor llega al celular.
+
+Curl de verificación (sin esperar al flow):
+
+```bash
+export HOST="http://144.91.100.31:19080"
+export SECRET="<LIWA_WEBHOOK_SECRET>"
+export PHONE="573004198710"
+
+curl -sS -X POST "$HOST/v1/liwa/webhooks" \
+  -H "Content-Type: application/json" \
+  -H "X-LIWA-WEBHOOK-SECRET: $SECRET" \
+  -d "{\"event\":\"bot_message\",\"phone\":\"$PHONE\",\"text\":\"Hola espejo bot Renovación\",\"external_id\":\"e2e-bot-$(date +%s)\"}"
+
+curl -sS -X POST "$HOST/v1/liwa/webhooks" \
+  -H "Content-Type: application/json" \
+  -H "X-LIWA-WEBHOOK-SECRET: $SECRET" \
+  -d "{\"event\":\"message\",\"phone\":\"$PHONE\",\"text\":\"Hola espejo usuario\",\"external_id\":\"e2e-user-$(date +%s)\"}"
+```
 
 ### 4. Smoke (15–20 min)
 

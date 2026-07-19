@@ -28,7 +28,15 @@ const CONTINUE = new Set([
   "reactivacion",
   "quiere_reactivar",
   "retomar",
-  "retoma_estudios"
+  "retoma_estudios",
+  // Soft-positive: still send the LIWA flow so the associate gets the template.
+  "quiere_pensarlo",
+  "pensarlo",
+  "pensar",
+  "callback",
+  "llamar_despues",
+  "agendar",
+  "reagendar"
 ]);
 
 const STOP = new Set([

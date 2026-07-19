@@ -99,6 +99,14 @@ describe("stageFromPostCallIntent", () => {
     });
   });
 
+  it("routes soft-positive quiere_pensarlo to WhatsApp follow-up", () => {
+    expect(stageFromPostCallIntent("quiere_pensarlo")).toEqual({
+      stage: "interesado",
+      tipification: "quiere_pensarlo",
+      wantsWhatsapp: true
+    });
+  });
+
   it("routes hard STOP to no_interes", () => {
     expect(stageFromPostCallIntent("no_interes")).toMatchObject({
       stage: "no_interes",

@@ -50,6 +50,16 @@ describe("normalizeLiwaPayload", () => {
     expect(parsed.text).toBe("Hola espejo");
   });
 
+  it("maps bot_message for outbound chat mirror", () => {
+    const parsed = normalizeLiwaPayload({
+      event: "bot_message",
+      phone: "+573001112233",
+      text: "Hola, soy el asistente"
+    });
+    expect(mapEventKind(parsed.event)).toBe("bot_message");
+    expect(parsed.text).toBe("Hola, soy el asistente");
+  });
+
   it("maps tipificacion", () => {
     const parsed = normalizeLiwaPayload({
       event: "tipify",

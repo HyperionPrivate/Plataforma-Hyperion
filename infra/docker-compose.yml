@@ -130,6 +130,7 @@ services:
       EXPECTED_DATABASE_ROLE: hyperion_access
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
       GATEWAY_TO_IDENTITY_TOKEN: ${GATEWAY_TO_IDENTITY_TOKEN:?GATEWAY_TO_IDENTITY_TOKEN is required}
       GATEWAY_OPERATOR_ASSERTION_KEY: ${GATEWAY_OPERATOR_ASSERTION_KEY:?GATEWAY_OPERATOR_ASSERTION_KEY is required}
       ACCESS_TO_LUMEN_TOKEN: ${ACCESS_TO_LUMEN_TOKEN:?ACCESS_TO_LUMEN_TOKEN is required}
@@ -489,6 +490,8 @@ services:
       DIALER_DEMO_API_KEY: ${DIALER_DEMO_API_KEY:-}
       VOICE_MODE: ${VOICE_MODE:-dialer}
       ELEVENLABS_AGENT_ID: ${ELEVENLABS_AGENT_ID:-}
+      # Required for outcome poller to complete demo Lab calls via conversation API.
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       NOVA_CORE_SERVICE_URL: http://nova-core-service:8091
       AUDIT_SERVICE_URL: http://audit-service:8086
       PORT: 8092
@@ -528,6 +531,7 @@ services:
       LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1782399915832}
       LIWA_FLOW_ID_B: ${LIWA_FLOW_ID_B:-1782486171458}
       LIWA_MODE: ${LIWA_MODE:-http}
+      LIWA_FORCE_TEXT: ${LIWA_FORCE_TEXT:-}
       LIWA_VIP_TAG: ${LIWA_VIP_TAG:-RENOVACION_VIP}
       NOVA_CORE_SERVICE_URL: http://nova-core-service:8091
       AUDIT_SERVICE_URL: http://audit-service:8086
@@ -716,6 +720,10 @@ services:
     environment:
       HYPERION_GATEWAY_URL: http://api-gateway:8080
       COOPFUTURO_TENANT_ID: ${COOPFUTURO_TENANT_ID:-787bc386-6d37-4c08-b929-5c8b9dc5ef40}
+      # Lab / post-call WA / ops default — must match the LIWA entry-point used in demos.
+      COOPFUTURO_LIWA_FLOW_ID: ${COOPFUTURO_LIWA_FLOW_ID:-1784249919201}
+      LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1784249919201}
+      LIWA_FLOW_ID_B: ${LIWA_FLOW_ID_B:-1782486171458}
     ports:
       # Contabo already maps WEB_CONSOLE_NOVA_HOST_PORT=19001; reuse it so CoopFuturo
       # keeps the same URL after swapping the Vite console for this Next UI.

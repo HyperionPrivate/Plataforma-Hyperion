@@ -18,7 +18,22 @@ const SCRYPT_P = 1;
 const SCRYPT_KEYLEN = 64;
 const SCRYPT_MAXMEM = 128 * 1024 * 1024;
 
-export const SESSION_TTL_HOURS = 12;
+const DEFAULT_SESSION_TTL_HOURS = 12;
+
+/**
+ * Session lifetime in hours. Configurable via SESSION_TTL_HOURS so operators
+ * (e.g. the CoopFuturo lab console) can run long sessions without being logged
+ * out mid-flow. Falls back to 12h when unset or invalid; clamped to 1..720h.
+ */
+export function getSessionTtlHours(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.SESSION_TTL_HOURS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_SESSION_TTL_HOURS;
+  }
+  return Math.min(720, Math.max(1, Math.trunc(raw)));
+}
+
+export const SESSION_TTL_HOURS = getSessionTtlHours();
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);

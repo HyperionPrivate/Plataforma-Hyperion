@@ -456,13 +456,7 @@ function ConversacionesContent() {
                       {m.role === "bot" && (
                         <span className="mb-1 flex items-center gap-1 text-[10px] text-[var(--muted)]">
                           <Bot className="size-3" strokeWidth={1.75} />{" "}
-                          {m.source === "advisor"
-                            ? "Asesor"
-                            : m.source === "voz"
-                              ? "Sistema"
-                              : m.source === "liwa_bot" || m.source === "whatsapp"
-                                ? "Bot WhatsApp"
-                                : "Asistente"}
+                          {m.source === "advisor" ? "Asesor" : m.source === "voz" ? "Sistema" : "Bot"}
                         </span>
                       )}
                       {m.role === "user" && (
