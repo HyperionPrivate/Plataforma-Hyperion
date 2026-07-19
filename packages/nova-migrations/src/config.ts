@@ -87,6 +87,8 @@ function readSafeSecret(environment: NodeJS.ProcessEnv, variableName: string): s
 
 function isRestrictedEnvironment(environment: NodeJS.ProcessEnv): boolean {
   return ["production", "staging"].includes(
-    (environment.HYPERION_ENV ?? environment.NODE_ENV ?? "development").trim().toLowerCase()
+    (environment.HYPERION_ENVIRONMENT ?? environment.HYPERION_ENV ?? environment.NODE_ENV ?? "development")
+      .trim()
+      .toLowerCase()
   );
 }

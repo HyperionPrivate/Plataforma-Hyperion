@@ -42,4 +42,24 @@ describe("NOVA migration configuration", () => {
       "migrator-password-00000001"
     );
   });
+
+  it("uses the canonical deployment class ahead of NODE_ENV and the legacy alias", () => {
+    const placeholder = "replace-nova-migrator-secret-0013";
+    expect(
+      readNovaMigratorPassword({
+        HYPERION_ENVIRONMENT: "ci",
+        HYPERION_ENV: "production",
+        NODE_ENV: "production",
+        NOVA_MIGRATOR_DATABASE_PASSWORD: placeholder
+      })
+    ).toBe(placeholder);
+    expect(() =>
+      readNovaMigratorPassword({
+        HYPERION_ENVIRONMENT: "production",
+        HYPERION_ENV: "ci",
+        NODE_ENV: "development",
+        NOVA_MIGRATOR_DATABASE_PASSWORD: placeholder
+      })
+    ).toThrow("must not use a placeholder");
+  });
 });

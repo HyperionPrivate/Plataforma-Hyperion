@@ -72,7 +72,8 @@ async function run() {
   const pulsoDb = createDatabase(pulsoDatabaseUrl);
   const sofiaDb = createDatabase(serviceDatabaseUrl(configuration, "hyperion_sofia", "SOFIA_DATABASE_PASSWORD"));
   const auditDb = createDatabase(configuration.auditDatabaseUrl);
-  const databases = [channelDb, pulsoDb, sofiaDb, auditDb, adminDb];
+  const auditAdminDb = createDatabase(configuration.auditAdminDatabaseUrl);
+  const databases = [channelDb, pulsoDb, sofiaDb, auditDb, auditAdminDb, adminDb];
   const consumers = [];
   const dispatchers = [];
   const runId = randomUUID();
@@ -344,7 +345,7 @@ async function run() {
     assert.equal(channelAuditEvent.status, "queued");
     assertDrain(await channelAuditDispatcher.drainOnce(), "channel-audit");
     const channelAuditProjection = await eventually("Channel audit projection", () =>
-      queryOneOrUndefined(adminDb, {
+      queryOneOrUndefined(auditDb, {
         text: `select inbox.received_at as "receivedAt", inbox.source_service as "sourceService",
                       ledger.event_type as "businessEventType", ledger.entity_id as "entityId"
                  from audit_runtime.inbox_events inbox
@@ -442,7 +443,7 @@ async function run() {
       assertDrain(await pulsoAuditDispatcher.drainOnce(), "pulso-audit");
     }
     const pulsoAuditProjection = await eventually("PULSO audit projections", async () => {
-      const result = await adminDb.query(
+      const result = await auditDb.query(
         `select inbox.event_id as "sourceEventId", inbox.received_at as "receivedAt",
                 inbox.source_service as "sourceService", ledger.event_type as "businessEventType",
                 ledger.entity_id as "entityId", (ledger.metadata->>'revision')::int as revision
@@ -476,7 +477,7 @@ async function run() {
     phase = "sofia-to-audit";
     assertDrain(await agentDispatcher.drainOnce(), "sofia");
     const auditProjection = await eventually("Audit projection", () =>
-      queryOneOrUndefined(adminDb, {
+      queryOneOrUndefined(auditDb, {
         text: `select ledger.id as "auditEventId", ledger.source_event_id as "sourceEventId",
                       ledger.actor_id as "actorId", ledger.event_type as "eventType",
                       ledger.entity_id as "entityId"
@@ -499,7 +500,7 @@ async function run() {
     assert.equal(replayDrain.completed, 0);
 
     phase = "exactly-once-verification";
-    const counts = await oneRow(adminDb, "flow counts", {
+    const sharedCounts = await oneRow(adminDb, "shared flow counts", {
       text: `select
         (select count(*)::int from channel_runtime.inbound_events
           where tenant_id = $1 and id = $2 and status = 'processed') as "channelInbox",
@@ -517,10 +518,6 @@ async function run() {
           where tenant_id = $1 and id = $6) as "sofiaEffect",
         (select count(*)::int from agent_runtime.outbox_events
           where tenant_id = $1 and id = $7 and status = 'published') as "sofiaOutbox",
-        (select count(*)::int from audit_runtime.inbox_events
-          where tenant_id = $1 and event_id = $7) as "auditInbox",
-        (select count(*)::int from platform.audit_events
-          where tenant_id = $1 and source_event_id = $7) as "auditEffect",
         (select count(*)::int from channel_runtime.outbox_events
           where tenant_id = $1 and id = $8 and status = 'published') as "channelDeliveryOutbox",
         (select count(*)::int from pulso_iris.inbox_events
@@ -529,16 +526,8 @@ async function run() {
           where tenant_id = $1 and id = $9 and delivery_status = 'sent') as "pulsoDeliveryEffect",
         (select count(*)::int from channel_runtime.outbox_events
           where tenant_id = $1 and id = $10 and status = 'published') as "channelAuditOutbox",
-        (select count(*)::int from audit_runtime.inbox_events
-          where tenant_id = $1 and event_id = $10) as "channelAuditInbox",
-        (select count(*)::int from platform.audit_events
-          where tenant_id = $1 and source_event_id = $10) as "channelAuditEffect",
         (select count(*)::int from pulso_iris.outbox_events
-          where tenant_id = $1 and id in ($11::uuid, $12::uuid) and status = 'published') as "pulsoAuditOutbox",
-        (select count(*)::int from audit_runtime.inbox_events
-          where tenant_id = $1 and event_id in ($11::uuid, $12::uuid)) as "pulsoAuditInbox",
-        (select count(*)::int from platform.audit_events
-          where tenant_id = $1 and source_event_id in ($11::uuid, $12::uuid)) as "pulsoAuditEffect"`,
+          where tenant_id = $1 and id in ($11::uuid, $12::uuid) and status = 'published') as "pulsoAuditOutbox"`,
       values: [
         tenantId,
         firstPersistence.eventId,
@@ -554,6 +543,29 @@ async function run() {
         pulsoAuditEvents.rows[1].id
       ]
     });
+    const auditCounts = await oneRow(auditDb, "Audit flow counts", {
+      text: `select
+        (select count(*)::int from audit_runtime.inbox_events
+          where tenant_id = $1 and event_id = $2) as "auditInbox",
+        (select count(*)::int from platform.audit_events
+          where tenant_id = $1 and source_event_id = $2) as "auditEffect",
+        (select count(*)::int from audit_runtime.inbox_events
+          where tenant_id = $1 and event_id = $3) as "channelAuditInbox",
+        (select count(*)::int from platform.audit_events
+          where tenant_id = $1 and source_event_id = $3) as "channelAuditEffect",
+        (select count(*)::int from audit_runtime.inbox_events
+          where tenant_id = $1 and event_id in ($4::uuid, $5::uuid)) as "pulsoAuditInbox",
+        (select count(*)::int from platform.audit_events
+          where tenant_id = $1 and source_event_id in ($4::uuid, $5::uuid)) as "pulsoAuditEffect"`,
+      values: [
+        tenantId,
+        sofiaProjection.outboxEventId,
+        channelAuditEvent.id,
+        pulsoAuditEvents.rows[0].id,
+        pulsoAuditEvents.rows[1].id
+      ]
+    });
+    const counts = { ...sharedCounts, ...auditCounts };
     assert.deepEqual(counts, {
       channelInbox: 1,
       channelOutbox: 1,
@@ -581,7 +593,7 @@ async function run() {
   } catch (error) {
     if (tenantId) {
       try {
-        failureDiagnostics = await collectFailureDiagnostics(adminDb, tenantId);
+        failureDiagnostics = await collectFailureDiagnostics(adminDb, auditDb, tenantId);
       } catch {
         failureDiagnostics = { snapshot: "unavailable" };
       }
@@ -598,7 +610,7 @@ async function run() {
       await Promise.allSettled([pulsoDeliveryContract.close()]);
     }
     try {
-      if (tenantId) await cleanupSyntheticTenant(adminDb, tenantId);
+      if (tenantId) await cleanupSyntheticTenant(adminDb, auditAdminDb, tenantId);
     } finally {
       await Promise.allSettled(databases.map((database) => database.close()));
     }
@@ -753,6 +765,18 @@ function readConfiguration(environment) {
   if (auditDatabaseLocation === sharedDatabaseLocation) {
     throw new Error("audit_database_must_be_logically_isolated");
   }
+  const auditAdminDatabaseUrl = requiredEnvironment(environment, "TEST_AUDIT_ADMIN_DATABASE_URL");
+  const parsedAuditAdminDatabaseUrl = safeUrl(auditAdminDatabaseUrl, "TEST_AUDIT_ADMIN_DATABASE_URL");
+  const auditAdminDatabaseLocation = `${parsedAuditAdminDatabaseUrl.hostname.toLowerCase()}:${parsedAuditAdminDatabaseUrl.port || "5432"}${parsedAuditAdminDatabaseUrl.pathname}`;
+  if (
+    (parsedAuditAdminDatabaseUrl.protocol !== "postgres:" && parsedAuditAdminDatabaseUrl.protocol !== "postgresql:") ||
+    !parsedAuditAdminDatabaseUrl.username ||
+    !parsedAuditAdminDatabaseUrl.password ||
+    parsedAuditAdminDatabaseUrl.username === "hyperion_audit" ||
+    auditAdminDatabaseLocation !== auditDatabaseLocation
+  ) {
+    throw new Error("invalid_audit_admin_database_url");
+  }
 
   const natsUrl = requiredEnvironment(environment, "NATS_URL");
   const parsedNatsUrl = safeUrl(natsUrl, "NATS_URL");
@@ -786,7 +810,15 @@ function readConfiguration(environment) {
   ];
   assert.equal(new Set(databasePasswords).size, databasePasswords.length);
 
-  return { adminDatabaseUrl, parsedDatabaseUrl, auditDatabaseUrl, natsUrl, natsPasswords, environment };
+  return {
+    adminDatabaseUrl,
+    parsedDatabaseUrl,
+    auditDatabaseUrl,
+    auditAdminDatabaseUrl,
+    natsUrl,
+    natsPasswords,
+    environment
+  };
 }
 
 function serviceDatabaseUrl(configuration, role, passwordName) {
@@ -908,10 +940,12 @@ async function oneRow(database, label, query) {
   return result.rows[0];
 }
 
-async function cleanupSyntheticTenant(adminDb, tenantId) {
-  await adminDb.transaction(async (transaction) => {
+async function cleanupSyntheticTenant(adminDb, auditAdminDb, tenantId) {
+  await auditAdminDb.transaction(async (transaction) => {
     await transaction.query("delete from platform.audit_events where tenant_id = $1", [tenantId]);
     await transaction.query("delete from audit_runtime.inbox_events where tenant_id = $1", [tenantId]);
+  });
+  await adminDb.transaction(async (transaction) => {
     await transaction.query("delete from channel_runtime.outbox_event_positions where tenant_id = $1", [tenantId]);
     await transaction.query("delete from channel_runtime.outbox_stream_positions where tenant_id = $1", [tenantId]);
     await transaction.query("delete from channel_runtime.outbox_events where tenant_id = $1", [tenantId]);
@@ -928,8 +962,8 @@ async function cleanupSyntheticTenant(adminDb, tenantId) {
   });
 }
 
-async function collectFailureDiagnostics(adminDb, tenantId) {
-  return oneRow(adminDb, "failure diagnostics", {
+async function collectFailureDiagnostics(adminDb, auditDb, tenantId) {
+  const shared = await oneRow(adminDb, "shared failure diagnostics", {
     text: `select
       (select count(*)::int from channel_runtime.outbox_events
         where tenant_id = $1) as "channelOutbox",
@@ -947,4 +981,13 @@ async function collectFailureDiagnostics(adminDb, tenantId) {
         where tenant_id = $1) as "pulsoOutbox"`,
     values: [tenantId]
   });
+  const audit = await oneRow(auditDb, "Audit failure diagnostics", {
+    text: `select
+      (select count(*)::int from audit_runtime.inbox_events
+        where tenant_id = $1) as "auditInbox",
+      (select count(*)::int from platform.audit_events
+        where tenant_id = $1) as "auditEffects"`,
+    values: [tenantId]
+  });
+  return { ...shared, ...audit };
 }

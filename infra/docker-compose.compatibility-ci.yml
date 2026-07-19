@@ -1,6 +1,17 @@
 # CI-only override used by the N-1 compatibility rehearsal. Both Compose
 # projects mount the same explicitly named volumes while keeping their images,
 # containers and networks isolated.
+services:
+  nova-database-bootstrap:
+    environment:
+      HYPERION_ENV: ${HYPERION_ENV:?HYPERION_ENV is required}
+  nova-migrations:
+    environment:
+      HYPERION_ENV: ${HYPERION_ENV:?HYPERION_ENV is required}
+  nova-role-bootstrap:
+    environment:
+      HYPERION_ENV: ${HYPERION_ENV:?HYPERION_ENV is required}
+
 volumes:
   postgres_data:
     name: ${HYPERION_COMPAT_POSTGRES_VOLUME:?HYPERION_COMPAT_POSTGRES_VOLUME is required}

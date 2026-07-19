@@ -123,11 +123,23 @@ test("NATS capacity reserves five rolling-upgrade slots above the managed topolo
 
 test("the real autonomy flow uses the provider-owned Audit database instead of the shared database", () => {
   assert.match(source, /requiredEnvironment\(environment, "TEST_AUDIT_DATABASE_URL"\)/);
+  assert.match(source, /requiredEnvironment\(environment, "TEST_AUDIT_ADMIN_DATABASE_URL"\)/);
   assert.match(source, /createDatabase\(configuration\.auditDatabaseUrl\)/);
+  assert.match(source, /createDatabase\(configuration\.auditAdminDatabaseUrl\)/);
   assert.doesNotMatch(source, /serviceDatabaseUrl\(configuration, "hyperion_audit"/);
   assert.match(source, /audit_database_must_be_logically_isolated/);
   assert.match(source, /const databasePasswords = \[\s*parsedAuditDatabaseUrl\.password/);
   assert.match(workflow, /TEST_AUDIT_DATABASE_URL=/);
+  assert.match(workflow, /TEST_AUDIT_ADMIN_DATABASE_URL:/);
+
+  const sharedCounts = source.slice(
+    source.indexOf('const sharedCounts = await oneRow(adminDb, "shared flow counts"'),
+    source.indexOf('const auditCounts = await oneRow(auditDb, "Audit flow counts"')
+  );
+  assert.doesNotMatch(sharedCounts, /audit_runtime|platform\.audit_events/);
+  assert.equal(source.match(/queryOneOrUndefined\(auditDb/g)?.length, 2);
+  assert.match(source, /const result = await auditDb\.query\(/);
+  assert.match(source, /cleanupSyntheticTenant\(adminDb, auditAdminDb, tenantId\)/);
 });
 
 test("LIWA tenant provisioning requires explicit account and tenant configuration", () => {
