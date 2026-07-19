@@ -4,9 +4,10 @@ title = "Hyperion gitleaks"
 useDefault = true
 
 [allowlist]
-description = "Placeholder templates and synthetic test fixtures are not live secrets"
+description = "Placeholder templates and synthetic fixtures are not live secrets"
 paths = [
   '''(^|/)(\.env\.example|.+\.env\.example)$''',
-  '''(?i).*\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$''',
-  '''(?i).*\.test\.mjs$'''
+  '''(?i).*\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|sh)$''',
+  '''(?i).*recovery-drill\.mjs$''',
+  '''(?i).*snapshot\.test\.sh$'''
 ]

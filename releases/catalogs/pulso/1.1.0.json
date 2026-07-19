@@ -6,7 +6,7 @@
   "owner": "@AdministracionHyperion",
   "createdAt": "2026-07-18T10:00:00Z",
   "rollbackPolicy": "releases/rollback-policies/pulso/1.1.0.json",
-  "rollbackPolicySha256": "1d2678bc86b1dc342391af7539f3cc2661e9400173a00c5f035668433681d0fe",
+  "rollbackPolicySha256": "fc245a3c7e48440464df14763ac7a573d871999eae1f825b43e838422370fd74",
   "components": [
     {
       "id": "agent-service",
@@ -89,7 +89,11 @@
       "version": "1.0.0",
       "imageRepository": "ghcr.io/administracionhyperion/pulso-migrations",
       "buildService": "pulso-migrations",
-      "composeServices": ["pulso-database-bootstrap", "pulso-migrations", "pulso-role-bootstrap"]
+      "composeServices": [
+        "pulso-database-bootstrap",
+        "pulso-migrations",
+        "pulso-role-bootstrap"
+      ]
     },
     {
       "id": "pulso-contracts",

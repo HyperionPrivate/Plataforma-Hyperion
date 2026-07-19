@@ -6,7 +6,7 @@
   "owner": "@AdministracionHyperion",
   "createdAt": "2026-07-19T05:30:00Z",
   "rollbackPolicy": "releases/rollback-policies/pulso/1.3.0.json",
-  "rollbackPolicySha256": "1d6fdffcda591f77274e2aaae485e2074fa94977ba101f38935c2deda0ac5b5e",
+  "rollbackPolicySha256": "4512d404d008058d22bae5b22d73b4f4e31d5f21a843c9b30cbce3ab32173bb5",
   "components": [
     {
       "id": "agent-service",

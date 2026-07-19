@@ -1,9 +1,8 @@
 name: Security / CodeQL
 
 on:
-  pull_request:
-    branches:
-      - main
+  # Code scanning SARIF upload needs GitHub Advanced Security on private repos.
+  # Run on main/schedule so PRs are not blocked on the Free-plan wall.
   push:
     branches:
       - main
@@ -25,6 +24,9 @@ jobs:
     name: Analyze JavaScript and TypeScript
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Free private orgs cannot upload code-scanning SARIF without Advanced Security.
+    # Keep the workflow visible; do not block the PR merge gate on that paid wall.
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3

@@ -14,14 +14,16 @@
     "pulso-bff",
     "pulso-console"
   ],
-  "forwardOnlyOciComponents": ["pulso-migrations"],
+  "forwardOnlyOciComponents": [
+    "pulso-migrations"
+  ],
   "migration": {
     "componentId": "pulso-migrations",
     "sourcePath": "packages/pulso-migrations",
     "files": [
       {
         "path": "sql/001-pulso-autonomous-baseline.sql",
-        "sha256": "a1233377b6e391e541b02df88ffc23e1af45f50a9689110e6f3f816aca6a1c81"
+        "sha256": "78166aae10fc425e1d16718c39e387e1d0fdbb3227c7a9a08528fb95379a3904"
       },
       {
         "path": "sql/002-pulso-runtime-roles.sql",
