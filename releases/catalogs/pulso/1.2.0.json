@@ -89,11 +89,7 @@
       "version": "1.1.0",
       "imageRepository": "ghcr.io/administracionhyperion/pulso-migrations",
       "buildService": "pulso-migrations",
-      "composeServices": [
-        "pulso-database-bootstrap",
-        "pulso-migrations",
-        "pulso-role-bootstrap"
-      ]
+      "composeServices": ["pulso-database-bootstrap", "pulso-migrations", "pulso-role-bootstrap"]
     },
     {
       "id": "pulso-contracts",
