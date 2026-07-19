@@ -7,6 +7,10 @@ import ts from "typescript";
 
 const DEFAULT_CONFIG = "docs/architecture/data-ownership.json";
 const DEFAULT_BASELINE = "docs/architecture/boundary-baseline.json";
+// Backwards-compatible default for focused fixtures. The repository config
+// declares explicit migration scopes so every provider-owned logical database
+// is evaluated independently and discovery can fail closed on new migrators.
+const DEFAULT_EFFECTIVE_MIGRATION_OVERLAY_ROOTS = ["packages/platform-migrations/sql"];
 const SOURCE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"]);
 
 function toPosix(value) {
@@ -165,9 +169,11 @@ export function extractMigrationStructure(sqlText) {
   const foreignKeys = [];
   const foreignKeyEvents = [];
   const routines = [];
+  const routineEvents = [];
   const plpgsqlAccesses = [];
   const securityDefiners = [];
   const triggers = [];
+  const triggerEvents = [];
   const createPattern =
     /create\s+table\s+(?:if\s+not\s+exists\s+)?"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?\s*\(([\s\S]*?)\)\s*;/gi;
   const alterPattern =
@@ -176,8 +182,12 @@ export function extractMigrationStructure(sqlText) {
     /create\s+(?:or\s+replace\s+)?(?:function|procedure)\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?/gi;
   const routineBodyPattern =
     /create\s+(?:or\s+replace\s+)?(?:function|procedure)\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?([\s\S]*?)\$([A-Za-z_]*)\$([\s\S]*?)\$\4\$/gi;
+  const dropRoutinePattern =
+    /drop\s+(?:function|procedure)\s+(?:if\s+exists\s+)?"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?(?:\s*\([^;]*?\))?(?:\s+(?:cascade|restrict))?\s*;/gi;
   const triggerPattern =
-    /create\s+(?:or\s+replace\s+)?trigger\s+"?([a-z_][a-z0-9_]*)"?\s+[\s\S]*?\bon\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?[\s\S]*?\bexecute\s+(?:function|procedure)\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?/gi;
+    /create\s+(?:or\s+replace\s+)?(?:constraint\s+)?trigger\s+"?([a-z_][a-z0-9_]*)"?\s+[\s\S]*?\bon\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?[\s\S]*?\bexecute\s+(?:function|procedure)\s+"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?/gi;
+  const dropTriggerPattern =
+    /drop\s+trigger\s+(?:if\s+exists\s+)?"?([a-z_][a-z0-9_]*)"?\s+on\s+(?:only\s+)?"?([a-z_][a-z0-9_]*)"?\."?([a-z_][a-z0-9_]*)"?(?:\s+(?:cascade|restrict))?\s*;/gi;
 
   for (const match of sql.matchAll(createPattern)) {
     const source = tableNameFromMatch(match);
@@ -231,28 +241,61 @@ export function extractMigrationStructure(sqlText) {
     const body = match[5] ?? "";
     const securityDefiner = /\bsecurity\s+definer\b/i.test(header);
     if (securityDefiner) securityDefiners.push(routine);
-    for (const access of extractSqlAccessesFromSql(body)) {
-      plpgsqlAccesses.push({ routine, securityDefiner, ...access });
-    }
+    const accesses = extractSqlAccessesFromSql(body).map((access) => ({
+      routine,
+      securityDefiner,
+      ...access
+    }));
+    routineEvents.push({
+      accesses,
+      position: match.index ?? 0,
+      routine,
+      securityDefiner,
+      type: "upsert"
+    });
+    plpgsqlAccesses.push(...accesses);
+  }
+
+  for (const match of sql.matchAll(dropRoutinePattern)) {
+    routineEvents.push({
+      position: match.index ?? 0,
+      routine: normalizeTable(match[1], match[2]),
+      type: "drop"
+    });
   }
 
   for (const match of sql.matchAll(triggerPattern)) {
-    triggers.push({
+    const trigger = {
       name: match[1].toLowerCase(),
       table: normalizeTable(match[2], match[3]),
       routine: normalizeTable(match[4], match[5])
+    };
+    triggers.push(trigger);
+    triggerEvents.push({ ...trigger, position: match.index ?? 0, type: "upsert" });
+  }
+
+  for (const match of sql.matchAll(dropTriggerPattern)) {
+    triggerEvents.push({
+      name: match[1].toLowerCase(),
+      position: match.index ?? 0,
+      table: normalizeTable(match[2], match[3]),
+      type: "drop"
     });
   }
 
   foreignKeyEvents.sort((left, right) => left.position - right.position);
+  routineEvents.sort((left, right) => left.position - right.position);
+  triggerEvents.sort((left, right) => left.position - right.position);
   return {
     declarations,
     foreignKeys,
     foreignKeyEvents,
     routines,
+    routineEvents,
     plpgsqlAccesses,
     securityDefiners,
-    triggers
+    triggers,
+    triggerEvents
   };
 }
 
@@ -309,15 +352,208 @@ function managedObjectProblem(config, object, objectType) {
   return config.managedSchemas.includes(schema) && !databaseObjectOwner(config, object, objectType);
 }
 
-function isTemporaryException(config, id) {
-  return (config.temporaryExceptions ?? []).some((entry) => entry.id === id);
+function currentUtcDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function validateTemporaryExceptions(exceptions = [], today = currentUtcDate()) {
+  const errors = [];
+  const activeIds = new Set();
+  const seenIds = new Set();
+
+  for (const [index, entry] of exceptions.entries()) {
+    const label = entry?.id || `temporaryExceptions[${index}]`;
+    const validId = typeof entry?.id === "string" && entry.id.trim().length > 0;
+    const validOwner = typeof entry?.owner === "string" && entry.owner.trim().length > 0;
+    const validIssue = typeof entry?.issue === "string" && /^[A-Z][A-Z0-9]+-[A-Z0-9-]+$/.test(entry.issue);
+    const validJustification = typeof entry?.justification === "string" && entry.justification.trim().length >= 20;
+    const validExpiry = typeof entry?.expiresAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(entry.expiresAt);
+
+    if (!validId || !validOwner || !validIssue || !validJustification || !validExpiry) {
+      errors.push(
+        `${label}: exception requires non-empty id/owner, issue, justification (>=20 chars) and ISO expiresAt`
+      );
+      continue;
+    }
+    if (seenIds.has(entry.id)) {
+      errors.push(`${label}: duplicate temporary exception id`);
+      continue;
+    }
+    seenIds.add(entry.id);
+    if (entry.expiresAt < today) {
+      errors.push(`${label}: temporary exception expired on ${entry.expiresAt}`);
+      continue;
+    }
+    activeIds.add(entry.id);
+  }
+
+  return { activeIds, errors };
+}
+
+function normalizedMigrationRoot(value) {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const normalized = toPosix(path.normalize(value.trim())).replace(/^\.\//, "");
+  if (path.isAbsolute(value) || normalized === ".." || normalized.startsWith("../")) return null;
+  return normalized;
+}
+
+async function discoverMigrationPackageRoots(root, packagesRoot) {
+  const discovered = [];
+  const errors = [];
+  const absolutePackagesRoot = path.join(root, packagesRoot);
+  let entries;
+  try {
+    entries = await readdir(absolutePackagesRoot, { withFileTypes: true });
+  } catch (error) {
+    return {
+      discovered,
+      errors: [`No se pudo descubrir migradores en ${packagesRoot}: ${error.message}`]
+    };
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const packageRoot = toPosix(path.join(packagesRoot, entry.name));
+    const manifestPath = path.join(root, packageRoot, "package.json");
+    let manifest;
+    let manifestMissing = false;
+    try {
+      manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    } catch (error) {
+      if (error?.code === "ENOENT") manifestMissing = true;
+      else errors.push(`${packageRoot}/package.json no se pudo validar: ${error.message}`);
+    }
+    const namedMigrator = entry.name === "migrations" || entry.name.endsWith("-migrations");
+    const hasMigrateScript = typeof manifest?.scripts?.migrate === "string" && manifest.scripts.migrate.trim() !== "";
+    let sqlFiles = [];
+    try {
+      sqlFiles = await walk(path.join(root, packageRoot, "sql"), new Set([".sql"]));
+    } catch (error) {
+      if (hasMigrateScript || namedMigrator) errors.push(`${packageRoot}/sql no se pudo escanear: ${error.message}`);
+    }
+    if (!hasMigrateScript && !(namedMigrator && sqlFiles.length > 0)) continue;
+    if (manifestMissing) errors.push(`${packageRoot}/package.json falta para un migrador descubierto`);
+    else if (namedMigrator && !hasMigrateScript) {
+      errors.push(`${packageRoot}/package.json debe declarar scripts.migrate`);
+    }
+    discovered.push(`${packageRoot}/sql`);
+  }
+
+  return { discovered: discovered.sort(), errors };
+}
+
+export async function resolveMigrationScopes(root, scan) {
+  const effective = scan?.migrationStateMode === "effective";
+  if (!effective || scan?.migrationScopes === undefined) {
+    const roots = [
+      scan?.migrationRoot,
+      ...(effective ? (scan?.effectiveMigrationOverlayRoots ?? DEFAULT_EFFECTIVE_MIGRATION_OVERLAY_ROOTS) : [])
+    ].filter(Boolean);
+    return { errors: [], scopes: [{ id: effective ? "effective" : "historical", roots: [...new Set(roots)] }] };
+  }
+
+  const errors = [];
+  const scopes = [];
+  const seenIds = new Set();
+  const seenRoots = new Set();
+  if (!Array.isArray(scan.migrationScopes) || scan.migrationScopes.length === 0) {
+    return { errors: ["scan.migrationScopes debe ser un arreglo no vacío"], scopes };
+  }
+
+  for (const [index, candidate] of scan.migrationScopes.entries()) {
+    const id = typeof candidate?.id === "string" ? candidate.id.trim() : "";
+    if (!/^[a-z][a-z0-9-]*$/.test(id)) {
+      errors.push(`scan.migrationScopes[${index}].id no es válido`);
+      continue;
+    }
+    if (seenIds.has(id)) errors.push(`scan.migrationScopes repite el scope ${id}`);
+    seenIds.add(id);
+    if (!Array.isArray(candidate.roots) || candidate.roots.length === 0) {
+      errors.push(`scan.migrationScopes.${id}.roots debe ser un arreglo no vacío`);
+      continue;
+    }
+    const mode = candidate.mode ?? "independent";
+    if (!new Set(["independent", "legacy-overlay"]).has(mode)) {
+      errors.push(`scan.migrationScopes.${id}.mode no es válido`);
+    }
+    if (candidate.roots.length > 1 && mode !== "legacy-overlay") {
+      errors.push(`scan.migrationScopes.${id} no puede mezclar migradores provider-owned independientes`);
+    }
+    const legacyRoot = normalizedMigrationRoot(scan.migrationRoot);
+    if (
+      mode === "legacy-overlay" &&
+      (candidate.roots.length < 2 || normalizedMigrationRoot(candidate.roots[0]) !== legacyRoot)
+    ) {
+      errors.push(
+        `scan.migrationScopes.${id} legacy-overlay debe comenzar por scan.migrationRoot y declarar un overlay`
+      );
+    }
+    if (mode === "legacy-overlay") {
+      if (typeof candidate.owner !== "string" || !candidate.owner.trim()) {
+        errors.push(`scan.migrationScopes.${id} legacy-overlay no declara owner`);
+      }
+      if (typeof candidate.issue !== "string" || !/^[A-Z][A-Z0-9]+-[A-Z0-9-]+$/.test(candidate.issue)) {
+        errors.push(`scan.migrationScopes.${id} legacy-overlay no declara issue válido`);
+      }
+      if (
+        typeof candidate.expiresAt !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(candidate.expiresAt) ||
+        candidate.expiresAt < currentUtcDate()
+      ) {
+        errors.push(`scan.migrationScopes.${id} legacy-overlay no declara expiresAt vigente`);
+      }
+    }
+    const roots = [];
+    for (const value of candidate.roots) {
+      const migrationRoot = normalizedMigrationRoot(value);
+      if (!migrationRoot) {
+        errors.push(`scan.migrationScopes.${id} contiene una ruta inválida`);
+        continue;
+      }
+      if (seenRoots.has(migrationRoot)) {
+        errors.push(`scan.migrationScopes registra más de una vez ${migrationRoot}`);
+        continue;
+      }
+      seenRoots.add(migrationRoot);
+      roots.push(migrationRoot);
+      try {
+        const sqlFiles = await walk(path.join(root, migrationRoot), new Set([".sql"]));
+        if (sqlFiles.length === 0) errors.push(`${migrationRoot} no contiene migraciones SQL`);
+      } catch (error) {
+        errors.push(`${migrationRoot} no se pudo escanear: ${error.message}`);
+      }
+    }
+    scopes.push({ id, roots });
+  }
+
+  const packagesRoot = normalizedMigrationRoot(scan.migrationPackagesRoot ?? "packages");
+  if (!packagesRoot) {
+    errors.push("scan.migrationPackagesRoot no es una ruta válida");
+  } else {
+    const discovery = await discoverMigrationPackageRoots(root, packagesRoot);
+    errors.push(...discovery.errors);
+    for (const migrationRoot of discovery.discovered) {
+      if (!seenRoots.has(migrationRoot)) {
+        errors.push(`Migrador descubierto no registrado en migrationScopes: ${migrationRoot}`);
+      }
+    }
+    for (const migrationRoot of seenRoots) {
+      if (!discovery.discovered.includes(migrationRoot)) {
+        errors.push(`migrationScopes registra una raíz sin package migrador: ${migrationRoot}`);
+      }
+    }
+  }
+
+  return { errors: [...new Set(errors)].sort(), scopes };
 }
 
 export async function detectBoundaryViolations(root, config) {
   const violations = new Map();
-  const structuralErrors = [];
-  const activeForeignKeys = new Map();
+  const exceptionValidation = validateTemporaryExceptions(config.temporaryExceptions);
+  const structuralErrors = [...exceptionValidation.errors];
+  const effectiveMigrationState = config.scan.migrationStateMode === "effective";
   const sourceExtensions = new Set(config.scan.sourceExtensions ?? [...SOURCE_EXTENSIONS]);
+  const isTemporaryException = (id) => exceptionValidation.activeIds.has(id);
 
   for (const sourceRoot of config.scan.sourceRoots) {
     const absoluteRoot = path.join(root, sourceRoot);
@@ -345,7 +581,7 @@ export async function detectBoundaryViolations(root, config) {
         if (sourceOwner === "migration-control") continue;
         if (sourceOwner === targetOwner) continue;
         const id = `sql-access|${relativePath}|${sourceOwner}->${targetOwner}|${access}|${objectType}|${object}`;
-        if (isTemporaryException(config, id)) continue;
+        if (isTemporaryException(id)) continue;
         addCount(violations, {
           id,
           kind: "sql-access",
@@ -360,121 +596,218 @@ export async function detectBoundaryViolations(root, config) {
     }
   }
 
-  const migrationRoot = path.join(root, config.scan.migrationRoot);
-  for (const file of await walk(migrationRoot, new Set([".sql"]))) {
-    const relativePath = toPosix(path.relative(root, file));
-    const structure = extractMigrationStructure(await readFile(file, "utf8"));
-    for (const table of structure.declarations) {
-      if (managedObjectProblem(config, table, "table")) {
-        structuralErrors.push(`Tabla declarada sin propietario: ${relativePath} -> ${table}`);
-      }
+  const migrationResolution = await resolveMigrationScopes(root, config.scan);
+  structuralErrors.push(...migrationResolution.errors);
+
+  for (const migrationScope of migrationResolution.errors.length === 0 ? migrationResolution.scopes : []) {
+    const activeForeignKeys = new Map();
+    const activeRoutines = new Map();
+    const activeTriggers = new Map();
+    const migrationFiles = [];
+    for (const migrationRoot of migrationScope.roots) {
+      migrationFiles.push(...(await walk(path.join(root, migrationRoot), new Set([".sql"]))));
     }
-    for (const routine of structure.routines) {
-      if (managedObjectProblem(config, routine, "routine")) {
-        structuralErrors.push(`Rutina declarada sin propietario: ${relativePath} -> ${routine}`);
+
+    for (const file of migrationFiles) {
+      const relativePath = toPosix(path.relative(root, file));
+      const structure = extractMigrationStructure(await readFile(file, "utf8"));
+      for (const table of structure.declarations) {
+        if (managedObjectProblem(config, table, "table")) {
+          structuralErrors.push(`Tabla declarada sin propietario: ${relativePath} -> ${table}`);
+        }
+      }
+      for (const routine of structure.routines) {
+        if (managedObjectProblem(config, routine, "routine")) {
+          structuralErrors.push(`Rutina declarada sin propietario: ${relativePath} -> ${routine}`);
+        }
+      }
+
+      const inspectRoutineAccess = (access, accessPath) => {
+        if (managedObjectProblem(config, access.object, access.objectType)) {
+          structuralErrors.push(
+            `Referencia PL/pgSQL a ${access.objectType === "routine" ? "rutina" : "tabla"} sin propietario: ${accessPath} -> ${access.routine} -> ${access.object}`
+          );
+          return;
+        }
+        const sourceOwner = databaseObjectOwner(config, access.routine, "routine");
+        const targetOwner = databaseObjectOwner(config, access.object, access.objectType);
+        if (!sourceOwner) {
+          structuralErrors.push(`Rutina PL/pgSQL sin propietario: ${accessPath} -> ${access.routine}`);
+          return;
+        }
+        if (!targetOwner || sourceOwner === targetOwner) return;
+        const id = `plpgsql-sql-access|${accessPath}|${access.routine}|${sourceOwner}->${targetOwner}|${access.access}|${access.objectType}|${access.object}`;
+        if (isTemporaryException(id)) return;
+        addCount(violations, {
+          id,
+          kind: "plpgsql-sql-access",
+          path: accessPath,
+          routine: access.routine,
+          sourceOwner,
+          targetOwner,
+          access: access.access,
+          object: access.object,
+          objectType: access.objectType,
+          securityDefiner: access.securityDefiner
+        });
+      };
+
+      const inspectSecurityDefiner = (routine, accesses, accessPath) => {
+        const hasCrossOwner = accesses.some(
+          (access) =>
+            access.routine === routine &&
+            access.securityDefiner &&
+            databaseObjectOwner(config, access.routine, "routine") &&
+            databaseObjectOwner(config, access.object, access.objectType) &&
+            databaseObjectOwner(config, access.routine, "routine") !==
+              databaseObjectOwner(config, access.object, access.objectType)
+        );
+        if (!hasCrossOwner) return;
+        const crossId = `security-definer-cross-owner|${accessPath}|${routine}`;
+        if (isTemporaryException(crossId)) return;
+        addCount(violations, {
+          id: crossId,
+          kind: "security-definer-cross-owner",
+          path: accessPath,
+          routine
+        });
+      };
+
+      if (effectiveMigrationState) {
+        for (const event of structure.routineEvents) {
+          if (event.type === "drop") activeRoutines.delete(event.routine);
+          else activeRoutines.set(event.routine, { ...event, path: relativePath });
+        }
+      } else {
+        for (const access of structure.plpgsqlAccesses) inspectRoutineAccess(access, relativePath);
+        for (const routine of structure.securityDefiners) {
+          inspectSecurityDefiner(routine, structure.plpgsqlAccesses, relativePath);
+        }
+      }
+
+      for (const event of structure.triggerEvents) {
+        const key = `${event.table}|${event.name}`;
+        if (event.type === "drop") activeTriggers.delete(key);
+        else activeTriggers.set(key, { ...event, path: relativePath });
+      }
+
+      for (const event of structure.foreignKeyEvents) {
+        if (event.type === "drop") {
+          activeForeignKeys.delete(`${event.source}|${event.constraintName}`);
+          continue;
+        }
+
+        const key = event.constraintName
+          ? `${event.source}|${event.constraintName}`
+          : `${relativePath}|${event.position}|${event.source}`;
+        activeForeignKeys.set(key, { ...event, path: relativePath });
       }
     }
 
-    for (const access of structure.plpgsqlAccesses) {
-      if (managedObjectProblem(config, access.object, access.objectType)) {
-        structuralErrors.push(
-          `Referencia PL/pgSQL a ${access.objectType === "routine" ? "rutina" : "tabla"} sin propietario: ${relativePath} -> ${access.routine} -> ${access.object}`
-        );
+    for (const { path: declarationPath, source, target } of activeForeignKeys.values()) {
+      if (managedObjectProblem(config, source, "table") || managedObjectProblem(config, target, "table")) {
+        structuralErrors.push(`FK con tabla sin propietario: ${declarationPath} -> ${source} -> ${target}`);
         continue;
       }
-      const sourceOwner = databaseObjectOwner(config, access.routine, "routine");
-      const targetOwner = databaseObjectOwner(config, access.object, access.objectType);
-      if (!sourceOwner) {
-        structuralErrors.push(`Rutina PL/pgSQL sin propietario: ${relativePath} -> ${access.routine}`);
-        continue;
-      }
-      if (!targetOwner || sourceOwner === targetOwner) continue;
-      const id = `plpgsql-sql-access|${relativePath}|${access.routine}|${sourceOwner}->${targetOwner}|${access.access}|${access.objectType}|${access.object}`;
-      if (isTemporaryException(config, id)) continue;
+      const sourceOwner = tableOwner(config, source);
+      const targetOwner = tableOwner(config, target);
+      if (!sourceOwner || !targetOwner || sourceOwner === targetOwner) continue;
+      const id = `cross-owner-fk|${declarationPath}|${source}|${sourceOwner}->${targetOwner}|${target}`;
+      if (isTemporaryException(id)) continue;
       addCount(violations, {
         id,
-        kind: "plpgsql-sql-access",
-        path: relativePath,
-        routine: access.routine,
+        kind: "cross-owner-fk",
+        path: declarationPath,
         sourceOwner,
         targetOwner,
-        access: access.access,
-        object: access.object,
-        objectType: access.objectType,
-        securityDefiner: access.securityDefiner
+        sourceTable: source,
+        targetTable: target
       });
     }
 
-    for (const routine of structure.securityDefiners) {
-      const id = `security-definer|${relativePath}|${routine}`;
-      if (isTemporaryException(config, id)) continue;
-      // SECURITY DEFINER is recorded only when paired with a cross-owner body access,
-      // or when the routine itself is undeclared (already a structural error).
-      const hasCrossOwner = structure.plpgsqlAccesses.some(
-        (access) =>
-          access.routine === routine &&
-          access.securityDefiner &&
-          databaseObjectOwner(config, access.routine, "routine") &&
-          databaseObjectOwner(config, access.object, access.objectType) &&
-          databaseObjectOwner(config, access.routine, "routine") !==
-            databaseObjectOwner(config, access.object, access.objectType)
-      );
-      if (!hasCrossOwner) continue;
-      const crossId = `security-definer-cross-owner|${relativePath}|${routine}`;
-      if (isTemporaryException(config, crossId)) continue;
+    for (const trigger of activeTriggers.values()) {
+      const tableProblem = managedObjectProblem(config, trigger.table, "table");
+      const routineProblem = managedObjectProblem(config, trigger.routine, "routine");
+      if (tableProblem) {
+        structuralErrors.push(
+          `Trigger sobre tabla sin propietario: ${trigger.path} -> ${trigger.name} -> ${trigger.table}`
+        );
+      }
+      if (routineProblem) {
+        structuralErrors.push(
+          `Trigger hacia rutina sin propietario: ${trigger.path} -> ${trigger.name} -> ${trigger.routine}`
+        );
+      }
+      if (tableProblem || routineProblem) continue;
+
+      const sourceOwner = tableOwner(config, trigger.table);
+      const targetOwner = databaseObjectOwner(config, trigger.routine, "routine");
+      if (!sourceOwner || !targetOwner || sourceOwner === targetOwner) continue;
+      const id = `cross-owner-trigger|${trigger.path}|${trigger.name}|${trigger.table}|${sourceOwner}->${targetOwner}|${trigger.routine}`;
+      if (isTemporaryException(id)) continue;
       addCount(violations, {
-        id: crossId,
-        kind: "security-definer-cross-owner",
-        path: relativePath,
-        routine
+        id,
+        kind: "cross-owner-trigger",
+        path: trigger.path,
+        trigger: trigger.name,
+        sourceOwner,
+        targetOwner,
+        sourceTable: trigger.table,
+        targetRoutine: trigger.routine
       });
     }
 
-    for (const trigger of structure.triggers) {
-      if (managedObjectProblem(config, trigger.table, "table")) {
-        structuralErrors.push(
-          `Trigger sobre tabla sin propietario: ${relativePath} -> ${trigger.name} -> ${trigger.table}`
-        );
-      }
-      if (managedObjectProblem(config, trigger.routine, "routine")) {
-        structuralErrors.push(
-          `Trigger hacia rutina sin propietario: ${relativePath} -> ${trigger.name} -> ${trigger.routine}`
-        );
+    if (effectiveMigrationState) {
+      for (const definition of activeRoutines.values()) {
+        for (const access of definition.accesses) {
+          if (managedObjectProblem(config, access.object, access.objectType)) {
+            structuralErrors.push(
+              `Referencia PL/pgSQL a ${access.objectType === "routine" ? "rutina" : "tabla"} sin propietario: ${definition.path} -> ${access.routine} -> ${access.object}`
+            );
+            continue;
+          }
+          const sourceOwner = databaseObjectOwner(config, access.routine, "routine");
+          const targetOwner = databaseObjectOwner(config, access.object, access.objectType);
+          if (!sourceOwner) {
+            structuralErrors.push(`Rutina PL/pgSQL sin propietario: ${definition.path} -> ${access.routine}`);
+            continue;
+          }
+          if (!targetOwner || sourceOwner === targetOwner) continue;
+          const id = `plpgsql-sql-access|${definition.path}|${access.routine}|${sourceOwner}->${targetOwner}|${access.access}|${access.objectType}|${access.object}`;
+          if (!isTemporaryException(id)) {
+            addCount(violations, {
+              id,
+              kind: "plpgsql-sql-access",
+              path: definition.path,
+              routine: access.routine,
+              sourceOwner,
+              targetOwner,
+              access: access.access,
+              object: access.object,
+              objectType: access.objectType,
+              securityDefiner: access.securityDefiner
+            });
+          }
+        }
+
+        if (definition.securityDefiner) {
+          const hasCrossOwner = definition.accesses.some((access) => {
+            const sourceOwner = databaseObjectOwner(config, access.routine, "routine");
+            const targetOwner = databaseObjectOwner(config, access.object, access.objectType);
+            return sourceOwner && targetOwner && sourceOwner !== targetOwner;
+          });
+          const id = `security-definer-cross-owner|${definition.path}|${definition.routine}`;
+          if (hasCrossOwner && !isTemporaryException(id)) {
+            addCount(violations, {
+              id,
+              kind: "security-definer-cross-owner",
+              path: definition.path,
+              routine: definition.routine
+            });
+          }
+        }
       }
     }
-
-    for (const event of structure.foreignKeyEvents) {
-      if (event.type === "drop") {
-        activeForeignKeys.delete(`${event.source}|${event.constraintName}`);
-        continue;
-      }
-
-      const key = event.constraintName
-        ? `${event.source}|${event.constraintName}`
-        : `${relativePath}|${event.position}|${event.source}`;
-      activeForeignKeys.set(key, { ...event, path: relativePath });
-    }
-  }
-
-  for (const { path: declarationPath, source, target } of activeForeignKeys.values()) {
-    if (managedObjectProblem(config, source, "table") || managedObjectProblem(config, target, "table")) {
-      structuralErrors.push(`FK con tabla sin propietario: ${declarationPath} -> ${source} -> ${target}`);
-      continue;
-    }
-    const sourceOwner = tableOwner(config, source);
-    const targetOwner = tableOwner(config, target);
-    if (!sourceOwner || !targetOwner || sourceOwner === targetOwner) continue;
-    const id = `cross-owner-fk|${declarationPath}|${source}|${sourceOwner}->${targetOwner}|${target}`;
-    if (isTemporaryException(config, id)) continue;
-    addCount(violations, {
-      id,
-      kind: "cross-owner-fk",
-      path: declarationPath,
-      sourceOwner,
-      targetOwner,
-      sourceTable: source,
-      targetTable: target
-    });
   }
 
   return {
@@ -513,6 +846,13 @@ export function makeBaseline(violations, commit = "replace-with-reviewed-commit"
   };
 }
 
+export function makeBaselineFromDetection(detected, commit = "replace-with-reviewed-commit") {
+  if ((detected?.structuralErrors ?? []).length > 0) {
+    throw new Error(`No se puede generar baseline con errores estructurales:\n${detected.structuralErrors.join("\n")}`);
+  }
+  return makeBaseline(detected?.violations ?? [], commit);
+}
+
 async function readJson(root, relativePath) {
   return JSON.parse(await readFile(path.join(root, relativePath), "utf8"));
 }
@@ -536,7 +876,7 @@ async function main() {
   const detected = await detectBoundaryViolations(root, config);
 
   if (args.has("--print-baseline")) {
-    process.stdout.write(`${JSON.stringify(makeBaseline(detected.violations), null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(makeBaselineFromDetection(detected), null, 2)}\n`);
     return;
   }
 

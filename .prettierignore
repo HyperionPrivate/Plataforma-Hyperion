@@ -3,4 +3,5 @@ dist/
 coverage/
 pnpm-lock.yaml
 tmp/
+graphify-out/
 apps/coopfuturo-console/

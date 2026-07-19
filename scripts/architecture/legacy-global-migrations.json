@@ -1,0 +1,196 @@
+{
+  "version": 3,
+  "algorithm": "sha256",
+  "policy": "Frozen historical global migrator. Remove entries when migrations move to a cell-owned migrator; never add entries or edit a listed file in place. A detected historical finding is accepted only when this catalog binds its exact occurrence count to exact bytes and to live debt metadata.",
+  "files": [
+    { "name": "001-platform.sql", "sha256": "e67a4c5e0b76ba4ded1c232ac866e7f71750dd8e418664ad9e275a14028fca14" },
+    { "name": "002-pulso-iris.sql", "sha256": "b75fa87ef761a463f9e588b21834d6ddddd0d389c210156d43b9d7225b9e5af5" },
+    { "name": "003-identity-auth.sql", "sha256": "ec667bbe9aa76c9daae4841cac9fdd21f82093c88d3d0f2e529b4a9545b1aaa4" },
+    {
+      "name": "004-cedco-catalog.sql",
+      "sha256": "b955d100a482a92e0cb4edf483e296e6914e6d52e4ee85989d57a217e0e0ed8d",
+      "acceptedFindings": [
+        {
+          "kind": "hardcoded-tenant-slug-selection",
+          "debtId": "DEBT-022",
+          "owner": "platform-data",
+          "issue": "HYP-DEBT-022",
+          "expiresOn": "2027-03-31",
+          "occurrences": 4,
+          "rationale": "Live legacy CEDCO seed whose bytes are immutable while the global migrator retires; provider-owned and NOVA standalone migrators do not execute it."
+        }
+      ]
+    },
+    {
+      "name": "005-pulso-iris-operations.sql",
+      "sha256": "fcfbf00dd971fe2258f0f94afcceb1c2909261d762f2ca2db54162e5ec8bc289"
+    },
+    {
+      "name": "006-tenant-isolation.sql",
+      "sha256": "d69e08477d1acb95249d3ede9d46c796de8e2300f5c224ceee3a63291dcd39eb"
+    },
+    { "name": "007-operator-roles.sql", "sha256": "ffdd95ee52be25c43149a848c202cfbc0056093fff16be861514a385c4783484" },
+    {
+      "name": "008-agenda-configuration.sql",
+      "sha256": "9daab2e9ae80ceecde3ef58c862c0616a64e64006944600b91198770cdee76d3"
+    },
+    {
+      "name": "009-agenda-slot-engine.sql",
+      "sha256": "cb7e04bdf7804ebcd7cff4bd1fe382fe52d09363b210530ebe09f29a752da235"
+    },
+    { "name": "010-agenda-rules.sql", "sha256": "e8376e5318c65870cd3d6ca316de3445b0767fcbb4b8027b4544f5e775fe86f1" },
+    {
+      "name": "011-configurable-agenda.sql",
+      "sha256": "7d12e6192f0ffb96eab4c989adb77b585976899b717e1f901389fa40700c0b38"
+    },
+    {
+      "name": "012-whatsapp-sofia-runtime.sql",
+      "sha256": "5354f4fc23c1cc778fbbcf90f27c4e6d04ca36d474b6428e1df923958be2557d"
+    },
+    {
+      "name": "013-sofia-confirmation-protocol.sql",
+      "sha256": "02062808ac00c3ab44f8be2cc228a32ae0e770fce92b9f2a2f610223b393640c"
+    },
+    {
+      "name": "014-sofia-local-time-protocol.sql",
+      "sha256": "ab8130b343ee302e0f3db464ebde88af8a3e92626b9b11538e95e9706707843a"
+    },
+    {
+      "name": "015-sofia-fresh-availability.sql",
+      "sha256": "c6dab91ba59e8e2dfe5799f7ad864c0bacee5c91e9be8328cbaaa98c8dbd6fea"
+    },
+    {
+      "name": "016-sofia-search-constraints.sql",
+      "sha256": "3333413d2a3111d0026f0ac65cbb0152acdf004e55b410040daaf1cb7cd189cd"
+    },
+    {
+      "name": "017-whatsapp-channel-durability.sql",
+      "sha256": "0ba9de2de6a568e2b3f28242177f7566fa17d28724a2e1c5a4982ce315e22d3a"
+    },
+    {
+      "name": "018-lumen-clinical-demo.sql",
+      "sha256": "846fe83d42f188c9fcbbc8dd986cfc9cee7cab289b7711aafb69dd96c7340732"
+    },
+    {
+      "name": "019-lumen-clinical-invariants.sql",
+      "sha256": "338779ca613227d1157cfb77b684fee8d53574f76766c1e7558410b77ee672da"
+    },
+    {
+      "name": "020-lumen-real-audio-pipeline.sql",
+      "sha256": "2f55728540ef2cd2a888885ce92014a855cbcdee990d1ccab4f3202d9766f770"
+    },
+    {
+      "name": "020-service-role-nologin-fence.sql",
+      "sha256": "51357be823f91bc21bb3a5d18bf3ef4c587bfda329df7de8309e1d29d6465672"
+    },
+    {
+      "name": "021-autonomous-event-flow.sql",
+      "sha256": "6a26b35bd122ff3e9785620866ef256351ee3e4e1a874b557db2d63c752e31df"
+    },
+    {
+      "name": "022-channel-inbound-outbox-fence.sql",
+      "sha256": "f70e0234604a71a9076bd8a8c5210accd20691090fde220952de7eaa737589ca"
+    },
+    { "name": "022-lumen-autonomy.sql", "sha256": "58413dbf80b3dfdbd5ee035acaeb88b8f859f73589fd259745e05a67f529c26f" },
+    {
+      "name": "023-channel-inbound-outbox-backfill.sql",
+      "sha256": "56aaed132975cbbd3f12e252b315dc5ee448e6f75d868f75f70eb26ddcd67cfa"
+    },
+    {
+      "name": "024-service-database-roles.sql",
+      "sha256": "7aa911fb60aef5401665f4f464c3500af96280e14d036d513456f7ffc45a85b5"
+    },
+    {
+      "name": "024-service-role-membership-fence.sql",
+      "sha256": "b4386e5eca9070d4265ae84e6df05d4ff61e8cb42304826354b908152c8cdbc4"
+    },
+    {
+      "name": "025-audit-ledger-autonomy.sql",
+      "sha256": "a4afbd61f7123ad56a455057e77650e12db360ded2203e03ef8617d745333795"
+    },
+    {
+      "name": "026-audit-source-provenance.sql",
+      "sha256": "146d137412b56ff6a738e6ce61170fe5c476693d066e4ecca83151da7a72a5ec"
+    },
+    {
+      "name": "027-audit-source-provenance-contract.sql",
+      "sha256": "518bb79d9b0a159dcd3fa3de39683e9d48cda0fa9ee780116005ac0e9873ac8b"
+    },
+    {
+      "name": "028-audit-source-provenance-index.sql",
+      "sha256": "bcd3e6fb6f8430d1dbace4e027ea73f959390b9bd83783b9caf5fcf98c8d9e18"
+    },
+    {
+      "name": "029-lumen-audio-cleanup-recovery.sql",
+      "sha256": "3d3b7557e72f776ce8eed61b6d8caea8c4554250a5487899f933932afb58a0f4"
+    },
+    {
+      "name": "030-channel-conversation-ordering.sql",
+      "sha256": "59ff1c3b49823e7840cc79540e84c6ad6789356401d8c7631d304056962fed95"
+    },
+    {
+      "name": "031-channel-conversation-ordering-indexes.sql",
+      "sha256": "419c6b70248cda7f23f591902b3bf1069175602eb9b137be89bde81b0a0f2b65"
+    },
+    {
+      "name": "032-lumen-audio-cleanup-contract.sql",
+      "sha256": "16be2e5abdc59fe7a9a83cb8c85de83ab103d0ef070ef878c20636d0a1fa9b4b"
+    },
+    {
+      "name": "033-lumen-audio-cleanup-index.sql",
+      "sha256": "08940e579c5eef0e0b191b3dd71b637433701ccab965f9132a505760e2f2acf0"
+    },
+    {
+      "name": "034-channel-conversation-ordering-contract.sql",
+      "sha256": "ebee9a656d7ac4b3514d9ea17310ef7b8b15b39e757da0a29d7927a9dbb3229f"
+    },
+    {
+      "name": "035-pulso-sofia-conversation-ordering.sql",
+      "sha256": "423f907af0ada4659d5c0ae8296c50b71aa8c7193ec27c8d7cb7cc2667da5b92"
+    },
+    {
+      "name": "036-pulso-sofia-conversation-ordering-backfill.sql",
+      "sha256": "c58a4a5b568519885cca786e1705d845b1854998c024575a9daac6f096036888"
+    },
+    {
+      "name": "037-pulso-sofia-conversation-ordering-indexes.sql",
+      "sha256": "b83ddbd903966bb34ae1889e2b289428b92ca169091dedd32ee73f6b946a8d69"
+    },
+    {
+      "name": "038-n-minus-one-durable-event-compatibility.sql",
+      "sha256": "140d5861aa0859f6ea9facfd437ed65f244927ef36b08dcff1bf6ac0341576cc"
+    },
+    {
+      "name": "039-lumen-unresolved-cleanup-owner-index.sql",
+      "sha256": "4438a75a308348e2916dc2b02f7d427a04e6179942307d5484f404a791d4a07a"
+    },
+    {
+      "name": "040-ownership-isolation-revoke-cross-owner-grants.sql",
+      "sha256": "60d3bd6e7626f7b5c417ebd1252f65e1896a56926bada4b34238725e93f7015f"
+    },
+    {
+      "name": "041-pulso-channel-audit-outbox.sql",
+      "sha256": "49944c08a6e823c46edb0b1cd71a463f7ec57acba16afda85a313ad69690d94c"
+    },
+    {
+      "name": "042-pulso-channel-audit-outbox-indexes.sql",
+      "sha256": "83ddcc24c95b7ebad5097af35864a796cd6322cc03382c8e1af3482184648e99"
+    },
+    {
+      "name": "043-pulso-channel-audit-outbox-contract.sql",
+      "sha256": "14bf437b76effe018bdccc7a64adb341762da6c8013c14e0bfcbe782161747bf"
+    },
+    {
+      "name": "044-pulso-channel-delivery-inbox.sql",
+      "sha256": "f3e4663ebfe3e270bb6bb18248e0812390e1527aca97a984993d3d8414fe4e25"
+    },
+    {
+      "name": "045-pulso-channel-delivery-inbox-index.sql",
+      "sha256": "5228c1b8265d83f67f149b618de952249c5ee6e96f73f1b1f37fd6e0d19837ae"
+    },
+    {
+      "name": "046-pulso-channel-delivery-inbox-contract.sql",
+      "sha256": "0bc1df0464dda2dfd9ed1e965b4c6dba152505aca8cd5a33e62e1332d857d656"
+    }
+  ]
+}
