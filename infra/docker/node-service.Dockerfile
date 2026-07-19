@@ -18,15 +18,12 @@ RUN find apps packages services -type d -name dist -prune -exec rm -rf '{}' +
 
 RUN pnpm install --frozen-lockfile
 ARG BUILD_FILTER
-# Always materialize the shared runtime closure copied by service-runtime-base,
-# even when BUILD_FILTER's dependency graph no longer references legacy packages.
+# Always materialize the shared runtime closure copied by service-runtime-base.
+# Use "..." so transitive deps (e.g. config → platform-contracts) build first.
 RUN test -n "$BUILD_FILTER" \
   && pnpm --filter "${BUILD_FILTER}..." \
-    --filter @hyperion/config \
-    --filter @hyperion/contracts \
-    --filter @hyperion/database \
-    --filter @hyperion/logger \
-    --filter @hyperion/service-runtime \
+    --filter "@hyperion/service-runtime..." \
+    --filter "@hyperion/contracts..." \
     build
 
 # Runtime images need executable JavaScript only. Keep tests, declarations and
