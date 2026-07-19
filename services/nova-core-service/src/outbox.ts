@@ -1,3 +1,4 @@
+import { auditEventSchema, novaAuditEventRecordContract } from "@hyperion/nova-contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 
 export interface NovaOutboxDelivery {
@@ -26,6 +27,18 @@ export interface NovaOutboxInsert {
   correlationId: string;
   businessIdempotencyKey?: string;
   dataClassification?: "public" | "internal" | "confidential" | "restricted";
+  payload: Record<string, unknown>;
+  destination: string;
+}
+
+export interface NovaAuditOutboxInsert {
+  eventId: string;
+  tenantId: string;
+  correlationId: string;
+  businessIdempotencyKey: string;
+  domainEventType: string;
+  entityType: string;
+  entityId?: string;
   payload: Record<string, unknown>;
   destination: string;
 }
@@ -199,6 +212,35 @@ export async function insertNovaOutboxEvent(db: DatabaseExecutor, event: NovaOut
       event.destination
     ]
   );
+}
+
+/**
+ * Wraps NOVA domain changes in the provider-owned Audit contract while keeping
+ * the domain event and its correlation data available as immutable metadata.
+ */
+export async function insertNovaAuditOutboxEvent(db: DatabaseExecutor, event: NovaAuditOutboxInsert): Promise<void> {
+  const auditPayload = auditEventSchema.parse({
+    tenantId: event.tenantId,
+    actorId: "nova-core-service",
+    eventType: event.domainEventType,
+    entityType: event.entityType,
+    entityId: event.entityId,
+    metadata: {
+      correlationId: event.correlationId,
+      businessIdempotencyKey: event.businessIdempotencyKey,
+      domainPayload: event.payload
+    }
+  });
+
+  await insertNovaOutboxEvent(db, {
+    eventId: event.eventId,
+    eventType: novaAuditEventRecordContract.eventType,
+    tenantId: event.tenantId,
+    correlationId: event.correlationId,
+    businessIdempotencyKey: event.businessIdempotencyKey,
+    payload: auditPayload,
+    destination: event.destination
+  });
 }
 
 function sanitizeErrorCode(value: string): string {

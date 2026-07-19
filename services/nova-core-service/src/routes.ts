@@ -2,6 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import {
   envelope,
   novaCatalog,
+  novaFlowIdSchema,
   novaIngressEventSchema,
   tenantIdSchema,
   contactImportedPayloadSchema,
@@ -21,16 +22,13 @@ import {
   prequalCompletedPayloadSchema,
   csatRecordedPayloadSchema,
   optOutPayloadSchema
-} from "@hyperion/contracts";
-import { readServiceUrls } from "@hyperion/config";
+} from "@hyperion/nova-contracts";
+import { readServiceUrls } from "@hyperion/nova-config";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
-import type { ServiceContext } from "@hyperion/service-runtime";
+import type { ServiceContext } from "@hyperion/nova-service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
-  agencyCodeFromTag,
-  agencyTagFromCode,
-  buildAgencySeedList,
   decideEligibility,
   DEFAULT_COMPLIANCE,
   normalizeE164,
@@ -39,11 +37,16 @@ import {
 } from "./domain.js";
 import { extractMultipartFile, isCsvFilename, parseContactsCsv, type ContactImportRow } from "./contact-import-file.js";
 import { createCoreAdapter, type CoreAdapter } from "./core-adapter.js";
-import { insertNovaOutboxEvent, listNovaOutboxDlq, redriveNovaOutboxDlq } from "./outbox.js";
+import {
+  insertNovaAuditOutboxEvent,
+  insertNovaOutboxEvent,
+  listNovaOutboxDlq,
+  redriveNovaOutboxDlq
+} from "./outbox.js";
 import { canTransitionCrm, inferIntentFromPayload, stageFromPostCallIntent, type CrmStage } from "./post-call.js";
 import { resolveLiwaFlowId, resolveProductFlowForContact } from "./resolve-liwa-flow.js";
 
-const productLineSchema = z.enum(["renovacion", "reactivacion", "nuevos", "microcredito"]);
+const productLineSchema = novaFlowIdSchema;
 
 const contactImportSchema = z.object({
   contacts: z
@@ -60,16 +63,14 @@ const contactImportSchema = z.object({
     .max(500)
 });
 
-function productLineFromSegment(raw?: string | null): "renovacion" | "reactivacion" | "nuevos" | "microcredito" {
+function productLineFromSegment(raw?: string | null): string {
   const value = String(raw ?? "")
     .trim()
     .toLowerCase()
     .normalize("NFKD")
     .replace(/\p{M}/gu, "");
-  if (value.includes("react")) return "reactivacion";
-  if (value.includes("nuevo")) return "nuevos";
-  if (value.includes("micro")) return "microcredito";
-  return "renovacion";
+  const identifier = value.replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  return novaFlowIdSchema.safeParse(identifier).success ? identifier : "default";
 }
 
 const scoreSchema = z.object({
@@ -81,7 +82,7 @@ const scoreSchema = z.object({
 const campaignCreateSchema = z.object({
   name: z.string().min(2).max(160),
   channel: z.enum(["voice", "whatsapp", "mixed"]),
-  product_flow: z.enum(["renovacion", "reactivacion"])
+  product_flow: novaFlowIdSchema
 });
 
 const enrollSchema = z.object({
@@ -141,7 +142,7 @@ const labLiwaEventSchema = z.object({
   text: z.string().max(2000).optional()
 });
 
-const productFlowSchema = z.enum(["renovacion", "reactivacion"]);
+const productFlowSchema = novaFlowIdSchema;
 
 const agentConfigSchema = z.object({
   product_flow: productFlowSchema,
@@ -175,7 +176,19 @@ const outcomeSchema = z.object({
 
 const bootstrapSchema = z.object({
   tenant_id: z.string().uuid(),
-  display_name: z.string().min(1).max(160)
+  display_name: z.string().min(1).max(160),
+  agencies: z
+    .array(
+      z.object({
+        code: z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,39}$/),
+        name: z.string().min(2).max(120),
+        city: z.string().min(2).max(120),
+        advisor_group: z.string().min(1).max(80),
+        routing_tag: z.string().min(1).max(80).optional()
+      })
+    )
+    .max(500)
+    .default([])
 });
 
 export interface NovaRouteDependencies {
@@ -368,9 +381,11 @@ export async function registerNovaRoutes(
           full_name_masked: row.full_name ? maskName(row.full_name) : undefined
         });
 
-        await insertNovaOutboxEvent(tx, {
+        await insertNovaAuditOutboxEvent(tx, {
           eventId: randomUUID(),
-          eventType: "contact.imported",
+          domainEventType: "contact.imported",
+          entityType: "contact",
+          entityId: resolvedId,
           tenantId: scope.tenantId,
           correlationId,
           businessIdempotencyKey: `contact-import:${scope.tenantId}:${phone}`,
@@ -546,7 +561,7 @@ export async function registerNovaRoutes(
 
     const productFlow = readProductFlow(request.params);
     if (!productFlow) {
-      return reply.code(400).send(envelope({ error: "productFlow must be renovacion|reactivacion" }, request.id));
+      return reply.code(400).send(envelope({ error: "productFlow must be a configured flow identifier" }, request.id));
     }
 
     const result = await scope.db.query(
@@ -582,7 +597,7 @@ export async function registerNovaRoutes(
 
     const productFlow = readProductFlow(request.params);
     if (!productFlow) {
-      return reply.code(400).send(envelope({ error: "productFlow must be renovacion|reactivacion" }, request.id));
+      return reply.code(400).send(envelope({ error: "productFlow must be a configured flow identifier" }, request.id));
     }
 
     const parsed = agentConfigSchema.safeParse({
@@ -654,9 +669,11 @@ export async function registerNovaRoutes(
           urgency: computed.urgency,
           wave: computed.wave
         });
-        await insertNovaOutboxEvent(tx, {
+        await insertNovaAuditOutboxEvent(tx, {
           eventId: randomUUID(),
-          eventType: "contact.scored",
+          domainEventType: "contact.scored",
+          entityType: "contact",
+          entityId: contactId,
           tenantId: scope.tenantId,
           correlationId,
           businessIdempotencyKey: `contact-scored:${scope.tenantId}:${contactId}:${segment}`,
@@ -740,9 +757,11 @@ export async function registerNovaRoutes(
         eligibility: decision.eligibility,
         reason: decision.reason
       });
-      await insertNovaOutboxEvent(tx, {
+      await insertNovaAuditOutboxEvent(tx, {
         eventId: randomUUID(),
-        eventType: "contact.eligibility.decided",
+        domainEventType: "contact.eligibility.decided",
+        entityType: "contact",
+        entityId: contactId,
         tenantId: scope.tenantId,
         correlationId,
         businessIdempotencyKey: `eligibility:${scope.tenantId}:${contactId}`,
@@ -1001,9 +1020,11 @@ export async function registerNovaRoutes(
           stage: row.stage,
           tipification: row.tipification ?? undefined
         });
-        await insertNovaOutboxEvent(tx, {
+        await insertNovaAuditOutboxEvent(tx, {
           eventId: randomUUID(),
-          eventType: "lead.qualified",
+          domainEventType: "lead.qualified",
+          entityType: "lead",
+          entityId: leadId,
           tenantId: scope.tenantId,
           correlationId,
           businessIdempotencyKey: `lead:${scope.tenantId}:${leadId}:${row.stage}`,
@@ -1266,9 +1287,11 @@ export async function registerNovaRoutes(
         kind: parsed.data.kind,
         score: typeof parsed.data.payload.score === "number" ? parsed.data.payload.score : undefined
       });
-      await insertNovaOutboxEvent(tx, {
+      await insertNovaAuditOutboxEvent(tx, {
         eventId: randomUUID(),
-        eventType: "core.outcome.recorded",
+        domainEventType: "core.outcome.recorded",
+        entityType: "outcome",
+        entityId: outcomeId,
         tenantId: scope.tenantId,
         correlationId,
         businessIdempotencyKey: `outcome:${scope.tenantId}:${outcomeId}`,
@@ -1338,6 +1361,7 @@ export async function registerNovaRoutes(
         method: "POST",
         headers,
         body: JSON.stringify(payload),
+        redirect: "error",
         signal: AbortSignal.timeout(8_000)
       });
     } catch (error) {
@@ -1410,7 +1434,7 @@ export async function registerNovaRoutes(
       phone = contact.rows[0]?.phone_e164 ?? null;
       const agency = row.agency_code ?? contact.rows[0]?.agency_code ?? null;
       if (agency) {
-        handoffTag = agencyTagFromCode(agency) ?? `AG_${agency}`;
+        handoffTag = (await findAgencyRoutingTag(scope.db, scope.tenantId, agency)) ?? null;
       }
     }
 
@@ -1478,12 +1502,21 @@ export async function registerNovaRoutes(
         [parsed.data.tenant_id, parsed.data.display_name, now, payloadHash]
       );
 
-      for (const agency of buildAgencySeedList()) {
+      for (const agency of parsed.data.agencies) {
         await tx.query(
-          `insert into nova.agencies (tenant_id, code, name, city, advisor_group)
-           values ($1, $2, $3, $4, $5)
-           on conflict (tenant_id, code) do nothing`,
-          [parsed.data.tenant_id, agency.code, agency.name, agency.city, agency.advisorGroup]
+          `insert into nova.agencies (tenant_id, code, name, city, advisor_group, routing_tag)
+           values ($1, $2, $3, $4, $5, $6)
+           on conflict (tenant_id, code) do update
+           set name = excluded.name, city = excluded.city,
+               advisor_group = excluded.advisor_group, routing_tag = excluded.routing_tag`,
+          [
+            parsed.data.tenant_id,
+            agency.code,
+            agency.name,
+            agency.city,
+            agency.advisor_group,
+            agency.routing_tag ?? null
+          ]
         );
       }
     });
@@ -1493,7 +1526,7 @@ export async function registerNovaRoutes(
         {
           tenant_id: parsed.data.tenant_id,
           display_name: parsed.data.display_name,
-          agencies: buildAgencySeedList().length
+          agencies: parsed.data.agencies.length
         },
         request.id
       )
@@ -1553,7 +1586,8 @@ export async function registerNovaRoutes(
     }
 
     const reviewId = randomUUID();
-    const flowId = parsed.data.flow_id ?? (await resolveLiwaFlowId(scope.db, scope.tenantId, "renovacion"));
+    const productFlow = await resolveProductFlowForContact(scope.db, scope.tenantId, contactId);
+    const flowId = parsed.data.flow_id ?? (await resolveLiwaFlowId(scope.db, scope.tenantId, productFlow));
     await scope.db.query(
       `insert into nova.whatsapp_reviews (tenant_id, review_id, contact_id, status, intent, flow_id)
        values ($1, $2, $3, 'pending_review', $4, $5)`,
@@ -1617,7 +1651,7 @@ export async function registerNovaRoutes(
           explicitFlowId: parsed.data.flow_id
         });
         const messageId = randomUUID();
-        const agencyTag = agencyTagFromCode(review.agencyCode);
+        const agencyTag = await findAgencyRoutingTag(tx, scope.tenantId, review.agencyCode);
         await insertNovaOutboxEvent(tx, {
           eventId: randomUUID(),
           eventType: "wa.send.requested",
@@ -1819,7 +1853,7 @@ async function processInboundEvent(
     }
 
     if (stageInfo.wantsWhatsapp) {
-      // Default ON: tipify positivo → disparar flujo LIWA (Renovaciones) sin gate de revisión.
+      // Default ON: a positive classification may dispatch the tenant-configured LIWA flow.
       // Ops puede forzar revisión con POST_CALL_WHATSAPP_AUTO_SEND=false.
       const autoSend = (process.env.POST_CALL_WHATSAPP_AUTO_SEND ?? "true").toLowerCase() !== "false";
 
@@ -1872,7 +1906,7 @@ async function processInboundEvent(
               contact_ref: row.phone,
               mode: "flow",
               flow_id: flowId,
-              agency_tag: agencyTagFromCode(row.agencyCode),
+              agency_tag: await findAgencyRoutingTag(db, tenantId, row.agencyCode),
               review_id: reviewId,
               product_flow: productFlow
             }),
@@ -2000,7 +2034,7 @@ async function processInboundEvent(
 
   if (eventType === "handoff.requested") {
     const parsed = handoffRequestedPayloadSchema.parse(payload);
-    const agencyCode = parsed.agency_code || agencyCodeFromTag(parsed.agency_tag) || "BGA";
+    const agencyCode = parsed.agency_code;
     const contactId = await ensureContactFromRef(db, tenantId, parsed.contact_id, parsed.contact_ref, agencyCode);
     if (!contactId) {
       throw new Error("handoff.requested requires resolvable contact_id or contact_ref phone");
@@ -2284,9 +2318,11 @@ async function upsertImportedContact(
     agency_code: row.agency_code,
     full_name_masked: row.full_name ? maskName(row.full_name) : undefined
   });
-  await insertNovaOutboxEvent(tx, {
+  await insertNovaAuditOutboxEvent(tx, {
     eventId: randomUUID(),
-    eventType: "contact.imported",
+    domainEventType: "contact.imported",
+    entityType: "contact",
+    entityId: resolvedId,
     tenantId,
     correlationId: randomUUID(),
     businessIdempotencyKey: `contact-import:${tenantId}:${row.phone_e164}`,
@@ -2328,13 +2364,26 @@ async function upsertAgentConfig(
   );
 }
 
-function readProductFlow(params: unknown): "renovacion" | "reactivacion" | undefined {
+function readProductFlow(params: unknown): string | undefined {
   const value =
     typeof params === "object" && params && "productFlow" in params
       ? (params as { productFlow?: unknown }).productFlow
       : undefined;
   const parsed = productFlowSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
+}
+
+async function findAgencyRoutingTag(
+  db: DatabaseExecutor,
+  tenantId: string,
+  agencyCode?: string | null
+): Promise<string | undefined> {
+  if (!agencyCode) return undefined;
+  const result = await db.query<{ routing_tag: string | null }>(
+    `select routing_tag from nova.agencies where tenant_id = $1 and code = $2`,
+    [tenantId, agencyCode]
+  );
+  return result.rows[0]?.routing_tag ?? undefined;
 }
 
 function requireTenantDb(

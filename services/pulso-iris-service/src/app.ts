@@ -1,5 +1,4 @@
 ﻿import {
-  envelope,
   pulsoIrisAgentCode,
   pulsoIrisAppointmentListSchema,
   pulsoIrisCatalog,
@@ -8,7 +7,8 @@
   pulsoIrisOperationalKpisSchema,
   pulsoIrisProductCode,
   pulsoIrisRpaActionListSchema
-} from "@hyperion/contracts";
+} from "@hyperion/pulso-contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import { randomUUID } from "node:crypto";
 import {
   HttpOutboxDispatcher,
@@ -20,18 +20,23 @@ import {
 import {
   createInternalAuthorizationHeaders,
   isRestrictedDeploymentEnvironment,
+  readInternalCaller,
   readInternalCredential,
   readOperatorAssertionKey,
   validateOperatorAssertionContext,
   validateInternalAuthorization,
+  validateProductOperatorAssertionContext,
   type RouteRegistrar,
   type ServiceContext
 } from "@hyperion/service-runtime";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
+import { registerAgendaReadinessRoute } from "./agenda-readiness-routes.js";
+import { ensureAgendaSettingsExist } from "./agenda-settings.js";
 import { registerAppointmentRoutes } from "./appointment-routes.js";
 import { startAppointmentHoldExpiration } from "./appointment-hold-expiration.js";
 import { startAppointmentVerificationSimulator } from "./appointment-verification-simulator.js";
 import { createAuditClient } from "./audit-client.js";
+import { createAuditHistoryClient } from "./audit-history-client.js";
 import { registerAvailabilityRoutes } from "./availability-routes.js";
 import { registerChannelDeliveryEventRoutes } from "./channel-delivery-events.js";
 import { startChannelDeliveryJetStreamConsumer } from "./channel-delivery-jetstream.js";
@@ -55,10 +60,16 @@ import { readTenantId } from "./shared.js";
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const durableOutbox = readDurableOutboxConfiguration(process.env);
   const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_PULSO_TOKEN");
-  const operatorAssertionKey = readOperatorAssertionKey(process.env);
+  const pulsoBffToken = readInternalCredential(process.env, "PULSO_BFF_TO_CORE_TOKEN");
+  const gatewayAssertionKey = readOperatorAssertionKey(process.env);
+  const pulsoAssertionKey = readInternalCredential(process.env, "PULSO_OPERATOR_ASSERTION_KEY");
+  if (pulsoBffToken && !pulsoAssertionKey) {
+    throw new Error("PULSO_OPERATOR_ASSERTION_KEY is required with PULSO_BFF_TO_CORE_TOKEN");
+  }
   const sofiaToken = readInternalCredential(process.env, "PULSO_TO_SOFIA_TOKEN");
   const sofiaToPulsoToken = readInternalCredential(process.env, "SOFIA_TO_PULSO_TOKEN");
   const channelToPulsoToken = readInternalCredential(process.env, "CHANNEL_TO_PULSO_TOKEN");
+  const integrationToPulsoToken = readInternalCredential(process.env, "INTEGRATION_TO_PULSO_TOKEN");
   const pulsoToChannelToken = readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN");
   const auditToken = readInternalCredential(process.env, "PULSO_TO_AUDIT_TOKEN");
   const allowLegacyChannelInboundV1 = readChannelInboundV1Compatibility(process.env);
@@ -88,28 +99,43 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   const emitAudit = createAuditClient({
     logger: context.logger
   });
+  const readAuditHistory = createAuditHistoryClient({
+    auditServiceUrl: process.env.AUDIT_SERVICE_URL ?? "http://localhost:8086",
+    credential: auditToken
+  });
 
   app.addHook("preHandler", async (request, reply) => {
     if (!request.routeOptions.url?.startsWith("/v1/tenants/")) return;
     const tenantId = readTenantParam(request.params);
     if (tenantId === undefined) return;
-    const authError = validateInternalAuthorization(request.headers, { "api-gateway": gatewayToken });
+    const authError = validateInternalAuthorization(request.headers, {
+      "pulso-bff": pulsoBffToken,
+      "api-gateway": gatewayToken
+    });
     if (authError) {
       return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
     }
-    const assertionError = validateOperatorAssertionContext(request.headers, operatorAssertionKey, tenantId);
+    const assertionError =
+      readInternalCaller(request.headers) === "pulso-bff"
+        ? validateProductOperatorAssertionContext(request.headers, pulsoAssertionKey, tenantId, pulsoIrisProductCode)
+        : validateOperatorAssertionContext(request.headers, gatewayAssertionKey, tenantId);
     if (assertionError) {
       return reply.code(assertionError.statusCode).send(envelope({ error: assertionError.message }, request.id));
+    }
+    const validTenantId = readTenantId(request.params);
+    if (context.db && validTenantId) {
+      await ensureAgendaSettingsExist(context.db, validTenantId);
     }
   });
 
   await registerConfigRoutes(app, context, emitAudit);
-  await registerAppointmentRoutes(app, context, emitAudit);
+  await registerAppointmentRoutes(app, context, emitAudit, readAuditHistory);
   await registerOperationsRoutes(app, context, emitAudit);
   await registerAvailabilityRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
   await registerSofiaToolRoutes(app, context, emitAudit);
   registerSofiaOwnerRoutes(app, context, sofiaToPulsoToken);
+  registerAgendaReadinessRoute(app, context, integrationToPulsoToken);
   registerChannelDeliveryRoutes(app, context, channelToPulsoToken);
   registerPulsoEventPositionRoute(app, context, sofiaToPulsoToken);
   if (isHttpDurableEventIngressEnabled(durableOutbox.transport)) {
@@ -564,6 +590,6 @@ function createWorkloadFetch(caller: string, token: string): typeof fetch {
     for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
       headers.set(name, value);
     }
-    return fetch(input, { ...init, headers });
+    return fetch(input, { ...init, headers, redirect: "error" });
   };
 }

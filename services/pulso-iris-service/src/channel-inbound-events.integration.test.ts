@@ -4,15 +4,18 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { receiveChannelInboundEvent, type ChannelInboundEvent } from "./channel-inbound-events.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("durable Channel -> PULSO persistence", () => {
   let db: DatabaseClient;
+  let fixtureDb: DatabaseClient;
   let tenantId = "";
 
   beforeAll(async () => {
     db = createDatabase(TEST_DATABASE_URL ?? "");
-    const tenant = await db.query<{ id: string }>(
+    fixtureDb = createDatabase(TEST_PULSO_FIXTURE_DATABASE_URL ?? "");
+    const tenant = await fixtureDb.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name)
        values ($1, 'Autonomous PULSO flow test') returning id`,
       [`autonomous-pulso-${randomUUID()}`]
@@ -25,11 +28,12 @@ describeIntegration("durable Channel -> PULSO persistence", () => {
       await db.query("delete from pulso_iris.outbox_events where tenant_id = $1", [tenantId]);
       await db.query("delete from pulso_iris.inbox_events where tenant_id = $1", [tenantId]);
       await db.query("delete from pulso_iris.channel_threads where tenant_id = $1", [tenantId]);
-      await db.query("delete from channel_runtime.outbox_event_positions where tenant_id = $1", [tenantId]);
-      await db.query("delete from channel_runtime.outbox_events where tenant_id = $1", [tenantId]);
-      await db.query("delete from platform.tenants where id = $1", [tenantId]);
+      await fixtureDb.query("delete from channel_runtime.outbox_event_positions where tenant_id = $1", [tenantId]);
+      await fixtureDb.query("delete from channel_runtime.outbox_events where tenant_id = $1", [tenantId]);
+      await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
+    await fixtureDb.close();
   });
 
   it("commits local projections and one next-hop outbox event, then replays idempotently", async () => {
@@ -58,7 +62,7 @@ describeIntegration("durable Channel -> PULSO persistence", () => {
     const accepted = await receiveChannelInboundEvent(db, event);
     expect(accepted.status).toBe("accepted");
     if (accepted.status !== "accepted") throw new Error("controlled test setup failed");
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.inbox_events
           set result = jsonb_set(result, '{outboxEventType}', '"pulso.message.received.v1"'::jsonb)
         where tenant_id = $1 and event_id = $2`,
@@ -90,7 +94,7 @@ describeIntegration("durable Channel -> PULSO persistence", () => {
     const secondEventId = randomUUID();
     // Migration 038 resolves v1 inbox rows from the exact Channel owner ledger:
     // outbox_events.id = inbox.event_id and positions.event_id = aggregate_id.
-    await db.query(
+    await fixtureDb.query(
       `insert into channel_runtime.outbox_events (
          id, tenant_id, event_type, event_version, aggregate_type, aggregate_id,
          stream_id, stream_sequence, payload, status, occurred_at
@@ -111,7 +115,7 @@ describeIntegration("durable Channel -> PULSO persistence", () => {
         })
       ]
     );
-    await db.query(
+    await fixtureDb.query(
       `insert into channel_runtime.outbox_event_positions (
          tenant_id, event_id, stream_id, stream_sequence
        ) values ($1, $2, $3, 2)`,

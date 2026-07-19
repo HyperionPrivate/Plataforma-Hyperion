@@ -1,8 +1,19 @@
+---
+documentType: runbook
+status: not-current
+owner: nova-operations
+issue: HYP-NOVA-011
+reviewDue: 2026-09-30
+---
+
 # Contabo / Hyperion — cutover chat espejo (LIWA → NOVA Conversaciones)
+
+> **No vigente para producción.** El inventario de host y proveedor debe levantarse de nuevo y el corte requiere
+> HTTPS estable o túnel privado, aserción firmada y manifiesto NOVA por digest.
 
 **Repo correcto:** `AdministracionHyperion/Plataforma-Hyperion`  
 **UI producto:** `apps/coopfuturo-console` (Next.js Ops UI PULSO/CoopFuturo — misma interfaz del monolito)  
-**Puerto Contabo:** `http://144.91.100.31:19001`  
+**Acceso legado Contabo:** retirado de la documentación; usar exclusivamente port-forward SSH local autorizado.
 **Webhook path Hyperion:** `/v1/liwa/webhooks` (vía api-gateway)
 
 > La UI visual vive en `apps/coopfuturo-console` (portada desde `CoopFuturo_/apps/web`).  
@@ -68,16 +79,16 @@ git checkout interfaz-coopfuturo
 export COMPOSE_PROJECT_NAME=hyperion-test
 export API_GATEWAY_HOST_PORT=18081
 export WEB_CONSOLE_HOST_PORT=13001
-docker compose --env-file .env.contabo-test -f infra/docker-compose.yml -f infra/docker-compose.contabo-test.yml up -d --build
+docker compose --profile legacy-gateway --env-file .env.contabo-test -f infra/docker-compose.yml -f infra/docker-compose.contabo-test.yml up -d --build
 ```
 
-Webhook prueba:
+Webhook de prueba (solo mediante túnel privado con TLS):
 
 ```text
-http://<host>:18081/v1/liwa/webhooks
+https://<host-del-tunel-privado>/v1/liwa/webhooks
 ```
 
-Consola: `http://<host>:13001`
+Consola: port-forward SSH a `http://127.0.0.1:13001`.
 
 **Opción B — cutover sobre el host público definitivo** (cuando toque):
 
@@ -103,11 +114,11 @@ https://<host-publico>/v1/liwa/webhooks
 
 ```text
 https://<host-publico>/v1/liwa/webhooks
-# o prueba: http://<host>:18081/v1/liwa/webhooks
+# o prueba: https://<host-del-tunel-privado>/v1/liwa/webhooks
 ```
 
-**Header:** `X-LIWA-WEBHOOK-SECRET: <mismo .env>`  
-(o `?secret=` si la UI LIWA no permite headers — ver LIWA-WEBHOOK-CUTOVER).
+**Header obligatorio:** `X-LIWA-WEBHOOK-SECRET: <mismo .env>`. Si LIWA no
+permite configurarlo, usar un proxy privado que lo inyecte; nunca ponerlo en la URL.
 
 **Prohibido para este stack:**
 
@@ -152,7 +163,7 @@ Repite con `external_id` distinto por burbuja (`renov-bot-2`, …) para dedup en
 Curl de verificación (sin esperar al flow):
 
 ```bash
-export HOST="http://144.91.100.31:19080"
+export HOST="https://<host-del-tunel-privado>"
 export SECRET="<LIWA_WEBHOOK_SECRET>"
 export PHONE="573004198710"
 
@@ -180,7 +191,7 @@ curl -sS -X POST "$HOST/v1/liwa/webhooks" \
 ### Curl smoke
 
 ```bash
-export HOST="http://<host>:18081"   # o https://<host-publico>
+export HOST="https://<host-publico-o-tunel-privado>"
 export SECRET="<LIWA_WEBHOOK_SECRET>"
 export PHONE="57300XXXXXXX"
 

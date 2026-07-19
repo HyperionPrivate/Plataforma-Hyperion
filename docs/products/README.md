@@ -4,18 +4,23 @@ Esta carpeta es la fuente de verdad versionada para el alcance funcional de los 
 Hyperion. Las especificaciones son deliberadamente técnicas y no incluyen contratos, precios, datos personales,
 credenciales ni información reservada de clientes.
 
+El inventario operativo y sus propietarios viven en el
+[catálogo versionado de productos](../catalogs/products.v1.json). La plataforma neutral no es una consola
+multiproducto: se limita a Access/SSO, aprovisionamiento, Audit y administración neutral.
+
 ## Portafolio de software
 
-| Producto                    | Propósito                                                                                       | Estado documentado                                                                          |
-| --------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| [PULSO IRIS](PULSO-IRIS.md) | Atención administrativa, agenda y automatización multicanal. SOFÍA es su agente conversacional. | Implementación parcial con integraciones y automatizaciones todavía simuladas o pendientes. |
-| [LUMEN](LUMEN.md)           | Asistencia clínica por voz con revisión y aprobación humana.                                    | Corte de demostración clínica limitado a datos sintéticos.                                  |
-| [NOVA](NOVA.md)             | Campañas de contacto proactivo (voz IA + WhatsApp). Primer tenant: Coopfuturo.                  | Walking skeleton + slices iniciales en mock; Dialer/LIWA reales detrás de flags.            |
+| Producto                    | Propósito                                                                                       | Estado documentado                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [PULSO IRIS](PULSO-IRIS.md) | Atención administrativa, agenda y automatización multicanal. SOFÍA es su agente conversacional. | Implementación parcial con integraciones y automatizaciones todavía simuladas o pendientes.      |
+| [LUMEN](LUMEN.md)           | Asistencia clínica por voz con revisión y aprobación humana.                                    | Corte de demostración clínica limitado a datos sintéticos.                                       |
+| [NOVA](NOVA.md)             | Campañas de contacto proactivo (voz IA + WhatsApp). Primer tenant: Coopfuturo.                  | Celda en separación; adaptadores reales existen, pero sus runbooks y cutovers no están vigentes. |
 
 SOFÍA puede desplegarse en un contexto técnico separado para proteger su ciclo de vida, datos y operación, pero
 no constituye un producto comercial independiente. La consultoría y otros servicios profesionales tampoco son
-runtimes de la plataforma. Esta separación se formaliza en
-[ADR-0001](../architecture/decisions/ADR-0001-product-service-boundaries.md).
+runtimes de la plataforma. Voice, LIWA y Documents pertenecen a NOVA; Prompt Flow, Knowledge, Integration y el
+canal WhatsApp pertenecen a PULSO mientras no tengan otro consumidor real. Esta separación se formaliza en
+[ADR-0006](../architecture/decisions/ADR-0006-federated-product-cells.md).
 
 ## Estados de cobertura
 

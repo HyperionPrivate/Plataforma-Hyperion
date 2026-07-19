@@ -1,22 +1,38 @@
+---
+documentType: runbook
+status: not-current
+owner: nova-operations
+issue: HYP-NOVA-010
+reviewDue: 2026-09-30
+---
+
 # Corte real NOVA (fase 6)
 
-Activación de integraciones reales detrás de flags, con smoke de paridad contra mock.
+> **No vigente para producción.** Falta revalidarlo contra `nova-console`, el BFF propio, el contexto Docker
+> cerrado y un manifiesto de release NOVA fijado por digest.
+
+El texto histórico asumía un cambio mock/live que el runtime actual no implementa como barrera suficiente. La
+activación real depende de credenciales completas y validación del adaptador, por lo que ningún valor de esta tabla
+autoriza por sí solo un cutover.
 
 ## Flags
 
-| Variable                     | Default                | Real                                        |
-| ---------------------------- | ---------------------- | ------------------------------------------- |
-| `VOICE_MODE`                 | `mock`                 | `dialer` (o `elevenlabs_sip` solo demo)     |
-| `LIWA_MODE`                  | `mock`                 | `live`                                      |
-| `DIALER_BASE_URL`            | vacío                  | URL HTTPS del Neutral Dialer v3             |
-| `VOICE_TO_DIALER_TOKEN`      | placeholder            | JWT del dialer                              |
-| `DIALER_WEBHOOK_HMAC_SECRET` | placeholder            | HMAC compartido                             |
-| `LIWA_BASE_URL`              | `https://chat.liwa.co` | mismo                                       |
-| `LIWA_WEBHOOK_SECRET`        | placeholder            | rotado (credencial comprometida del piloto) |
+| Variable                     | Valor versionado/transicional  | Condición para una futura revalidación                  |
+| ---------------------------- | ------------------------------ | ------------------------------------------------------- |
+| `VOICE_MODE`                 | `dialer`                       | No tratarlo como feature flag ni fallback mock.         |
+| `DIALER_BASE_URL`            | red interna del Neutral Dialer | Origen aprobado, fijado y protegido contra SSRF.        |
+| `DIALER_ADMIN_USER`          | vacío fuera del overlay        | Credencial externa rotada.                              |
+| `DIALER_ADMIN_PASSWORD`      | vacío fuera del overlay        | Secreto externo; nunca documentarlo ni registrarlo.     |
+| `DIALER_DEMO_API_KEY`        | vacío fuera del overlay        | API key dedicada y rotada.                              |
+| `DIALER_WEBHOOK_HMAC_SECRET` | placeholder en `.env.example`  | HMAC dedicado y rotado.                                 |
+| `LIWA_MODE`                  | `http`                         | Etiqueta transicional; no demuestra conexión saludable. |
+| `LIWA_BASE_URL`              | `https://chat.liwa.co/api`     | Host allowlisted y contrato del proveedor verificado.   |
+| `LIWA_API_TOKEN`             | vacío                          | Token rotado en secret store.                           |
+| `LIWA_WEBHOOK_SECRET`        | placeholder en `.env.example`  | Secreto rotado y entregado solo mediante header.        |
 
 ## Bloqueadores externos
 
-1. **Rotar credencial LIWA** antes de `LIWA_MODE=live`.
+1. **Rotar credencial LIWA** antes de cualquier llamada real.
 2. Dominio público estable para webhooks (sin Cloudflare quick tunnel).
 3. Stack Compose del dialer desplegado junto a Hyperion (`infra/docker-compose.dialer.yml` overlay).
 4. Configurar en LIWA los nodos de webhook hacia `https://<dominio>/v1/liwa/webhooks`.
@@ -33,5 +49,6 @@ Activación de integraciones reales detrás de flags, con smoke de paridad contr
 
 ## Smoke CI
 
-Script: `scripts/autonomy/nova-smoke.e2e.mjs` (mock por defecto).
-Flujo: import → eligibility → campaign start → voice.call.* → wa.send.* → document → handoff claim.
+Script: `scripts/autonomy/nova-smoke.e2e.mjs` (requiere stack levantado y credenciales de un operador NOVA de prueba).
+El flujo usa login, cookies aisladas y CSRF; prueba además `403` cross-tenant y `404` cross-product. Voice puede quedar
+como dependencia opcional sólo cuando `NOVA_SMOKE_REQUIRE_VOICE` no es `1`; no existe fallback mock autorizado.

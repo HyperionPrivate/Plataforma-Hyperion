@@ -1,16 +1,18 @@
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import {
-  envelope,
+  pulsoAgendaReadinessSchema,
   sofiaReadinessSchema,
-  tenantIdSchema,
   whatsappIntegrationStatusSchema,
   whatsappQrSchema
-} from "@hyperion/contracts";
+} from "@hyperion/pulso-contracts";
 import {
   createInternalAuthorizationHeaders,
+  readInternalCaller,
   readInternalCredential,
   readOperatorAssertionKey,
   validateOperatorAssertionContext,
   validateInternalAuthorization,
+  validateProductOperatorAssertionContext,
   type RouteRegistrar
 } from "@hyperion/service-runtime";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -23,14 +25,21 @@ type OperatorRole = "admin" | "coordinator" | "advisor" | "auditor";
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const channelUrl = (process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089").replace(/\/$/, "");
   const agentUrl = (process.env.AGENT_SERVICE_URL ?? "http://localhost:8083").replace(/\/$/, "");
+  const pulsoUrl = (process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088").replace(/\/$/, "");
   const channelToken = readInternalCredential(process.env, "INTEGRATION_TO_CHANNEL_TOKEN");
   const sofiaToken = readInternalCredential(process.env, "INTEGRATION_TO_SOFIA_TOKEN");
+  const pulsoToken = readInternalCredential(process.env, "INTEGRATION_TO_PULSO_TOKEN");
   const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_INTEGRATION_TOKEN");
-  const operatorAssertionKey = readOperatorAssertionKey(process.env);
+  const pulsoBffToken = readInternalCredential(process.env, "PULSO_BFF_TO_INTEGRATION_TOKEN");
+  const gatewayAssertionKey = readOperatorAssertionKey(process.env);
+  const pulsoAssertionKey = readInternalCredential(process.env, "PULSO_OPERATOR_ASSERTION_KEY");
+  if (pulsoBffToken && !pulsoAssertionKey) {
+    throw new Error("PULSO_OPERATOR_ASSERTION_KEY is required with PULSO_BFF_TO_INTEGRATION_TOKEN");
+  }
 
   app.get("/v1/integrations", async (request, reply) => {
     if (!requireGateway(request, reply, gatewayToken)) return;
-    if (!requireOperatorRole(request, reply, ["admin"], operatorAssertionKey, null)) return;
+    if (!requireOperatorRole(request, reply, ["admin"], gatewayAssertionKey, null)) return;
     if (!context.db) return envelope([], request.id);
     const result = await context.db.query(`
       select id, tenant_id, provider, name, status, config, created_at, updated_at
@@ -42,8 +51,14 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.get("/v1/tenants/:tenantId/integrations/whatsapp/status", async (request, reply) => {
-    if (!requireGateway(request, reply, gatewayToken)) return;
-    const tenantId = requireTenantAndRole(request, reply, ["admin", "coordinator"], operatorAssertionKey);
+    if (!requireProductEdge(request, reply, gatewayToken, pulsoBffToken)) return;
+    const tenantId = requireTenantAndRole(
+      request,
+      reply,
+      ["admin", "coordinator"],
+      gatewayAssertionKey,
+      pulsoAssertionKey
+    );
     if (!tenantId) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/status`,
@@ -56,8 +71,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.post("/v1/tenants/:tenantId/integrations/whatsapp/connect", async (request, reply) => {
-    if (!requireGateway(request, reply, gatewayToken)) return;
-    const tenantId = requireTenantAndRole(request, reply, ["admin"], operatorAssertionKey);
+    if (!requireProductEdge(request, reply, gatewayToken, pulsoBffToken)) return;
+    const tenantId = requireTenantAndRole(request, reply, ["admin"], gatewayAssertionKey, pulsoAssertionKey);
     if (!tenantId) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/connect`,
@@ -70,8 +85,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.get("/v1/tenants/:tenantId/integrations/whatsapp/qr", async (request, reply) => {
-    if (!requireGateway(request, reply, gatewayToken)) return;
-    const tenantId = requireTenantAndRole(request, reply, ["admin"], operatorAssertionKey);
+    if (!requireProductEdge(request, reply, gatewayToken, pulsoBffToken)) return;
+    const tenantId = requireTenantAndRole(request, reply, ["admin"], gatewayAssertionKey, pulsoAssertionKey);
     if (!tenantId) return;
     reply.header("cache-control", "no-store, private, max-age=0");
     reply.header("pragma", "no-cache");
@@ -86,8 +101,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.post("/v1/tenants/:tenantId/integrations/whatsapp/disconnect", async (request, reply) => {
-    if (!requireGateway(request, reply, gatewayToken)) return;
-    const tenantId = requireTenantAndRole(request, reply, ["admin"], operatorAssertionKey);
+    if (!requireProductEdge(request, reply, gatewayToken, pulsoBffToken)) return;
+    const tenantId = requireTenantAndRole(request, reply, ["admin"], gatewayAssertionKey, pulsoAssertionKey);
     if (!tenantId) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/disconnect`,
@@ -100,12 +115,16 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   app.get("/v1/tenants/:tenantId/pulso-iris/sofia/readiness", async (request, reply) => {
-    if (!requireGateway(request, reply, gatewayToken)) return;
-    const tenantId = requireTenantAndRole(request, reply, ["admin", "coordinator"], operatorAssertionKey);
+    if (!requireProductEdge(request, reply, gatewayToken, pulsoBffToken)) return;
+    const tenantId = requireTenantAndRole(
+      request,
+      reply,
+      ["admin", "coordinator"],
+      gatewayAssertionKey,
+      pulsoAssertionKey
+    );
     if (!tenantId) return;
-    if (!context.db) return reply.code(503).send(envelope({ error: "Database unavailable" }, request.id));
-
-    const [channel, agent, agenda, prompt] = await Promise.all([
+    const [channel, agent, agenda] = await Promise.all([
       callInternal(
         `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/status`,
         "GET",
@@ -118,50 +137,27 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         sofiaToken,
         READINESS_TIMEOUT_MS
       ),
-      context.db.query<{
-        mode: string;
-        status: string;
-        professionalCount: number;
-        ruleCount: number;
-      }>(
-        `select s.mode, s.status,
-                (select count(*)::int from pulso_iris.professionals p
-                 where p.tenant_id = s.tenant_id and p.status = 'active') as "professionalCount",
-                (select count(*)::int from pulso_iris.availability_rules r
-                 where r.tenant_id = s.tenant_id and r.status = 'active') as "ruleCount"
-         from pulso_iris.agenda_settings s where s.tenant_id = $1`,
-        [tenantId]
-      ),
-      context.db.query<{ count: number }>(
-        `select count(*)::int as count
-         from (
-           select f.definition ->> 'runtimeKey' as runtime_key
-           from platform.prompt_flows f
-           join platform.agents a on a.id = f.agent_id
-           where f.tenant_id = $1 and a.tenant_id = $1 and a.code = 'SOFIA'
-             and a.status = 'active' and f.status = 'active'
-           order by f.version desc, f.updated_at desc
-           limit 1
-         ) selected
-         where selected.runtime_key = 'sofia_whatsapp_internal_v5'
-           and exists (
-             select 1 from platform.schema_migrations
-             where name = '016-sofia-search-constraints.sql'
-           )`,
-        [tenantId]
+      callInternal(
+        `${pulsoUrl}/internal/v1/tenants/${tenantId}/pulso-iris/agenda/readiness`,
+        "GET",
+        pulsoToken,
+        READINESS_TIMEOUT_MS
       )
     ]);
+
+    const agendaPayload = agenda.ok ? pulsoAgendaReadinessSchema.safeParse(agenda.data) : undefined;
+    if (!agendaPayload?.success || agendaPayload.data.tenantId !== tenantId) {
+      return reply.code(502).send(envelope({ error: "PULSO agenda readiness unavailable" }, request.id));
+    }
 
     const channelState = readString(channel.data, "state");
     const workerReady = readBoolean(agent.data, "workerEnabled") && readBoolean(agent.data, "workerRunning");
     const agentReady = agent.ok && readBoolean(agent.data, "ready") && workerReady;
-    const agendaRow = agenda.rows[0];
-    const agendaReady =
-      agendaRow?.mode === "internal" &&
-      agendaRow.status === "active" &&
-      agendaRow.professionalCount > 0 &&
-      agendaRow.ruleCount > 0;
-    const promptReady = (prompt.rows[0]?.count ?? 0) > 0;
+    const agendaReady = agendaPayload.data.ready;
+    // N-1 SOFIA responses only expose `ready`; current providers also expose
+    // `promptFlowReady`. In both cases the provider owns the prompt decision.
+    const promptReady =
+      agent.ok && (readOptionalBoolean(agent.data, "promptFlowReady") ?? readBoolean(agent.data, "ready"));
     const channelReady = channel.ok && channelState === "ready";
 
     const dependencies = [
@@ -191,11 +187,27 @@ function requireGateway(request: FastifyRequest, reply: FastifyReply, token: str
   return false;
 }
 
+function requireProductEdge(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  gatewayToken: string | undefined,
+  pulsoBffToken: string | undefined
+): boolean {
+  const failure = validateInternalAuthorization(request.headers, {
+    "pulso-bff": pulsoBffToken,
+    "api-gateway": gatewayToken
+  });
+  if (!failure) return true;
+  void reply.code(failure.statusCode).send(envelope({ error: failure.message }, request.id));
+  return false;
+}
+
 function requireTenantAndRole(
   request: FastifyRequest,
   reply: FastifyReply,
   allowedRoles: OperatorRole[],
-  operatorAssertionKey: string | undefined
+  gatewayAssertionKey: string | undefined,
+  pulsoAssertionKey: string | undefined
 ): string | undefined {
   const params = request.params as { tenantId?: unknown };
   const tenantId = tenantIdSchema.safeParse(params.tenantId);
@@ -203,7 +215,19 @@ function requireTenantAndRole(
     void reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
     return undefined;
   }
-  if (!requireOperatorRole(request, reply, allowedRoles, operatorAssertionKey, tenantId.data)) return undefined;
+  const assertionFailure =
+    readInternalCaller(request.headers) === "pulso-bff"
+      ? validateProductOperatorAssertionContext(request.headers, pulsoAssertionKey, tenantId.data, "PULSO_IRIS")
+      : validateOperatorAssertionContext(request.headers, gatewayAssertionKey, tenantId.data);
+  if (assertionFailure) {
+    void reply.code(assertionFailure.statusCode).send(envelope({ error: assertionFailure.message }, request.id));
+    return undefined;
+  }
+  const role = readOperatorRole(request);
+  if (!role || !allowedRoles.includes(role)) {
+    void reply.code(403).send(envelope({ error: "Insufficient integration permissions" }, request.id));
+    return undefined;
+  }
   return tenantId.data;
 }
 
@@ -254,6 +278,7 @@ async function callInternal(
         "content-type": "application/json"
       },
       body: method === "POST" ? "{}" : undefined,
+      redirect: "error",
       signal: AbortSignal.timeout(timeoutMs)
     });
     const payload = (await response.json()) as { data?: unknown } | unknown;
@@ -279,4 +304,8 @@ function readString(value: unknown, key: string): string | undefined {
 
 function readBoolean(value: unknown, key: string): boolean {
   return isRecord(value) && value[key] === true;
+}
+
+function readOptionalBoolean(value: unknown, key: string): boolean | undefined {
+  return isRecord(value) && typeof value[key] === "boolean" ? value[key] : undefined;
 }

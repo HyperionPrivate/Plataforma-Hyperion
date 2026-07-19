@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAgencySeedList, decideEligibility, DEFAULT_COMPLIANCE, normalizeE164, scoreContact } from "./domain.js";
+import { decideEligibility, DEFAULT_COMPLIANCE, normalizeE164, scoreContact } from "./domain.js";
 
 describe("normalizeE164", () => {
   it("accepts canonical E.164", () => {
@@ -93,30 +93,30 @@ describe("decideEligibility", () => {
 });
 
 describe("scoreContact", () => {
-  it("scores renovacion with mora and low propensity toward voz wave", () => {
+  it("scores a tenant-defined segment with arrears toward the voice wave", () => {
     const result = scoreContact({
-      segment: "Renovacion",
+      segment: "priority",
       cupoPreaprobado: false,
       moraActual: 120_000,
       saldoTotal: null,
       universidad: null
     });
-    expect(result.segment).toBe("Renovacion");
+    expect(result.segment).toBe("priority");
     expect(result.propensity).toBeLessThan(50);
     expect(result.urgency).toBeGreaterThanOrEqual(70);
     expect(result.score).toBeGreaterThan(0.4);
     expect(result.wave).toBe("voz");
   });
 
-  it("maps reactivacion segment aliases", () => {
-    expect(scoreContact({ segment: "B" }).segment).toBe("Reactivacion");
-    expect(scoreContact({ segment: "reactivacion" }).segment).toBe("Reactivacion");
+  it("preserves tenant-defined segment identifiers", () => {
+    expect(scoreContact({ segment: "flow-b" }).segment).toBe("flow-b");
+    expect(scoreContact({ segment: "priority" }).segment).toBe("priority");
   });
 
   it("boosts propensity for universidad and preapproved cupo", () => {
-    const base = scoreContact({ segment: "Renovacion" });
+    const base = scoreContact({ segment: "priority" });
     const boosted = scoreContact({
-      segment: "Renovacion",
+      segment: "priority",
       cupoPreaprobado: true,
       universidad: "UIS",
       saldoTotal: 1
@@ -127,7 +127,7 @@ describe("scoreContact", () => {
 
   it("selects whatsapp wave when urgency and propensity are both high", () => {
     const result = scoreContact({
-      segment: "Renovacion",
+      segment: "priority",
       cupoPreaprobado: true,
       moraActual: 50_000,
       saldoTotal: 200_000,
@@ -136,14 +136,5 @@ describe("scoreContact", () => {
     expect(result.propensity).toBeGreaterThanOrEqual(50);
     expect(result.urgency).toBeGreaterThanOrEqual(50);
     expect(result.wave).toBe("whatsapp");
-  });
-});
-
-describe("buildAgencySeedList", () => {
-  it("returns nine agencies from the NOVA catalog", () => {
-    const agencies = buildAgencySeedList();
-    expect(agencies).toHaveLength(9);
-    expect(agencies.map((agency) => agency.code)).toContain("BAQ");
-    expect(agencies[0]).toMatchObject({ code: expect.any(String), city: expect.any(String) });
   });
 });

@@ -1,6 +1,15 @@
-import { envelope } from "@hyperion/contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import type { JetStreamEventHandler, JsonValue } from "@hyperion/durable-events";
+import {
+  lumenProjectionEventSchema,
+  type LumenEncounterReferenceEvent,
+  type LumenOperatorGrantEvent,
+  type LumenProjectionEvent,
+  type LumenProjectionKind,
+  type LumenProjectionResult,
+  type LumenTenantSnapshotEvent
+} from "@hyperion/lumen-contracts";
 import {
   readInternalCaller,
   readInternalCredential,
@@ -8,95 +17,6 @@ import {
   type RouteRegistrar
 } from "@hyperion/service-runtime";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { z } from "zod";
-
-const sourceVersionSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
-const sourceUpdatedAtSchema = z.string().datetime({ offset: true });
-const shortNullableTextSchema = (maximum: number) => z.string().trim().min(1).max(maximum).nullable();
-
-const tenantSnapshotPayloadSchema = z
-  .object({
-    tenantId: z.string().uuid(),
-    status: z.enum(["active", "paused", "archived"]),
-    isDemo: z.boolean(),
-    sourceVersion: sourceVersionSchema,
-    sourceUpdatedAt: sourceUpdatedAtSchema
-  })
-  .strict();
-
-const operatorGrantPayloadSchema = z
-  .object({
-    tenantId: z.string().uuid(),
-    operatorId: z.string().uuid(),
-    role: z.string().trim().min(1).max(80),
-    isActive: z.boolean(),
-    canReview: z.boolean(),
-    sourceVersion: sourceVersionSchema,
-    sourceUpdatedAt: sourceUpdatedAtSchema
-  })
-  .strict()
-  .refine((payload) => payload.isActive || !payload.canReview, {
-    message: "Inactive operators cannot retain review permission",
-    path: ["canReview"]
-  });
-
-const encounterReferencePayloadSchema = z
-  .object({
-    tenantId: z.string().uuid(),
-    encounterId: z.string().uuid(),
-    patientId: z.string().uuid(),
-    siteId: z.string().uuid(),
-    professionalId: z.string().uuid(),
-    patientDisplayName: z.string().trim().min(1).max(240),
-    patientAge: z.number().int().min(0).max(130).nullable(),
-    payer: shortNullableTextSchema(240),
-    documentMasked: shortNullableTextSchema(80),
-    professionalName: z.string().trim().min(1).max(240),
-    subspecialty: shortNullableTextSchema(240),
-    siteName: z.string().trim().min(1).max(240),
-    patientIsDemo: z.literal(true),
-    professionalIsDemo: z.literal(true),
-    sourceVersion: sourceVersionSchema,
-    sourceUpdatedAt: sourceUpdatedAtSchema
-  })
-  .strict();
-
-function eventSchema<TType extends string, TPayload extends z.ZodTypeAny>(type: TType, payload: TPayload) {
-  return z
-    .object({
-      id: z.string().uuid(),
-      type: z.literal(type),
-      version: z.literal(1),
-      occurredAt: z.string().datetime({ offset: true }),
-      tenantId: z.string().uuid(),
-      payload
-    })
-    .strict();
-}
-
-const tenantSnapshotEventSchema = eventSchema("access.lumen.tenant-snapshot.v1", tenantSnapshotPayloadSchema);
-const operatorGrantEventSchema = eventSchema("access.lumen.operator-grant.v1", operatorGrantPayloadSchema);
-const encounterReferenceEventSchema = eventSchema(
-  "pulso.lumen.encounter-reference.v1",
-  encounterReferencePayloadSchema
-);
-
-export const lumenProjectionEventSchema = z
-  .union([tenantSnapshotEventSchema, operatorGrantEventSchema, encounterReferenceEventSchema])
-  .refine((event) => event.tenantId.toLowerCase() === event.payload.tenantId.toLowerCase(), {
-    message: "Envelope tenantId must match payload tenantId",
-    path: ["tenantId"]
-  });
-
-export type LumenProjectionEvent = z.infer<typeof lumenProjectionEventSchema>;
-export type LumenProjectionKind = "tenant_snapshot" | "operator_grant" | "encounter_reference";
-
-export type LumenProjectionResult =
-  | { status: "accepted"; projection: LumenProjectionKind }
-  | { status: "duplicate"; projection: LumenProjectionKind }
-  | { status: "stale"; projection: LumenProjectionKind }
-  | { status: "conflict"; projection?: LumenProjectionKind; reason: "event_id" | "source_version" }
-  | { status: "frozen"; projection: "encounter_reference" };
 
 interface ProjectionRow {
   sourceVersion: string;
@@ -223,7 +143,7 @@ async function applyProjection(db: DatabaseExecutor, event: LumenProjectionEvent
 
 async function applyTenantSnapshot(
   db: DatabaseExecutor,
-  event: z.infer<typeof tenantSnapshotEventSchema>,
+  event: LumenTenantSnapshotEvent,
   projection: "tenant_snapshot"
 ): Promise<LumenProjectionResult> {
   const payloadHash = sha256CanonicalJson(event.payload);
@@ -271,7 +191,7 @@ async function applyTenantSnapshot(
 
 async function applyOperatorGrant(
   db: DatabaseExecutor,
-  event: z.infer<typeof operatorGrantEventSchema>,
+  event: LumenOperatorGrantEvent,
   projection: "operator_grant"
 ): Promise<LumenProjectionResult> {
   const payloadHash = sha256CanonicalJson(event.payload);
@@ -320,7 +240,7 @@ async function applyOperatorGrant(
 
 async function applyEncounterReference(
   db: DatabaseExecutor,
-  event: z.infer<typeof encounterReferenceEventSchema>
+  event: LumenEncounterReferenceEvent
 ): Promise<LumenProjectionResult> {
   const projection = "encounter_reference" as const;
   const payloadHash = sha256CanonicalJson(event.payload);

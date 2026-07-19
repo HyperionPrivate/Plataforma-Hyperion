@@ -1,5 +1,11 @@
-import { envelope, tenantIdSchema } from "@hyperion/contracts";
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { DatabaseClient } from "@hyperion/database";
+import {
+  pulsoSofiaConversationContextRequestSchema,
+  pulsoSofiaConversationContextResultSchema,
+  pulsoSofiaInboundLookupRequestSchema,
+  pulsoSofiaInboundLookupResultSchema
+} from "@hyperion/pulso-contracts";
 import { validateInternalAuthorization, type RouteRegistrar, type ServiceContext } from "@hyperion/service-runtime";
 import { z } from "zod";
 
@@ -7,6 +13,7 @@ const CONFIRMATION_EXECUTION_LEASE_MS = 5 * 60 * 1_000;
 
 const uuid = z.string().uuid();
 const jsonObject = z.record(z.string(), z.unknown());
+const emptyQuerySchema = z.object({}).strict();
 
 const tenantConversationParams = z.object({
   tenantId: tenantIdSchema,
@@ -29,55 +36,90 @@ const sofiaRuntimeSchema = z
   })
   .strict();
 
-const mutationSchema = z.discriminatedUnion("op", [
-  z.object({
+const confirmableToolSchema = z.enum(["create_appointment_hold", "cancel_appointment", "reschedule_appointment"]);
+const confirmationExecutionSchema = z
+  .object({
+    actionId: uuid,
+    tool: confirmableToolSchema,
+    arguments: jsonObject,
+    confirmationMessageId: uuid,
+    claimedAt: z.string().datetime()
+  })
+  .strict();
+
+const claimPendingActionMutationSchema = z
+  .object({
     op: z.literal("claim_pending_action"),
     pendingJobId: uuid,
-    pendingTool: z.string().min(1),
-    execution: jsonObject
-  }),
-  z.object({
-    op: z.literal("move_execution_to_grant"),
-    executionActionId: z.string().min(1),
+    pendingTool: confirmableToolSchema,
+    patientId: uuid,
     confirmationMessageId: uuid,
-    executionTool: z.string().min(1),
-    grant: jsonObject
-  }),
-  z.object({
-    op: z.literal("store_execution_receipt"),
-    executionActionId: z.string().min(1),
-    confirmationMessageId: uuid,
-    executionTool: z.string().min(1),
-    receipt: jsonObject
-  }),
-  z.object({
-    op: z.literal("store_pending_receipt"),
-    pendingJobId: uuid,
-    pendingTool: z.string().min(1),
-    currentMessageId: uuid,
-    receipt: jsonObject
-  }),
-  z.object({
-    op: z.literal("store_grant_receipt"),
-    grantActionId: z.string().min(1),
-    holdId: uuid,
-    currentMessageId: uuid,
-    confirmationMessageId: uuid.nullable().optional(),
-    receipt: jsonObject
-  }),
-  z.object({ op: z.literal("save_conversation_state"), patch: jsonObject }),
-  z.object({ op: z.literal("save_availability_state"), availabilityPatch: jsonObject, selection: jsonObject }),
-  z.object({ op: z.literal("clear_last_availability") }),
-  z.object({
-    op: z.literal("stage_pending_action"),
-    expectedPendingJobId: uuid.nullable(),
-    expectedGrantActionId: z.string().nullable(),
-    patch: jsonObject
-  }),
-  z.object({ op: z.literal("replace_pending_with_grant"), pendingJobId: uuid, patch: jsonObject }),
-  z.object({ op: z.literal("clear_confirmed_grant"), actionId: z.string().min(1), holdId: uuid }),
-  z.object({ op: z.literal("clear_confirmed_pending"), actionId: z.string().min(1) })
-]);
+    confirmationBody: z.string().min(1).max(4096),
+    execution: confirmationExecutionSchema
+  })
+  .strict();
+
+const mutationSchema = z
+  .discriminatedUnion("op", [
+    claimPendingActionMutationSchema,
+    z.object({
+      op: z.literal("move_execution_to_grant"),
+      executionActionId: z.string().min(1),
+      confirmationMessageId: uuid,
+      executionTool: z.string().min(1),
+      grant: jsonObject
+    }),
+    z.object({
+      op: z.literal("store_execution_receipt"),
+      executionActionId: z.string().min(1),
+      confirmationMessageId: uuid,
+      executionTool: z.string().min(1),
+      receipt: jsonObject
+    }),
+    z.object({
+      op: z.literal("store_pending_receipt"),
+      pendingJobId: uuid,
+      pendingTool: z.string().min(1),
+      currentMessageId: uuid,
+      receipt: jsonObject
+    }),
+    z.object({
+      op: z.literal("store_grant_receipt"),
+      grantActionId: z.string().min(1),
+      holdId: uuid,
+      currentMessageId: uuid,
+      confirmationMessageId: uuid.nullable().optional(),
+      receipt: jsonObject
+    }),
+    z.object({ op: z.literal("save_conversation_state"), patch: jsonObject }),
+    z.object({ op: z.literal("save_availability_state"), availabilityPatch: jsonObject, selection: jsonObject }),
+    z.object({ op: z.literal("clear_last_availability") }),
+    z.object({
+      op: z.literal("stage_pending_action"),
+      expectedPendingJobId: uuid.nullable(),
+      expectedGrantActionId: z.string().nullable(),
+      patch: jsonObject
+    }),
+    z.object({ op: z.literal("replace_pending_with_grant"), pendingJobId: uuid, patch: jsonObject }),
+    z.object({ op: z.literal("clear_confirmed_grant"), actionId: z.string().min(1), holdId: uuid }),
+    z.object({ op: z.literal("clear_confirmed_pending"), actionId: z.string().min(1) })
+  ])
+  .superRefine((mutation, context) => {
+    if (mutation.op !== "claim_pending_action") return;
+    if (mutation.execution.actionId !== mutation.pendingJobId) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["execution", "actionId"], message: "actionId mismatch" });
+    }
+    if (mutation.execution.tool !== mutation.pendingTool) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["execution", "tool"], message: "tool mismatch" });
+    }
+    if (mutation.execution.confirmationMessageId !== mutation.confirmationMessageId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["execution", "confirmationMessageId"],
+        message: "confirmationMessageId mismatch"
+      });
+    }
+  });
 
 export function registerSofiaOwnerRoutes(
   app: Parameters<RouteRegistrar>[0],
@@ -86,6 +128,114 @@ export function registerSofiaOwnerRoutes(
 ): void {
   const authorize = (headers: Parameters<typeof validateInternalAuthorization>[0]) =>
     validateInternalAuthorization(headers, { "agent-service": sofiaCredential });
+
+  app.post("/internal/v1/tenants/:tenantId/pulso-iris/sofia/inbound-message", async (request, reply) => {
+    const authError = authorize(request.headers);
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
+    const params = z.object({ tenantId: tenantIdSchema }).strict().safeParse(request.params);
+    const query = emptyQuerySchema.safeParse(request.query);
+    const body = pulsoSofiaInboundLookupRequestSchema.safeParse(request.body);
+    if (!params.success || !query.success || !body.success) {
+      return reply.code(400).send(envelope({ error: "Invalid sofia inbound lookup request" }, request.id));
+    }
+    if (!context.db) {
+      return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
+    }
+
+    const found = await context.db.query<{
+      id: string;
+      sender: string;
+      body: string;
+      conversationStatus: string;
+    }>(
+      `select m.id, m.sender, m.body, c.status as "conversationStatus"
+         from pulso_iris.messages m
+         join pulso_iris.conversations c
+           on c.tenant_id = m.tenant_id
+          and c.id = m.conversation_id
+        where m.tenant_id = $1
+          and m.conversation_id = $2
+          and m.id = $3
+          and m.sender = 'patient'
+          and c.patient_id = $4`,
+      [params.data.tenantId, body.data.conversationId, body.data.messageId, body.data.patientId]
+    );
+    const row = found.rows[0];
+    const result = pulsoSofiaInboundLookupResultSchema.parse(
+      row
+        ? {
+            found: true,
+            tenantId: params.data.tenantId,
+            conversationId: body.data.conversationId,
+            patientId: body.data.patientId,
+            conversationStatus: row.conversationStatus,
+            message: { id: row.id, sender: row.sender, body: row.body }
+          }
+        : { found: false }
+    );
+    return envelope(result, request.id);
+  });
+
+  app.post("/internal/v1/tenants/:tenantId/pulso-iris/sofia/conversation-context", async (request, reply) => {
+    const authError = authorize(request.headers);
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
+    const params = z.object({ tenantId: tenantIdSchema }).strict().safeParse(request.params);
+    const query = emptyQuerySchema.safeParse(request.query);
+    const body = pulsoSofiaConversationContextRequestSchema.safeParse(request.body);
+    if (!params.success || !query.success || !body.success) {
+      return reply.code(400).send(envelope({ error: "Invalid sofia conversation context request" }, request.id));
+    }
+    if (!context.db) {
+      return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
+    }
+
+    const conversation = await context.db.query<{
+      sofiaState: unknown;
+      patientName: string | null;
+      history: unknown;
+    }>(
+      `select coalesce(c.metadata->'sofiaState', '{}'::jsonb) as "sofiaState",
+              p.full_name as "patientName",
+              coalesce((
+                select jsonb_agg(
+                  jsonb_build_object('sender', recent.sender, 'body', recent.body)
+                  order by recent.created_at, recent.id
+                )
+                  from (
+                    select m.id, m.sender, m.body, m.created_at
+                      from pulso_iris.messages m
+                     where m.tenant_id = c.tenant_id
+                       and m.conversation_id = c.id
+                     order by m.created_at desc, m.id desc
+                     limit 12
+                  ) recent
+              ), '[]'::jsonb) as history
+         from pulso_iris.conversations c
+         left join pulso_iris.administrative_patients p
+           on p.tenant_id = c.tenant_id
+          and p.id = c.patient_id
+        where c.tenant_id = $1
+          and c.id = $2
+          and c.patient_id = $3`,
+      [params.data.tenantId, body.data.conversationId, body.data.patientId]
+    );
+    if (!conversation.rows[0]) {
+      return reply.code(404).send(envelope({ error: "SOFIA conversation context not found" }, request.id));
+    }
+    const result = pulsoSofiaConversationContextResultSchema.parse({
+      tenantId: params.data.tenantId,
+      conversationId: body.data.conversationId,
+      patientId: body.data.patientId,
+      patientName: conversation.rows[0].patientName,
+      sofiaState: conversation.rows[0].sofiaState,
+      history: conversation.rows[0].history
+    });
+    return envelope(result, request.id);
+  });
 
   app.post("/internal/v1/tenants/:tenantId/pulso-iris/messages/sofia-outbound", async (request, reply) => {
     const authError = authorize(request.headers);
@@ -216,7 +366,7 @@ async function applySofiaStateMutationInternal(
   switch (mutation.op) {
     case "claim_pending_action": {
       const result = await db.query(
-        `update pulso_iris.conversations
+        `update pulso_iris.conversations c
          set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
            'sofiaState',
            coalesce(metadata->'sofiaState', '{}'::jsonb) || jsonb_build_object(
@@ -225,12 +375,35 @@ async function applySofiaStateMutationInternal(
              'confirmationExecution', $5::jsonb
            )
          ), updated_at = now()
-         where tenant_id = $1 and id = $2
+         where c.tenant_id = $1 and c.id = $2
+           and c.patient_id = $6
            and metadata #>> '{sofiaState,pendingAction,jobId}' = $3
            and metadata #>> '{sofiaState,pendingAction,tool}' = $4
            and coalesce(metadata #> '{sofiaState,confirmationExecution}', 'null'::jsonb) = 'null'::jsonb
-           and coalesce(metadata #> '{sofiaState,confirmationGrant}', 'null'::jsonb) = 'null'::jsonb`,
-        [tenantId, conversationId, mutation.pendingJobId, mutation.pendingTool, JSON.stringify(mutation.execution)]
+           and coalesce(metadata #> '{sofiaState,confirmationGrant}', 'null'::jsonb) = 'null'::jsonb
+           and exists (
+             select 1
+               from pulso_iris.messages m
+              where m.tenant_id = c.tenant_id
+                and m.conversation_id = c.id
+                and m.id = $7
+                and m.sender = 'patient'
+                and m.body = $8
+                and btrim(regexp_replace(
+                      translate(lower(m.body), 'áéíóúüñ', 'aeiouun'),
+                      '[^a-z0-9]+', ' ', 'g'
+                    )) ~ '^(si )?confirmo( (agendar|reservar|cancelar|reagendar|la cita|el cambio))?$'
+           )`,
+        [
+          tenantId,
+          conversationId,
+          mutation.pendingJobId,
+          mutation.pendingTool,
+          JSON.stringify(mutation.execution),
+          mutation.patientId,
+          mutation.confirmationMessageId,
+          mutation.confirmationBody
+        ]
       );
       return (result.rowCount ?? 0) > 0;
     }

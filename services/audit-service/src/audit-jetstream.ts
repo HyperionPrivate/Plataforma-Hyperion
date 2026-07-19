@@ -39,6 +39,11 @@ export const AUDIT_EVENT_CONSUMERS = [
     connectionName: "audit-channel-event-record"
   },
   {
+    ...AUDIT_EVENT_CONTRACTS.nova,
+    durableName: "audit_nova_event_record_v1",
+    connectionName: "audit-nova-event-record"
+  },
+  {
     eventType: LEGACY_AUDIT_EVENT_CONTRACT.eventType,
     sourceService: LEGACY_AUDIT_EVENT_CONTRACT.sourceService,
     durableName: "audit_event_record_v1",

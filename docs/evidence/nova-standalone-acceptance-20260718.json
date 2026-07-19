@@ -1,0 +1,564 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "nova-standalone-acceptance-20260718",
+  "observedAt": "2026-07-18T17:40:18.5743493-05:00",
+  "operationId": "hyperion-nova-fresh-20260718",
+  "source": {
+    "branch": "feat/federated-separation",
+    "commit": "1d77f380a5684d4de3a072c1aa4c8714a2ed023c",
+    "workingTreeDirty": true,
+    "note": "The initial manifest hash and historical closures record earlier standalone observations. The current uncommitted Platform and NOVA closures were subsequently exercised together with real Access and Audit; the commit alone identifies neither working-tree state."
+  },
+  "context": {
+    "path": ".docker-contexts/nova",
+    "fullStandaloneManifestSha256Observed": "c0ec448059c79b92ecd135376c5b2ccdd51ce3567a212d7276a5b935f9333c77",
+    "historicalPostAcceptanceClosure": {
+      "observedAt": "2026-07-18T18:39:55.9030000-05:00",
+      "algorithm": "sha256-path-null-content-sha256-lf-v1",
+      "sha256": "d1816bc3d7cf82a51c7826c5b7dd9a4cd5ce69ce9071aee0ce226e386b54f411",
+      "status": "historical-superseded-by-latest-generated-closure"
+    },
+    "latestGeneratedClosure": {
+      "algorithm": "sha256-path-null-content-sha256-lf-v1",
+      "sha256": "c5195e1c7ee1a86cd923fa2bc246221640549bf4c83bf4e4c5e46aa87c5d9851",
+      "sourceFiles": 179,
+      "foreignLumenOrPulsoSourceFiles": 0,
+      "includesBffReadinessHardening": true,
+      "fullStandaloneComposeRepeatedForThisClosure": true,
+      "focalBffSmokeRepeatedForThisClosure": false,
+      "authenticatedPlatformNovaComposeRepeatedForThisClosure": true
+    },
+    "declaredSourceRoots": 21,
+    "sourceFiles": 179,
+    "filesIncludingManifest": 180,
+    "foreignLumenOrPulsoSourceFiles": 0
+  },
+  "images": [
+    {
+      "component": "nova-migrations",
+      "localContentIdPrefix": "sha256:722c8c83",
+      "build": "passed"
+    },
+    {
+      "component": "nova-core-service",
+      "localContentIdPrefix": "sha256:db9a76391",
+      "build": "passed"
+    },
+    {
+      "component": "voice-channel-service",
+      "localContentIdPrefix": "sha256:d3288cc35",
+      "build": "passed"
+    },
+    {
+      "component": "liwa-channel-service",
+      "localContentIdPrefix": "sha256:80e29c16c",
+      "build": "passed"
+    },
+    {
+      "component": "documents-service",
+      "localContentIdPrefix": "sha256:52a8be9ed",
+      "build": "passed"
+    },
+    {
+      "component": "nova-bff",
+      "localContentIdPrefix": "sha256:1279e00e",
+      "build": "passed"
+    },
+    {
+      "component": "nova-console",
+      "localContentIdPrefix": "sha256:4837a510",
+      "build": "passed-after-private-provenance-receipt-removal"
+    }
+  ],
+  "imageIsolation": {
+    "nodeImageImports": {
+      "tested": 6,
+      "passed": 6,
+      "network": "none",
+      "readOnlyRootFilesystem": true,
+      "capabilitiesDropped": "ALL",
+      "noNewPrivileges": true
+    },
+    "inventories": {
+      "nova-migrations": ["packages/nova-migrations"],
+      "runtimeSharedPackages": [
+        "packages/audit-contracts",
+        "packages/database",
+        "packages/logger",
+        "packages/nova-config",
+        "packages/nova-contracts",
+        "packages/nova-durable-events",
+        "packages/nova-service-runtime",
+        "packages/platform-contracts"
+      ],
+      "nova-bff": [
+        "apps/nova-bff",
+        "packages/audit-contracts",
+        "packages/nova-contracts",
+        "packages/platform-contracts"
+      ],
+      "foreignLumenOrPulsoDeployables": 0
+    }
+  },
+  "standaloneCompose": {
+    "commandResult": "passed",
+    "externalAccessAndAuditEndpoints": "https://*.example.invalid",
+    "oneShots": {
+      "nova-database-bootstrap": 0,
+      "nova-migrations": 0,
+      "nova-role-bootstrap": 0,
+      "minio-init": 0
+    },
+    "healthyServices": [
+      "postgres",
+      "minio",
+      "nova-core-service",
+      "voice-channel-service",
+      "liwa-channel-service",
+      "documents-service",
+      "nova-bff",
+      "nova-console"
+    ],
+    "http": {
+      "novaBffHealth": 200,
+      "novaBffReady": 200,
+      "novaConsoleRoot": 200,
+      "novaConsoleForeignLumen": 404,
+      "novaConsoleForeignPulso": 404,
+      "novaConsoleForeignPlatformAdmin": 404,
+      "novaBffForeignLumenRoute": 404
+    },
+    "database": {
+      "migrationLedgerRows": 7,
+      "providerTables": 48,
+      "runtimeCredentialsConnected": ["hyperion_nova", "hyperion_voice", "hyperion_liwa", "hyperion_documents"],
+      "crossOwnerReadHyperionVoiceToNovaContacts": "denied"
+    }
+  },
+  "postAcceptancePackagingCorrection": {
+    "reason": "The base Nginx 50x.html asset and private build-provenance receipts are not part of the public provider bundle closure.",
+    "staticRegression": "passed-for-nova-lumen-pulso-and-platform-console-dockerfiles",
+    "privateProvenanceReceiptsExcludedFromRuntime": true,
+    "novaConsole": {
+      "localContentId": "sha256:4837a5105217f3849592a2d238bd5a9ccf5e7a9550b63beb28fcb7c13f946495",
+      "runtimeUid": 101,
+      "canonicalFiles": 5,
+      "inherited50xHtmlPresent": false,
+      "privateProvenanceReceiptPresent": false,
+      "network": "none",
+      "readOnlyRootFilesystem": true,
+      "capabilitiesDropped": "ALL",
+      "noNewPrivileges": true
+    },
+    "siblingConsoleImageClosures": {
+      "lumen-console": {
+        "localContentId": "sha256:49c8c26ad1b6a9f1af90c46f6e8aa2df42c91de25fd485a577e704672cd19d4b",
+        "runtimeUid": 101,
+        "canonicalFiles": 3,
+        "inherited50xHtmlPresent": false,
+        "privateProvenanceReceiptPresent": false
+      },
+      "pulso-console": {
+        "localContentId": "sha256:acb8ae90bb32f51d6d0af1db6d389f411b0e53f837a56fcea76e659f7232a1b6",
+        "runtimeUid": 101,
+        "canonicalFiles": 3,
+        "inherited50xHtmlPresent": false,
+        "privateProvenanceReceiptPresent": false
+      },
+      "platform-admin-console": {
+        "localContentId": "sha256:6437f39da56bf4687bcd6d9f9f5b2ac49c4525419e56208d34fdd5755fd58111",
+        "runtimeUid": 101,
+        "canonicalFiles": 3,
+        "inherited50xHtmlPresent": false,
+        "privateProvenanceReceiptPresent": false
+      }
+    }
+  },
+  "subsequentBffReadinessHardening": {
+    "scope": "focal-nova-bff-image-smoke-after-historical-standalone-compose",
+    "historicalStandaloneComposePredatesThisHardening": true,
+    "fullStandaloneComposeRepeated": false,
+    "contextClosureSha256": "f68a4a7b0df222b0ad87d30198bf7f31a499355dbaf8b79e745a038dab44e09f",
+    "previousFocalSmoke": {
+      "contextClosureSha256": "8cbf2ab866eda02096c5b9fbd74d85bdd74118c5213351337e2ce3d763b9044d",
+      "localContentId": "sha256:d128d3837acac1450c09f805f70ee6ed06d6a43cb6fb028df336c232272118a9",
+      "removedAfterSmoke": true
+    },
+    "temporaryImage": {
+      "localContentId": "sha256:695910ce710b08f0c5bff2828d233723a67db38298393af119c6c693d7912693",
+      "built": true,
+      "removedAfterSmoke": true,
+      "pushed": false,
+      "signed": false
+    },
+    "http": {
+      "health": 200,
+      "coldReadyWithoutRequiredJwksAndUpstreams": 503,
+      "warmReadyWithIsolatedFixture": 200
+    },
+    "fixture": {
+      "isolated": true,
+      "providedJwksAndNovaUpstreams": true,
+      "accessMintingProbe": "degraded-non-required"
+    },
+    "cleanup": {
+      "temporaryImageRemoved": true,
+      "smokeContainersRemaining": 0,
+      "smokeNetworksRemaining": 0
+    }
+  },
+  "subsequentFullStandaloneComposeForLatestClosure": {
+    "observedAt": "2026-07-18T21:17:34.2767881-05:00",
+    "scope": "full-standalone-infrastructure-readiness-on-latest-generated-closure",
+    "status": "historical-superseded-by-current-authenticated-platform-nova-acceptance",
+    "contextClosureSha256": "f68a4a7b0df222b0ad87d30198bf7f31a499355dbaf8b79e745a038dab44e09f",
+    "temporaryComposeProject": "hyperion-nova-acceptance-20260719015554",
+    "composeFiles": ["infra/docker-compose.nova.yml", "infra/docker-compose.nova.acceptance.yml"],
+    "localImagesBuilt": [
+      {
+        "component": "nova-database-bootstrap",
+        "localContentId": "sha256:e9551c7e130fff4fe4187a9bb1f326fe0c6c76df64975210296fc42209ab2a5c"
+      },
+      {
+        "component": "nova-migrations",
+        "localContentId": "sha256:d211eff3fe5712d12af2ea29a1429d807d3f780d6613c4eb840b4e42074bd026"
+      },
+      {
+        "component": "nova-role-bootstrap",
+        "localContentId": "sha256:8b2a0beb9d733da2650bddbe2d9009df2c18fc75e7a87c86167b97efbe35c736"
+      },
+      {
+        "component": "nova-core-service",
+        "localContentId": "sha256:2085337a3df8ad68271e9cfeb48653abe1a36c69c80b5a50a5238105a8e009bf"
+      },
+      {
+        "component": "voice-channel-service",
+        "localContentId": "sha256:d029d55711653045ef3d58fa90b4fb5d2f9b176117948410d5071a9725de3aa4"
+      },
+      {
+        "component": "liwa-channel-service",
+        "localContentId": "sha256:c0f8725e5ac4dc8cdf4b8bd6de8da7ffcdca503c11605bc49ad47fcaab00923b"
+      },
+      {
+        "component": "documents-service",
+        "localContentId": "sha256:9e1ec7d045784cb4772623229294b65cd51b3f6c8f6314bb2a1a09ae794d1ca4"
+      },
+      {
+        "component": "nova-bff",
+        "localContentId": "sha256:5e4400703774d1083218879a8e108eb0400f80a636626cff366ce49a6057b447"
+      },
+      {
+        "component": "nova-console",
+        "localContentId": "sha256:912256dd46bafcd32ded35fc7dab5abcd5c4d7f859c805276ce1370f6dc2ad81"
+      },
+      {
+        "component": "nova-access-jwks-fixture",
+        "localContentId": "sha256:ba5d61d9a6830bd4c70597c015000d7c34bf019bdff1aa2fa76e8309ce596c90"
+      }
+    ],
+    "oneShots": {
+      "nova-database-bootstrap": 0,
+      "nova-migrations": 0,
+      "nova-role-bootstrap": 0,
+      "minio-init": 0
+    },
+    "healthyServices": [
+      "postgres",
+      "minio",
+      "nova-access-jwks-fixture",
+      "nova-core-service",
+      "voice-channel-service",
+      "liwa-channel-service",
+      "documents-service",
+      "nova-bff",
+      "nova-console"
+    ],
+    "loopbackPorts": {
+      "novaBff": 28095,
+      "novaConsole": 23010
+    },
+    "http": {
+      "novaBffHealth": 200,
+      "novaBffReady": 200,
+      "novaBffReadyDependencies": [
+        {
+          "name": "access-signing-keys",
+          "status": "ok",
+          "required": true
+        },
+        {
+          "name": "access-token-minting",
+          "status": "degraded",
+          "required": false
+        },
+        {
+          "name": "nova-core",
+          "status": "ok",
+          "required": true
+        },
+        {
+          "name": "nova-voice",
+          "status": "ok",
+          "required": true
+        },
+        {
+          "name": "nova-liwa",
+          "status": "ok",
+          "required": true
+        },
+        {
+          "name": "nova-documents",
+          "status": "ok",
+          "required": true
+        }
+      ],
+      "novaConsoleHealthz": 200,
+      "novaConsoleForeignRoutes": {
+        "/lumen": 404,
+        "/pulso": 404,
+        "/admin": 404
+      },
+      "novaBffForeignRoutes": {
+        "/api/lumen": 404,
+        "/api/pulso": 404,
+        "/api/platform/admin": 404
+      },
+      "knownNovaRouteWithoutSession": 401
+    },
+    "database": {
+      "name": "hyperion_nova",
+      "owner": "hyperion_nova_migrator",
+      "migrationLedgerRows": 7,
+      "migrationLedgerNames": [
+        "047-nova-autonomy.sql",
+        "048-nova-correlation-and-domain.sql",
+        "049-nova-ui-meta-contactos.sql",
+        "050-nova-lead-product-line.sql",
+        "051-liwa-accepted-pending.sql",
+        "052-nova-conversation-messages.sql",
+        "053-nova-tenant-owned-routing.sql"
+      ],
+      "providerRelations": 48,
+      "runtimeCredentialsConnected": ["hyperion_nova", "hyperion_voice", "hyperion_liwa", "hyperion_documents"],
+      "crossOwnerReadHyperionVoiceToNovaContacts": "denied"
+    },
+    "localAcceptanceJwksFixture": {
+      "publicJwkOnly": true,
+      "readyStatus": 503,
+      "privateKeyPresent": false,
+      "tokenMintingAvailable": false,
+      "loginAvailable": false
+    },
+    "authenticatedFunctionalSmokePerformed": false,
+    "publication": {
+      "pushed": false,
+      "signed": false,
+      "registryDigestRecorded": false
+    },
+    "cleanup": {
+      "status": "completed",
+      "performed": true,
+      "observedAt": "2026-07-18T21:25:48.2830550-05:00",
+      "projectContainersRemaining": 0,
+      "projectImagesRemaining": 0,
+      "projectNetworksRemaining": 0,
+      "projectVolumesRemaining": 0,
+      "preExistingContainersUnchanged": 5
+    }
+  },
+  "currentAuthenticatedPlatformNovaAcceptance": {
+    "observedAt": "2026-07-18T22:41:24.6564796-05:00",
+    "scope": "authenticated-two-project-platform-nova-runtime-on-current-provider-closures",
+    "command": "RUN_PLATFORM_NOVA_ACCEPTANCE=1 node scripts/autonomy/platform-nova-acceptance.e2e.mjs",
+    "exitCode": 0,
+    "wallTimeSeconds": 336,
+    "receipt": {
+      "status": "ok",
+      "runId": "fe789b64f392",
+      "tenantId": "4cd0f266-9fcb-4a37-9150-a943d7127c37",
+      "operatorId": "af8f8d9a-3835-4bc5-8d34-11303907ebbc",
+      "contactId": "7b436fc5-9e6a-4b65-a089-f0af1a86afc1",
+      "eventId": "795ee413-e019-44ec-8f65-412a5ffb0712"
+    },
+    "projects": {
+      "platform": "hyperion-platform-acceptance-fe789b64f392",
+      "nova": "hyperion-nova-acceptance-fe789b64f392",
+      "sharedInternalNetwork": "hyperion-platform-nova-acceptance-fe789b64f392"
+    },
+    "composeFiles": {
+      "platform": ["infra/docker-compose.platform.yml", "infra/docker-compose.platform-nova.acceptance.yml"],
+      "nova": ["infra/docker-compose.nova.yml", "infra/docker-compose.nova-platform.acceptance.yml"]
+    },
+    "providerClosures": {
+      "platform": {
+        "algorithm": "sha256-path-null-content-sha256-lf-v1",
+        "sha256": "9010f0e99646ccf4d314840caff0c5613e66a3f4bb9727ba2f80b8cac6fd5b80",
+        "sourceFiles": 165,
+        "foreignProductDeployables": 0
+      },
+      "nova": {
+        "algorithm": "sha256-path-null-content-sha256-lf-v1",
+        "sha256": "c5195e1c7ee1a86cd923fa2bc246221640549bf4c83bf4e4c5e46aa87c5d9851",
+        "sourceFiles": 179,
+        "foreignLumenOrPulsoSourceFiles": 0
+      }
+    },
+    "build": {
+      "sequential": true,
+      "platformBuildTargets": 7,
+      "novaBuildTargets": 9,
+      "jwksFixtureBuiltOrStarted": false
+    },
+    "networkBoundary": {
+      "sharedNetworkInternal": true,
+      "platformWorkloadsAttached": ["identity-service", "audit-service"],
+      "novaWorkloadsAttached": ["nova-bff", "nova-core-service"],
+      "publishedPorts": "ephemeral-loopback-only"
+    },
+    "authenticationAndAuthorization": {
+      "realPlatformAccess": true,
+      "realJwks": true,
+      "platformAdminLogin": 201,
+      "grantWithoutCsrf": 403,
+      "grantWithCsrf": 200,
+      "novaLogin": 201,
+      "warmJwksAuthMeDuringIdentityOutage": 200,
+      "foreignTenantNovaRoute": 403,
+      "foreignLumenRoute": 404,
+      "sessionCookieAttributesValidated": ["HttpOnly", "Secure", "SameSite=Strict", "Path=/", "no Domain"],
+      "realBrowserOrTlsPerformed": false
+    },
+    "novaOperation": {
+      "bootstrap": 201,
+      "contactImport": 201
+    },
+    "auditOutageRecovery": {
+      "outboxRowsForLogicalImport": 1,
+      "outageStatus": "pending",
+      "outageLastError": "network_error",
+      "outageAttemptCount": 2,
+      "completedStatus": "completed",
+      "completedAttemptCount": 3,
+      "eventIdStableAcrossRetry": true,
+      "businessIdempotencyKeyStableAcrossRetry": true,
+      "auditInboxRows": 1,
+      "auditRowsBySourceEventId": 1,
+      "auditRowsByBusinessIdempotencyKey": 1
+    },
+    "knownLimitations": {
+      "tenantProvisioning": "One parameterized SQL insert in the disposable Access database remains necessary because tenant-service has no provider-owned create API (HYP-FED-001). The operator, session and NOVA grant used real Platform APIs.",
+      "logicalExactlyOnce": "This run proves outage, retry, drain and one observable logical row. ACK-loss/replay deduplication is proven separately by scripts/autonomy/nova-audit-http.e2e.mjs.",
+      "browserSession": "Set-Cookie attributes and double-submit CSRF were validated over loopback HTTP; a real browser/TLS acceptance remains an environment cutover check."
+    },
+    "cleanup": {
+      "receiptEmittedAfterPostconditions": true,
+      "platformProjectContainersRemaining": 0,
+      "platformProjectImagesRemaining": 0,
+      "platformProjectNetworksRemaining": 0,
+      "platformProjectVolumesRemaining": 0,
+      "novaProjectContainersRemaining": 0,
+      "novaProjectImagesRemaining": 0,
+      "novaProjectNetworksRemaining": 0,
+      "novaProjectVolumesRemaining": 0,
+      "sharedNetworkRemaining": 0,
+      "uniqueMigrationImagesRemaining": 0,
+      "preExistingActiveContainersUnchanged": 5
+    },
+    "publication": {
+      "pushed": false,
+      "signed": false,
+      "registryDigestRecorded": false
+    }
+  },
+  "subsequentRepositoryExtractionRehearsal": {
+    "scope": "local-offline-gate",
+    "tests": {
+      "passed": 16,
+      "failed": 0
+    },
+    "realSourceExecution": {
+      "status": "blocked-before-artifact-materialization",
+      "reason": "The working tree contains uncommitted changes and therefore cannot be bound to a clean immutable source commit."
+    },
+    "externalArtifactPrerequisites": {
+      "satisfied": false,
+      "required": [
+        "@hyperion/platform-contracts",
+        "@hyperion/audit-contracts",
+        "@hyperion/database",
+        "@hyperion/logger"
+      ],
+      "reason": "The required packages have not been published and read back with exact provenance."
+    },
+    "repositoryExtracted": false,
+    "repositoryPushed": false
+  },
+  "subsequentPublicationReadbackPreparation": {
+    "providerContractWorkflowPrepared": true,
+    "sharedLibraryWorkflowPrepared": true,
+    "packAndReadbackGatesPrepared": true,
+    "workflowExecutedAgainstRegistry": false,
+    "packagesPublished": false,
+    "registryReadbackCompleted": false,
+    "catalogMarksRequiredNovaExternalsPublished": false
+  },
+  "githubExternalState": {
+    "observedAt": "2026-07-18T22:48:48-05:00",
+    "repository": "AdministracionHyperion/Plataforma-Hyperion",
+    "ownerType": "User",
+    "repositoryVisibility": "private",
+    "mainBranchProtectionApiStatus": 403,
+    "repositoryRulesetsApiStatus": 403,
+    "mainCommit": "a80b877d",
+    "mainProtected": false,
+    "requiredChecks": 0,
+    "pullRequest27": {
+      "state": "OPEN",
+      "mergeable": "MERGEABLE",
+      "mergeStateStatus": "CLEAN",
+      "humanReviewsSubmitted": 0,
+      "reviewRequestsPending": ["mateo181230-cmyk"],
+      "checklistItemsOpen": 3,
+      "checks": {
+        "check": "SUCCESS",
+        "docker-build-and-smoke": "SUCCESS",
+        "n-minus-one-upgrade-rollback": "SUCCESS"
+      },
+      "merged": false
+    },
+    "remoteMutationsPerformed": false
+  },
+  "externalPackageRegistryState": {
+    "observedAt": "2026-07-18T22:48:48-05:00",
+    "registry": "https://registry.npmjs.org/",
+    "anonymousPublicReadback": {
+      "@hyperion/platform-contracts": "E404",
+      "@hyperion/audit-contracts": "E404",
+      "@hyperion/database": "E404",
+      "@hyperion/logger": "E404"
+    },
+    "novaExtractionPrerequisitesPubliclyConsumable": false,
+    "remoteMutationsPerformed": false
+  },
+  "finalLocalValidation": {
+    "command": "pnpm check",
+    "exitCode": 0,
+    "wallTimeSeconds": 261,
+    "observedAt": "2026-07-18T22:50:17-05:00",
+    "scope": "architecture, federation, documentation, releases, compose, lint-format, recovery, builds and recursive workspace tests",
+    "includesPlatformNovaAcceptanceGate": true,
+    "workingTreeDirty": true
+  },
+  "cleanup": {
+    "projectContainersRemaining": 0,
+    "projectImagesRemaining": 0,
+    "projectNetworksRemaining": 0,
+    "projectVolumesRemaining": 0,
+    "preExistingContainersUnchanged": 5
+  },
+  "publication": {
+    "pushed": false,
+    "signed": false,
+    "registryDigestRecorded": false
+  }
+}

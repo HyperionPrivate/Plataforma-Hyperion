@@ -7,23 +7,26 @@ import { createDatabasePulsoDeliveryGuard } from "./pulso-delivery.integration.t
 import { WHATSAPP_PROVIDER_MODE } from "./types.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("PostgresChannelRepository", () => {
   let db: DatabaseClient;
+  let fixtureDb: DatabaseClient;
   let repository: PostgresChannelRepository;
   let tenantId: string;
 
   beforeAll(async () => {
     db = createDatabase(TEST_DATABASE_URL ?? "");
-    const tenant = await db.query<{ id: string }>(
+    fixtureDb = createDatabase(TEST_PULSO_FIXTURE_DATABASE_URL ?? "");
+    const tenant = await fixtureDb.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name)
        values ($1, 'WhatsApp repository integration test')
        returning id`,
       [`wa-repository-${randomUUID()}`]
     );
     tenantId = tenant.rows[0]?.id ?? "";
-    repository = new PostgresChannelRepository(db, createDatabasePulsoDeliveryGuard(db));
+    repository = new PostgresChannelRepository(db, createDatabasePulsoDeliveryGuard(fixtureDb));
     await repository.projectConnection(tenantId, {
       providerMode: WHATSAPP_PROVIDER_MODE,
       state: "ready",
@@ -35,9 +38,10 @@ describeIntegration("PostgresChannelRepository", () => {
   afterAll(async () => {
     if (tenantId) {
       await db.query("delete from channel_runtime.outbox_events where tenant_id = $1", [tenantId]);
-      await db.query("delete from platform.tenants where id = $1", [tenantId]);
+      await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
+    await fixtureDb.close();
   });
 
   async function createClaimedOutbound(label: string) {
@@ -51,7 +55,7 @@ describeIntegration("PostgresChannelRepository", () => {
     const bindingRow = binding.rows[0];
     if (!bindingRow) throw new Error("Expected an active bound conversation");
     const body = `respuesta durable ${label}`;
-    const message = await db.query<{ id: string }>(
+    const message = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', $3, $4, 'queued') returning id`,
@@ -247,12 +251,12 @@ describeIntegration("PostgresChannelRepository", () => {
       `select id from channel_runtime.thread_bindings where tenant_id = $1 limit 1`,
       [tenantId]
     );
-    const conversation = await db.query<{ id: string }>(
+    const conversation = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.conversations (tenant_id, channel, direction, status)
        values ($1, 'whatsapp', 'inbound', 'active') returning id`,
       [tenantId]
     );
-    const message = await db.query<{ id: string }>(
+    const message = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', 'respuesta sintetica', $3, 'queued') returning id`,
@@ -340,7 +344,7 @@ describeIntegration("PostgresChannelRepository", () => {
       status: "delivered",
       occurredAt: deliveredAgainAt
     });
-    const state = await db.query<{
+    const state = await fixtureDb.query<{
       outbound: string;
       message: string;
       messageProviderId: string | null;
@@ -445,7 +449,7 @@ describeIntegration("PostgresChannelRepository", () => {
       })
     ).resolves.toBe(true);
 
-    const states = await db.query<{ id: string; outbound: string; message: string }>(
+    const states = await fixtureDb.query<{ id: string; outbound: string; message: string }>(
       `select m.id, o.status as outbound, m.delivery_status as message
        from pulso_iris.messages m
        join channel_runtime.outbound_messages o
@@ -502,13 +506,20 @@ describeIntegration("PostgresChannelRepository", () => {
     const pending = await createClaimedOutbound("outbox-rollback");
     const providerMessageId = `provider-rollback-${randomUUID()}`;
     const failingDatabase = createOutboxFailureDatabase(db);
-    const failingRepository = new PostgresChannelRepository(failingDatabase, createDatabasePulsoDeliveryGuard(db));
+    const failingRepository = new PostgresChannelRepository(
+      failingDatabase,
+      createDatabasePulsoDeliveryGuard(fixtureDb)
+    );
 
     await expect(
       failingRepository.markOutboundSent(pending.claimed, providerMessageId, new Date("2026-07-10T06:30:00.000Z"))
     ).rejects.toThrow("synthetic_channel_delivery_outbox_failure");
 
-    const rolledBack = await db.query<{ outbound: string; providerMessageId: string | null; message: string }>(
+    const rolledBack = await fixtureDb.query<{
+      outbound: string;
+      providerMessageId: string | null;
+      message: string;
+    }>(
       `select o.status as outbound, o.provider_message_id as "providerMessageId", m.delivery_status as message
        from channel_runtime.outbound_messages o
        join pulso_iris.messages m on m.tenant_id = o.tenant_id and m.id = o.message_id
@@ -574,7 +585,7 @@ describeIntegration("PostgresChannelRepository", () => {
   });
 
   it("prunes receipt capacity by message identity without dropping a positive state", async () => {
-    const tenant = await db.query<{ id: string }>(
+    const tenant = await fixtureDb.query<{ id: string }>(
       `insert into platform.tenants (slug, display_name)
        values ($1, 'Receipt capacity integration test') returning id`,
       [`receipt-capacity-${randomUUID()}`]
@@ -625,7 +636,7 @@ describeIntegration("PostgresChannelRepository", () => {
         targetStatuses: ["delivered", "failed"]
       });
     } finally {
-      await db.query("delete from platform.tenants where id = $1", [capacityTenantId]);
+      await fixtureDb.query("delete from platform.tenants where id = $1", [capacityTenantId]);
     }
   });
 
@@ -640,7 +651,7 @@ describeIntegration("PostgresChannelRepository", () => {
     const bindingRow = binding.rows[0];
     if (!bindingRow) throw new Error("Expected an active bound conversation");
     const body = "respuesta con receipt concurrente";
-    const message = await db.query<{ id: string }>(
+    const message = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', $3, $4, 'queued') returning id`,
@@ -672,7 +683,7 @@ describeIntegration("PostgresChannelRepository", () => {
     expect({ sent, receiptPersisted }).toEqual({ sent: true, receiptPersisted: true });
 
     const messageId = message.rows[0]?.id ?? "";
-    const state = await db.query<{ outbound: string; message: string; pending: number }>(
+    const state = await fixtureDb.query<{ outbound: string; message: string; pending: number }>(
       `select o.status as outbound, m.delivery_status as message,
               (select count(*)::int from channel_runtime.delivery_receipts receipt
                where receipt.tenant_id = o.tenant_id
@@ -719,7 +730,7 @@ describeIntegration("PostgresChannelRepository", () => {
     );
     const bindingRow = binding.rows[0];
     if (!bindingRow) throw new Error("Expected an active bound conversation");
-    const message = await db.query<{ id: string }>(
+    const message = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', 'respuesta concurrente', $3, 'queued') returning id`,
@@ -751,7 +762,7 @@ describeIntegration("PostgresChannelRepository", () => {
       tenantId,
       messageId
     ]);
-    await db.query(`delete from pulso_iris.messages where tenant_id = $1 and id = $2`, [tenantId, messageId]);
+    await fixtureDb.query(`delete from pulso_iris.messages where tenant_id = $1 and id = $2`, [tenantId, messageId]);
   });
 
   it("rejects cross-conversation, non-SOFIA and body-drift outbound messages", async () => {
@@ -764,24 +775,24 @@ describeIntegration("PostgresChannelRepository", () => {
     );
     const bindingRow = binding.rows[0];
     if (!bindingRow) throw new Error("Expected an active bound conversation");
-    const foreignConversation = await db.query<{ id: string }>(
+    const foreignConversation = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.conversations (tenant_id, channel, direction, status)
        values ($1, 'whatsapp', 'inbound', 'active') returning id`,
       [tenantId]
     );
-    const foreignMessage = await db.query<{ id: string }>(
+    const foreignMessage = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', 'otra conversacion', $3, 'queued') returning id`,
       [tenantId, foreignConversation.rows[0]?.id, WHATSAPP_PROVIDER_MODE]
     );
-    const patientMessage = await db.query<{ id: string }>(
+    const patientMessage = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'patient', 'mensaje del paciente', $3, 'received') returning id`,
       [tenantId, bindingRow.conversationId, WHATSAPP_PROVIDER_MODE]
     );
-    const boundMessage = await db.query<{ id: string }>(
+    const boundMessage = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', 'contenido persistido', $3, 'queued') returning id`,
@@ -837,13 +848,13 @@ describeIntegration("PostgresChannelRepository", () => {
 
     const ownerBody = "respuesta propietaria de la clave";
     const contenderBody = "respuesta valida con clave colisionada";
-    const ownerMessage = await db.query<{ id: string }>(
+    const ownerMessage = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', $3, $4, 'queued') returning id`,
       [tenantId, bindingRow.conversationId, ownerBody, WHATSAPP_PROVIDER_MODE]
     );
-    const contenderMessage = await db.query<{ id: string }>(
+    const contenderMessage = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', $3, $4, 'queued') returning id`,
@@ -887,7 +898,7 @@ describeIntegration("PostgresChannelRepository", () => {
          where tenant_id = $1 and provider = $2 and idempotency_key = $3`,
         [tenantId, WHATSAPP_PROVIDER_MODE, idempotencyKey]
       );
-      await db.query(
+      await fixtureDb.query(
         `delete from pulso_iris.messages
          where tenant_id = $1 and id in ($2, $3)`,
         [tenantId, ownerMessageId, contenderMessageId]
@@ -905,7 +916,7 @@ describeIntegration("PostgresChannelRepository", () => {
     );
     const bindingRow = binding.rows[0];
     if (!bindingRow) throw new Error("Expected an active bound conversation");
-    const foreignConversation = await db.query<{ id: string }>(
+    const foreignConversation = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.conversations (tenant_id, channel, direction, status)
        values ($1, 'whatsapp', 'inbound', 'active') returning id`,
       [tenantId]
@@ -913,7 +924,7 @@ describeIntegration("PostgresChannelRepository", () => {
 
     const createQueued = async (label: string) => {
       const body = `respuesta controlada ${label}`;
-      const message = await db.query<{ id: string }>(
+      const message = await fixtureDb.query<{ id: string }>(
         `insert into pulso_iris.messages (
            tenant_id, conversation_id, sender, body, provider, delivery_status
          ) values ($1, $2, 'sofia', $3, $4, 'queued') returning id`,
@@ -931,7 +942,7 @@ describeIntegration("PostgresChannelRepository", () => {
     };
 
     const assertCancelled = async (outboundId: string, messageId: string, ownerStatus = "queued") => {
-      const state = await db.query<{ outbound: string; errorCode: string; message: string }>(
+      const state = await fixtureDb.query<{ outbound: string; errorCode: string; message: string }>(
         `select o.status as outbound, o.last_error_code as "errorCode", m.delivery_status as message
          from channel_runtime.outbound_messages o
          join pulso_iris.messages m on m.tenant_id = o.tenant_id and m.id = o.message_id
@@ -969,7 +980,7 @@ describeIntegration("PostgresChannelRepository", () => {
     await assertCancelled(blockedBinding.outboundId, blockedBinding.messageId);
 
     const movedConversation = await createQueued("moved-conversation");
-    await db.query(`update pulso_iris.messages set conversation_id = $3 where tenant_id = $1 and id = $2`, [
+    await fixtureDb.query(`update pulso_iris.messages set conversation_id = $3 where tenant_id = $1 and id = $2`, [
       tenantId,
       movedConversation.messageId,
       foreignConversation.rows[0]?.id
@@ -978,7 +989,7 @@ describeIntegration("PostgresChannelRepository", () => {
     await assertCancelled(movedConversation.outboundId, movedConversation.messageId);
 
     const changedSender = await createQueued("changed-sender");
-    await db.query(`update pulso_iris.messages set sender = 'patient' where tenant_id = $1 and id = $2`, [
+    await fixtureDb.query(`update pulso_iris.messages set sender = 'patient' where tenant_id = $1 and id = $2`, [
       tenantId,
       changedSender.messageId
     ]);
@@ -986,23 +997,23 @@ describeIntegration("PostgresChannelRepository", () => {
     await assertCancelled(changedSender.outboundId, changedSender.messageId);
 
     const changedBody = await createQueued("changed-body");
-    await db.query(`update pulso_iris.messages set body = 'contenido cambiado' where tenant_id = $1 and id = $2`, [
-      tenantId,
-      changedBody.messageId
-    ]);
+    await fixtureDb.query(
+      `update pulso_iris.messages set body = 'contenido cambiado' where tenant_id = $1 and id = $2`,
+      [tenantId, changedBody.messageId]
+    );
     await expect(repository.claimOutbound("repository-invalid-body")).resolves.toBeUndefined();
     await assertCancelled(changedBody.outboundId, changedBody.messageId);
 
     const changedProvider = await createQueued("changed-provider");
-    await db.query(`update pulso_iris.messages set provider = 'other-provider' where tenant_id = $1 and id = $2`, [
-      tenantId,
-      changedProvider.messageId
-    ]);
+    await fixtureDb.query(
+      `update pulso_iris.messages set provider = 'other-provider' where tenant_id = $1 and id = $2`,
+      [tenantId, changedProvider.messageId]
+    );
     await expect(repository.claimOutbound("repository-invalid-provider")).resolves.toBeUndefined();
     await assertCancelled(changedProvider.outboundId, changedProvider.messageId);
 
     const changedLifecycle = await createQueued("changed-lifecycle");
-    await db.query(`update pulso_iris.messages set delivery_status = 'sent' where tenant_id = $1 and id = $2`, [
+    await fixtureDb.query(`update pulso_iris.messages set delivery_status = 'sent' where tenant_id = $1 and id = $2`, [
       tenantId,
       changedLifecycle.messageId
     ]);
@@ -1020,7 +1031,7 @@ describeIntegration("PostgresChannelRepository", () => {
     );
     const bindingRow = binding.rows[0];
     if (!bindingRow) throw new Error("Expected an active bound conversation");
-    const message = await db.query<{ id: string }>(
+    const message = await fixtureDb.query<{ id: string }>(
       `insert into pulso_iris.messages (
          tenant_id, conversation_id, sender, body, provider, delivery_status
        ) values ($1, $2, 'sofia', 'respuesta previa al envio', $3, 'queued') returning id`,
@@ -1037,13 +1048,13 @@ describeIntegration("PostgresChannelRepository", () => {
     const claimed = await repository.claimOutbound("repository-pre-send-worker");
     if (!claimed) throw new Error("Expected a claimed outbound message");
 
-    await db.query(`update pulso_iris.messages set delivery_status = 'sent' where tenant_id = $1 and id = $2`, [
+    await fixtureDb.query(`update pulso_iris.messages set delivery_status = 'sent' where tenant_id = $1 and id = $2`, [
       tenantId,
       messageId
     ]);
 
     await expect(repository.markOutboundSending(claimed)).resolves.toBe(false);
-    const state = await db.query<{ outbound: string; errorCode: string; message: string }>(
+    const state = await fixtureDb.query<{ outbound: string; errorCode: string; message: string }>(
       `select o.status as outbound, o.last_error_code as "errorCode", m.delivery_status as message
        from channel_runtime.outbound_messages o
        join pulso_iris.messages m on m.tenant_id = o.tenant_id and m.id = o.message_id
@@ -1082,7 +1093,7 @@ describeIntegration("PostgresChannelRepository", () => {
       ["wrong-provider", "other-provider", "queued"],
       ["already-sent", WHATSAPP_PROVIDER_MODE, "sent"]
     ] as const) {
-      const message = await db.query<{ id: string }>(
+      const message = await fixtureDb.query<{ id: string }>(
         `insert into pulso_iris.messages (
            tenant_id, conversation_id, sender, body, provider, delivery_status
          ) values ($1, $2, 'sofia', $3, $4, $5) returning id`,

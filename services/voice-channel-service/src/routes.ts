@@ -6,14 +6,29 @@ import {
   voiceCallRequestedPayloadSchema,
   voiceCallDispatchedPayloadSchema,
   voiceCallCompletedPayloadSchema
-} from "@hyperion/contracts";
-import { isRestrictedDeploymentEnvironment, readServiceUrls } from "@hyperion/config";
+} from "@hyperion/nova-contracts";
+import { isRestrictedDeploymentEnvironment, readServiceUrls } from "@hyperion/nova-config";
 import type { DatabaseClient } from "@hyperion/database";
-import type { ServiceContext } from "@hyperion/service-runtime";
+import type { ServiceContext } from "@hyperion/nova-service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { DialerAdapter } from "./dialer-adapter.js";
 import { insertVoiceOutboxEvent, listVoiceOutboxDlq, redriveVoiceOutboxDlq } from "./outbox.js";
+
+const rawJsonBodies = new WeakMap<FastifyRequest, Buffer>();
+
+export function registerVoiceRawJsonBodyParser(app: FastifyInstance): void {
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "buffer" }, (request, body, done) => {
+    const rawBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+    rawJsonBodies.set(request, rawBody);
+    try {
+      done(null, JSON.parse(rawBody.toString("utf8")));
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  });
+}
 
 const voiceCatalog = {
   product: novaCatalog.product.code,
@@ -103,7 +118,9 @@ function withGreeting(dynamicVars?: Record<string, string>): Record<string, stri
     vars[key] = value;
   }
   if (!vars.saludo) vars.saludo = colombianGreeting();
-  if (!vars.disclosure_ai) vars.disclosure_ai = "asistente de voz de Coopfuturo";
+  if (!vars.disclosure_ai) {
+    vars.disclosure_ai = process.env.VOICE_AI_DISCLOSURE_NAME?.trim() || "asistente de voz con inteligencia artificial";
+  }
   if (!vars.cupo_preaprobado_validado) vars.cupo_preaprobado_validado = "no";
   if (vars.nombre) vars.nombre = titleCaseName(vars.nombre);
   else vars.nombre = SPOKEN_DEFAULTS.nombre;
@@ -719,7 +736,7 @@ function verifyDialerWebhook(
     return { accepted: false, signatureValid: false, statusCode: 401, message: "Missing dialer webhook signature" };
   }
 
-  const body = JSON.stringify(request.body ?? {});
+  const body = rawJsonBodies.get(request) ?? Buffer.from(JSON.stringify(request.body ?? {}));
   const expected = createHmac("sha256", secret).update(body).digest("hex");
   if (signature.length !== expected.length) {
     return { accepted: false, signatureValid: false, statusCode: 401, message: "Invalid signature" };
@@ -752,7 +769,7 @@ function verifyElevenLabsWebhook(
     return { accepted: false, signatureValid: false, statusCode: 401, message: "Missing ElevenLabs webhook signature" };
   }
 
-  const body = JSON.stringify(request.body ?? {});
+  const body = rawJsonBodies.get(request) ?? Buffer.from(JSON.stringify(request.body ?? {}));
   const expected = createHmac("sha256", secret).update(body).digest("hex");
   const normalized = signature.replace(/^sha256=/i, "");
   if (normalized.length !== expected.length) {

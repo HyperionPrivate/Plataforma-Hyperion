@@ -14,6 +14,11 @@ import {
 } from "./availability-request-constraints.js";
 import type { LlmMessage, LlmProvider } from "./llm-provider.js";
 import {
+  createPulsoSofiaContextClient,
+  PulsoSofiaContextDependencyError,
+  type PulsoSofiaContextClient
+} from "./pulso-sofia-context-client.js";
+import {
   isExplicitConfirmation,
   SOFIA_TOOL_DEFINITIONS,
   SofiaToolClient,
@@ -155,9 +160,9 @@ interface ClaimedJob {
   input: unknown;
 }
 
-interface RecoverableConfirmationJob extends ClaimedJob {
-  messageId: string;
-  messageBody: string;
+interface RecoverableConfirmationCandidate extends ClaimedJob {
+  updatedAt: Date | string;
+  createdAt: Date | string;
 }
 
 interface PromptFlow {
@@ -191,6 +196,7 @@ export class SofiaRuntime {
   private readonly fetchImpl: typeof fetch;
   private readonly workerId: string;
   private readonly tools: SofiaToolClient;
+  private readonly pulsoContext: PulsoSofiaContextClient;
   private readonly pollIntervalMs: number;
   private ingestTimer?: NodeJS.Timeout;
   private jobTimer?: NodeJS.Timeout;
@@ -220,6 +226,12 @@ export class SofiaRuntime {
       pulsoToken: this.credentials.pulso,
       db: options.db,
       fetchImpl: this.fetchImpl,
+      signal: this.shutdownController.signal
+    });
+    this.pulsoContext = createPulsoSofiaContextClient({
+      pulsoIrisUrl: options.pulsoIrisUrl,
+      credential: this.credentials.pulso,
+      fetch: this.fetchImpl,
       signal: this.shutdownController.signal
     });
   }
@@ -333,68 +345,25 @@ export class SofiaRuntime {
   }
 
   private async claimRecoverableConfirmationJob(): Promise<ClaimedJob | undefined> {
-    return this.options.db.transaction(async (tx) => {
-      const candidates = await tx.query<RecoverableConfirmationJob>(
+    let cursor: Pick<RecoverableConfirmationCandidate, "updatedAt" | "createdAt" | "id"> | undefined;
+    for (;;) {
+      const candidates = await this.options.db.query<RecoverableConfirmationCandidate>(
         `/* sofia-confirmation:recovery-candidates */
          select j.id, j.tenant_id as "tenantId", j.conversation_id as "conversationId",
                 j.inbound_event_id as "inboundEventId", j.attempt_count as "attemptCount",
                 j.max_attempts as "maxAttempts", j.input,
-                patient.id::text as "messageId", patient.body as "messageBody"
+                j.updated_at as "updatedAt", j.created_at as "createdAt"
          from agent_runtime.jobs j
-         join pulso_iris.messages patient
-           on patient.tenant_id = j.tenant_id
-          and patient.conversation_id = j.conversation_id
-          and patient.id::text = j.input->>'messageId'
-          and patient.sender = 'patient'
          where (
              j.status = 'dead_letter'
              or (j.status = 'running' and j.locked_at < now() - interval '2 minutes')
            )
            and j.attempt_count >= j.max_attempts
            and j.attempt_count < 10
-           and not exists (
-             select 1
-             from agent_runtime.jobs predecessor
-             where predecessor.tenant_id = j.tenant_id
-               and predecessor.stream_id = j.stream_id
-               and predecessor.stream_sequence < j.stream_sequence
-               and predecessor.status <> 'completed'
-           )
-           and btrim(regexp_replace(
-                 translate(lower(patient.body), 'áéíóúüñ', 'aeiouun'),
-                 '[^a-z0-9]+', ' ', 'g'
-               )) ~ '^(si )?confirmo( (agendar|reservar|cancelar|reagendar|la cita|el cambio))?$'
-           and not exists (
-             select 1
-             from channel_runtime.outbound_messages outbound
-             where outbound.tenant_id = j.tenant_id
-               and outbound.provider = 'whatsapp_web_test'
-               and outbound.idempotency_key = 'sofia-job:' || j.id::text
-           )
-         order by j.updated_at, j.created_at
-         for update of j skip locked
-         limit 10`
-      );
-      const candidate = candidates.rows.find((row) => isExplicitConfirmation(row.messageBody));
-      if (!candidate) return undefined;
-
-      const claimed = await tx.query<ClaimedJob>(
-        `/* sofia-confirmation:claim-recovered */
-         update agent_runtime.jobs j
-         set status = 'running',
-             attempt_count = j.attempt_count + 1,
-             max_attempts = least(10, greatest(j.max_attempts, j.attempt_count + 1)),
-             locked_at = now(), locked_by = $1, completed_at = null, updated_at = now()
-         where j.tenant_id = $2
-           and j.id = $3
-           and j.conversation_id = $4
-           and j.input->>'messageId' = $5
            and (
-             j.status = 'dead_letter'
-             or (j.status = 'running' and j.locked_at < now() - interval '2 minutes')
+             $1::timestamptz is null
+             or (j.updated_at, j.created_at, j.id) > ($1::timestamptz, $2::timestamptz, $3::uuid)
            )
-           and j.attempt_count >= j.max_attempts
-           and j.attempt_count < 10
            and not exists (
              select 1
              from agent_runtime.jobs predecessor
@@ -403,37 +372,76 @@ export class SofiaRuntime {
                and predecessor.stream_sequence < j.stream_sequence
                and predecessor.status <> 'completed'
            )
-           and exists (
-             select 1
-             from pulso_iris.messages patient
-             where patient.tenant_id = j.tenant_id
-               and patient.conversation_id = j.conversation_id
-               and patient.id::text = j.input->>'messageId'
-               and patient.id::text = $5
-               and patient.sender = 'patient'
-               and patient.body = $6
-           )
-           and not exists (
-             select 1
-             from channel_runtime.outbound_messages outbound
-             where outbound.tenant_id = j.tenant_id
-               and outbound.provider = 'whatsapp_web_test'
-               and outbound.idempotency_key = 'sofia-job:' || j.id::text
-           )
-         returning j.id, j.tenant_id as "tenantId", j.conversation_id as "conversationId",
-                   j.inbound_event_id as "inboundEventId", j.attempt_count as "attemptCount",
-                   j.max_attempts as "maxAttempts", j.input`,
-        [
-          this.workerId,
-          candidate.tenantId,
-          candidate.id,
-          candidate.conversationId,
-          candidate.messageId,
-          candidate.messageBody
-        ]
+         order by j.updated_at, j.created_at, j.id
+         limit 10`,
+        cursor ? [cursor.updatedAt, cursor.createdAt, cursor.id] : [null, null, null]
       );
-      return claimed.rows[0];
-    });
+      if (candidates.rows.length === 0) return undefined;
+
+      for (const candidate of candidates.rows) {
+        const input = jobInputSchema.safeParse(candidate.input);
+        if (!input.success) continue;
+        let inbound: Awaited<ReturnType<PulsoSofiaContextClient["lookupInbound"]>>;
+        try {
+          inbound = await this.pulsoContext.lookupInbound(candidate.tenantId, {
+            conversationId: candidate.conversationId,
+            messageId: input.data.messageId,
+            patientId: input.data.patientId
+          });
+        } catch (error) {
+          this.options.logger.warn("SOFIA confirmation recovery candidate lookup failed closed", {
+            jobId: candidate.id,
+            error: sanitizeError(error)
+          });
+          if (error instanceof PulsoSofiaContextDependencyError) return undefined;
+          continue;
+        }
+        if (!inbound.found || !isExplicitConfirmation(inbound.message.body)) continue;
+
+        const claimed = await this.options.db.query<ClaimedJob>(
+          `/* sofia-confirmation:claim-recovered */
+           update agent_runtime.jobs j
+           set status = 'running',
+               attempt_count = j.attempt_count + 1,
+               max_attempts = least(10, greatest(j.max_attempts, j.attempt_count + 1)),
+               locked_at = now(), locked_by = $1, completed_at = null, updated_at = now()
+           where j.tenant_id = $2
+             and j.id = $3
+             and j.conversation_id = $4
+             and j.input->>'messageId' = $5
+             and j.input->>'patientId' = $6
+             and (
+               j.status = 'dead_letter'
+               or (j.status = 'running' and j.locked_at < now() - interval '2 minutes')
+             )
+             and j.attempt_count >= j.max_attempts
+             and j.attempt_count < 10
+             and not exists (
+               select 1
+               from agent_runtime.jobs predecessor
+               where predecessor.tenant_id = j.tenant_id
+                 and predecessor.stream_id = j.stream_id
+                 and predecessor.stream_sequence < j.stream_sequence
+                 and predecessor.status <> 'completed'
+             )
+           returning j.id, j.tenant_id as "tenantId", j.conversation_id as "conversationId",
+                     j.inbound_event_id as "inboundEventId", j.attempt_count as "attemptCount",
+                     j.max_attempts as "maxAttempts", j.input`,
+          [
+            this.workerId,
+            candidate.tenantId,
+            candidate.id,
+            candidate.conversationId,
+            input.data.messageId,
+            input.data.patientId
+          ]
+        );
+        if (claimed.rows[0]) return claimed.rows[0];
+      }
+
+      const last = candidates.rows[candidates.rows.length - 1]!;
+      cursor = { updatedAt: last.updatedAt, createdAt: last.createdAt, id: last.id };
+    }
   }
 
   private ingestTick(): Promise<void> {
@@ -481,17 +489,14 @@ export class SofiaRuntime {
   private async processJob(job: ClaimedJob): Promise<void> {
     this.throwIfShuttingDown();
     const input = jobInputSchema.parse(job.input);
-    const current = await this.options.db.query<{ body: string; conversationStatus: string }>(
-      `select m.body, c.status as "conversationStatus"
-       from pulso_iris.messages m
-       join pulso_iris.conversations c
-         on c.tenant_id = m.tenant_id and c.id = m.conversation_id
-       where m.tenant_id = $1 and m.id = $2 and m.conversation_id = $3`,
-      [job.tenantId, input.messageId, job.conversationId]
-    );
-    const currentMessage = current.rows[0];
-    const currentBody = currentMessage?.body;
-    if (!currentBody) throw new Error("Inbound message is missing");
+    const current = await this.pulsoContext.lookupInbound(job.tenantId, {
+      conversationId: job.conversationId,
+      messageId: input.messageId,
+      patientId: input.patientId
+    });
+    if (!current.found) throw new Error("Inbound message is missing or conflicts with the job identity");
+    const currentMessage = current;
+    const currentBody = current.message.body;
     const explicitConfirmation = isExplicitConfirmation(currentBody);
 
     await this.setConversationRuntime(job.tenantId, job.conversationId, "processing");
@@ -1084,34 +1089,20 @@ export class SofiaRuntime {
     hadAvailabilityContext: boolean;
     availabilityRuntime: AvailabilityRuntimeContext;
   }> {
-    const [history, state, patient, catalog] = await Promise.all([
-      this.options.db.query<{ sender: string; body: string }>(
-        `select sender, body from (
-           select sender, body, created_at from pulso_iris.messages
-           where tenant_id = $1 and conversation_id = $2
-           order by created_at desc limit 12
-         ) recent order by created_at`,
-        [job.tenantId, job.conversationId]
-      ),
-      this.options.db.query<{ sofiaState: unknown }>(
-        `select coalesce(metadata->'sofiaState', '{}'::jsonb) as "sofiaState"
-         from pulso_iris.conversations where tenant_id = $1 and id = $2`,
-        [job.tenantId, job.conversationId]
-      ),
-      this.options.db.query<{ fullName?: string }>(
-        `select full_name as "fullName" from pulso_iris.administrative_patients
-         where tenant_id = $1 and id = $2`,
-        [job.tenantId, input.patientId]
-      ),
+    const [context, catalog] = await Promise.all([
+      this.pulsoContext.loadConversation(job.tenantId, {
+        conversationId: job.conversationId,
+        patientId: input.patientId
+      }),
       this.callPulsoTool(job.tenantId, "get_catalog", {})
     ]);
     const now = Date.now();
-    const sanitized = sanitizeSofiaState(state.rows[0]?.sofiaState, now);
+    const sanitized = sanitizeSofiaState(context.sofiaState, now);
     const timeZone = readCatalogTimeZone(catalog);
     const runtimeContext = {
       now: new Date(now).toISOString(),
       timezone: timeZone,
-      patientName: patient.rows[0]?.fullName ?? null,
+      patientName: context.patientName,
       availabilityContextValid: sanitized.availabilityStatus === "valid",
       state: sanitized.state,
       catalog
@@ -1122,7 +1113,7 @@ export class SofiaRuntime {
           role: "system",
           content: `${prompt.systemPrompt}\n\nContexto estructurado de Hyperion:\n${JSON.stringify(runtimeContext)}`
         },
-        ...history.rows.map((message): LlmMessage => ({
+        ...context.history.map((message): LlmMessage => ({
           role: message.sender === "patient" ? "user" : "assistant",
           content: message.body
         }))
@@ -1344,20 +1335,18 @@ export function registerSofiaReadinessRoute(
          order by f.version desc, f.updated_at desc
          limit 1
        ) selected
-       where selected.runtime_key = 'sofia_whatsapp_internal_v5'
-         and exists (
-           select 1 from platform.schema_migrations
-           where name = '016-sofia-search-constraints.sql'
-         )`,
+       where selected.runtime_key = 'sofia_whatsapp_internal_v5'`,
       [tenantId.data]
     );
     const workerRunning = options.runtime.isRunning();
+    const promptFlowReady = (prompt.rows[0]?.count ?? 0) > 0;
     return {
       data: {
-        ready: options.workerEnabled && workerRunning && options.llm.isConfigured() && (prompt.rows[0]?.count ?? 0) > 0,
+        ready: options.workerEnabled && workerRunning && options.llm.isConfigured() && promptFlowReady,
         model: options.llm.model,
         workerEnabled: options.workerEnabled,
-        workerRunning
+        workerRunning,
+        promptFlowReady
       }
     };
   });

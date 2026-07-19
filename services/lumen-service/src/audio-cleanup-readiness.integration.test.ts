@@ -11,20 +11,23 @@ import {
 import { temporaryAudioRequestDirectory } from "./temporary-audio.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_LUMEN_FIXTURE_DATABASE_URL = process.env.TEST_LUMEN_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_LUMEN_FIXTURE_DATABASE_URL ? describe : describe.skip;
 const { Client } = pg;
 
 describeIntegration("LUMEN audio cleanup lease readiness", () => {
   const owner = `lumen-readiness-${randomUUID()}`;
   let app: ServiceHandle["app"];
   let client: pg.Client;
+  let fixtureClient: pg.Client;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
     process.env.LUMEN_INSTANCE_ID = owner;
     process.env.DURABLE_OUTBOX_ENABLED = "false";
     client = new Client({ connectionString: TEST_DATABASE_URL });
-    await client.connect();
+    fixtureClient = new Client({ connectionString: TEST_LUMEN_FIXTURE_DATABASE_URL });
+    await Promise.all([client.connect(), fixtureClient.connect()]);
     const handle = await createService({
       serviceName: "lumen-service",
       databaseRequired: true,
@@ -36,7 +39,7 @@ describeIntegration("LUMEN audio cleanup lease readiness", () => {
   afterAll(async () => {
     await app?.close();
     await client?.query(`delete from lumen.audio_cleanup_owner_leases where cleanup_owner = $1`, [owner]);
-    await client?.end();
+    await Promise.all([client?.end(), fixtureClient?.end()]);
     delete process.env.DATABASE_URL;
     delete process.env.LUMEN_INSTANCE_ID;
     delete process.env.DURABLE_OUTBOX_ENABLED;
@@ -47,53 +50,9 @@ describeIntegration("LUMEN audio cleanup lease readiness", () => {
     const previousHolder = randomUUID();
     const removed: string[] = [];
     let reconciler: Awaited<ReturnType<typeof startLumenAudioCleanupReconciler>> | undefined;
-    await client.query("begin");
+    const fixture = await createCleanupFixture(fixtureClient, crashedOwner, "crash-recovery");
     try {
-      const tenantId = (
-        await client.query<{ id: string }>(
-          `insert into platform.tenants (slug, display_name, status)
-           values ($1, 'LUMEN crash recovery test', 'active') returning id`,
-          [`lumen-crash-${randomUUID()}`]
-        )
-      ).rows[0]!.id;
-      await client.query(
-        `insert into lumen.tenant_snapshots (
-           tenant_id, status, is_demo, is_active, source_version, source_updated_at, payload_hash
-         ) values ($1, 'active', true, true, 1, now(), $2)`,
-        [tenantId, sha256(`tenant:${tenantId}:1`)]
-      );
-      const encounterId = randomUUID();
-      const patientId = randomUUID();
-      const siteId = randomUUID();
-      const professionalId = randomUUID();
-      await client.query(
-        `insert into lumen.encounter_reference_snapshots (
-           tenant_id, encounter_id, patient_id, site_id, professional_id,
-           patient_display_name, professional_name, site_name,
-           patient_is_demo, professional_is_demo, source_version, source_updated_at, payload_hash
-         ) values ($1, $2, $3, $4, $5, 'Paciente sintético', 'Profesional sintético',
-                   'Sede sintética', true, true, 1, now(), $6)`,
-        [tenantId, encounterId, patientId, siteId, professionalId, sha256(`reference:${encounterId}:1`)]
-      );
-      await client.query(
-        `insert into lumen.encounters (
-           id, tenant_id, patient_id, professional_id, site_id, scheduled_at,
-           is_demo, demo_key, metadata
-         ) values ($1, $2, $3, $4, $5, now(), true, $6, '{"synthetic":true}'::jsonb)`,
-        [encounterId, tenantId, patientId, professionalId, siteId, `crash-${randomUUID()}`]
-      );
-      const attemptId = (
-        await client.query<{ id: string }>(
-          `insert into lumen.processing_attempts (
-             tenant_id, encounter_id, operation, idempotency_key, input_sha256,
-             provider, model, mime_type, source, duration_seconds, cleanup_protocol, cleanup_owner
-           ) values ($1, $2, 'transcription', $3, $4, 'test-stt', 'test-model',
-                     'audio/wav', 'authorized_upload', 8, 'deterministic_v2', $5)
-           returning id`,
-          [tenantId, encounterId, randomUUID(), sha256("authorized synthetic audio"), crashedOwner]
-        )
-      ).rows[0]!.id;
-      await client.query(
+      await fixtureClient.query(
         `insert into lumen.audio_cleanup_owner_leases (
            cleanup_owner, holder_id, acquired_at, heartbeat_at, expires_at
          ) values ($1, $2, now() - interval '31 minutes', now() - interval '31 minutes', now() - interval '1 second')`,
@@ -118,25 +77,28 @@ describeIntegration("LUMEN audio cleanup lease readiness", () => {
       }>(
         `select status, error_code as "errorCode", temp_audio_deleted_at as "deletedAt"
            from lumen.processing_attempts where id = $1`,
-        [attemptId]
+        [fixture.attemptId]
       );
       expect(recovered.rows[0]).toMatchObject({ status: "failed", errorCode: "process_interrupted" });
       expect(recovered.rows[0]?.deletedAt).toBeInstanceOf(Date);
       expect(removed).toEqual([
-        temporaryAudioRequestDirectory(configuration.rootDirectory, crashedOwner, attemptId).requestDirectory
+        temporaryAudioRequestDirectory(configuration.rootDirectory, crashedOwner, fixture.attemptId).requestDirectory
       ]);
     } finally {
       await reconciler?.stop();
-      await client.query("rollback");
+      await fixtureClient.query(`delete from lumen.audio_cleanup_owner_leases where cleanup_owner = $1`, [
+        crashedOwner
+      ]);
+      await deleteCleanupFixture(fixtureClient, fixture);
     }
   });
 
   it("returns HTTP 503 for expired foreign-owner work and recovers when that owner lease is restored", async () => {
     const foreignOwner = `lumen-foreign-recovery-${randomUUID()}`;
     const foreignHolder = randomUUID();
-    const fixture = await createCleanupFixture(client, foreignOwner, "foreign-owner");
+    const fixture = await createCleanupFixture(fixtureClient, foreignOwner, "foreign-owner");
     try {
-      await client.query(
+      await fixtureClient.query(
         `insert into lumen.audio_cleanup_owner_leases (
            cleanup_owner, holder_id, acquired_at, heartbeat_at, expires_at
          ) values ($1, $2, now() - interval '31 minutes', now() - interval '31 minutes', now() - interval '1 second')`,
@@ -151,7 +113,7 @@ describeIntegration("LUMEN audio cleanup lease readiness", () => {
         detail: "dependency readiness check failed"
       });
 
-      await client.query(
+      await fixtureClient.query(
         `update lumen.audio_cleanup_owner_leases
             set heartbeat_at = now(), expires_at = now() + interval '30 minutes'
           where cleanup_owner = $1 and holder_id = $2`,
@@ -161,8 +123,10 @@ describeIntegration("LUMEN audio cleanup lease readiness", () => {
       expect(restored.statusCode).toBe(200);
       expect(restored.json().dependencies).toContainEqual({ name: "lumen_audio_cleanup_lease", status: "ok" });
     } finally {
-      await client.query(`delete from lumen.audio_cleanup_owner_leases where cleanup_owner = $1`, [foreignOwner]);
-      await deleteCleanupFixture(client, fixture);
+      await fixtureClient.query(`delete from lumen.audio_cleanup_owner_leases where cleanup_owner = $1`, [
+        foreignOwner
+      ]);
+      await deleteCleanupFixture(fixtureClient, fixture);
     }
   });
 
@@ -197,13 +161,7 @@ interface CleanupFixture {
 }
 
 async function createCleanupFixture(client: pg.Client, cleanupOwner: string, label: string): Promise<CleanupFixture> {
-  const tenantId = (
-    await client.query<{ id: string }>(
-      `insert into platform.tenants (slug, display_name, status)
-       values ($1, 'LUMEN owner readiness test', 'active') returning id`,
-      [`lumen-${label}-${randomUUID()}`]
-    )
-  ).rows[0]!.id;
+  const tenantId = randomUUID();
   await client.query(
     `insert into lumen.tenant_snapshots (
        tenant_id, status, is_demo, is_active, source_version, source_updated_at, payload_hash
@@ -253,5 +211,4 @@ async function deleteCleanupFixture(client: pg.Client, fixture: CleanupFixture):
     fixture.encounterId
   ]);
   await client.query(`delete from lumen.tenant_snapshots where tenant_id = $1`, [fixture.tenantId]);
-  await client.query(`delete from platform.tenants where id = $1`, [fixture.tenantId]);
 }

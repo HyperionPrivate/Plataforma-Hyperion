@@ -5,32 +5,35 @@ import { createIntegrationOwnerState } from "./sofia-integration-owner-state.tes
 import { SofiaToolClient } from "./sofia-tools.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("SOFIA PostgreSQL confirmation state", () => {
   let db: DatabaseClient;
+  let fixtureDb: DatabaseClient;
   let tenantId = "";
   let patientId = "";
   let conversationId = "";
 
   beforeAll(async () => {
     db = createDatabase(TEST_DATABASE_URL!);
+    fixtureDb = createDatabase(TEST_PULSO_FIXTURE_DATABASE_URL!);
     tenantId = (
-      await db.query<{ id: string }>(
+      await fixtureDb.query<{ id: string }>(
         `insert into platform.tenants (slug, display_name)
          values ($1, 'SOFIA confirmation integration') returning id`,
         [`sofia-confirmation-${randomUUID()}`]
       )
     ).rows[0]!.id;
     patientId = (
-      await db.query<{ id: string }>(
+      await fixtureDb.query<{ id: string }>(
         `insert into pulso_iris.administrative_patients (tenant_id, preferred_channel)
          values ($1, 'whatsapp') returning id`,
         [tenantId]
       )
     ).rows[0]!.id;
     conversationId = (
-      await db.query<{ id: string }>(
+      await fixtureDb.query<{ id: string }>(
         `insert into pulso_iris.conversations (tenant_id, patient_id, channel)
          values ($1, $2, 'whatsapp') returning id`,
         [tenantId, patientId]
@@ -39,13 +42,14 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
   });
 
   afterAll(async () => {
-    if (tenantId) await db.query("delete from platform.tenants where id = $1", [tenantId]);
+    if (tenantId) await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     await db.close();
+    await fixtureDb.close();
   });
 
   it("clears an expired action with CAS without rebuilding it from CONFIRMO arguments", async () => {
     const fetchImpl = vi.fn();
-    const client = createClient(db, fetchImpl);
+    const client = createClient(db, fixtureDb, fetchImpl);
     const firstJobId = randomUUID();
     const first = await client.execute("cancel_appointment", cancelArguments("Solicitud inicial"), {
       ...context(tenantId, patientId, conversationId, firstJobId),
@@ -53,7 +57,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     });
     expect(first).toMatchObject({ ok: false, code: "explicit_confirmation_required" });
 
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(
          metadata,
@@ -71,7 +75,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     });
     expect(result).toMatchObject({ ok: false, code: "confirmation_action_missing" });
 
-    const state = await readState(db, tenantId, conversationId);
+    const state = await readState(fixtureDb, tenantId, conversationId);
     expect(state.pendingAction).toBeNull();
     expect(state.confirmationGrant).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -80,7 +84,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
   it("claims one durable action and replays its receipt by confirmation message", async () => {
     const actionId = randomUUID();
     const appointmentId = randomUUID();
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(metadata, '{sofiaState}', $3::jsonb)
        where tenant_id = $1 and id = $2`,
@@ -118,7 +122,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
           { status: 200, headers: { "content-type": "application/json" } }
         )
     );
-    const client = createClient(db, fetchImpl);
+    const client = createClient(db, fixtureDb, fetchImpl);
     const confirmationContext = {
       ...context(tenantId, patientId, conversationId, randomUUID()),
       currentMessageBody: "CONFIRMO cancelar"
@@ -130,7 +134,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     expect(first).toMatchObject({ ok: true, status: "completed", action: "cancel", replayed: false });
     expect(replay).toMatchObject({ ok: true, status: "completed", action: "cancel", replayed: true });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const state = await readState(db, tenantId, conversationId);
+    const state = await readState(fixtureDb, tenantId, conversationId);
     expect(state).toMatchObject({
       pendingAction: null,
       confirmationExecution: null,
@@ -143,7 +147,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
 
   it("finalizes a compatible pending action by CAS without a domain call", async () => {
     const actionId = randomUUID();
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(metadata, '{sofiaState}', $3::jsonb)
        where tenant_id = $1 and id = $2`,
@@ -162,7 +166,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       ]
     );
     const fetchImpl = vi.fn();
-    const client = createClient(db, fetchImpl);
+    const client = createClient(db, fixtureDb, fetchImpl);
     const confirmationContext = {
       ...context(tenantId, patientId, conversationId, randomUUID()),
       currentMessageBody: "CONFIRMO cancelar"
@@ -182,7 +186,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       code: "confirmation_retry_exhausted"
     });
     expect(fetchImpl).not.toHaveBeenCalled();
-    const state = await readState(db, tenantId, conversationId);
+    const state = await readState(fixtureDb, tenantId, conversationId);
     expect(state).toMatchObject({
       pendingAction: null,
       confirmationExecution: null,
@@ -196,7 +200,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
   it("expires an orphan execution with CAS and leaves a durable terminal receipt", async () => {
     const actionId = randomUUID();
     const confirmationMessageId = randomUUID();
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(metadata, '{sofiaState}', $3::jsonb)
        where tenant_id = $1 and id = $2`,
@@ -216,7 +220,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       ]
     );
     const fetchImpl = vi.fn();
-    const client = createClient(db, fetchImpl);
+    const client = createClient(db, fixtureDb, fetchImpl);
     const originalContext = {
       ...context(tenantId, patientId, conversationId, randomUUID()),
       currentMessageId: confirmationMessageId,
@@ -238,7 +242,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     });
     expect(unrelated).toMatchObject({ ok: false, status: "no_action" });
     expect(fetchImpl).not.toHaveBeenCalled();
-    const state = await readState(db, tenantId, conversationId);
+    const state = await readState(fixtureDb, tenantId, conversationId);
     expect(state).toMatchObject({
       confirmationExecution: null,
       confirmationReceipts: {
@@ -248,7 +252,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
   });
 
   it("removes an expired grant before preparing another action", async () => {
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(
          metadata,
@@ -271,7 +275,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       ]
     );
     const fetchImpl = vi.fn();
-    const client = createClient(db, fetchImpl);
+    const client = createClient(db, fixtureDb, fetchImpl);
     const jobId = randomUUID();
 
     const result = await client.execute("cancel_appointment", cancelArguments("Solicitud posterior"), {
@@ -280,21 +284,21 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     });
 
     expect(result).toMatchObject({ ok: false, code: "explicit_confirmation_required" });
-    const state = await readState(db, tenantId, conversationId);
+    const state = await readState(fixtureDb, tenantId, conversationId);
     expect(state.pendingAction).toMatchObject({ tool: "cancel_appointment", jobId });
     expect(state.confirmationGrant).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("keeps the original action and TTL for an operationally identical request", async () => {
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(metadata, '{sofiaState}', '{}'::jsonb)
        where tenant_id = $1 and id = $2`,
       [tenantId, conversationId]
     );
     const fetchImpl = vi.fn();
-    const client = createClient(db, fetchImpl);
+    const client = createClient(db, fixtureDb, fetchImpl);
     const appointmentId = randomUUID();
     const originalJobId = randomUUID();
 
@@ -307,7 +311,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       }
     );
     expect(first).toMatchObject({ code: "explicit_confirmation_required" });
-    const original = await readState(db, tenantId, conversationId);
+    const original = await readState(fixtureDb, tenantId, conversationId);
 
     const repeated = await client.execute(
       "cancel_appointment",
@@ -321,7 +325,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       code: "explicit_confirmation_required",
       pendingActionReused: true
     });
-    const persisted = await readState(db, tenantId, conversationId);
+    const persisted = await readState(fixtureDb, tenantId, conversationId);
     expect(persisted.pendingAction).toEqual(original.pendingAction);
     expect(persisted.pendingAction).toMatchObject({ jobId: originalJobId });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -331,7 +335,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     const oldActionId = randomUUID();
     const newActionId = randomUUID();
     const appointmentId = randomUUID();
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(metadata, '{sofiaState}', $3::jsonb)
        where tenant_id = $1 and id = $2`,
@@ -356,7 +360,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       jobId: newActionId
     };
     const fetchImpl = vi.fn(async () => {
-      await db.query(
+      await fixtureDb.query(
         `update pulso_iris.conversations
          set metadata = jsonb_set(metadata, '{sofiaState}', $3::jsonb)
          where tenant_id = $1 and id = $2`,
@@ -367,7 +371,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
         headers: { "content-type": "application/json" }
       });
     });
-    const client = createClient(db, fetchImpl);
+    const client = createClient(db, fixtureDb, fetchImpl);
 
     const result = await client.execute(
       "cancel_appointment",
@@ -379,13 +383,13 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
     );
 
     expect(result).toMatchObject({ ok: true });
-    const state = await readState(db, tenantId, conversationId);
+    const state = await readState(fixtureDb, tenantId, conversationId);
     expect(state.pendingAction).toMatchObject({ tool: "reschedule_appointment", jobId: newActionId });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("versions fresh availability and invalidates it after a successful mutation", async () => {
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(metadata, '{sofiaState}', '{}'::jsonb)
        where tenant_id = $1 and id = $2`,
@@ -411,7 +415,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
         headers: { "content-type": "application/json" }
       });
     });
-    const client = createClient(db, fetchImpl);
+    const client = createClient(db, fixtureDb, fetchImpl);
     const searchJobId = randomUUID();
 
     const searchArguments = {
@@ -428,7 +432,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       currentMessageBody: "Consulta disponibilidad"
     });
     expect(search).toMatchObject({ ok: true });
-    const freshState = await readState(db, tenantId, conversationId);
+    const freshState = await readState(fixtureDb, tenantId, conversationId);
     expect(freshState).toMatchObject({
       lastAvailability: { slots: [expect.objectContaining({ localTime: "09:00" })] },
       lastAvailabilitySchemaVersion: 3,
@@ -445,7 +449,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
 
     const actionId = randomUUID();
     const appointmentId = randomUUID();
-    await db.query(
+    await fixtureDb.query(
       `update pulso_iris.conversations
        set metadata = jsonb_set(
          metadata,
@@ -473,7 +477,7 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
       }
     );
     expect(cancelled).toMatchObject({ ok: true });
-    const clearedState = await readState(db, tenantId, conversationId);
+    const clearedState = await readState(fixtureDb, tenantId, conversationId);
     expect(clearedState).not.toHaveProperty("lastAvailability");
     expect(clearedState).not.toHaveProperty("lastAvailabilityAt");
     expect(clearedState).not.toHaveProperty("lastAvailabilitySchemaVersion");
@@ -483,13 +487,17 @@ describeIntegration("SOFIA PostgreSQL confirmation state", () => {
   });
 });
 
-function createClient(db: DatabaseClient, fetchImpl: ReturnType<typeof vi.fn>): SofiaToolClient {
+function createClient(
+  db: DatabaseClient,
+  fixtureDb: DatabaseClient,
+  fetchImpl: ReturnType<typeof vi.fn>
+): SofiaToolClient {
   return new SofiaToolClient({
     pulsoIrisUrl: "http://pulso.test",
     internalServiceToken: "controlled-internal-token",
     db,
     fetchImpl: fetchImpl as typeof fetch,
-    ownerState: createIntegrationOwnerState(db)
+    ownerState: createIntegrationOwnerState(fixtureDb)
   });
 }
 

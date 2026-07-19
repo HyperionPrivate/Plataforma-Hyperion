@@ -70,7 +70,7 @@ export class ContractTestAdapter implements CoreAdapter {
       document_id: documentId,
       associate_id: "assoc-contract-test",
       full_name: "Asociado Contract Test",
-      agency_code: "BAQ",
+      agency_code: "TEST_AGENCY",
       status: "active"
     };
   }

@@ -1,7 +1,11 @@
 # ADR-0003: Producto NOVA y contextos autónomos
 
-- Estado: Aceptada
+- Estado: Aceptada; reemplazada parcialmente por [ADR-0006](ADR-0006-federated-product-cells.md)
 - Fecha: 2026-07-16
+
+> ADR-0006 reclasifica Voice, LIWA y Documents dentro de la célula NOVA y reemplaza `api-gateway`/`web-console`
+> como destino común. NOVA como producto, Coopfuturo como primer tenant y la propiedad lógica de datos continúan
+> vigentes.
 
 ## Contexto
 

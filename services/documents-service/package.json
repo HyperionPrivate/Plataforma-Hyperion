@@ -14,11 +14,11 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.787.0",
-    "@hyperion/config": "workspace:*",
-    "@hyperion/contracts": "workspace:*",
-    "@hyperion/database": "workspace:*",
-    "@hyperion/durable-events": "workspace:*",
-    "@hyperion/service-runtime": "workspace:*",
+    "@hyperion/nova-config": "workspace:*",
+    "@hyperion/nova-contracts": "1.1.0",
+    "@hyperion/database": "0.1.0",
+    "@hyperion/nova-durable-events": "workspace:*",
+    "@hyperion/nova-service-runtime": "workspace:*",
     "fastify": "^5.2.1",
     "zod": "^3.24.2"
   },

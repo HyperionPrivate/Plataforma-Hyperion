@@ -19,24 +19,25 @@ describe("normalizeLiwaPayload", () => {
       event: "documento",
       phone: "+573002555948",
       external_id: "t1",
-      ciudad: "Bucaramanga",
+      agency_code: "NORTH",
+      agency_tag: "QUEUE_NORTH",
       filename: "orden.pdf"
     });
     expect(parsed.event).toBe("document_received");
     expect(parsed.phone).toBe("+573002555948");
-    expect(parsed.agencyTag).toBe("AG_BUCARAMANGA");
-    expect(parsed.agencyCode).toBe("BGA");
+    expect(parsed.agencyTag).toBe("QUEUE_NORTH");
+    expect(parsed.agencyCode).toBe("NORTH");
   });
 
   it("maps asesor alias to handoff", () => {
     const parsed = normalizeLiwaPayload({
       event: "asesor",
       telefono: "3002555948",
-      ciudad: "Barranquilla"
+      ciudad: "Example City"
     });
     expect(mapEventKind(parsed.event)).toBe("handoff_requested");
-    expect(parsed.agencyTag).toBe("AG_BARRANQUILLA");
-    expect(parsed.agencyCode).toBe("BAQ");
+    expect(parsed.agencyTag).toBeUndefined();
+    expect(parsed.agencyCode).toBeUndefined();
   });
 
   it("maps WhatsApp-style from as phone for chat mirror", () => {
@@ -73,7 +74,7 @@ describe("normalizeLiwaPayload", () => {
 
   it("maps LIWA Tools tag-applied payload (user + tag, no event)", () => {
     const parsed = normalizeLiwaPayload({
-      tag: { id: "906422", name: "RENOVACION_VIP" },
+      tag: { id: "906422", name: "FLOW_PRIORITY" },
       user: {
         id: "573002555948",
         phone: "+573002555948",
@@ -86,16 +87,13 @@ describe("normalizeLiwaPayload", () => {
     expect(mapEventKind(parsed.event)).toBe("tipificacion");
     expect(parsed.phone).toBe("+573002555948");
     expect(parsed.contactId).toBe("573002555948");
-    expect(parsed.tipificacion).toBe("renovacion_vip");
+    expect(parsed.tipificacion).toBe("flow_priority");
     expect(parsed.name).toBe("Prueba");
   });
 });
 
 describe("resolveAgencyFromGeo", () => {
-  it("does not invent BAQ when ciudad is Bucaramanga", () => {
-    expect(resolveAgencyFromGeo({ ciudad: "Bucaramanga" })).toMatchObject({
-      tag: "AG_BUCARAMANGA",
-      code: "BGA"
-    });
+  it("does not infer tenant routing from a city name", () => {
+    expect(resolveAgencyFromGeo({ ciudad: "Example City" })).toEqual({ source: "unmapped" });
   });
 });

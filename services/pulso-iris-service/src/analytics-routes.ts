@@ -1,4 +1,5 @@
-﻿import { envelope, pulsoIrisWorkerListSchema } from "@hyperion/contracts";
+﻿import { envelope } from "@hyperion/platform-contracts";
+import { pulsoIrisWorkerListSchema } from "@hyperion/pulso-contracts";
 import type { RouteRegistrar } from "@hyperion/service-runtime";
 import { readUuidParam, requireTenantDb } from "./shared.js";
 

@@ -77,7 +77,7 @@ describe("HttpLiwaClient", () => {
     const fetchImpl = mockFetch((url, init) => {
       calls.push(`${init?.method ?? "GET"} ${url}`);
       if (url.endsWith("/accounts/tags") && (init?.method ?? "GET") === "GET") {
-        return new Response(JSON.stringify([{ id: "562888", name: "AG_BUCARAMANGA" }]), { status: 200 });
+        return new Response(JSON.stringify([{ id: "562888", name: "QUEUE_NORTH" }]), { status: 200 });
       }
       if (url.includes("/contacts/contact-1/tags/562888")) {
         return new Response("{}", { status: 200 });
@@ -86,7 +86,7 @@ describe("HttpLiwaClient", () => {
     });
 
     const client = new HttpLiwaClient("https://chat.liwa.co/api", "token-test", env, fetchImpl);
-    await client.handoffToAgency("contact-1", "AG_BUCARAMANGA");
+    await client.handoffToAgency("contact-1", "QUEUE_NORTH");
 
     expect(calls.some((c) => c.includes("/handoff"))).toBe(false);
     expect(calls).toContain("GET https://chat.liwa.co/api/accounts/tags");
@@ -111,13 +111,12 @@ describe("HttpLiwaClient", () => {
   it("lists flows and account me", async () => {
     const fetchImpl = mockFetch((url) => {
       if (url.endsWith("/accounts/me")) {
-        return new Response(
-          JSON.stringify({ page_id: "1656233", name: "Coopfuturo 2026 Cta Comercial", active: true }),
-          { status: 200 }
-        );
+        return new Response(JSON.stringify({ page_id: "1656233", name: "Tenant Commercial Account", active: true }), {
+          status: 200
+        });
       }
       if (url.endsWith("/accounts/flows")) {
-        return new Response(JSON.stringify([{ id: "1782399915832", name: "Renovaciones" }]), { status: 200 });
+        return new Response(JSON.stringify([{ id: "flow-1", name: "Priority Flow" }]), { status: 200 });
       }
       return new Response("{}", { status: 404 });
     });
@@ -125,9 +124,9 @@ describe("HttpLiwaClient", () => {
     const client = new HttpLiwaClient("https://chat.liwa.co/api", "token-test", env, fetchImpl);
     await expect(client.getAccountMe()).resolves.toMatchObject({
       pageId: "1656233",
-      name: "Coopfuturo 2026 Cta Comercial"
+      name: "Tenant Commercial Account"
     });
-    await expect(client.listFlows()).resolves.toEqual([{ id: "1782399915832", name: "Renovaciones" }]);
+    await expect(client.listFlows()).resolves.toEqual([{ id: "flow-1", name: "Priority Flow" }]);
   });
 
   it("sendFlow marks accepted_pending when LIWA returns 200 without message id", async () => {

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { AuditEventInput } from "@hyperion/contracts";
+import type { AuditEventInput } from "@hyperion/audit-contracts";
 import { isDatabaseTransaction, type DatabaseExecutor, type DatabaseTransaction } from "@hyperion/database";
 
 export const PULSO_AUDIT_EVENTS = [

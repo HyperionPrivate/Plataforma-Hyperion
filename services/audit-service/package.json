@@ -12,9 +12,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hyperion/contracts": "workspace:*",
+    "@hyperion/audit-contracts": "1.1.0",
+    "@hyperion/audit-migrations": "workspace:*",
     "@hyperion/database": "workspace:*",
     "@hyperion/durable-events": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
     "@hyperion/service-runtime": "workspace:*"
   }
 }

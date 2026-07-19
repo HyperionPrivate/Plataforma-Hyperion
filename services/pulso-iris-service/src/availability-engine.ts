@@ -3,7 +3,7 @@ import {
   type PulsoIrisAvailabilitySlot,
   type PulsoIrisAvailabilitySlots,
   type PulsoIrisSlotAlternative
-} from "@hyperion/contracts";
+} from "@hyperion/pulso-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 
 type Database = Pick<NonNullable<ServiceContext["db"]>, "query">;

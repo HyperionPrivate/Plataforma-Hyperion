@@ -1,4 +1,15 @@
+---
+documentType: runbook
+status: not-current
+owner: platform-operations
+issue: HYP-OPS-002
+reviewDue: 2026-09-30
+---
+
 # Offsite backup copy — interface stub
+
+> **No vigente como procedimiento de recuperación.** Sigue siendo una interfaz fail-closed y no acredita destino,
+> retención, restore ni RPO/RTO de ningún producto.
 
 Hyperion versiona el dump local (`scripts/ops/postgres-backup.sh`) y la
 restauración controlada (`scripts/ops/postgres-restore.sh`). **La copia offsite

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { readDeploymentEnvironment } from "@hyperion/config";
+import { readDeploymentEnvironment } from "@hyperion/nova-config";
 
 export interface StoredObject {
   storageKey: string;

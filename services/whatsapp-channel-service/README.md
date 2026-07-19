@@ -14,6 +14,8 @@ Canal privado y temporal de prueba para PULSO IRIS. El servicio usa Baileys sin 
   consulta/vinculación del thread propietario; no autoriza operaciones de Integration ni de SOFÍA.
 - `CHANNEL_TO_PULSO_TOKEN` y `CHANNEL_TO_AUDIT_TOKEN`: credenciales salientes separadas para los dispatchers HTTP
   y los comandos síncronos estrictamente necesarios. En JetStream se usan identidades NATS separadas.
+- `ACCESS_TO_CHANNEL_TOKEN`: credencial exclusiva del productor Access para el fallback HTTP de
+  `access.tenant.snapshot.v1`; el transporte JetStream usa el durable `channel_access_tenant_snapshot_v1`.
 
 No se deben registrar QR, cuerpos de mensajes, numeros completos ni archivos del directorio de sesion. El rollback consiste en deshabilitar `WHATSAPP_WEB_TEST_ENABLED`, llamar `disconnect` para revocar el dispositivo y detener solo este servicio.
 
@@ -30,6 +32,7 @@ No se deben registrar QR, cuerpos de mensajes, numeros completos ni archivos del
 - `GET /internal/v1/tenants/:tenantId/channel-inbound/:eventId/stream-position`
 - `GET /internal/v1/tenants/:tenantId/whatsapp/threads/:threadBindingId`
 - `POST /internal/v1/tenants/:tenantId/whatsapp/threads/:threadBindingId/bind`
+- `POST /internal/v1/events/access-tenant-snapshots`
 
 Las rutas de posición y thread validan conjuntamente `x-hyperion-caller=pulso-iris-service` y
 `PULSO_TO_CHANNEL_TOKEN`; el bind asocia paciente, conversación y mensaje dentro de una transacción Channel. La

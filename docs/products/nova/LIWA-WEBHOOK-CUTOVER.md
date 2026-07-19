@@ -1,4 +1,15 @@
+---
+documentType: runbook
+status: not-current
+owner: nova-channels
+issue: HYP-NOVA-014
+reviewDue: 2026-09-30
+---
+
 # LIWA webhook cutover (NOVA)
+
+> **No vigente para producción.** Las instrucciones de laboratorio conservan valor diagnóstico, pero el corte debe
+> revalidarse con dominio HTTPS estable o túnel privado, secreto rotado y aserción de operador firmada.
 
 Inbound webhooks **no se configuran por API** (ausentes en Swagger). Se pegan en la UI LIWA:
 Herramientas → Webhooks / nodos del flow **Renovaciones** (`1782399915832`).
@@ -9,42 +20,42 @@ Herramientas → Webhooks / nodos del flow **Renovaciones** (`1782399915832`).
 https://<tu-host-publico>/v1/liwa/webhooks
 ```
 
-Autenticación (cualquiera de estas):
+Autenticación obligatoria:
 
 ```text
 Header: X-LIWA-WEBHOOK-SECRET: <mismo valor que LIWA_WEBHOOK_SECRET en .env>
-# o, si Tools→Webhooks no permite headers:
-URL: https://<host>/v1/liwa/webhooks?secret=<LIWA_WEBHOOK_SECRET>
 ```
 
-La URL con `?secret=` está en `docs/products/nova/LIWA-WEBHOOK-LIVE-URL.txt` (local, no commitear el secret).
+No se admiten secretos en query string ni webhooks HTTP. Si la UI del proveedor no
+permite enviar el header, el corte queda bloqueado hasta disponer de un proxy privado
+que inyecte el header; el secreto nunca debe quedar en URL, logs o historial.
 
-Fallback local (`HYPERION_ENVIRONMENT=local` + `LIWA_WEBHOOK_ALLOW_INSECURE=1`): acepta sin secret. Solo cutover.
+El ingress público NOVA no expone rutas de simulación. La normalización y autenticación de payloads de laboratorio
+se comprueban sin publicar un webhook mediante la suite local del servicio:
 
-Lab local (mismo secret):
-
-```text
-POST /v1/liwa/webhooks/simulate
+```powershell
+pnpm --filter @hyperion/liwa-channel-service test
 ```
 
 ## Túnel temporal (dev)
 
-1. Publicar LIWA (opcional) + gateway:
+1. Arrancar la celda NOVA standalone; el BFF queda ligado sólo a loopback:
 
 ```bash
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.liwa-tunnel.yml --env-file .env up -d api-gateway liwa-channel-service
+docker compose --env-file .env.nova -f infra/docker-compose.nova.yml up -d nova-bff liwa-channel-service
 ```
 
-2. Quick tunnel Cloudflare hacia el api-gateway (`8080`):
+2. Túnel privado/temporal con terminación TLS hacia el ingress NOVA (`8095`):
 
 ```bash
-cloudflared tunnel --url http://127.0.0.1:8080
+cloudflared tunnel --url http://127.0.0.1:8095
 ```
 
-3. URL pública = `https://<subdominio>.trycloudflare.com/v1/liwa/webhooks`  
-   El gateway proxya a `liwa-channel-service` sin auth de sesión (solo header secret).
+3. URL TLS = `https://<subdominio-temporal>/v1/liwa/webhooks`.
+   `nova-bff` proxya sólo la ruta exacta a `liwa-channel-service`, sin auth de sesión y preservando únicamente el
+   header secreto del proveedor.
 
-Si el quick tunnel se reinicia, la URL cambia: actualiza el webhook en LIWA.
+Si el túnel se reinicia, la URL puede cambiar: actualiza el webhook en LIWA y retíralo al terminar la prueba.
 
 ## Payload canónico (runbook piloto)
 

@@ -4,7 +4,7 @@ import {
   type LumenClinicalField,
   type LumenClinicalRecordContent,
   type LumenFieldEvidenceOrigin
-} from "@hyperion/contracts";
+} from "@hyperion/lumen-contracts";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 

@@ -1,4 +1,15 @@
-# Post-llamada → WhatsApp (NOVA / version limpia)
+---
+documentType: runbook
+status: not-current
+owner: nova-channels
+issue: HYP-NOVA-015
+reviewDue: 2026-09-30
+---
+
+# Post-llamada → WhatsApp (NOVA / versión limpia)
+
+> **No vigente para producción.** Debe revalidarse con políticas por tenant, LIWA real, recuperación de outbox y
+> telemetría del release exacto.
 
 Qué incluye esta entrega:
 

@@ -1,5 +1,6 @@
-import { auditEventSchema, envelope } from "@hyperion/contracts";
+import { auditEntityTypeSchema, auditEventInputSchema } from "@hyperion/audit-contracts";
 import { isHttpDurableEventIngressEnabled } from "@hyperion/durable-events";
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import {
   readInternalCaller,
   readInternalCredential,
@@ -8,6 +9,7 @@ import {
   type RouteRegistrar
 } from "@hyperion/service-runtime";
 import { readAuditEventTransportConfiguration, startAuditEventJetStreamConsumers } from "./audit-jetstream.js";
+import { listSourceAuditEvents } from "./audit-query.js";
 import { parseInternalAuditEventEnvelope, receiveInternalAuditEvent } from "./event-inbox.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
@@ -30,7 +32,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
 
   app.get("/v1/audit/events", async (request, reply) => {
     const authError = validateInternalAuthorization(request.headers, {
-      "api-gateway": readInternalCredential(process.env, "GATEWAY_TO_AUDIT_TOKEN")
+      "api-gateway": readInternalCredential(process.env, "GATEWAY_TO_AUDIT_TOKEN"),
+      "platform-admin-bff": readInternalCredential(process.env, "PLATFORM_ADMIN_BFF_TO_AUDIT_TOKEN")
     });
     if (authError) {
       return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
@@ -50,6 +53,35 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     return envelope(result.rows, request.id);
   });
 
+  app.get("/internal/v1/tenants/:tenantId/audit/entities/:entityType/:entityId/events", async (request, reply) => {
+    const authError = validateInternalAuthorization(request.headers, durableEventCredentials);
+    if (authError) {
+      return reply.code(authError.statusCode).send(envelope({ error: authError.message }, request.id));
+    }
+    const caller = readInternalCaller(request.headers)!;
+    const sourceService = expectedAuditSourceForCaller(caller);
+    if (!sourceService) {
+      return reply.code(403).send(envelope({ error: "Caller has no Audit source scope" }, request.id));
+    }
+    const params = request.params as Record<string, unknown>;
+    const tenantId = tenantIdSchema.safeParse(params.tenantId);
+    const entityType = auditEntityTypeSchema.safeParse(params.entityType);
+    const entityId = typeof params.entityId === "string" ? params.entityId.trim() : "";
+    if (!tenantId.success || !entityType.success || entityId.length < 1 || entityId.length > 160) {
+      return reply.code(400).send(envelope({ error: "Invalid Audit query scope" }, request.id));
+    }
+    if (!context.db) {
+      return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
+    }
+    const events = await listSourceAuditEvents(context.db, {
+      tenantId: tenantId.data,
+      sourceService,
+      entityType: entityType.data,
+      entityId
+    });
+    return envelope(events, request.id);
+  });
+
   app.post("/v1/audit/events", async (request, reply) => {
     const authError = validateInternalAuthorization(request.headers, directWriteCredentials);
     if (authError) {
@@ -61,7 +93,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
     }
 
-    const parsed = auditEventSchema.safeParse(request.body);
+    const parsed = auditEventInputSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply
         .code(400)
@@ -150,6 +182,7 @@ function readDirectWriteCredentials(env: NodeJS.ProcessEnv): InternalCredentialM
 function readDurableEventCredentials(env: NodeJS.ProcessEnv): InternalCredentialMap {
   return {
     "agent-service": readInternalCredential(env, "SOFIA_TO_AUDIT_TOKEN"),
+    "nova-core-service": readInternalCredential(env, "NOVA_TO_AUDIT_TOKEN"),
     "lumen-service": readInternalCredential(env, "LUMEN_TO_AUDIT_TOKEN"),
     "pulso-iris-service": readInternalCredential(env, "PULSO_TO_AUDIT_TOKEN"),
     "whatsapp-channel-service": readInternalCredential(env, "CHANNEL_TO_AUDIT_TOKEN")
@@ -158,8 +191,16 @@ function readDurableEventCredentials(env: NodeJS.ProcessEnv): InternalCredential
 
 function expectedAuditSourceForCaller(
   caller: string
-): "sofia-automation" | "lumen-service" | "pulso-iris-service" | "whatsapp-channel-service" | undefined {
+):
+  | "nova-core-service"
+  | "sofia-automation"
+  | "lumen-service"
+  | "pulso-iris-service"
+  | "whatsapp-channel-service"
+  | undefined {
   switch (caller) {
+    case "nova-core-service":
+      return "nova-core-service";
     case "agent-service":
       return "sofia-automation";
     case "lumen-service":

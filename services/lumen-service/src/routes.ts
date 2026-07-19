@@ -1,6 +1,5 @@
+import { auditEventInputSchema as auditEventSchema, type AuditEventInput } from "@hyperion/audit-contracts";
 import {
-  auditEventSchema,
-  envelope,
   lumenClinicalRecordContentSchema,
   lumenClinicalRecordPatchSchema,
   lumenClinicalRequiredFieldBlockers,
@@ -11,15 +10,14 @@ import {
   lumenStructureInputSchema,
   lumenTranscriptionInputSchema,
   lumenWorklistEntrySchema,
-  tenantIdSchema,
   type LumenClinicalField,
   type LumenClinicalRecord,
   type LumenEncounterDetail,
   type LumenFieldEvidenceOrigin,
-  type LumenWorklistEntry,
-  type AuditEventInput
-} from "@hyperion/contracts";
+  type LumenWorklistEntry
+} from "@hyperion/lumen-contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";

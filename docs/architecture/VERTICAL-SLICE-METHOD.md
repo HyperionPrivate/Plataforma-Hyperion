@@ -22,7 +22,7 @@ Nada se construye en horizontal. Cada capacidad es un **vertical slice** complet
 
 ## Definition of Done por pieza
 
-- [ ] Contrato Zod publicado y versionado en `packages/contracts`
+- [ ] Contrato Zod provider-owned publicado y versionado en el paquete de contratos de la celda
 - [ ] Esquema/migración propia del contexto
 - [ ] Outbox/inbox idempotente si tiene efectos asíncronos
 - [ ] Auth por vínculo (`*_TO_*_TOKEN` + `x-hyperion-caller`)

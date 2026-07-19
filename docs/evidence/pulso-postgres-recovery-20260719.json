@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "cell": "pulso",
+  "scope": "postgres-only",
+  "observedAt": "2026-07-19T04:37:24Z",
+  "source": {
+    "branch": "feat/federated-separation",
+    "revision": "1d77f380a5684d4de3a072c1aa4c8714a2ed023c",
+    "workingTreeIncluded": true,
+    "note": "The revision does not identify the uncommitted federated-separation worktree exercised by this drill."
+  },
+  "runtime": {
+    "project": "hyperion-pulso-recovery-acceptance-7e4c29a1",
+    "operationId": "20260719T043724Z",
+    "dockerContext": "desktop-linux",
+    "dockerEndpointSha256": "2e1a13b5c38007e19366225454c425eb89626875521ad4eddc04f1b533aa4908",
+    "postgresImage": "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+    "sourceDatabase": "hyperion_pulso",
+    "sourceDatabaseRemovedBeforeValidation": true,
+    "restoreDatabase": "hyperion_pulso_restore_drill",
+    "restoreOwner": "hyperion_pulso_migrator"
+  },
+  "receipt": {
+    "backupSha256": "f8cf3034b7ca8d83c399b4383012035bea2681e45c08f2abcf037f79e451bf3d",
+    "schemaSha256": "c89d6b89e40c6e9c68d376aae176af5e65b6a687cc00c8ed457bf0b5ff3d83c0",
+    "ledgerSha256": "b2b52fd8463f4351b4338d34fa64bbaed64e5135e9920e995d3522df2a396114",
+    "aclSha256": "b800eda53e42d5060827d028a01361e958a2001b67b11485a68538f8322afdd8",
+    "markerSha256": "9938f8df2e0ea4b1f3bfed1d784970c3e9364c83573f13737c9f63c49bf19fc1",
+    "migrationCount": 3,
+    "schemaVersionValue": 3,
+    "sofiaSchemaVersionValue": 1,
+    "runtimeRolesVerified": 5,
+    "migrationsSkippedOnValidation": [
+      "001-pulso-autonomous-baseline.sql",
+      "002-pulso-runtime-roles.sql",
+      "003-sofia-readiness-marker.sql"
+    ],
+    "roleBootstrapCount": 5,
+    "publicDatabasePrivilegesRevoked": true,
+    "whatsappSessionsIncluded": false,
+    "cleanupVerified": true
+  },
+  "additionalLocalAcceptance": {
+    "postgresVersion": "16.14",
+    "freshMigrationResult": {
+      "applied": ["001-pulso-autonomous-baseline.sql", "002-pulso-runtime-roles.sql", "003-sofia-readiness-marker.sql"],
+      "adopted": [],
+      "skipped": []
+    },
+    "resumeFromManaged001Result": {
+      "applied": ["002-pulso-runtime-roles.sql", "003-sofia-readiness-marker.sql"],
+      "adopted": [],
+      "skipped": ["001-pulso-autonomous-baseline.sql"]
+    },
+    "upgradeFromManaged002Result": {
+      "applied": ["003-sofia-readiness-marker.sql"],
+      "adopted": [],
+      "skipped": ["001-pulso-autonomous-baseline.sql", "002-pulso-runtime-roles.sql"]
+    },
+    "runtimeMarkerAcceptance": {
+      "suite": "packages/pulso-migrations/src/autonomy.integration.test.ts",
+      "testsPassed": 8,
+      "agentAndPromptReadyWithGlobalVersion2": true,
+      "agentAndPromptUnreadyWithoutLocalMarker": true,
+      "agentAndPromptRecoveredAfterLocalMarkerRestore": true
+    },
+    "nMinusOneContractFixture": {
+      "suite": "packages/service-runtime/src/sofia-n-minus-one-readiness.integration.test.ts",
+      "publishedImageUsed": false,
+      "purpose": "Executable frozen 002 readiness behavior; not OCI rehearsal evidence"
+    }
+  },
+  "preexistingDockerResourcesAfterCleanup": [
+    {
+      "name": "plataforma-hyperion-liwa-channel-service-1",
+      "containerId": "cb9722301228"
+    },
+    {
+      "name": "plataforma-hyperion-api-gateway-1",
+      "containerId": "28014d9c94ad"
+    },
+    {
+      "name": "plataforma-hyperion-nova-core-service-1",
+      "containerId": "dbd7e28f4b66"
+    },
+    {
+      "name": "plataforma-hyperion-postgres-1",
+      "containerId": "5e46c6f5de89"
+    },
+    {
+      "name": "victoriaos-finalbuena-app",
+      "containerId": "7f87a8adf824"
+    }
+  ],
+  "limitations": {
+    "publishedNMinusOneImageRehearsed": false,
+    "registryReadbackPerformed": false,
+    "whatsappSessionStorageIncluded": false,
+    "offsiteRestorePerformed": false,
+    "productionCutoverPerformed": false
+  }
+}

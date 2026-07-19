@@ -1,4 +1,4 @@
-import { startService } from "@hyperion/service-runtime";
+import { startService } from "@hyperion/nova-service-runtime";
 import { registerRoutes } from "./app.js";
 
 await startService({
@@ -7,7 +7,7 @@ await startService({
   requiredSchemaVersion: {
     schema: "nova",
     serviceName: "nova",
-    minimumVersion: 2
+    minimumVersion: 6
   },
   registerRoutes
 });

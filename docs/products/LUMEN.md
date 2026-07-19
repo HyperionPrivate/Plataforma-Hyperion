@@ -109,10 +109,10 @@ La frontera vigente está descrita en
   corrección, aprobación y fallos relevantes DEBEN producir evidencia de
   auditoría sin incluir audio ni contenido sensible innecesario.
 
-Los contratos de contenido, incertidumbres y bloqueos están en
-[packages/contracts](../../packages/contracts/src/index.ts). Las invariantes
-persistentes están en la
-[migración clínica](../../packages/migrations/sql/019-lumen-clinical-invariants.sql).
+Los contratos provider-owned de contenido, incertidumbres y bloqueos están en
+[`@hyperion/lumen-contracts`](../../packages/lumen-contracts/src/index.ts). Las invariantes persistentes están
+consolidadas en el
+[baseline autónomo de LUMEN](../../packages/lumen-migrations/sql/001-lumen-autonomous-baseline.sql).
 
 ## 6. Capacidades HTTP funcionales
 
@@ -148,6 +148,21 @@ Todas las rutas de dominio son versionadas y acotadas por `tenantId`.
 La implementación de estas rutas se encuentra en
 [routes.ts](../../services/lumen-service/src/routes.ts) y
 [projection-events.ts](../../services/lumen-service/src/projection-events.ts).
+
+Access produce los snapshots `tenant-snapshot` y `operator-grant` desde un outbox propio en la misma transacción
+que muta un grant LUMEN o el estado efectivo de un operador. La reconciliación de arranque y periódica es acotada,
+serializada, reentrante e idempotente. HTTP conserva una credencial exclusiva como rollback; el overlay usa una
+identidad JetStream `access` con ACL limitada a esos dos contratos. `tenant-service` no expone mutaciones hoy, por
+lo que cambios de tenant realizados por bootstrap/aprovisionamiento se recuperan mediante la reconciliación. PULSO
+todavía no produce `encounter-reference`.
+
+El bloqueo de ese productor es de dominio, no de transporte: el contrato exige un `encounterId` que corresponda a
+un `lumen.encounters`, mientras PULSO sólo posee `appointments` y no existe un mapping ni un evento de
+aprovisionamiento que cree el encounter local. Además, v1 exige `patientIsDemo=true` y `professionalIsDemo=true`,
+pero PULSO representa esas señales con metadata de paciente e `is_pilot` del profesional. Antes de implementar el
+productor, los owners de PULSO/LUMEN deben fijar el identificador canónico, el punto de emisión, la regla de
+elegibilidad demo y el reloj de `sourceVersion`; inferirlos en código permitiría mezclar citas reales con el flujo
+clínico sintético.
 
 ## 7. Audio y transcripción
 
@@ -202,22 +217,22 @@ La implementación de estas rutas se encuentra en
   esquema y no depende del historial global para quedar listo.
 
 La forma normativa de las interfaces HTTP y eventos públicos está en
-[los contratos compartidos](../../packages/contracts/src/index.ts). Ese paquete no representa el lifecycle interno
-de limpieza: `cleanup_pending` es un estado persistente privado de LUMEN, definido por
-[processing-attempts.ts](../../services/lumen-service/src/processing-attempts.ts) y por sus constraints de migración;
-no debe interpretarse como un estado aceptado por una entrada pública. La persistencia inicial y la autonomía están en
-[018-lumen-clinical-demo.sql](../../packages/migrations/sql/018-lumen-clinical-demo.sql),
-[020-lumen-real-audio-pipeline.sql](../../packages/migrations/sql/020-lumen-real-audio-pipeline.sql)
-y
-[022-lumen-autonomy.sql](../../packages/migrations/sql/022-lumen-autonomy.sql), y
-la recuperación durable está en
-[029-lumen-audio-cleanup-recovery.sql](../../packages/migrations/sql/029-lumen-audio-cleanup-recovery.sql),
-la validación y lease exclusiva en
-[032-lumen-audio-cleanup-contract.sql](../../packages/migrations/sql/032-lumen-audio-cleanup-contract.sql)
-y el índice de reconciliación en
-[033-lumen-audio-cleanup-index.sql](../../packages/migrations/sql/033-lumen-audio-cleanup-index.sql). El chequeo
-global de owners no resueltos usa el índice parcial de
-[039-lumen-unresolved-cleanup-owner-index.sql](../../packages/migrations/sql/039-lumen-unresolved-cleanup-owner-index.sql).
+[`@hyperion/lumen-contracts`](../../packages/lumen-contracts/src/index.ts). Ese paquete no representa el lifecycle
+interno de limpieza: `cleanup_pending` es un estado persistente privado de LUMEN, definido por
+[processing-attempts.ts](../../services/lumen-service/src/processing-attempts.ts) y por las invariantes del
+[baseline provider-owned](../../packages/lumen-migrations/sql/001-lumen-autonomous-baseline.sql); no debe
+interpretarse como un estado aceptado por una entrada pública.
+
+El baseline autónomo consolida el esquema efectivo de persistencia clínica, proyecciones, inbox/outbox, recuperación
+durable, lease de limpieza, reconciliación e índices. Los cambios posteriores se aplican mediante el
+[runner de LUMEN](../../packages/lumen-migrations/src/runner.ts), con ledger y checksum propios, y el
+[fence del rol runtime](../../packages/lumen-migrations/sql/002-lumen-runtime-role.sql). Ninguno de esos pasos depende
+del historial global para arrancar o quedar listo.
+
+La única excepción heredada es el
+[comando administrativo del puente N-1](../../packages/migrations/src/lumen-n-minus-one-compatibility.ts). No forma
+parte de la imagen ni del runtime autónomo y está trazado para retiro como `DEBT-025` en el
+[catálogo de deuda](../catalogs/debt.v1.json); no autoriza nuevas migraciones LUMEN en el paquete global.
 
 ## 9. Consola funcional
 
@@ -263,13 +278,13 @@ global de owners no resueltos usa el índice parcial de
 | LUM-141–LUM-147 | Módulos de negocio completos, operación desconectada e integraciones públicas                            | `pendiente`                                                        |
 
 Las superficies de demostración están identificadas en sus propios componentes:
-[laboratorios](../../apps/web-console/src/components/lumen/demo/LumenLaboratoriesView.tsx),
-[asistente](../../apps/web-console/src/components/lumen/demo/LumenAssistantView.tsx),
-[modelos](../../apps/web-console/src/components/lumen/demo/LumenModelsView.tsx),
-[consentimientos](../../apps/web-console/src/components/lumen/demo/LumenConsentView.tsx),
-[facturación](../../apps/web-console/src/components/lumen/demo/LumenBillingView.tsx)
+[laboratorios](../../apps/lumen-console/src/components/lumen/demo/LumenLaboratoriesView.tsx),
+[asistente](../../apps/lumen-console/src/components/lumen/demo/LumenAssistantView.tsx),
+[modelos](../../apps/lumen-console/src/components/lumen/demo/LumenModelsView.tsx),
+[consentimientos](../../apps/lumen-console/src/components/lumen/demo/LumenConsentView.tsx),
+[facturación](../../apps/lumen-console/src/components/lumen/demo/LumenBillingView.tsx)
 y
-[dashboard](../../apps/web-console/src/components/lumen/demo/LumenDashboardView.tsx).
+[dashboard](../../apps/lumen-console/src/components/lumen/demo/LumenDashboardView.tsx).
 
 ## 12. Capacidades pendientes
 
@@ -327,10 +342,12 @@ La evidencia automatizada principal está en
 [lumen.integration.test.ts](../../services/lumen-service/src/lumen.integration.test.ts),
 [temporary-audio.test.ts](../../services/lumen-service/src/temporary-audio.test.ts),
 [audio-cleanup-recovery.test.ts](../../services/lumen-service/src/audio-cleanup-recovery.test.ts),
-[lumen-audio-cleanup-recovery.integration.test.ts](../../packages/migrations/src/lumen-audio-cleanup-recovery.integration.test.ts),
-[projection-events.integration.test.ts](../../services/lumen-service/src/projection-events.integration.test.ts)
-y las
-[pruebas de contratos](../../packages/contracts/src/index.test.ts).
+[projection-events.integration.test.ts](../../services/lumen-service/src/projection-events.integration.test.ts),
+[audio-cleanup-readiness.integration.test.ts](../../services/lumen-service/src/audio-cleanup-readiness.integration.test.ts),
+la
+[aceptación PostgreSQL autónoma](../../packages/lumen-migrations/src/autonomy.integration.test.ts),
+las [pruebas del runner provider-owned](../../packages/lumen-migrations/src/runner.test.ts) y las
+[pruebas de contratos LUMEN](../../packages/lumen-contracts/src/index.test.ts).
 
 ## 14. Fuera de alcance del corte vigente
 

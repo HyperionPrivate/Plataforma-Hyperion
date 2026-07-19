@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { envelope, tenantIdSchema } from "@hyperion/contracts";
+import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import {
   HttpOutboxDispatcher,
   JetStreamOutboxDispatcher,
@@ -17,7 +17,9 @@ import {
 } from "@hyperion/service-runtime";
 import QRCode from "qrcode";
 import { z } from "zod";
+import { startAccessTenantProjectionJetStreamConsumer } from "./access-tenant-projection-jetstream.js";
 import { BaileysWhatsAppWebTestProvider } from "./baileys-provider.js";
+import { registerAccessTenantProjectionRoutes } from "./access-tenant-projections.js";
 import { PostgresChannelAuditOutbox } from "./channel-audit-outbox.js";
 import { PostgresChannelDeliveryOutbox } from "./channel-delivery-outbox.js";
 import { PostgresChannelOutbox } from "./channel-outbox.js";
@@ -53,6 +55,7 @@ const failureSchema = completionSchema.extend({
 
 export interface ChannelRouteDependencies {
   channel?: WhatsAppChannelService;
+  accessCredential?: string;
   integrationCredential?: string;
   pulsoCredential?: string;
   sofiaCredential?: string;
@@ -63,6 +66,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   const channelToPulsoToken = readInternalCredential(process.env, "CHANNEL_TO_PULSO_TOKEN");
   const channelToAuditToken = readInternalCredential(process.env, "CHANNEL_TO_AUDIT_TOKEN");
   const dependencies: ChannelRouteDependencies = {
+    accessCredential: readInternalCredential(process.env, "ACCESS_TO_CHANNEL_TOKEN"),
     integrationCredential: readInternalCredential(process.env, "INTEGRATION_TO_CHANNEL_TOKEN"),
     pulsoCredential: readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN"),
     sofiaCredential: readInternalCredential(process.env, "SOFIA_TO_CHANNEL_TOKEN")
@@ -90,6 +94,23 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       });
     }
     app.addHook("onClose", async () => channel.stop());
+
+    // Consumer lifecycle is independent from local outbox publication. Turning
+    // off Channel producers must never make the Access-owned projection stale.
+    if (durableOutbox.transport === "jetstream") {
+      const consumer = await startAccessTenantProjectionJetStreamConsumer(
+        (hook) => app.addHook("onClose", hook),
+        context.db,
+        {
+          natsUrl: durableOutbox.natsUrl,
+          ...durableOutbox.authentication
+        }
+      );
+      context.registerReadinessCheck?.({
+        name: "jetstream_access_tenant_projection_consumer",
+        check: () => consumer.checkReadiness()
+      });
+    }
 
     if (durableOutbox.transport === "jetstream" || channelToPulsoToken) {
       const workerId = `channel-outbox-${randomUUID()}`;
@@ -236,6 +257,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     }
   }
   registerChannelRoutes(app, dependencies, context);
+  registerAccessTenantProjectionRoutes(app, context, dependencies.accessCredential);
   registerChannelEventPositionRoute(app, context, dependencies.pulsoCredential);
   registerThreadBindRoutes(app, context, dependencies.pulsoCredential);
 };
@@ -473,6 +495,9 @@ function credentialsForChannelRoute(
   routeUrl: string | undefined,
   dependencies: ChannelRouteDependencies
 ): InternalCredentialMap {
+  if (routeUrl === "/internal/v1/events/access-tenant-snapshots") {
+    return { "identity-service": dependencies.accessCredential };
+  }
   if (
     routeUrl === "/internal/v1/tenants/:tenantId/whatsapp/messages" ||
     routeUrl === "/internal/v1/whatsapp/inbound/claim" ||
@@ -507,7 +532,7 @@ function createWorkloadFetch(caller: string, token: string): typeof fetch {
     for (const [name, value] of Object.entries(createInternalAuthorizationHeaders(caller, token))) {
       headers.set(name, value);
     }
-    return fetch(input, { ...init, headers });
+    return fetch(input, { ...init, headers, redirect: "error" });
   };
 }
 

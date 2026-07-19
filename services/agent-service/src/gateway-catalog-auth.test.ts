@@ -1,4 +1,3 @@
-import { productModules } from "@hyperion/contracts";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { registerRoutes } from "./app.js";
@@ -28,7 +27,7 @@ describe("agent-service gateway catalog auth", () => {
     delete process.env.GATEWAY_TO_SOFIA_TOKEN;
   });
 
-  for (const path of ["/v1/products", "/v1/agents"] as const) {
+  for (const path of ["/v1/agents"] as const) {
     describe(path, () => {
       it("rejects anonymous reads when the edge credential is missing", async () => {
         const response = await app.inject({ method: "GET", url: path });
@@ -82,20 +81,22 @@ describe("agent-service gateway catalog auth", () => {
           }
         });
         expect(response.statusCode).toBe(200);
-        if (path === "/v1/products") {
-          expect(response.json().data).toEqual(
-            productModules.map((module) => ({
-              code: module.code,
-              name: module.name,
-              status: module.status,
-              owner_service: module.ownerService
-            }))
-          );
-        } else {
-          // No DATABASE_URL in this fixture → empty agent list.
-          expect(response.json().data).toEqual([]);
-        }
+        // No DATABASE_URL in this fixture → empty agent list.
+        expect(response.json().data).toEqual([]);
       });
     });
   }
+
+  it("does not expose the former global product catalog from SOFIA", async () => {
+    process.env.GATEWAY_TO_SOFIA_TOKEN = GATEWAY_TOKEN;
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/products",
+      headers: {
+        authorization: `Bearer ${GATEWAY_TOKEN}`,
+        "x-hyperion-caller": "api-gateway"
+      }
+    });
+    expect(response.statusCode).toBe(404);
+  });
 });

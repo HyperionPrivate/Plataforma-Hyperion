@@ -1,4 +1,15 @@
+---
+documentType: runbook
+status: not-current
+owner: nova-voice
+issue: HYP-NOVA-013
+reviewDue: 2026-09-30
+---
+
 # Cutover Dialer (NOVA)
+
+> **No vigente para producción.** Debe revalidarse con la imagen externa exacta del Neutral Dialer, webhook HTTPS,
+> rotación de credenciales y smoke del manifiesto NOVA fijado por digest.
 
 Nota corta para activar voz real con Neutral Dialer v3 junto a Hyperion.
 
@@ -25,6 +36,10 @@ El Neutral Dialer v3 opera hoy con **un solo worker** de pacing/ejecución. No e
 
 ## Webhooks y dominio
 
-Los callbacks HMAC del dialer llegan a Hyperion (`POST /v1/voice/webhooks/dialer`) vía api-gateway. Hace falta un **dominio público estable** (TLS) apuntando al gateway; no usar Cloudflare quick tunnel ni URLs efímeras en cutover real.
+Los callbacks HMAC del dialer llegan al ingress provider-owned de NOVA en
+`POST /v1/voice/webhooks/dialer`, servido por `nova-bff`. Hace falta un **dominio público estable** con TLS
+apuntando al puerto loopback del BFF mediante reverse proxy; nunca exponer HTTP directo. El proxy preserva el
+cuerpo exacto y `X-Dialer-Signature`, y Voice valida el HMAC sobre esos mismos bytes. No usar Cloudflare quick
+tunnel ni URLs efímeras en cutover real.
 
 Orden sugerido: smoke mock → tenant de prueba con dialer → comparar pacing/stats → campañas productivas.

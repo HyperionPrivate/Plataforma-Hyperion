@@ -1,4 +1,4 @@
-import type { LumenClinicalRecordContent, LumenFieldEvidenceOrigin } from "@hyperion/contracts";
+import type { LumenClinicalRecordContent, LumenFieldEvidenceOrigin } from "@hyperion/lumen-contracts";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
@@ -15,7 +15,8 @@ import { registerLumenRoutes } from "./routes.js";
 import type { SpeechToTextProvider } from "./speech-to-text.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
+const TEST_LUMEN_FIXTURE_DATABASE_URL = process.env.TEST_LUMEN_FIXTURE_DATABASE_URL;
+const describeIntegration = TEST_DATABASE_URL && TEST_LUMEN_FIXTURE_DATABASE_URL ? describe : describe.skip;
 const { Client } = pg;
 
 const TEST_TRANSCRIPT =
@@ -118,6 +119,7 @@ const structurer: ClinicalStructurer = {
 
 let app: ServiceHandle["app"];
 let client: pg.Client;
+let fixtureClient: pg.Client;
 let tenantA: string;
 let tenantB: string;
 let encounterA: string;
@@ -130,8 +132,8 @@ describeIntegration("LUMEN clinical vertical", () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL;
     client = new Client({ connectionString: TEST_DATABASE_URL });
-    await client.connect();
-    await cleanup();
+    fixtureClient = new Client({ connectionString: TEST_LUMEN_FIXTURE_DATABASE_URL });
+    await Promise.all([client.connect(), fixtureClient.connect()]);
     tenantA = await createTenant("lumen-int-a");
     tenantB = await createTenant("lumen-int-b");
     const fixtureA = await createFixture(tenantA, "A");
@@ -157,8 +159,7 @@ describeIntegration("LUMEN clinical vertical", () => {
 
   afterAll(async () => {
     await app?.close();
-    await cleanup();
-    await client?.end();
+    await Promise.all([client?.end(), fixtureClient?.end()]);
     delete process.env.DATABASE_URL;
   });
 
@@ -467,7 +468,7 @@ describeIntegration("LUMEN clinical vertical", () => {
       [tenantA, encounterA]
     );
     await expect(
-      client.query(
+      fixtureClient.query(
         `insert into lumen.encounters
            (tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
          values ($1, $2, $3, $4, now(), true, 'cross-tenant', '{"synthetic":true}'::jsonb)`,
@@ -483,7 +484,7 @@ describeIntegration("LUMEN clinical vertical", () => {
       [tenantA, encounterA]
     );
     await expect(
-      client.query(
+      fixtureClient.query(
         `insert into lumen.encounters
            (tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
          values ($1, $2, $3, $4, now(), true, 'non-demo-reference', '{"synthetic":true}'::jsonb)`,
@@ -494,7 +495,7 @@ describeIntegration("LUMEN clinical vertical", () => {
 
   it("keeps synthetic identity markers and approval transitions database-enforced", async () => {
     await expect(
-      client.query(
+      fixtureClient.query(
         `update lumen.encounter_reference_snapshots
          set patient_is_demo = false
          where tenant_id = $1 and patient_id = $2`,
@@ -502,13 +503,13 @@ describeIntegration("LUMEN clinical vertical", () => {
       )
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(`update lumen.encounters set status = 'approved' where tenant_id = $1 and id = $2`, [
+      fixtureClient.query(`update lumen.encounters set status = 'approved' where tenant_id = $1 and id = $2`, [
         tenantA,
         encounterA
       ])
     ).rejects.toMatchObject({ code: "23514" });
 
-    const failedDictation = await client.query(
+    const failedDictation = await fixtureClient.query(
       `insert into lumen.dictations
          (tenant_id, encounter_id, status, mime_type, provider, error_code, metadata)
        values ($1, $2, 'failed', 'audio/webm', 'test-stt', 'ProviderError', '{"audioStored":false}'::jsonb)
@@ -516,7 +517,7 @@ describeIntegration("LUMEN clinical vertical", () => {
       [tenantA, encounterA]
     );
     await expect(
-      client.query(
+      fixtureClient.query(
         `insert into lumen.clinical_records
            (tenant_id, encounter_id, dictation_id, status, content, provider, model)
          values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
@@ -536,13 +537,13 @@ describeIntegration("LUMEN clinical vertical", () => {
       ]
     };
     const dictationId = await createCompletedAudioDictation(tenantA, fixture.encounterId, TEST_TRANSCRIPT);
-    await client.query(
+    await fixtureClient.query(
       `insert into lumen.clinical_records
          (tenant_id, encounter_id, dictation_id, status, content, provider, model)
        values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
       [tenantA, fixture.encounterId, dictationId, JSON.stringify(resolvedContent)]
     );
-    await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
+    await fixtureClient.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
       tenantA,
       fixture.encounterId
     ]);
@@ -625,13 +626,13 @@ describeIntegration("LUMEN clinical vertical", () => {
   it("returns every missing required clinical field before approval", async () => {
     const fixture = await createFixture(tenantA, "F");
     const dictationId = await createCompletedAudioDictation(tenantA, fixture.encounterId, TEST_TRANSCRIPT);
-    await client.query(
+    await fixtureClient.query(
       `insert into lumen.clinical_records
          (tenant_id, encounter_id, dictation_id, status, content, provider, model)
        values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
       [tenantA, fixture.encounterId, dictationId, JSON.stringify({ ...CONTENT, history: "", uncertainties: [] })]
     );
-    await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
+    await fixtureClient.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
       tenantA,
       fixture.encounterId
     ]);
@@ -656,13 +657,13 @@ describeIntegration("LUMEN clinical vertical", () => {
       uncertainties: [],
       fieldEvidence: CONTENT.fieldEvidence.filter((evidence) => evidence.field !== "plan")
     };
-    await client.query(
+    await fixtureClient.query(
       `insert into lumen.clinical_records
          (tenant_id, encounter_id, dictation_id, status, content, provider, model)
        values ($1, $2, $3, 'draft', $4::jsonb, 'test-llm', 'test-llm-v1')`,
       [tenantA, fixture.encounterId, dictationId, JSON.stringify(contentWithoutPlanEvidence)]
     );
-    await client.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
+    await fixtureClient.query(`update lumen.encounters set status = 'review' where tenant_id = $1 and id = $2`, [
       tenantA,
       fixture.encounterId
     ]);
@@ -803,14 +804,14 @@ describeIntegration("LUMEN clinical vertical", () => {
     });
     expect(reviewedStored.rows[0].reviewed_at).toBeTruthy();
     await expect(
-      client.query(
+      fixtureClient.query(
         `update lumen.dictations set provider_transcript = 'altered'
          where tenant_id = $1 and id = $2`,
         [tenantA, dictation.id]
       )
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(
+      fixtureClient.query(
         `update lumen.processing_attempts set model = 'altered'
          where id = $1`,
         [stored.rows[0].processing_attempt_id]
@@ -851,7 +852,7 @@ describeIntegration("LUMEN clinical vertical", () => {
     expect(transcriptReviewAudit.rows[0].metadata).not.toContain(dictation.transcript);
 
     await expect(
-      client.query(
+      fixtureClient.query(
         `update lumen.clinical_records set approved_by = $3
          where tenant_id = $1 and encounter_id = $2`,
         [tenantA, encounterA, operatorId]
@@ -865,7 +866,7 @@ describeIntegration("LUMEN clinical vertical", () => {
     });
     expect(blocked.statusCode).toBe(422);
     await expect(
-      client.query(
+      fixtureClient.query(
         `update lumen.clinical_records
          set status = 'approved', approved_by = $3, approved_at = now()
          where tenant_id = $1 and encounter_id = $2`,
@@ -1004,20 +1005,20 @@ describeIntegration("LUMEN clinical vertical", () => {
     expect(afterDictations.rows[0].count).toBe(beforeDictations.rows[0].count);
 
     await expect(
-      client.query(
+      fixtureClient.query(
         `update lumen.clinical_records set content = jsonb_set(content, '{history}', '"alterada"'::jsonb)
          where tenant_id = $1 and encounter_id = $2`,
         [tenantA, encounterA]
       )
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(`delete from lumen.clinical_records where tenant_id = $1 and encounter_id = $2`, [
+      fixtureClient.query(`delete from lumen.clinical_records where tenant_id = $1 and encounter_id = $2`, [
         tenantA,
         encounterA
       ])
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(
+      fixtureClient.query(
         `insert into lumen.dictations
            (tenant_id, encounter_id, status, transcript, mime_type, provider, metadata)
          values ($1, $2, 'transcribed', 'posterior', 'text/plain', 'manual', '{"audioStored":false}'::jsonb)`,
@@ -1037,16 +1038,12 @@ describeIntegration("LUMEN clinical vertical", () => {
 });
 
 async function createTenant(slug: string): Promise<string> {
-  const result = await client.query(
-    `insert into platform.tenants (slug, display_name, status) values ($1, $2, 'active') returning id`,
-    [slug, slug]
-  );
-  const tenantId = result.rows[0].id as string;
-  await client.query(
+  const tenantId = randomUUID();
+  await fixtureClient.query(
     `insert into lumen.tenant_snapshots (
        tenant_id, status, is_demo, is_active, source_version, source_updated_at, payload_hash
      ) values ($1, 'active', true, true, 1, now(), $2)`,
-    [tenantId, sha256ForTest(`tenant:${tenantId}:1`)]
+    [tenantId, sha256ForTest(`tenant:${slug}:${tenantId}:1`)]
   );
   return tenantId;
 }
@@ -1059,7 +1056,7 @@ async function createFixture(
   const patientId = randomUUID();
   const professionalId = randomUUID();
   const siteId = randomUUID();
-  await client.query(
+  await fixtureClient.query(
     `insert into lumen.encounter_reference_snapshots (
        tenant_id, encounter_id, patient_id, site_id, professional_id,
        patient_display_name, patient_age, professional_name, site_name,
@@ -1077,14 +1074,14 @@ async function createFixture(
       sha256ForTest(`reference:${tenantId}:${encounterId}:1`)
     ]
   );
-  const encounter = await client.query(
+  const encounter = await fixtureClient.query(
     `insert into lumen.encounters
        (id, tenant_id, patient_id, professional_id, site_id, scheduled_at, is_demo, demo_key, metadata)
      values ($2, $1, $3, $4, $5, '2026-07-10T15:00:00Z', true, $6, '{"synthetic":true}'::jsonb)
      returning id`,
     [tenantId, encounterId, patientId, professionalId, siteId, `integration-${suffix}`]
   );
-  await client.query(
+  await fixtureClient.query(
     `insert into lumen.preconsultation_summaries (tenant_id, encounter_id, content, source_count)
      values ($1, $2, $3::jsonb, 3)`,
     [
@@ -1103,17 +1100,8 @@ async function createFixture(
 }
 
 async function createOperator(tenantId: string): Promise<string> {
-  const operator = await client.query(
-    `insert into platform.operators (tenant_id, email, display_name, role, status)
-     values ($1, $2, 'Asesor LUMEN sintético', 'advisor', 'active') returning id`,
-    [tenantId, `lumen-int-${tenantId}`]
-  );
-  await client.query(`insert into platform.operator_tenants (operator_id, tenant_id) values ($1, $2)`, [
-    operator.rows[0].id,
-    tenantId
-  ]);
-  const operatorId = operator.rows[0].id as string;
-  await client.query(
+  const operatorId = randomUUID();
+  await fixtureClient.query(
     `insert into lumen.operator_grants (
        operator_id, tenant_id, role, is_active, can_review,
        source_version, source_updated_at, payload_hash
@@ -1128,7 +1116,7 @@ async function createCompletedAudioDictation(
   encounterId: string,
   transcript: string
 ): Promise<string> {
-  const attempt = await client.query(
+  const attempt = await fixtureClient.query(
     `insert into lumen.processing_attempts
        (tenant_id, encounter_id, operation, idempotency_key, input_sha256,
         provider, model, mime_type, source, duration_seconds, cleanup_protocol, cleanup_owner)
@@ -1137,7 +1125,7 @@ async function createCompletedAudioDictation(
      returning id`,
     [tenantId, encounterId, randomUUID(), sha256ForTest(`fixture-audio:${transcript}`)]
   );
-  const dictation = await client.query(
+  const dictation = await fixtureClient.query(
     `insert into lumen.dictations
        (tenant_id, encounter_id, status, transcript, mime_type, provider, model,
         duration_seconds, metadata, provider_transcript, processing_attempt_id)
@@ -1147,7 +1135,7 @@ async function createCompletedAudioDictation(
      returning id`,
     [tenantId, encounterId, transcript, attempt.rows[0].id]
   );
-  await client.query(
+  await fixtureClient.query(
     `update lumen.processing_attempts
      set status = 'completed', result_entity_id = $2, completed_at = now(),
          temp_audio_deleted_at = now(), updated_at = now()
@@ -1155,10 +1143,4 @@ async function createCompletedAudioDictation(
     [attempt.rows[0].id, dictation.rows[0].id]
   );
   return dictation.rows[0].id;
-}
-
-async function cleanup(): Promise<void> {
-  if (!client) return;
-  await client.query(`delete from platform.tenants where slug like 'lumen-int-%'`);
-  await client.query(`delete from platform.operators where email like 'lumen-int-%'`);
 }

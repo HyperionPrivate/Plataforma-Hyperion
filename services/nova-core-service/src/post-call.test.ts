@@ -20,7 +20,7 @@ describe("CONTINUE / STOP sets", () => {
   it("marks CONTINUE intents as wanting WhatsApp", () => {
     expect(intentWantsWhatsapp("interesado")).toBe(true);
     expect(intentWantsWhatsapp("pedir_whatsapp")).toBe(true);
-    expect(intentWantsWhatsapp("reactivar")).toBe(true);
+    expect(intentWantsWhatsapp("follow_up")).toBe(true);
   });
 
   it("marks STOP intents as not wanting WhatsApp", () => {

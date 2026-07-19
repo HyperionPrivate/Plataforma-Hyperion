@@ -1,9 +1,10 @@
-import { envelope } from "@hyperion/contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import type { DatabaseClient } from "@hyperion/database";
 import { readInternalCredential, validateInternalAuthorization, type ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AgendaProviderError } from "./agenda-provider.js";
+import { ensureAgendaSettingsExist } from "./agenda-settings.js";
 import type { AuditEmitter } from "./audit-client.js";
 import { createChannelThreadClient, type ChannelThreadClient } from "./channel-thread-client.js";
 import { InternalAgendaProvider } from "./internal-agenda-provider.js";
@@ -127,6 +128,7 @@ export async function registerSofiaToolRoutes(
     }
 
     try {
+      await ensureAgendaSettingsExist(context.db, tenantId);
       const result =
         toolName === "identify_patient_by_phone"
           ? await identifyPatient(

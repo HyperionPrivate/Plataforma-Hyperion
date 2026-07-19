@@ -710,6 +710,9 @@ export class SofiaToolClient {
       op: "claim_pending_action",
       pendingJobId: pending.jobId,
       pendingTool: pending.tool,
+      patientId: context.patientId,
+      confirmationMessageId: context.currentMessageId,
+      confirmationBody: context.currentMessageBody,
       execution
     });
   }

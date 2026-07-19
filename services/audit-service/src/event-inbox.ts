@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { auditEventSchema, type AuditEventInput } from "@hyperion/contracts";
+import {
+  auditEventInputSchema,
+  auditEventRecordV1Contracts,
+  legacyAuditEventRecordV1Contract,
+  type AuditEventInput,
+  type AuditEventRecordV1Contract,
+  type PersistedAuditEventRecordV1Type,
+  type PersistedAuditEventSourceService
+} from "@hyperion/audit-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 
 const EVENT_VERSION = 1 as const;
@@ -7,35 +15,14 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-
 const ISO_DATETIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const ENVELOPE_KEYS = new Set(["id", "type", "version", "occurredAt", "tenantId", "payload"]);
 
-export const AUDIT_EVENT_CONTRACTS = {
-  sofia: {
-    eventType: "sofia.audit.event.record.v1",
-    sourceService: "sofia-automation"
-  },
-  lumen: {
-    eventType: "lumen.audit.event.record.v1",
-    sourceService: "lumen-service"
-  },
-  pulso: {
-    eventType: "pulso.audit.event.record.v1",
-    sourceService: "pulso-iris-service"
-  },
-  channel: {
-    eventType: "channel.audit.event.record.v1",
-    sourceService: "whatsapp-channel-service"
-  }
-} as const;
+export const AUDIT_EVENT_CONTRACTS = auditEventRecordV1Contracts;
 
 /** Drain-only wire contract retained until the pre-provenance durable is empty. */
-export const LEGACY_AUDIT_EVENT_CONTRACT = {
-  eventType: "audit.event.record.v1",
-  persistedEventType: "legacy.audit.event.record.v1",
-  sourceService: "legacy-unknown"
-} as const;
+export const LEGACY_AUDIT_EVENT_CONTRACT = legacyAuditEventRecordV1Contract;
 
-export type AuditEventContract = (typeof AUDIT_EVENT_CONTRACTS)[keyof typeof AUDIT_EVENT_CONTRACTS];
-export type AuditEventType = AuditEventContract["eventType"] | typeof LEGACY_AUDIT_EVENT_CONTRACT.persistedEventType;
-export type AuditSourceService = AuditEventContract["sourceService"] | typeof LEGACY_AUDIT_EVENT_CONTRACT.sourceService;
+export type AuditEventContract = AuditEventRecordV1Contract;
+export type AuditEventType = PersistedAuditEventRecordV1Type;
+export type AuditSourceService = PersistedAuditEventSourceService;
 
 interface ResolvedAuditEventContract {
   readonly wireEventType: string;
@@ -139,7 +126,7 @@ function parseAuditEventEnvelope(
     issues.push("tenantId must be a UUID or null");
   }
 
-  const parsedPayload = auditEventSchema.safeParse(body.payload);
+  const parsedPayload = auditEventInputSchema.safeParse(body.payload);
   if (!parsedPayload.success) {
     issues.push("payload must match auditEventSchema");
   }

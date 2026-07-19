@@ -1,4 +1,4 @@
-import type { LumenClinicalRecordContent } from "@hyperion/contracts";
+import type { LumenClinicalRecordContent } from "@hyperion/lumen-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   clinicalEvidenceIssues,
