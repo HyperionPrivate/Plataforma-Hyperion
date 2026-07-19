@@ -49,7 +49,8 @@ test("uses liveness-only smoke for Platform and isolated fixture origins for pro
 
   const lumen = smokeConfiguration("lumen");
   assert.deepEqual(lumen.productFixture.requiredDependencies, ["lumen"]);
-  assert.equal(lumen.environment.ACCESS_SERVICE_URL, "http://access-service:18080");
+  assert.equal(lumen.environment.ACCESS_SERVICE_URL, "http://identity-service:18080");
+  assert.equal(nova.environment.ACCESS_SERVICE_URL, "http://identity-service:18080");
   assert.equal(lumen.environment.LUMEN_SERVICE_URL, "http://lumen-service:18080");
   const pulso = smokeConfiguration("pulso");
   assert.deepEqual(pulso.productFixture.requiredDependencies, ["pulso-core", "pulso-integration"]);

@@ -24,18 +24,19 @@ const READINESS_JWK = Object.freeze({
 const CELL_RUNTIME_ORIGINS = Object.freeze({
   platform: Object.freeze({}),
   nova: Object.freeze({
-    ACCESS_SERVICE_URL: `http://access-service:${FIXTURE_PORT}`,
+    // NOVA BFF private-HTTP allowlist is identity-service (Access alias), not access-service.
+    ACCESS_SERVICE_URL: `http://identity-service:${FIXTURE_PORT}`,
     NOVA_CORE_SERVICE_URL: `http://nova-core-service:${FIXTURE_PORT}`,
     VOICE_CHANNEL_SERVICE_URL: `http://voice-channel-service:${FIXTURE_PORT}`,
     LIWA_CHANNEL_SERVICE_URL: `http://liwa-channel-service:${FIXTURE_PORT}`,
     DOCUMENTS_SERVICE_URL: `http://documents-service:${FIXTURE_PORT}`
   }),
   lumen: Object.freeze({
-    ACCESS_SERVICE_URL: `http://access-service:${FIXTURE_PORT}`,
+    ACCESS_SERVICE_URL: `http://identity-service:${FIXTURE_PORT}`,
     LUMEN_SERVICE_URL: `http://lumen-service:${FIXTURE_PORT}`
   }),
   pulso: Object.freeze({
-    ACCESS_SERVICE_URL: `http://access-service:${FIXTURE_PORT}`,
+    ACCESS_SERVICE_URL: `http://identity-service:${FIXTURE_PORT}`,
     PULSO_IRIS_SERVICE_URL: `http://pulso-iris-service:${FIXTURE_PORT}`,
     AGENT_SERVICE_URL: `http://agent-service:${FIXTURE_PORT}`,
     PROMPT_FLOW_SERVICE_URL: `http://prompt-flow-service:${FIXTURE_PORT}`,
