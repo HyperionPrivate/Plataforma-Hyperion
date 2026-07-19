@@ -61,8 +61,8 @@ describe("JetStream topology bootstrap", () => {
   });
 
   it("owns active durables, separate v1 rollout durables and the drain-only Audit durable", () => {
-    expect(HYPERION_KNOWN_CONSUMERS).toHaveLength(14);
-    expect(new Set(HYPERION_KNOWN_CONSUMERS.map(({ durableName }) => durableName)).size).toBe(14);
+    expect(HYPERION_KNOWN_CONSUMERS).toHaveLength(15);
+    expect(new Set(HYPERION_KNOWN_CONSUMERS.map(({ durableName }) => durableName)).size).toBe(15);
     expect(HYPERION_KNOWN_CONSUMERS).toEqual(
       expect.arrayContaining([
         {
@@ -80,6 +80,10 @@ describe("JetStream topology bootstrap", () => {
         {
           eventType: "channel.audit.event.record.v1",
           durableName: "audit_channel_event_record_v1"
+        },
+        {
+          eventType: "nova.audit.event.record.v1",
+          durableName: "audit_nova_event_record_v1"
         },
         {
           eventType: "audit.event.record.v1",
@@ -114,8 +118,8 @@ describe("JetStream topology bootstrap", () => {
     const first = await provisionHyperionJetStreamTopology(fixture.adapter);
     const second = await provisionHyperionJetStreamTopology(fixture.adapter);
 
-    expect(first.consumers).toHaveLength(14);
-    expect(first.consumers.filter(({ result }) => result.consumerCreated)).toHaveLength(14);
+    expect(first.consumers).toHaveLength(15);
+    expect(first.consumers.filter(({ result }) => result.consumerCreated)).toHaveLength(15);
     expect(first.consumers.filter(({ result }) => result.streamCreated)).toHaveLength(1);
     expect(second.consumers.every(({ result }) => !result.streamCreated && !result.consumerCreated)).toBe(true);
   });

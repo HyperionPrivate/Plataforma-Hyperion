@@ -8,6 +8,18 @@ const scriptPath = join(dirname(fileURLToPath(import.meta.url)), "real-flow.e2e.
 const source = readFileSync(scriptPath, "utf8");
 const workflowPath = join(dirname(fileURLToPath(import.meta.url)), "../../.github/workflows/check.yml");
 const workflow = readFileSync(workflowPath, "utf8");
+const natsAcl = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../../infra/nats/nats-server.conf"),
+  "utf8"
+);
+const auditJetStreamSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../../services/audit-service/src/audit-jetstream.ts"),
+  "utf8"
+);
+const jetStreamBootstrapSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../../packages/durable-events/src/jetstream-bootstrap.ts"),
+  "utf8"
+);
 const liwaBindingSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "liwa-bind-tenant.mjs"), "utf8");
 
 test("autonomy E2E wires the real PULSO-to-Channel thread contract into the consumer", () => {
@@ -84,6 +96,29 @@ test("CI runs the real autonomy flow before destructive NATS ACL probes", () => 
   assert.ok(bootstrap < autonomy);
   assert.ok(autonomy < acl);
   assert.ok(acl < stop);
+});
+
+test("Audit NATS ACL can initialize every provider-owned durable, including NOVA", () => {
+  const durableNames = [...auditJetStreamSource.matchAll(/durableName:\s*"([a-z0-9_]+)"/g)].map((match) => match[1]);
+  assert.ok(durableNames.length > 0);
+  for (const durableName of durableNames) {
+    assert.equal(jetStreamBootstrapSource.includes(`durableName: "${durableName}"`), true);
+    assert.equal(natsAcl.includes(`$JS.API.CONSUMER.INFO.HYPERION_EVENTS.${durableName}`), true);
+    assert.equal(natsAcl.includes(`$JS.API.CONSUMER.MSG.NEXT.HYPERION_EVENTS.${durableName}`), true);
+    assert.equal(natsAcl.includes(`$JS.ACK.HYPERION_EVENTS.${durableName}.>`), true);
+  }
+  assert.equal(natsAcl.includes("hyperion.dlq.nova.audit.event.record.v1"), true);
+});
+
+test("NATS capacity reserves five rolling-upgrade slots above the managed topology", () => {
+  const managedDurableNames = [...jetStreamBootstrapSource.matchAll(/durableName:\s*"([a-z0-9_]+)"/g)].map(
+    (match) => match[1]
+  );
+  const maxConsumers = natsAcl.match(/max_consumers:\s*(\d+)/);
+
+  assert.ok(maxConsumers);
+  assert.equal(new Set(managedDurableNames).size, managedDurableNames.length);
+  assert.equal(Number(maxConsumers[1]), managedDurableNames.length + 5);
 });
 
 test("the real autonomy flow uses the provider-owned Audit database instead of the shared database", () => {
