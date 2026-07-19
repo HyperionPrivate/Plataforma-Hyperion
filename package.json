@@ -97,7 +97,7 @@
     "@hyperion/frontend-build-provenance": "workspace:*",
     "@types/node": "^22.13.14",
     "@types/pg": "^8.11.11",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.0.3",
     "eslint": "^10.6.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.7.0",
