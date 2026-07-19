@@ -18,8 +18,16 @@ RUN find apps packages services -type d -name dist -prune -exec rm -rf '{}' +
 
 RUN pnpm install --frozen-lockfile
 ARG BUILD_FILTER
+# Always materialize the shared runtime closure copied by service-runtime-base,
+# even when BUILD_FILTER's dependency graph no longer references legacy packages.
 RUN test -n "$BUILD_FILTER" \
-  && pnpm --filter "${BUILD_FILTER}..." build
+  && pnpm --filter "${BUILD_FILTER}..." \
+    --filter @hyperion/config \
+    --filter @hyperion/contracts \
+    --filter @hyperion/database \
+    --filter @hyperion/logger \
+    --filter @hyperion/service-runtime \
+    build
 
 # Runtime images need executable JavaScript only. Keep tests, declarations and
 # source maps out of every later COPY --from=build boundary.
@@ -60,6 +68,8 @@ COPY packages/database/package.json packages/database/package.json
 COPY packages/logger/package.json packages/logger/package.json
 COPY packages/service-runtime/package.json packages/service-runtime/package.json
 
+# contracts remains only for api-gateway / legacy migrations; other services may
+# not depend on it, so the build stage above forces that package into dist.
 COPY --from=build /app/packages/config/dist packages/config/dist
 COPY --from=build /app/packages/contracts/dist packages/contracts/dist
 COPY --from=build /app/packages/database/dist packages/database/dist

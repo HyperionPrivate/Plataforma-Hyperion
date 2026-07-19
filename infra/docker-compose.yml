@@ -1007,12 +1007,13 @@ services:
   pulso-bff:
     build:
       <<: *pulso-console-build
-      target: pulso-bff
+      target: pulso-runtime
       args:
-        BFF_PACKAGE: "@hyperion/pulso-bff"
-        BFF_PATH: pulso-bff
+        BUILD_FILTER: "@hyperion/pulso-bff"
+        DEPLOYABLE_PATH: apps/pulso-bff
     restart: unless-stopped
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "apps/pulso-bff/dist/index.js"]
     environment:
       NODE_ENV: production
       HYPERION_ENVIRONMENT: ${HYPERION_ENVIRONMENT:?HYPERION_ENVIRONMENT is required}
