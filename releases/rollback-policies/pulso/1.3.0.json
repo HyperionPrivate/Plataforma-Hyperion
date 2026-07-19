@@ -14,7 +14,9 @@
     "pulso-bff",
     "pulso-console"
   ],
-  "forwardOnlyOciComponents": ["pulso-migrations"],
+  "forwardOnlyOciComponents": [
+    "pulso-migrations"
+  ],
   "migration": {
     "componentId": "pulso-migrations",
     "sourcePath": "packages/pulso-migrations",

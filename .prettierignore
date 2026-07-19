@@ -5,3 +5,10 @@ pnpm-lock.yaml
 tmp/
 graphify-out/
 apps/coopfuturo-console/
+
+# Hash-sealed release artifacts (SHA-256 pinned in catalogs)
+releases/catalogs/
+releases/rollback-policies/
+releases/manifests/
+releases/registry/
+
