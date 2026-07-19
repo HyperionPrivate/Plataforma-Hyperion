@@ -119,12 +119,16 @@ jobs:
           set -uo pipefail
           mkdir -p trivy-results
           read -r -a services <<<"$(node scripts/ci/cell-compose-plan.mjs "$CELL" services)"
-          mapfile -t image_ids < <(
-            docker compose --env-file "$COMPOSE_ENV_FILE" -p "hyperion-security-${CELL}" \
-              -f "$COMPOSE_FILE" images --quiet "${services[@]}" |
-              awk 'NF' |
-              sort --unique
-          )
+          project_name="hyperion-security-${CELL}"
+          compose=(docker compose --env-file "$COMPOSE_ENV_FILE" -p "$project_name" -f "$COMPOSE_FILE")
+          compose_model=$("${compose[@]}" config --format json)
+          image_ids=()
+          for service in "${services[@]}"; do
+            image_reference=$(printf '%s' "$compose_model" | node scripts/ci/resolve-compose-image-reference.mjs --project "$project_name" --service "$service")
+            image_id=$(docker image inspect --format '{{.Id}}' "$image_reference")
+            test -n "$image_id"
+            image_ids+=("$image_id")
+          done
           if [[ ${#image_ids[@]} -eq 0 ]]; then
             echo "No Compose images were available to scan" >&2
             exit 1
