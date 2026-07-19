@@ -156,6 +156,7 @@ services:
       VOICE_CHANNEL_SERVICE_URL: http://voice-channel-service:8092
       LIWA_CHANNEL_SERVICE_URL: http://liwa-channel-service:8093
       DOCUMENTS_SERVICE_URL: http://documents-service:8094
+      LIWA_ACCOUNT_ID: ${NOVA_LIWA_ACCOUNT_ID:-}
       CORE_MODE: contract
       PORT: 8091
     expose:

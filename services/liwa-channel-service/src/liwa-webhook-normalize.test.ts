@@ -49,6 +49,7 @@ describe("normalizeLiwaPayload", () => {
     expect(mapEventKind(parsed.event)).toBe("message");
     expect(parsed.phone).toBe("+573001112233");
     expect(parsed.text).toBe("Hola espejo");
+    expect(parsed).not.toHaveProperty("tenantIdHint");
   });
 
   it("maps bot_message for outbound chat mirror", () => {

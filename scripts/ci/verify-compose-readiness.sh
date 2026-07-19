@@ -82,10 +82,11 @@ if has_service web-console; then
     legacy_console_port=${LEGACY_WEB_CONSOLE_HOST_PORT:-3004}
     "${compose[@]}" exec -T web-console wget -q -O /dev/null http://127.0.0.1:8080/healthz
 
+    legacy_lumen_encounter="11111111-1111-4111-8111-111111111111"
     redirect_headers="$(curl --silent --show-error --dump-header - --output /dev/null \
-      "http://127.0.0.1:${legacy_console_port}/lumen/preconsulta?tenantId=probe&encounterId=42")"
-    grep -Eiq '^HTTP/[^ ]+ 308' <<<"${redirect_headers}"
-    expected_lumen_location="${LUMEN_CONSOLE_ORIGIN:-http://localhost:3002}/lumen/preconsulta?tenantId=probe&encounterId=42"
+      "http://127.0.0.1:${legacy_console_port}/lumen/preconsulta?encounter=${legacy_lumen_encounter}")"
+    grep -Eiq '^HTTP/[^ ]+ 307' <<<"${redirect_headers}"
+    expected_lumen_location="${LUMEN_CONSOLE_ORIGIN:-http://localhost:3002}/lumen/preconsulta?encounter=${legacy_lumen_encounter}"
     grep -Fqi "location: ${expected_lumen_location}" <<<"${redirect_headers}"
 
     unknown_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \

@@ -208,35 +208,31 @@ export async function registerLiwaRoutes(
     const kind = mapEventKind(parsed.event);
     const externalId = parsed.externalId || randomUUID();
 
-    await context.db.query(
-      `insert into liwa.webhook_receipts (receipt_id, external_id, event_name, payload)
-       values ($1, $2, $3, $4::jsonb)
-       on conflict (external_id) do nothing`,
-      [
-        randomUUID(),
-        externalId,
-        kind,
-        JSON.stringify({ ...raw, _normalized: parsed, simulate: Boolean(opts?.simulate) })
-      ]
-    );
-
-    const tenantId = await resolveWebhookTenant(context.db, raw, parsed);
-    if (!tenantId) {
-      return reply.code(422).send(envelope({ error: "Unable to resolve tenant for webhook payload" }, request.id));
-    }
-
+    let persisted: { deduped: boolean; tenantId: string | null };
     try {
-      await emitNormalizedWebhookEvent(context.db, tenantId, parsed, kind, novaDestination, externalId);
+      persisted = await persistNormalizedWebhook(
+        context.db,
+        raw,
+        parsed,
+        kind,
+        novaDestination,
+        externalId,
+        Boolean(opts?.simulate)
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to emit normalized webhook event";
       return reply.code(422).send(envelope({ error: message }, request.id));
+    }
+    if (!persisted.tenantId) {
+      return reply.code(422).send(envelope({ error: "Unable to resolve tenant for webhook payload" }, request.id));
     }
 
     return envelope(
       {
         accepted: true,
+        deduped: persisted.deduped,
         normalized: kind,
-        tenant_id: tenantId,
+        tenant_id: persisted.tenantId,
         phone: parsed.phone || undefined,
         agency_code: parsed.agencyCode,
         agency_tag: parsed.agencyTag,
@@ -504,63 +500,71 @@ async function upsertContactBinding(
   );
 }
 
-async function resolveWebhookTenant(
+export async function resolveWebhookTenant(
+  db: DatabaseExecutor,
+  raw: Record<string, unknown>,
+  configuredAccountId = process.env.LIWA_ACCOUNT_ID?.trim()
+): Promise<string | null> {
+  if (!configuredAccountId) return null;
+
+  // The payload may confirm the provider account, but it can never choose the
+  // account or tenant. A conflicting account identifier is treated as forged.
+  const payloadAccountIds = readWebhookAccountIds(raw);
+  if (payloadAccountIds.some((accountId) => accountId !== configuredAccountId)) return null;
+
+  const binding = await db.query<{ tenantId: string }>(
+    `select tenant_id as "tenantId" from liwa.tenant_bindings where liwa_account_id = $1`,
+    [configuredAccountId]
+  );
+  if (binding.rowCount !== 1) return null;
+  const tenantId = binding.rows[0]?.tenantId;
+  return tenantIdSchema.safeParse(tenantId).success ? tenantId! : null;
+}
+
+export async function persistNormalizedWebhook(
   db: DatabaseClient,
   raw: Record<string, unknown>,
-  parsed: NormalizedLiwaPayload
-): Promise<string | null> {
-  const userObj = raw.user && typeof raw.user === "object" ? (raw.user as Record<string, unknown>) : {};
-  const accountId =
-    raw.account_id ??
-    raw.page_id ??
-    raw.liwa_account_id ??
-    userObj.account_id ??
-    userObj.page_id ??
-    process.env.LIWA_ACCOUNT_ID ??
-    "1656233";
-  if (accountId !== undefined && accountId !== null && String(accountId).trim() !== "") {
-    const binding = await db.query<{ tenantId: string }>(
-      `select tenant_id as "tenantId" from liwa.tenant_bindings where liwa_account_id = $1`,
-      [String(accountId)]
+  parsed: NormalizedLiwaPayload,
+  kind: ReturnType<typeof mapEventKind>,
+  novaDestination: string,
+  externalId: string,
+  simulate: boolean
+): Promise<{ deduped: boolean; tenantId: string | null }> {
+  return db.transaction(async (tx) => {
+    const tenantId = await resolveWebhookTenant(tx, raw);
+    if (!tenantId) return { deduped: false, tenantId: null };
+
+    const receipt = await tx.query(
+      `insert into liwa.webhook_receipts (receipt_id, external_id, event_name, payload)
+       values ($1, $2, $3, $4::jsonb)
+       on conflict (external_id) do nothing
+       returning receipt_id`,
+      [randomUUID(), externalId, kind, JSON.stringify({ ...raw, _normalized: parsed, simulate })]
     );
-    if (binding.rowCount === 1) return binding.rows[0]!.tenantId;
+    if (receipt.rowCount === 0) return { deduped: true, tenantId };
+
+    await emitNormalizedWebhookEvent(tx, tenantId, parsed, kind, novaDestination, externalId);
+    return { deduped: false, tenantId };
+  });
+}
+
+function readWebhookAccountIds(raw: Record<string, unknown>): string[] {
+  const nested = raw.data && typeof raw.data === "object" ? (raw.data as Record<string, unknown>) : {};
+  const bodies = [raw, nested];
+  const values = new Set<string>();
+  for (const body of bodies) {
+    const user = body.user && typeof body.user === "object" ? (body.user as Record<string, unknown>) : {};
+    for (const candidate of [body.account_id, body.page_id, body.liwa_account_id, user.account_id, user.page_id]) {
+      if (candidate === undefined || candidate === null) continue;
+      const value = String(candidate).trim();
+      if (value) values.add(value);
+    }
   }
-
-  if (parsed.tenantIdHint && tenantIdSchema.safeParse(parsed.tenantIdHint).success) {
-    return parsed.tenantIdHint;
-  }
-
-  const defaultTenant = process.env.LIWA_WEBHOOK_DEFAULT_TENANT_ID?.trim();
-  if (defaultTenant && tenantIdSchema.safeParse(defaultTenant).success) {
-    return defaultTenant;
-  }
-
-  const phone = normalizePhoneE164(parsed.phone) ?? parsed.phone;
-  const tenantIds = new Set<string>();
-
-  if (parsed.contactId) {
-    const byContact = await db.query<{ tenantId: string }>(
-      `select distinct tenant_id as "tenantId" from liwa.contact_bindings where contact_ref = $1`,
-      [parsed.contactId]
-    );
-    for (const row of byContact.rows) tenantIds.add(row.tenantId);
-  }
-
-  if (phone) {
-    const byPhone = await db.query<{ tenantId: string }>(
-      `select distinct tenant_id as "tenantId" from liwa.contact_bindings
-        where phone_e164 = $1 or contact_ref = $1`,
-      [phone]
-    );
-    for (const row of byPhone.rows) tenantIds.add(row.tenantId);
-  }
-
-  if (tenantIds.size === 1) return [...tenantIds][0]!;
-  return null;
+  return [...values];
 }
 
 async function emitNormalizedWebhookEvent(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   tenantId: string,
   parsed: NormalizedLiwaPayload,
   kind: ReturnType<typeof mapEventKind>,
@@ -764,7 +768,7 @@ async function emitNormalizedWebhookEvent(
 }
 
 async function emitWaMessageReceived(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   input: {
     tenantId: string;
     correlationId: string;
@@ -826,7 +830,7 @@ function readUuid(params: unknown, key: string): string | undefined {
 }
 
 async function resolveOrBindContact(
-  db: DatabaseClient,
+  db: DatabaseExecutor,
   tenantId: string,
   input: { phone?: string; liwaContactId?: string; agencyTag?: string }
 ): Promise<string | undefined> {

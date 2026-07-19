@@ -276,6 +276,10 @@ REVOKE CREATE, TEMPORARY ON DATABASE \"${target_database}\" FROM \"hyperion_audi
 GRANT CONNECT ON DATABASE \"${target_database}\" TO \"hyperion_audit\";"
 elif [[ "${restore_profile}" == "nova" ]]; then
   compose+=(--profile nova-ops)
+  profile_database_acl_sql="REVOKE ALL ON DATABASE \"${target_database}\" FROM PUBLIC;
+GRANT CONNECT, CREATE, TEMPORARY ON DATABASE \"${target_database}\" TO \"hyperion_nova_migrator\";
+REVOKE CREATE, TEMPORARY ON DATABASE \"${target_database}\" FROM \"hyperion_nova\", \"hyperion_voice\", \"hyperion_liwa\", \"hyperion_documents\";
+GRANT CONNECT ON DATABASE \"${target_database}\" TO \"hyperion_nova\", \"hyperion_voice\", \"hyperion_liwa\", \"hyperion_documents\";"
 elif [[ "${restore_profile}" == "lumen" ]]; then
   compose+=(--profile lumen-ops)
   profile_database_acl_sql="REVOKE ALL ON DATABASE \"${target_database}\" FROM PUBLIC;
@@ -319,6 +323,7 @@ gzip -dc -- "${backup_archive}" \
     _ "${target_owner}" "${target_database}"
 
 if [[ "${restore_profile}" == "access" || "${restore_profile}" == "audit" \
+  || "${restore_profile}" == "nova" \
   || "${restore_profile}" == "lumen" || "${restore_profile}" == "pulso" ]]; then
   "${compose[@]}" exec -T postgres \
     sh -eu -c "

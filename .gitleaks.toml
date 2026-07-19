@@ -6,8 +6,12 @@ useDefault = true
 [allowlist]
 description = "Placeholder templates and synthetic fixtures are not live secrets"
 paths = [
-  '''(^|/)(\.env\.example|.+\.env\.example)$''',
-  '''(?i).*\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|sh)$''',
-  '''(?i).*recovery-drill\.mjs$''',
-  '''(?i).*snapshot\.test\.sh$'''
+  '''(^|/)(\.env\.example|.+\.env\.example)$'''
+]
+regexes = [
+  '''(?i)(?:replace|synthetic|example|mock|fake|forbidden)[-_a-z0-9.~-]{12,}''',
+  '''(?i)(?:gateway|nova|pulso|lumen|platform-admin)-operator-assertion-key-[0-9]+''',
+  '''clave-segura-123''',
+  '''(?:29ab67d0-54c5-4dab-83f7-197b5d16da02|ad67c1d8-09c7-4f75-82bb-f55ec14d33ba)''',
+  '''c3ludGhldGljLW5vbi1zZWNyZXQ='''
 ]

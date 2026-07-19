@@ -120,8 +120,8 @@ cada BFF validará localmente mediante JWKS; una caída temporal de Identity no 
 El grant normativo es `tenantId × productId × roles/capabilities`. Las sesiones de navegador se aíslan por origen
 con cookies `HttpOnly`, `Secure` y `SameSite`, sin bearer común en `localStorage`.
 
-El modelo Compose normal no construye ni inicia `api-gateway`. El workflow full-stack, restringido a `main` y a
-ejecución programada, activa `legacy-gateway` de forma explícita y levanta dos smoke tests reales: el stack base
+El modelo Compose normal no construye ni inicia `api-gateway`. El workflow full-stack se conserva para pushes a
+`main` y ejecuciones programadas; activa `legacy-gateway` explícitamente y levanta dos smoke tests reales: el stack base
 HTTP y el stack con el overlay JetStream. Esto comprueba build, one-shots, healthchecks y convivencia legacy; no
 convierte el piloto JetStream de un nodo en una configuración productiva ni sustituye un ensayo de upgrade y
 rollback con datos representativos. Un job separado resuelve fail-closed las capacidades del SHA base y ensaya el

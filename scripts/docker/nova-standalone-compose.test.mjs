@@ -318,7 +318,8 @@ test("el entorno NOVA inventaría proveedores externos sin reutilizar secretos d
     "NOVA_ELEVENLABS_WEBHOOK_HMAC_SECRET",
     "NOVA_LIWA_API_BASE_URL",
     "NOVA_LIWA_API_TOKEN",
-    "NOVA_LIWA_WEBHOOK_SECRET"
+    "NOVA_LIWA_WEBHOOK_SECRET",
+    "NOVA_LIWA_ACCOUNT_ID"
   ]) {
     assert.match(composeSource, new RegExp(`\\$\\{${variable}(?=[:}])`), `${variable} missing from Compose`);
     assert.match(environmentSource, new RegExp(`^${variable}=`, "m"), `${variable} missing from NOVA env inventory`);
@@ -373,6 +374,10 @@ test("el entorno NOVA inventaría proveedores externos sin reutilizar secretos d
   const modelResult = compose("config", "--format", "json");
   assert.equal(modelResult.status, 0, modelResult.stderr || modelResult.stdout);
   const services = JSON.parse(modelResult.stdout).services;
+  assert.equal(
+    services["nova-core-service"].environment.LIWA_ACCOUNT_ID,
+    services["liwa-channel-service"].environment.LIWA_ACCOUNT_ID
+  );
   assert.equal(services["nova-bff"].environment.NOVA_PROVIDER_EDGE_TOKEN, environment.get("NOVA_PROVIDER_EDGE_TOKEN"));
   for (const [service, descriptor] of Object.entries(services)) {
     if (service === "nova-bff") continue;

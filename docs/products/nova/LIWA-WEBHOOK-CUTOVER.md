@@ -108,13 +108,19 @@ Cutover Contabo ordenado + guía de nodos: [CONTABO_CHAT_ESPEJO_CUTOVER.md](CONT
 ## Binding de tenant
 
 ```bash
-DATABASE_URL=... LIWA_BIND_TENANT_ID=<uuid-coopfuturo> node scripts/autonomy/liwa-bind-tenant.mjs
+DATABASE_URL=... LIWA_ACCOUNT_ID=<cuenta-liwa> LIWA_BIND_TENANT_ID=<uuid-coopfuturo> node scripts/autonomy/liwa-bind-tenant.mjs
 ```
 
 Cuenta LIWA: `LIWA_ACCOUNT_ID=1656233` (Coopfuturo 2026 Cta Comercial).
+
+La cuenta debe existir como binding único en `liwa.tenant_bindings`. El servicio ignora cualquier `tenant_id` del
+payload y rechaza un `account_id` o `page_id` diferente al configurado; no existe fallback por teléfono, contacto ni
+tenant predeterminado. La entrega se considera persistida sólo cuando el receipt y sus eventos outbox confirman la
+misma transacción.
 
 ## Verificación
 
 1. Simular con secret en Hyperion.
 2. Disparar nodo real del flow.
-3. Confirmar `liwa.webhook_receipts` + handoff/CRM en nova-core.
+3. Confirmar `liwa.webhook_receipts` + outbox LIWA; repetir el mismo `external_id` y verificar `deduped=true` sin un
+   segundo efecto en nova-core.

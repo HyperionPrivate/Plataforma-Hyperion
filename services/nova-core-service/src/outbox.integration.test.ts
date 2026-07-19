@@ -24,7 +24,7 @@ interface PersistedOutboxState {
 
 describeIntegration("NOVA Audit outbox PostgreSQL recovery", () => {
   let db: DatabaseClient | undefined;
-  let eventId: string | undefined;
+  const eventIds: string[] = [];
 
   beforeAll(async () => {
     db = createDatabase(TEST_NOVA_DATABASE_URL ?? "");
@@ -35,7 +35,7 @@ describeIntegration("NOVA Audit outbox PostgreSQL recovery", () => {
   afterAll(async () => {
     if (!db) return;
     try {
-      if (eventId) {
+      for (const eventId of eventIds) {
         await db.query("delete from nova.outbox_dlq where event_id = $1", [eventId]);
         await db.query("delete from nova.outbox_events where event_id = $1", [eventId]);
       }
@@ -47,7 +47,8 @@ describeIntegration("NOVA Audit outbox PostgreSQL recovery", () => {
   it("returns a failed Audit delivery to pending and completes the same event id after recovery", async () => {
     if (!db) throw new Error("NOVA integration database was not initialized");
 
-    eventId = randomUUID();
+    const eventId = randomUUID();
+    eventIds.push(eventId);
     const tenantId = randomUUID();
     const correlationId = randomUUID();
     const entityId = randomUUID();
@@ -135,6 +136,45 @@ describeIntegration("NOVA Audit outbox PostgreSQL recovery", () => {
         "x-hyperion-event-version": "1"
       });
     }
+  });
+
+  it("reclaims and completes a dispatching event whose worker lease expired", async () => {
+    if (!db) throw new Error("NOVA integration database was not initialized");
+
+    const eventId = randomUUID();
+    eventIds.push(eventId);
+    const tenantId = randomUUID();
+    await insertNovaAuditOutboxEvent(db, {
+      eventId,
+      tenantId,
+      correlationId: randomUUID(),
+      businessIdempotencyKey: `expired-lease:${eventId}`,
+      domainEventType: "contact.imported",
+      entityType: "contact",
+      entityId: randomUUID(),
+      payload: { source: "expired-worker" },
+      destination: AUDIT_DESTINATION
+    });
+    await db.query(
+      `update nova.outbox_events
+          set status = 'dispatching', locked_by = 'crashed-worker', locked_at = now() - interval '3 minutes',
+              attempt_count = 1
+        where event_id = $1`,
+      [eventId]
+    );
+
+    const replacement = new PostgresNovaOutbox(db, "replacement-worker");
+    await expect(replacement.claim(1)).resolves.toEqual([
+      expect.objectContaining({ id: eventId, tenantId, type: novaAuditEventRecordContract.eventType })
+    ]);
+    await replacement.complete(eventId);
+
+    await expect(readOutboxState(db, eventId)).resolves.toMatchObject({
+      status: "completed",
+      attemptCount: 2,
+      lockedAt: null,
+      lockedBy: null
+    });
   });
 });
 

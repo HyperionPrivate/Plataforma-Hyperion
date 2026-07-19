@@ -31,6 +31,19 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SOURCE_DATABASE = "hyperion_nova";
 const RESTORE_DATABASE = "hyperion_nova_restore_drill";
 const POSTGRES_ADMIN_USER = "hyperion_nova_admin";
+const EXPECTED_RESTORED_DATABASE_ACL = [
+  "t", // PUBLIC cannot CONNECT
+  "t",
+  "t",
+  "t", // migrator: CONNECT, CREATE, TEMPORARY
+  ...Array.from({ length: 4 }, () => ["t", "f", "f"]).flat() // runtimes: CONNECT only
+].join("\t");
+
+export function assertRestoredDatabaseAcl(value) {
+  if (value !== EXPECTED_RESTORED_DATABASE_ACL) {
+    throw new Error("restored NOVA database ACL does not match the least-privilege provider boundary");
+  }
+}
 const MAX_BUFFER = 64 * 1024 * 1024;
 
 export function parseArguments(argv, now = new Date(), randomSuffix = randomBytes(4).toString("hex")) {
@@ -426,6 +439,35 @@ export function runDrill(options) {
     if (restoredOwner !== "hyperion_nova_migrator") {
       throw new Error(`restored database has unexpected owner: ${restoredOwner}`);
     }
+    const restoredAcl = dockerPsql(
+      compose,
+      RESTORE_DATABASE,
+      `select concat_ws(E'\\t',
+         not exists (
+           select 1
+             from pg_database database_entry,
+                  aclexplode(coalesce(database_entry.datacl, acldefault('d', database_entry.datdba))) privilege
+            where database_entry.datname = current_database()
+              and privilege.grantee = 0
+              and privilege.privilege_type = 'CONNECT'
+         ),
+         has_database_privilege('hyperion_nova_migrator', current_database(), 'CONNECT'),
+         has_database_privilege('hyperion_nova_migrator', current_database(), 'CREATE'),
+         has_database_privilege('hyperion_nova_migrator', current_database(), 'TEMPORARY'),
+         has_database_privilege('hyperion_nova', current_database(), 'CONNECT'),
+         has_database_privilege('hyperion_nova', current_database(), 'CREATE'),
+         has_database_privilege('hyperion_nova', current_database(), 'TEMPORARY'),
+         has_database_privilege('hyperion_voice', current_database(), 'CONNECT'),
+         has_database_privilege('hyperion_voice', current_database(), 'CREATE'),
+         has_database_privilege('hyperion_voice', current_database(), 'TEMPORARY'),
+         has_database_privilege('hyperion_liwa', current_database(), 'CONNECT'),
+         has_database_privilege('hyperion_liwa', current_database(), 'CREATE'),
+         has_database_privilege('hyperion_liwa', current_database(), 'TEMPORARY'),
+         has_database_privilege('hyperion_documents', current_database(), 'CONNECT'),
+         has_database_privilege('hyperion_documents', current_database(), 'CREATE'),
+         has_database_privilege('hyperion_documents', current_database(), 'TEMPORARY'))`
+    );
+    assertRestoredDatabaseAcl(restoredAcl);
 
     result = {
       schemaVersion: 1,

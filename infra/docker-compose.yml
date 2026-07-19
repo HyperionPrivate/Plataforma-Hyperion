@@ -697,6 +697,7 @@ services:
       VOICE_CHANNEL_SERVICE_URL: http://voice-channel-service:8092
       LIWA_CHANNEL_SERVICE_URL: http://liwa-channel-service:8093
       DOCUMENTS_SERVICE_URL: http://documents-service:8094
+      LIWA_ACCOUNT_ID: ${LIWA_ACCOUNT_ID:-}
       CORE_MODE: ${CORE_MODE:-contract}
       CORE_BASE_URL: ${CORE_BASE_URL:-}
       LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1782399915832}
@@ -777,8 +778,7 @@ services:
       # The public endpoint requires X-LIWA-WEBHOOK-SECRET over HTTPS/private tunnel.
       LIWA_BASE_URL: ${LIWA_BASE_URL:-https://chat.liwa.co/api}
       LIWA_API_TOKEN: ${LIWA_API_TOKEN:-}
-      LIWA_ACCOUNT_ID: ${LIWA_ACCOUNT_ID:-1656233}
-      LIWA_WEBHOOK_DEFAULT_TENANT_ID: ${LIWA_WEBHOOK_DEFAULT_TENANT_ID:-}
+      LIWA_ACCOUNT_ID: ${LIWA_ACCOUNT_ID:-}
       LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1782399915832}
       LIWA_FLOW_ID_B: ${LIWA_FLOW_ID_B:-1782486171458}
       LIWA_MODE: ${LIWA_MODE:-http}
@@ -966,7 +966,7 @@ services:
       CONSOLE_CELL: nova
       CONSOLE_ROUTE_PATTERN: ^/$
     ports:
-      - "${NOVA_CONSOLE_HOST_PORT:-3010}:8080"
+      - "${HYPERION_CONSOLE_HOST_IP:-127.0.0.1}:${NOVA_CONSOLE_HOST_PORT:-3010}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 15s
@@ -1085,7 +1085,7 @@ services:
       CONSOLE_CELL: lumen
       CONSOLE_ROUTE_PATTERN: ^(?:/|/lumen(?:/[^/]+)?/?)$
     ports:
-      - "${LUMEN_CONSOLE_HOST_PORT:-3002}:8080"
+      - "${HYPERION_CONSOLE_HOST_IP:-127.0.0.1}:${LUMEN_CONSOLE_HOST_PORT:-3002}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 15s
@@ -1109,7 +1109,7 @@ services:
       CONSOLE_CELL: pulso
       CONSOLE_ROUTE_PATTERN: ^(?:/|/(?:operacion|conversaciones|agenda|rpa|campanas|bi|configuracion)/?)$
     ports:
-      - "${PULSO_CONSOLE_HOST_PORT:-3000}:8080"
+      - "${HYPERION_CONSOLE_HOST_IP:-127.0.0.1}:${PULSO_CONSOLE_HOST_PORT:-3000}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 15s
@@ -1130,7 +1130,7 @@ services:
       CONSOLE_CELL: platform
       CONSOLE_ROUTE_PATTERN: ^(?:/|/(?:operators|tenants|grants|catalog)/?)$
     ports:
-      - "${PLATFORM_ADMIN_CONSOLE_HOST_PORT:-3003}:8080"
+      - "${HYPERION_CONSOLE_HOST_IP:-127.0.0.1}:${PLATFORM_ADMIN_CONSOLE_HOST_PORT:-3003}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 15s
@@ -1154,7 +1154,7 @@ services:
       LUMEN_CONSOLE_ORIGIN: ${LUMEN_CONSOLE_ORIGIN:-http://localhost:3002}
       PULSO_CONSOLE_ORIGIN: ${PULSO_CONSOLE_ORIGIN:-http://localhost:3000}
     ports:
-      - "${LEGACY_WEB_CONSOLE_HOST_PORT:-3004}:8080"
+      - "${HYPERION_CONSOLE_HOST_IP:-127.0.0.1}:${LEGACY_WEB_CONSOLE_HOST_PORT:-3004}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 15s
@@ -1183,7 +1183,7 @@ services:
     ports:
       # Contabo already maps WEB_CONSOLE_NOVA_HOST_PORT=19001; reuse it so CoopFuturo
       # keeps the same URL after swapping the Vite console for this Next UI.
-      - "${WEB_CONSOLE_NOVA_HOST_PORT:-3011}:3000"
+      - "${HYPERION_CONSOLE_HOST_IP:-127.0.0.1}:${WEB_CONSOLE_NOVA_HOST_PORT:-3011}:3000"
     healthcheck:
       test:
         [

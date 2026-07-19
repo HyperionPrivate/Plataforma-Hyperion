@@ -470,9 +470,13 @@ async function buildReadinessHealth(
 }
 
 /** NULL and PostgreSQL infinity both mean the password never expires. */
-function isSafeRolePasswordExpiry(value: string | Date | null | undefined): boolean {
+function isSafeRolePasswordExpiry(value: string | number | Date | null | undefined): boolean {
   if (value == null) return true;
   if (typeof value === "string") return value.trim().toLowerCase() === "infinity";
+  // node-postgres parses PostgreSQL timestamptz 'infinity' as numeric
+  // Infinity (OID 1184). Only positive infinity represents a password that
+  // never expires; finite timestamps and -infinity must remain fail-closed.
+  if (typeof value === "number") return value === Number.POSITIVE_INFINITY;
   if (value instanceof Date) return !Number.isFinite(value.getTime());
   return false;
 }
@@ -492,7 +496,7 @@ async function findDatabaseRoleProblem(db: DatabaseClient, expectedRole: string)
       rolinherit: boolean;
       rolreplication: boolean;
       rolsuper: boolean;
-      rolvaliduntil: string | null;
+      rolvaliduntil: string | number | Date | null;
       sessionRole: string;
     }>(
       `select current_user as "currentRole", session_user as "sessionRole",
