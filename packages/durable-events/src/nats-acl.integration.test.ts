@@ -259,6 +259,26 @@ describe.skipIf(!enabled)("NATS service ACLs", () => {
     await expectPublishDenied(channel, "hyperion.events.pulso.audit.event.record.v1", "acl-denied-channel-as-pulso");
   });
 
+  it("allows Audit to initialize the NOVA event durable and own its DLQ", async () => {
+    const durableName = "audit_nova_event_record_v1";
+    const pullSubject = `$JS.API.CONSUMER.MSG.NEXT.HYPERION_EVENTS.${durableName}`;
+    await expectRequestPublishDenied(topology, pullSubject);
+
+    const consumer = await jetstream(audit, { timeout: 2_000 }).consumers.get("HYPERION_EVENTS", durableName);
+    await expect(consumer.info(true)).resolves.toMatchObject({
+      config: {
+        durable_name: durableName,
+        filter_subject: "hyperion.events.nova.audit.event.record.v1"
+      }
+    });
+    await expect(consumer.next({ expires: 1_000 })).resolves.toBeNull();
+    await expectPublishAllowed(
+      audit,
+      "hyperion.dlq.nova.audit.event.record.v1",
+      `acl-allowed-audit-nova-dlq-${Date.now()}`
+    );
+  });
+
   it("rejects the removed ambiguous Audit subject for every runtime identity", async () => {
     for (const [connection, identity] of [
       [sofia, "sofia"],
