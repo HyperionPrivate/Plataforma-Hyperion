@@ -1,0 +1,521 @@
+name: reusable-cell-ci
+
+on:
+  workflow_call:
+    inputs:
+      cell:
+        description: Federated product cell to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  code:
+    name: ${{ inputs.cell }} / code
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      HYPERION_ENVIRONMENT: ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install workspace closure
+        run: node scripts/ci/cell-install-plan.mjs --cell "${{ inputs.cell }}" --execute
+      - name: Test architecture controls
+        run: pnpm architecture:test
+      - name: Enforce architecture boundaries
+        run: pnpm architecture:check
+      - name: Test federation controls owned by the selected cell
+        run: pnpm federation:test:cell -- --cell "${{ inputs.cell }}"
+      - name: Enforce federated boundaries
+        run: pnpm federation:check
+      - name: Enforce Compose identities and one-shot ordering
+        run: pnpm compose:check
+      - name: Enforce frontend isolation
+        run: pnpm frontend:check
+      - name: Test documentation gates
+        run: pnpm docs:test
+      - name: Enforce documentation integrity
+        run: pnpm docs:check
+      - name: Test release tooling owned by the selected cell
+        run: pnpm release:test -- --cell "${{ inputs.cell }}"
+      - name: Enforce release manifests, catalogs, rollback and contracts owned by the selected cell
+        run: pnpm release:check -- --cell "${{ inputs.cell }}"
+      - name: Lint cell
+        run: node scripts/ci/run-cell-phase.mjs --cell "${{ inputs.cell }}" --phase lint
+      - name: Typecheck cell dependency closure
+        run: node scripts/ci/run-cell-phase.mjs --cell "${{ inputs.cell }}" --phase typecheck
+      - name: Run cell unit tests
+        run: node scripts/ci/run-cell-phase.mjs --cell "${{ inputs.cell }}" --phase unit
+      - name: Run cell integration contracts
+        run: node scripts/ci/run-cell-phase.mjs --cell "${{ inputs.cell }}" --phase integration
+      - name: Build cell dependency closure
+        run: node scripts/ci/run-cell-phase.mjs --cell "${{ inputs.cell }}" --phase build
+      - name: Install standalone CoopFuturo client
+        if: inputs.cell == 'nova'
+        run: npm ci --prefix apps/coopfuturo-console
+      - name: Check standalone CoopFuturo client
+        if: inputs.cell == 'nova'
+        run: pnpm coopfuturo:check
+      - name: Test product backup, restore, recovery evidence and rollback gates
+        if: inputs.cell != 'platform'
+        run: pnpm backup:test --cell "${{ inputs.cell }}"
+
+  nova-database-smoke:
+    name: nova / logical-database-smoke
+    if: inputs.cell == 'nova'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: hyperion
+          POSTGRES_PASSWORD: hyperion_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hyperion -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install NOVA migration closure
+        run: >-
+          node scripts/ci/cell-install-plan.mjs --cell nova
+          --package @hyperion/nova-migrations
+          --package @hyperion/nova-core-service --execute
+      - name: Install neutral Audit provider closure
+        run: >-
+          node scripts/ci/cell-install-plan.mjs --cell platform
+          --package @hyperion/audit-migrations
+          --package @hyperion/audit-service --execute
+      - name: Build provider-owned NOVA migrator
+        run: pnpm --filter @hyperion/nova-migrations build
+      - name: Build NOVA outbox integration closure
+        run: pnpm --filter @hyperion/nova-core-service... build
+      - name: Build neutral Audit provider closure
+        run: pnpm --filter @hyperion/audit-service... build
+      - name: Generate isolated ephemeral NOVA database credentials
+        run: >-
+          node -e "const fs=require('node:fs');const crypto=require('node:crypto');
+          const names=['NOVA_MIGRATOR','NOVA','VOICE','LIWA','DOCUMENTS','AUDIT_MIGRATOR','AUDIT'];
+          const values=names.map((name)=>name+'_DATABASE_PASSWORD='+crypto.randomBytes(24).toString('base64url'));
+          values.forEach((entry)=>process.stdout.write('::add-mask::'+entry.slice(entry.indexOf('=')+1)+'\n'));
+          fs.appendFileSync(process.env.GITHUB_ENV,values.join('\n')+'\n',{mode:0o600})"
+      - name: Bootstrap isolated NOVA logical database
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          NOVA_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          NOVA_POSTGRES_DB=hyperion_nova_ci
+          NOVA_MIGRATOR_DATABASE_PASSWORD="$NOVA_MIGRATOR_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/nova-migrations bootstrap:database
+      - name: Migrate NOVA as its dedicated owner
+        shell: bash
+        run: |
+          nova_migrator_url="postgres://hyperion_nova_migrator:${NOVA_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            NOVA_MIGRATOR_DATABASE_URL="$nova_migrator_url" \
+            pnpm --filter @hyperion/nova-migrations migrate
+      - name: Activate only NOVA runtime roles
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          NOVA_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          NOVA_POSTGRES_DB=hyperion_nova_ci
+          NOVA_DATABASE_PASSWORD="$NOVA_DATABASE_PASSWORD"
+          VOICE_DATABASE_PASSWORD="$VOICE_DATABASE_PASSWORD"
+          LIWA_DATABASE_PASSWORD="$LIWA_DATABASE_PASSWORD"
+          DOCUMENTS_DATABASE_PASSWORD="$DOCUMENTS_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/nova-migrations bootstrap:roles
+      - name: Bootstrap isolated neutral Audit logical database
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          AUDIT_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          AUDIT_POSTGRES_DB=hyperion_audit_nova_ci
+          AUDIT_MIGRATOR_DATABASE_PASSWORD="$AUDIT_MIGRATOR_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/audit-migrations bootstrap:database
+      - name: Migrate neutral Audit as its dedicated owner
+        shell: bash
+        run: |
+          audit_migrator_url="postgres://hyperion_audit_migrator:${AUDIT_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_audit_nova_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            AUDIT_MIGRATOR_DATABASE_URL="$audit_migrator_url" \
+            pnpm --filter @hyperion/audit-migrations migrate
+      - name: Activate only the neutral Audit runtime role
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          AUDIT_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          AUDIT_POSTGRES_DB=hyperion_audit_nova_ci
+          AUDIT_DATABASE_PASSWORD="$AUDIT_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/audit-migrations bootstrap:roles
+      - name: Exercise Audit outage and NOVA outbox recovery on the runtime role
+        shell: bash
+        run: |
+          nova_runtime_url="postgres://hyperion_nova:${NOVA_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true \
+            TEST_NOVA_DATABASE_URL="$nova_runtime_url" \
+            pnpm --filter @hyperion/nova-core-service exec vitest run src/outbox.integration.test.ts
+      - name: Exercise real NOVA to Audit outage, lost acknowledgement and idempotent retry
+        shell: bash
+        run: |
+          nova_runtime_url="postgres://hyperion_nova:${NOVA_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          audit_runtime_url="postgres://hyperion_audit:${AUDIT_DATABASE_PASSWORD}@localhost:5432/hyperion_audit_nova_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            TEST_NOVA_DATABASE_URL="$nova_runtime_url" \
+            TEST_AUDIT_DATABASE_URL="$audit_runtime_url" \
+            node scripts/autonomy/nova-audit-http.e2e.mjs
+      - name: Exercise NOVA database autonomy integration assertions
+        shell: bash
+        run: |
+          nova_migrator_url="postgres://hyperion_nova_migrator:${NOVA_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          nova_runtime_url="postgres://hyperion_nova:${NOVA_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          voice_runtime_url="postgres://hyperion_voice:${VOICE_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          liwa_runtime_url="postgres://hyperion_liwa:${LIWA_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          documents_runtime_url="postgres://hyperion_documents:${DOCUMENTS_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true \
+            TEST_NOVA_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres \
+            TEST_NOVA_POSTGRES_DB=hyperion_nova_ci \
+            TEST_NOVA_MIGRATOR_DATABASE_URL="$nova_migrator_url" \
+            TEST_NOVA_DATABASE_URL="$nova_runtime_url" \
+            TEST_VOICE_DATABASE_URL="$voice_runtime_url" \
+            TEST_LIWA_DATABASE_URL="$liwa_runtime_url" \
+            TEST_DOCUMENTS_DATABASE_URL="$documents_runtime_url" \
+            pnpm --filter @hyperion/nova-migrations exec vitest run src/autonomy.integration.test.ts
+
+  access-database-smoke:
+    name: platform / access-logical-database-smoke
+    if: inputs.cell == 'platform'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: hyperion
+          POSTGRES_PASSWORD: hyperion_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hyperion -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install Access provider closure
+        run: >-
+          node scripts/ci/cell-install-plan.mjs --cell platform
+          --package @hyperion/access-migrations
+          --package @hyperion/identity-service
+          --package @hyperion/tenant-service --execute
+      - name: Build Access provider and runtime consumers
+        run: |
+          pnpm --filter @hyperion/access-migrations build
+          pnpm --filter @hyperion/identity-service... build
+          pnpm --filter @hyperion/tenant-service... build
+      - name: Generate isolated Access database credentials
+        run: >-
+          node -e "const fs=require('node:fs');const crypto=require('node:crypto');
+          const names=['ACCESS_MIGRATOR','IDENTITY','TENANT'];
+          const values=names.map((name)=>name+'_DATABASE_PASSWORD='+crypto.randomBytes(24).toString('base64url'));
+          values.forEach((entry)=>process.stdout.write('::add-mask::'+entry.slice(entry.indexOf('=')+1)+'\n'));
+          fs.appendFileSync(process.env.GITHUB_ENV,values.join('\n')+'\n',{mode:0o600})"
+      - name: Bootstrap sealed Access logical database
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          ACCESS_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          ACCESS_POSTGRES_DB=hyperion_access_ci
+          ACCESS_MIGRATOR_DATABASE_PASSWORD="$ACCESS_MIGRATOR_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/access-migrations bootstrap:database
+      - name: Migrate Access as its dedicated owner
+        shell: bash
+        run: |
+          access_migrator_url="postgres://hyperion_access_migrator:${ACCESS_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            ACCESS_POSTGRES_DB=hyperion_access_ci \
+            ACCESS_MIGRATOR_DATABASE_URL="$access_migrator_url" \
+            pnpm --filter @hyperion/access-migrations migrate
+      - name: Validate grants and activate only Identity and Tenant roles
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          ACCESS_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          ACCESS_POSTGRES_DB=hyperion_access_ci
+          ACCESS_MIGRATOR_DATABASE_PASSWORD="$ACCESS_MIGRATOR_DATABASE_PASSWORD"
+          IDENTITY_DATABASE_PASSWORD="$IDENTITY_DATABASE_PASSWORD"
+          TENANT_DATABASE_PASSWORD="$TENANT_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/access-migrations bootstrap:roles
+      - name: Prove fresh-start ownership, exact ACLs and runtime isolation
+        shell: bash
+        run: |
+          access_migrator_url="postgres://hyperion_access_migrator:${ACCESS_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          identity_url="postgres://hyperion_identity:${IDENTITY_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          tenant_url="postgres://hyperion_tenant:${TENANT_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            TEST_ACCESS_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres \
+            TEST_ACCESS_POSTGRES_DB=hyperion_access_ci \
+            TEST_ACCESS_MIGRATOR_DATABASE_URL="$access_migrator_url" \
+            TEST_IDENTITY_DATABASE_URL="$identity_url" \
+            TEST_TENANT_DATABASE_URL="$tenant_url" \
+            pnpm --filter @hyperion/access-migrations test:fresh-start
+      - name: Exercise Access tenant projection transaction, outage retry and exact replay
+        shell: bash
+        run: |
+          access_fixture_url="postgres://hyperion_access_migrator:${ACCESS_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          identity_url="postgres://hyperion_identity:${IDENTITY_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            TEST_ACCESS_DATABASE_DISPOSABLE=true \
+            TEST_ACCESS_FIXTURE_DATABASE_URL="$access_fixture_url" \
+            TEST_IDENTITY_DATABASE_URL="$identity_url" \
+            pnpm --filter @hyperion/identity-service test:tenant-projection-postgres
+      - name: Exercise exact replay for both Access-owned LUMEN projections
+        shell: bash
+        run: |
+          access_fixture_url="postgres://hyperion_access_migrator:${ACCESS_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          identity_url="postgres://hyperion_identity:${IDENTITY_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            TEST_ACCESS_DATABASE_DISPOSABLE=true \
+            TEST_ACCESS_FIXTURE_DATABASE_URL="$access_fixture_url" \
+            TEST_IDENTITY_DATABASE_URL="$identity_url" \
+            pnpm --filter @hyperion/identity-service test:lumen-projection-postgres
+      - name: Prove Access migration checksum idempotence
+        shell: bash
+        run: |
+          access_migrator_url="postgres://hyperion_access_migrator:${ACCESS_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_access_ci"
+          output=$(env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            ACCESS_POSTGRES_DB=hyperion_access_ci \
+            ACCESS_MIGRATOR_DATABASE_URL="$access_migrator_url" \
+            pnpm --filter @hyperion/access-migrations migrate)
+          printf '%s\n' "$output"
+          grep -q '"applied":\[\]' <<<"$output"
+
+  audit-database-smoke:
+    name: platform / audit-logical-database-smoke
+    if: inputs.cell == 'platform'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: hyperion
+          POSTGRES_PASSWORD: hyperion_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hyperion -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install Audit provider closure
+        run: >-
+          node scripts/ci/cell-install-plan.mjs --cell platform
+          --package @hyperion/audit-migrations
+          --package @hyperion/audit-service --execute
+      - name: Build Audit migration and service closures
+        run: |
+          pnpm --filter @hyperion/audit-migrations build
+          pnpm --filter @hyperion/audit-service... build
+      - name: Generate isolated Audit database credentials
+        run: >-
+          node -e "const fs=require('node:fs');const crypto=require('node:crypto');
+          const names=['AUDIT_MIGRATOR','AUDIT'];
+          const values=names.map((name)=>name+'_DATABASE_PASSWORD='+crypto.randomBytes(24).toString('base64url'));
+          values.forEach((entry)=>process.stdout.write('::add-mask::'+entry.slice(entry.indexOf('=')+1)+'\n'));
+          fs.appendFileSync(process.env.GITHUB_ENV,values.join('\n')+'\n',{mode:0o600})"
+      - name: Bootstrap isolated Audit logical database
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          AUDIT_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          AUDIT_POSTGRES_DB=hyperion_audit_ci
+          AUDIT_MIGRATOR_DATABASE_PASSWORD="$AUDIT_MIGRATOR_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/audit-migrations bootstrap:database
+      - name: Migrate Audit as its dedicated owner
+        shell: bash
+        run: |
+          audit_migrator_url="postgres://hyperion_audit_migrator:${AUDIT_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_audit_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            AUDIT_MIGRATOR_DATABASE_URL="$audit_migrator_url" \
+            pnpm --filter @hyperion/audit-migrations migrate
+      - name: Validate and activate the Audit runtime role
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          AUDIT_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          AUDIT_POSTGRES_DB=hyperion_audit_ci
+          AUDIT_DATABASE_PASSWORD="$AUDIT_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/audit-migrations bootstrap:roles
+      - name: Prove provider readiness and NOVA idempotency on the runtime role
+        shell: bash
+        run: |
+          audit_runtime_url="postgres://hyperion_audit:${AUDIT_DATABASE_PASSWORD}@localhost:5432/hyperion_audit_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            TEST_DATABASE_URL="$audit_runtime_url" \
+            pnpm --filter @hyperion/audit-service exec vitest run \
+              src/readiness.integration.test.ts src/internal-events.integration.test.ts
+
+  image:
+    name: ${{ inputs.cell }} / image-smoke
+    needs: code
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      HYPERION_ENVIRONMENT: ci
+      COMPOSE_PARALLEL_LIMIT: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Materialize allowlisted Docker context
+        run: node scripts/docker/generate-cell-contexts.mjs --cell "${{ inputs.cell }}"
+      - name: Resolve the owning cell Compose descriptor
+        id: compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'compose_file=%s\n' "$(node scripts/ci/cell-compose-plan.mjs '${{ inputs.cell }}' compose-file)" >> "$GITHUB_OUTPUT"
+          printf 'env_file=%s\n' "$(node scripts/ci/cell-compose-plan.mjs '${{ inputs.cell }}' env-file)" >> "$GITHUB_OUTPUT"
+      - name: Build only cell images
+        shell: bash
+        env:
+          COMPOSE_FILE: ${{ steps.compose.outputs.compose_file }}
+          COMPOSE_ENV_FILE: ${{ steps.compose.outputs.env_file }}
+        run: |
+          set -euo pipefail
+          read -r -a services <<<"$(node scripts/ci/cell-compose-plan.mjs '${{ inputs.cell }}' services)"
+          test "${#services[@]}" -gt 0
+          compose=(docker compose --env-file "$COMPOSE_ENV_FILE" -p "hyperion-${{ inputs.cell }}-ci" -f "$COMPOSE_FILE")
+          "${compose[@]}" build "${services[@]}"
+      - name: Verify image artifacts
+        shell: bash
+        env:
+          COMPOSE_FILE: ${{ steps.compose.outputs.compose_file }}
+          COMPOSE_ENV_FILE: ${{ steps.compose.outputs.env_file }}
+        run: |
+          set -euo pipefail
+          read -r -a services <<<"$(node scripts/ci/cell-compose-plan.mjs '${{ inputs.cell }}' services)"
+          project_name="hyperion-${{ inputs.cell }}-ci"
+          compose=(docker compose --env-file "$COMPOSE_ENV_FILE" -p "$project_name" -f "$COMPOSE_FILE")
+          compose_model=$("${compose[@]}" config --format json)
+          for service in "${services[@]}"; do
+            image_reference=$(printf '%s' "$compose_model" | node scripts/ci/resolve-compose-image-reference.mjs --project "$project_name" --service "$service")
+            image_id=$(docker image inspect --format '{{.Id}}' "$image_reference")
+            test -n "$image_id"
+          done
+      - name: Import Platform runtime image closures without migration authority
+        if: inputs.cell == 'platform'
+        shell: bash
+        env:
+          COMPOSE_FILE: ${{ steps.compose.outputs.compose_file }}
+          COMPOSE_ENV_FILE: ${{ steps.compose.outputs.env_file }}
+        run: |
+          set -euo pipefail
+          project_name="hyperion-platform-ci"
+          compose=(docker compose --env-file "$COMPOSE_ENV_FILE" -p "$project_name" -f "$COMPOSE_FILE")
+          compose_model=$("${compose[@]}" config --format json)
+          for service in identity-service tenant-service; do
+            image_reference=$(printf '%s' "$compose_model" | node scripts/ci/resolve-compose-image-reference.mjs --project "$project_name" --service "$service")
+            docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              "$image_reference" node --input-type=module --eval \
+              "await import('./services/${service}/dist/app.js')"
+          done
+      - name: Start only the cell BFF image and verify its isolated health contract
+        shell: bash
+        env:
+          COMPOSE_FILE: ${{ steps.compose.outputs.compose_file }}
+          COMPOSE_ENV_FILE: ${{ steps.compose.outputs.env_file }}
+        run: |
+          set -euo pipefail
+          service=$(node scripts/ci/cell-compose-plan.mjs '${{ inputs.cell }}' smoke-service)
+          project_name="hyperion-${{ inputs.cell }}-ci"
+          compose=(docker compose --env-file "$COMPOSE_ENV_FILE" -p "$project_name" -f "$COMPOSE_FILE")
+          image_reference=$("${compose[@]}" config --format json | node scripts/ci/resolve-compose-image-reference.mjs --project "$project_name" --service "$service")
+          image_id=$(docker image inspect --format '{{.Id}}' "$image_reference")
+          test -n "$image_id"
+          node scripts/ci/smoke-cell-bff-image.mjs --cell '${{ inputs.cell }}' --image "$image_id"
+      - name: Remove cell smoke containers and networks
+        if: always()
+        shell: bash
+        env:
+          COMPOSE_FILE: ${{ steps.compose.outputs.compose_file }}
+          COMPOSE_ENV_FILE: ${{ steps.compose.outputs.env_file }}
+        run: |
+          set -u
+          cleanup_status=0
+          label_key="io.hyperion.ci.cell-bff-smoke"
+          expected_label="${{ inputs.cell }}"
+          readarray -t smoke_containers < <(docker ps --all --quiet --filter "label=${label_key}=${expected_label}")
+          for container_id in "${smoke_containers[@]}"; do
+            actual_label=$(docker inspect --format "{{ index .Config.Labels \"${label_key}\" }}" "$container_id" 2>/dev/null || true)
+            if [[ "$actual_label" != "$expected_label" ]]; then
+              echo "Refusing to remove smoke container $container_id after label readback mismatch" >&2
+              cleanup_status=1
+              continue
+            fi
+            docker rm --force "$container_id" || cleanup_status=1
+          done
+          readarray -t smoke_networks < <(docker network ls --quiet --filter "label=${label_key}=${expected_label}")
+          for network_id in "${smoke_networks[@]}"; do
+            actual_label=$(docker network inspect --format "{{ index .Labels \"${label_key}\" }}" "$network_id" 2>/dev/null || true)
+            if [[ "$actual_label" != "$expected_label" ]]; then
+              echo "Refusing to remove smoke network $network_id after label readback mismatch" >&2
+              cleanup_status=1
+              continue
+            fi
+            docker network rm "$network_id" || cleanup_status=1
+          done
+          if [[ -n "$COMPOSE_FILE" && -n "$COMPOSE_ENV_FILE" ]]; then
+            docker compose --env-file "$COMPOSE_ENV_FILE" -p "hyperion-${{ inputs.cell }}-ci" \
+              -f "$COMPOSE_FILE" down --remove-orphans || cleanup_status=1
+          fi
+          exit "$cleanup_status"

@@ -1,0 +1,407 @@
+name: build-attested-cell-images
+
+on:
+  workflow_dispatch:
+    inputs:
+      cell:
+        description: Federated cell whose OCI catalog will be built
+        required: true
+        type: choice
+        options:
+          - platform
+          - nova
+          - lumen
+          - pulso
+      catalog_version:
+        description: Existing versioned release catalog (SemVer)
+        required: true
+        default: 1.0.0
+        type: string
+      source_revision:
+        description: Exact lowercase protected-main commit selected for this workflow run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+  security-events: write
+
+env:
+  TRIVY_VERSION: v0.68.2
+
+concurrency:
+  group: build-attested-cell-images-${{ inputs.cell }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: ${{ inputs.cell }} / immutable build plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ inputs.source_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the selected protected-main source
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "$SOURCE_REVISION" =~ ^0+$ ]]
+          if [[ "$REF_PROTECTED" != "true" || "$GITHUB_REF" != "refs/heads/main" || "$GITHUB_SHA" != "$SOURCE_REVISION" ]]; then
+            echo "Dispatch this workflow on protected main and use that exact github.sha as source_revision." >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+      - name: Resolve catalog-owned image matrix
+        id: plan
+        shell: bash
+        env:
+          CELL: ${{ inputs.cell }}
+          CATALOG_VERSION: ${{ inputs.catalog_version }}
+        run: |
+          set -euo pipefail
+          matrix=$(node scripts/releases/create-image-build-plan.mjs \
+            --cell "$CELL" --catalog-version "$CATALOG_VERSION" --format matrix)
+          test -n "$matrix"
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ inputs.cell }} / ${{ matrix.id }} / push and attest
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: release-publication
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      COMPOSE_PARALLEL_LIMIT: 2
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - name: Verify checked-out source revision
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: test "$GITHUB_SHA" = "$SOURCE_REVISION" && test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+      - name: Authenticate GHCR for immutable publication
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Install the pinned image scanner
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache: false
+      - name: Materialize only the selected cell Docker context
+        env:
+          CELL: ${{ inputs.cell }}
+        run: node scripts/docker/generate-cell-contexts.mjs --cell "$CELL"
+      - name: Resolve source tag or build and push a run-unique candidate
+        id: push
+        shell: bash
+        env:
+          CELL: ${{ inputs.cell }}
+          SERVICE: ${{ matrix.service }}
+          COMPOSE_SERVICES_JSON: ${{ toJSON(matrix.composeServices) }}
+          IMAGE_REPOSITORY: ${{ matrix.repository }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          compose_file=$(node scripts/ci/cell-compose-plan.mjs "$CELL" compose-file)
+          compose_env_file=$(node scripts/ci/cell-compose-plan.mjs "$CELL" env-file)
+          project_name="hyperion-${CELL}-${SERVICE}"
+          compose=(docker compose --env-file "$compose_env_file" -p "$project_name" -f "$compose_file")
+          resolve_local_image() {
+            "${compose[@]}" config --format json | node scripts/ci/resolve-compose-image-reference.mjs \
+              --project "$project_name" --service "$1"
+          }
+          mapfile -t compose_services < <(
+            node -e 'for (const service of JSON.parse(process.env.COMPOSE_SERVICES_JSON)) console.log(service)'
+          )
+          test "${#compose_services[@]}" -gt 0
+          canonical_service_present=false
+          for compose_service in "${compose_services[@]}"; do
+            if [[ "$compose_service" == "$SERVICE" ]]; then canonical_service_present=true; fi
+          done
+          test "$canonical_service_present" = true
+          source_tag="${IMAGE_REPOSITORY}:${SOURCE_REVISION}"
+          candidate_tag="${IMAGE_REPOSITORY}:candidate-${SOURCE_REVISION}-${RUN_ID}-${RUN_ATTEMPT}"
+          set +e
+          registry_preflight=$(docker buildx imagetools inspect "$source_tag" 2>&1)
+          registry_status=$?
+          set -e
+          if [[ "$registry_status" -eq 0 ]]; then
+            mapfile -t source_digests < <(
+              sed -nE 's/^Digest:[[:space:]]+(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' <<<"$registry_preflight"
+            )
+            if [[ "${#source_digests[@]}" -ne 1 ]]; then
+              echo "Existing immutable source tag $source_tag has no unambiguous top-level digest." >&2
+              exit 1
+            fi
+            printf 'digest=%s\n' "${source_digests[0]}" >> "$GITHUB_OUTPUT"
+            printf 'attestation_required=false\n' >> "$GITHUB_OUTPUT"
+            printf 'promotion_required=false\n' >> "$GITHUB_OUTPUT"
+            printf 'source_tag=%s\n' "$source_tag" >> "$GITHUB_OUTPUT"
+            printf 'candidate_tag=\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! grep -Eqi 'manifest unknown|not found' <<<"$registry_preflight"; then
+            echo "Registry preflight failed without proving that $source_tag is absent:" >&2
+            printf '%s\n' "$registry_preflight" >&2
+            exit 1
+          fi
+          "${compose[@]}" build "${compose_services[@]}"
+          image_reference=$(resolve_local_image "$SERVICE")
+          image_id=$(docker image inspect --format '{{.Id}}' "$image_reference")
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          for compose_service in "${compose_services[@]}"; do
+            alias_image_reference=$(resolve_local_image "$compose_service")
+            alias_image_id=$(docker image inspect --format '{{.Id}}' "$alias_image_reference")
+            if [[ ! "$alias_image_id" =~ ^sha256:[0-9a-f]{64}$ || "$alias_image_id" != "$image_id" ]]; then
+              echo "Compose alias $compose_service does not resolve to the canonical $SERVICE image ID." >&2
+              exit 1
+            fi
+          done
+          docker tag "$image_id" "$candidate_tag"
+          set +e
+          push_output=$(docker push "$candidate_tag" 2>&1)
+          push_status=$?
+          set -e
+          printf '%s\n' "$push_output"
+          if [[ "$push_status" -ne 0 ]]; then
+            echo "Push failed; no digest is eligible for attestation." >&2
+            exit 1
+          fi
+          mapfile -t push_digests < <(
+            sed -nE 's/^([^[:space:]]+:[[:space:]]+)?digest:[[:space:]]+(sha256:[0-9a-f]{64})[[:space:]]+size:.*$/\2/p' <<<"$push_output"
+          )
+          if [[ "${#push_digests[@]}" -ne 1 ]]; then
+            echo "The exact docker push must return one unambiguous manifest digest." >&2
+            exit 1
+          fi
+          digest="${push_digests[0]}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          immutable_reference="${IMAGE_REPOSITORY}@${digest}"
+          reference_inspection=$(docker buildx imagetools inspect "$immutable_reference")
+          mapfile -t reference_digests < <(
+            sed -nE 's/^Digest:[[:space:]]+(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' <<<"$reference_inspection"
+          )
+          if [[ "${#reference_digests[@]}" -ne 1 || "${reference_digests[0]}" != "$digest" ]]; then
+            echo "Registry readback of $immutable_reference differs from the digest returned by docker push." >&2
+            exit 1
+          fi
+
+          candidate_inspection=$(docker buildx imagetools inspect "$candidate_tag")
+          mapfile -t candidate_digests < <(
+            sed -nE 's/^Digest:[[:space:]]+(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' <<<"$candidate_inspection"
+          )
+          if [[ "${#candidate_digests[@]}" -ne 1 || "${candidate_digests[0]}" != "$digest" ]]; then
+            echo "Run candidate $candidate_tag no longer resolves to the digest returned by docker push." >&2
+            exit 1
+          fi
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'attestation_required=true\n' >> "$GITHUB_OUTPUT"
+          printf 'promotion_required=true\n' >> "$GITHUB_OUTPUT"
+          printf 'source_tag=%s\n' "$source_tag" >> "$GITHUB_OUTPUT"
+          printf 'candidate_tag=%s\n' "$candidate_tag" >> "$GITHUB_OUTPUT"
+      - name: Scan the exact registry digest before attestation or promotion
+        id: immutable_scan
+        shell: bash
+        env:
+          CELL: ${{ inputs.cell }}
+          COMPONENT: ${{ matrix.id }}
+          IMAGE_REPOSITORY: ${{ matrix.repository }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          immutable_reference="${IMAGE_REPOSITORY}@${DIGEST}"
+          evidence_directory="$RUNNER_TEMP/immutable-image-scan"
+          mkdir -p "$evidence_directory"
+          sarif="$evidence_directory/trivy.sarif"
+
+          set +e
+          trivy image --no-progress --scanners vuln \
+            --severity HIGH,CRITICAL --exit-code 1 --format sarif \
+            --output "$sarif" "$immutable_reference"
+          scan_status=$?
+          set -e
+          test -s "$sarif"
+
+          CELL="$CELL" COMPONENT="$COMPONENT" IMAGE_REFERENCE="$immutable_reference" \
+            SOURCE_REVISION="$SOURCE_REVISION" SCAN_STATUS="$scan_status" \
+            node <<'NODE' > "$evidence_directory/scan-evidence.json"
+          const evidence = {
+            schemaVersion: 1,
+            cell: process.env.CELL,
+            component: process.env.COMPONENT,
+            image: process.env.IMAGE_REFERENCE,
+            sourceRevision: process.env.SOURCE_REVISION,
+            scanner: { name: 'trivy', version: process.env.TRIVY_VERSION },
+            policy: { scanners: ['vuln'], severities: ['HIGH', 'CRITICAL'] },
+            accepted: process.env.SCAN_STATUS === '0'
+          };
+          process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+          (cd "$evidence_directory" && sha256sum trivy.sarif scan-evidence.json > SHA256SUMS)
+          printf 'evidence_directory=%s\n' "$evidence_directory" >> "$GITHUB_OUTPUT"
+          exit "$scan_status"
+      - name: Upload immutable digest scan evidence
+        if: always() && steps.immutable_scan.outputs.evidence_directory != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-scan-${{ inputs.cell }}-${{ matrix.id }}-${{ inputs.source_revision }}
+          path: ${{ steps.immutable_scan.outputs.evidence_directory }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 9
+      - name: Sign SLSA provenance and attach it to the OCI image
+        if: steps.push.outputs.attestation_required == 'true'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ${{ matrix.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Promote the attested digest to the immutable source tag or resume it
+        shell: bash
+        env:
+          IMAGE_REPOSITORY: ${{ matrix.repository }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          PROMOTION_REQUIRED: ${{ steps.push.outputs.promotion_required }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          source_tag="${IMAGE_REPOSITORY}:${SOURCE_REVISION}"
+          immutable_reference="${IMAGE_REPOSITORY}@${DIGEST}"
+
+          set +e
+          source_inspection=$(docker buildx imagetools inspect "$source_tag" 2>&1)
+          source_status=$?
+          set -e
+          if [[ "$source_status" -eq 0 ]]; then
+            mapfile -t source_digests < <(
+              sed -nE 's/^Digest:[[:space:]]+(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' <<<"$source_inspection"
+            )
+            if [[ "${#source_digests[@]}" -ne 1 || "${source_digests[0]}" != "$DIGEST" ]]; then
+              echo "Immutable source tag $source_tag exists with a divergent digest; refusing overwrite." >&2
+              exit 1
+            fi
+          else
+            if ! grep -Eqi 'manifest unknown|not found' <<<"$source_inspection"; then
+              echo "Registry readback failed without proving that $source_tag is absent:" >&2
+              printf '%s\n' "$source_inspection" >&2
+              exit 1
+            fi
+            if [[ "$PROMOTION_REQUIRED" != "true" ]]; then
+              echo "A resumed source tag disappeared; refusing to recreate it without this run's attestation." >&2
+              exit 1
+            fi
+            docker buildx imagetools create --prefer-index=false --tag "$source_tag" "$immutable_reference"
+          fi
+
+          final_inspection=$(docker buildx imagetools inspect "$source_tag")
+          mapfile -t final_digests < <(
+            sed -nE 's/^Digest:[[:space:]]+(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' <<<"$final_inspection"
+          )
+          if [[ "${#final_digests[@]}" -ne 1 || "${final_digests[0]}" != "$DIGEST" ]]; then
+            echo "Immutable source tag $source_tag does not resolve to the attested digest." >&2
+            exit 1
+          fi
+
+  evidence:
+    name: ${{ inputs.cell }} / resolve and verify immutable inventory
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    environment: release-publication
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Authenticate registry readback
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Resolve source tags to registry-owned digests
+        shell: bash
+        env:
+          CELL: ${{ inputs.cell }}
+          CATALOG_VERSION: ${{ inputs.catalog_version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          EVIDENCE_DIRECTORY: ${{ runner.temp }}/attested-images
+        run: >-
+          node scripts/releases/create-registry-image-inventory.mjs
+          --cell "$CELL"
+          --catalog-version "$CATALOG_VERSION"
+          --source-revision "$SOURCE_REVISION"
+          --output "$EVIDENCE_DIRECTORY/image-inventory.json"
+      - name: Verify every registry image and signed source provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CELL: ${{ inputs.cell }}
+          CATALOG_VERSION: ${{ inputs.catalog_version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          EVIDENCE_DIRECTORY: ${{ runner.temp }}/attested-images
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if node scripts/releases/verify-image-provenance.mjs \
+              --cell "$CELL" \
+              --catalog-version "$CATALOG_VERSION" \
+              --source-revision "$SOURCE_REVISION" \
+              --source-repository "$SOURCE_REPOSITORY" \
+              --image-inventory "$EVIDENCE_DIRECTORY/image-inventory.json" \
+              --output "$EVIDENCE_DIRECTORY/registry-verification.json"; then
+              exit 0
+            fi
+            test "$attempt" -lt 5
+            sleep 5
+          done
+      - name: Seal attested build evidence
+        shell: bash
+        env:
+          EVIDENCE_DIRECTORY: ${{ runner.temp }}/attested-images
+        run: |
+          cd "$EVIDENCE_DIRECTORY"
+          sha256sum image-inventory.json registry-verification.json > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Upload producer-owned image inventory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: attested-images-${{ inputs.cell }}-${{ inputs.source_revision }}
+          path: ${{ runner.temp }}/attested-images
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 9

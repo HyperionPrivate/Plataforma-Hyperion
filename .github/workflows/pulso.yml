@@ -1,0 +1,193 @@
+name: pulso-cell
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pulso-cell-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  impact:
+    name: pulso / affected
+    runs-on: ubuntu-latest
+    outputs:
+      affected: ${{ steps.impact.outputs.affected }}
+    steps:
+      - name: Checkout dependency graph
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve affected cell
+        id: impact
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          node scripts/ci/resolve-cell-impact.mjs --cell pulso
+          --base "$BASE_SHA" --head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+
+  cell:
+    if: needs.impact.outputs.affected == 'true'
+    needs: impact
+    uses: ./.github/workflows/_cell-ci.yml
+    with:
+      cell: pulso
+
+  database:
+    name: pulso / logical-database-integration
+    if: needs.impact.outputs.affected == 'true'
+    needs: impact
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: hyperion
+          POSTGRES_PASSWORD: hyperion_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hyperion -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout PULSO database closure
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install isolated PULSO database test closure
+        run: >-
+          node scripts/ci/cell-install-plan.mjs --cell pulso
+          --package @hyperion/pulso-migrations
+          --package @hyperion/pulso-iris-service
+          --package @hyperion/agent-service
+          --package @hyperion/prompt-flow-service
+          --package @hyperion/whatsapp-channel-service --execute
+      - name: Build provider-owned PULSO migrator
+        run: pnpm --filter @hyperion/pulso-migrations build
+      - name: Build PULSO runtime integration closures
+        run: >-
+          pnpm --filter @hyperion/pulso-iris-service...
+          --filter @hyperion/agent-service...
+          --filter @hyperion/prompt-flow-service...
+          --filter @hyperion/whatsapp-channel-service... build
+      - name: Generate isolated ephemeral PULSO database credentials
+        run: >-
+          node -e "const fs=require('node:fs');const crypto=require('node:crypto');
+          const names=['PULSO_MIGRATOR','PULSO','SOFIA','KNOWLEDGE','INTEGRATION','CHANNEL'];
+          const values=names.map((name)=>name+'_DATABASE_PASSWORD='+crypto.randomBytes(24).toString('base64url'));
+          values.forEach((entry)=>process.stdout.write('::add-mask::'+entry.slice(entry.indexOf('=')+1)+'\n'));
+          fs.appendFileSync(process.env.GITHUB_ENV,values.join('\n')+'\n',{mode:0o600})"
+      - name: Bootstrap isolated PULSO logical database
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          PULSO_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          PULSO_POSTGRES_DB=hyperion_pulso_n1_fixture_ci
+          PULSO_MIGRATOR_DATABASE_PASSWORD="$PULSO_MIGRATOR_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/pulso-migrations bootstrap:database
+      - name: Run provider-owned PULSO migrations as the dedicated owner
+        shell: bash
+        run: |
+          pulso_migrator_url="postgres://hyperion_pulso_migrator:${PULSO_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            PULSO_MIGRATOR_DATABASE_URL="$pulso_migrator_url" \
+            pnpm --filter @hyperion/pulso-migrations migrate
+      - name: Activate only the five PULSO runtime roles
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          PULSO_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          PULSO_POSTGRES_DB=hyperion_pulso_n1_fixture_ci
+          PULSO_DATABASE_PASSWORD="$PULSO_DATABASE_PASSWORD"
+          SOFIA_DATABASE_PASSWORD="$SOFIA_DATABASE_PASSWORD"
+          KNOWLEDGE_DATABASE_PASSWORD="$KNOWLEDGE_DATABASE_PASSWORD"
+          INTEGRATION_DATABASE_PASSWORD="$INTEGRATION_DATABASE_PASSWORD"
+          CHANNEL_DATABASE_PASSWORD="$CHANNEL_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/pulso-migrations bootstrap:roles
+      - name: Verify autonomous PULSO catalog and five runtime privilege fences
+        shell: bash
+        run: |
+          pulso_migrator_url="postgres://hyperion_pulso_migrator:${PULSO_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          pulso_runtime_url="postgres://hyperion_pulso:${PULSO_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          sofia_runtime_url="postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          knowledge_runtime_url="postgres://hyperion_knowledge:${KNOWLEDGE_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          integration_runtime_url="postgres://hyperion_integration:${INTEGRATION_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          channel_runtime_url="postgres://hyperion_channel:${CHANNEL_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            REQUIRE_PULSO_READINESS_ACCEPTANCE=1 \
+            PULSO_READINESS_ACCEPTANCE_DATABASE_NAME=hyperion_pulso_n1_fixture_ci \
+            TEST_PULSO_MIGRATOR_DATABASE_URL="$pulso_migrator_url" \
+            TEST_PULSO_DATABASE_URL="$pulso_runtime_url" \
+            TEST_SOFIA_DATABASE_URL="$sofia_runtime_url" \
+            TEST_KNOWLEDGE_DATABASE_URL="$knowledge_runtime_url" \
+            TEST_INTEGRATION_DATABASE_URL="$integration_runtime_url" \
+            TEST_CHANNEL_DATABASE_URL="$channel_runtime_url" \
+            pnpm --filter @hyperion/pulso-migrations exec vitest run src/autonomy.integration.test.ts
+      - name: Exercise the frozen SOFIA 002 readiness contract fixture against 003
+        shell: bash
+        run: |
+          pulso_migrator_url="postgres://hyperion_pulso_migrator:${PULSO_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          sofia_runtime_url="postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true NODE_ENV=test HYPERION_ENVIRONMENT=ci \
+            REQUIRE_SOFIA_N_MINUS_ONE_FIXTURE=1 \
+            SOFIA_N_MINUS_ONE_FIXTURE_DATABASE_NAME=hyperion_pulso_n1_fixture_ci \
+            TEST_PULSO_MIGRATOR_DATABASE_URL="$pulso_migrator_url" \
+            TEST_SOFIA_DATABASE_URL="$sofia_runtime_url" \
+            pnpm --filter @hyperion/service-runtime exec vitest run \
+              src/sofia-n-minus-one-readiness.integration.test.ts --no-file-parallelism
+      - name: Run all 93 PULSO runtime PostgreSQL integrations with fenced roles
+        shell: bash
+        run: |
+          pulso_runtime_url="postgres://hyperion_pulso:${PULSO_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          sofia_runtime_url="postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          channel_runtime_url="postgres://hyperion_channel:${CHANNEL_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          pulso_fixture_url="postgres://hyperion:hyperion_test@localhost:5432/hyperion_pulso_n1_fixture_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true NODE_ENV=test HYPERION_ENVIRONMENT=ci \
+            TEST_PULSO_DATABASE_URL="$pulso_runtime_url" \
+            TEST_SOFIA_DATABASE_URL="$sofia_runtime_url" \
+            TEST_CHANNEL_DATABASE_URL="$channel_runtime_url" \
+            TEST_PULSO_FIXTURE_DATABASE_URL="$pulso_fixture_url" \
+            node scripts/ci/run-pulso-runtime-integrations.mjs
+      - name: Test provider-owned PULSO PostgreSQL recovery gates
+        run: pnpm ops:pulso:postgres:recovery:test
+
+  required:
+    name: pulso / required
+    if: always()
+    needs: [impact, cell, database]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout required gate
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Require affected PULSO database integration success
+        if: needs.impact.outputs.affected == 'true'
+        env:
+          DATABASE_RESULT: ${{ needs.database.result }}
+        run: test "$DATABASE_RESULT" = "success"
+      - name: Require affected cell success
+        env:
+          CELL: pulso
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          AFFECTED: ${{ needs.impact.outputs.affected }}
+          CELL_RESULT: ${{ needs.cell.result }}
+        run: node scripts/ci/verify-required-cell-result.mjs

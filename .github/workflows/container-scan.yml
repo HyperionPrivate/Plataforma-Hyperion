@@ -1,0 +1,164 @@
+name: Security / Container images
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "11 9 * * 3"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRIVY_VERSION: v0.68.2
+
+jobs:
+  impact:
+    name: Resolve affected image cells
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.impact.outputs.matrix }}
+      has_cells: ${{ steps.impact.outputs.has_cells }}
+    steps:
+      - name: Checkout dependency graph
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve affected cells
+        id: impact
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          args=(--github-output "$GITHUB_OUTPUT")
+          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            args+=(--all)
+          else
+            args+=(--base "$BASE_SHA" --head "$HEAD_SHA")
+          fi
+          node scripts/ci/resolve-container-scan-plan.mjs "${args[@]}"
+
+  scan:
+    name: ${{ matrix.cell }} / build and scan deployable images
+    needs: impact
+    if: needs.impact.outputs.has_cells == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.impact.outputs.matrix) }}
+    env:
+      COMPOSE_PARALLEL_LIMIT: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Materialize affected cell Docker context
+        env:
+          CELL: ${{ matrix.cell }}
+        run: node scripts/docker/generate-cell-contexts.mjs --cell "$CELL"
+      - name: Resolve the owning cell Compose descriptor
+        id: compose
+        shell: bash
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          set -euo pipefail
+          printf 'compose_file=%s\n' "$(node scripts/ci/cell-compose-plan.mjs "$CELL" compose-file)" >> "$GITHUB_OUTPUT"
+          printf 'env_file=%s\n' "$(node scripts/ci/cell-compose-plan.mjs "$CELL" env-file)" >> "$GITHUB_OUTPUT"
+      - name: Build only affected cell deployables
+        shell: bash
+        env:
+          CELL: ${{ matrix.cell }}
+          COMPOSE_FILE: ${{ steps.compose.outputs.compose_file }}
+          COMPOSE_ENV_FILE: ${{ steps.compose.outputs.env_file }}
+        run: |
+          set -euo pipefail
+          read -r -a services <<<"$(node scripts/ci/cell-compose-plan.mjs "$CELL" services)"
+          test "${#services[@]}" -gt 0
+          docker compose --env-file "$COMPOSE_ENV_FILE" -p "hyperion-security-${CELL}" \
+            -f "$COMPOSE_FILE" build --pull "${services[@]}"
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache: false
+      - name: Scan images and enforce severity policy
+        id: trivy
+        shell: bash
+        env:
+          CELL: ${{ matrix.cell }}
+          COMPOSE_FILE: ${{ steps.compose.outputs.compose_file }}
+          COMPOSE_ENV_FILE: ${{ steps.compose.outputs.env_file }}
+        run: |
+          set -uo pipefail
+          mkdir -p trivy-results
+          read -r -a services <<<"$(node scripts/ci/cell-compose-plan.mjs "$CELL" services)"
+          mapfile -t image_ids < <(
+            docker compose --env-file "$COMPOSE_ENV_FILE" -p "hyperion-security-${CELL}" \
+              -f "$COMPOSE_FILE" images --quiet "${services[@]}" |
+              awk 'NF' |
+              sort --unique
+          )
+          if [[ ${#image_ids[@]} -eq 0 ]]; then
+            echo "No Compose images were available to scan" >&2
+            exit 1
+          fi
+
+          status=0
+          index=0
+          for image_id in "${image_ids[@]}"; do
+            index=$((index + 1))
+            image_name=$(docker image inspect --format '{{ join .RepoTags "," }}' "$image_id")
+            echo "Scanning ${image_name:-$image_id}"
+            trivy image --no-progress --scanners vuln \
+              --severity HIGH,CRITICAL --format sarif \
+              --output "trivy-results/image-${index}.sarif" "$image_id" || status=1
+            trivy image --no-progress --scanners vuln \
+              --severity HIGH,CRITICAL --exit-code 1 "$image_id" || status=1
+          done
+          exit "$status"
+      - name: Upload image findings
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@bb16b9baa2ec4010b29f5c606d57d01190139edd # v4.37.1
+        with:
+          sarif_file: trivy-results
+          category: container-images-${{ matrix.cell }}
+
+  required:
+    name: container images / required
+    needs: [impact, scan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require impact resolution and every affected image scan
+        shell: bash
+        env:
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          HAS_CELLS: ${{ needs.impact.outputs.has_cells }}
+          SCAN_RESULT: ${{ needs.scan.result }}
+        run: |
+          set -euo pipefail
+          test "$IMPACT_RESULT" = "success"
+          if [[ "$HAS_CELLS" = "true" ]]; then
+            test "$SCAN_RESULT" = "success"
+          else
+            test "$SCAN_RESULT" = "skipped"
+          fi

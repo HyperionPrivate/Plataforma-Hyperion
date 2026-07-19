@@ -1,13 +1,18 @@
-name: check
+name: full-stack
 
 on:
-  pull_request:
   push:
     branches:
       - main
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -16,7 +21,7 @@ jobs:
       HYPERION_ENVIRONMENT: ci
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_USER: hyperion
           POSTGRES_PASSWORD: hyperion_test
@@ -30,13 +35,15 @@ jobs:
           --health-retries 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
           persist-credentials: false
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
+      - name: Install pinned history-filter prerequisite
+        run: python3 -m pip install --disable-pip-version-check --no-deps git-filter-repo==2.47.0
       - name: Enable pnpm
         run: corepack enable
       - name: Install
@@ -45,6 +52,20 @@ jobs:
         run: pnpm architecture:test
       - name: Enforce architecture boundaries
         run: pnpm architecture:check
+      - name: Test federated boundaries and affected-cell routing
+        run: pnpm federation:test
+      - name: Enforce federated boundaries
+        run: pnpm federation:check
+      - name: Enforce frontend isolation
+        run: pnpm frontend:check
+      - name: Test documentation gates
+        run: pnpm docs:test
+      - name: Enforce documentation integrity
+        run: pnpm docs:check
+      - name: Test federated release tooling
+        run: pnpm release:test
+      - name: Enforce federated release manifests
+        run: pnpm release:check
       - name: Enforce Compose service identities
         run: pnpm compose:check
       - name: Lint
@@ -57,6 +78,10 @@ jobs:
         run: pnpm --filter @hyperion/migrations migrate
         env:
           DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_test
+      - name: Migrate platform-owned Access schema
+        run: pnpm --filter @hyperion/platform-migrations migrate
+        env:
+          PLATFORM_MIGRATOR_DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_test
       - name: Verify migration-only NOLOGIN service roles
         run: pnpm --filter @hyperion/migrations exec vitest run src/service-role-migration.integration.test.ts
         env:
@@ -66,8 +91,8 @@ jobs:
         shell: bash
         run: >-
           node -e "const fs=require('node:fs');const crypto=require('node:crypto');
-          const databaseNames=['ACCESS','SOFIA','KNOWLEDGE','AUDIT','INTEGRATION','PULSO','CHANNEL','LUMEN','NOVA','VOICE','LIWA','DOCUMENTS'];
-          const natsNames=['TOPOLOGY','CHANNEL','PULSO','SOFIA','AUDIT','LUMEN'];
+          const databaseNames=['ACCESS','SOFIA','KNOWLEDGE','AUDIT','INTEGRATION','PULSO','CHANNEL','LUMEN','NOVA_MIGRATOR','NOVA','VOICE','LIWA','DOCUMENTS'];
+          const natsNames=['TOPOLOGY','ACCESS','CHANNEL','PULSO','SOFIA','AUDIT','LUMEN'];
           const values=[...databaseNames.map((name)=>name+'_DATABASE_PASSWORD=A'+crypto.randomBytes(24).toString('base64url')),
           ...natsNames.map((name)=>'NATS_'+name+'_PASSWORD=A'+crypto.randomBytes(24).toString('base64url'))];
           values.forEach((entry)=>process.stdout.write('::add-mask::'+entry.slice(entry.indexOf('=')+1)+'\n'));
@@ -76,6 +101,49 @@ jobs:
         run: pnpm --filter @hyperion/migrations bootstrap:roles
         env:
           DATABASE_URL: postgres://hyperion:hyperion_test@localhost:5432/hyperion_test
+      - name: Bootstrap isolated NOVA logical database and roles
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          NOVA_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          NOVA_POSTGRES_DB=hyperion_nova_ci
+          NOVA_MIGRATOR_DATABASE_PASSWORD="$NOVA_MIGRATOR_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/nova-migrations bootstrap:database
+      - name: Run provider-owned NOVA migrations as the NOVA migrator
+        shell: bash
+        run: |
+          nova_migrator_url="postgres://hyperion_nova_migrator:${NOVA_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            NOVA_MIGRATOR_DATABASE_URL="$nova_migrator_url" \
+            pnpm --filter @hyperion/nova-migrations migrate
+      - name: Activate NOVA runtime roles with the privileged one-shot
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          NOVA_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          NOVA_POSTGRES_DB=hyperion_nova_ci
+          NOVA_DATABASE_PASSWORD="$NOVA_DATABASE_PASSWORD"
+          VOICE_DATABASE_PASSWORD="$VOICE_DATABASE_PASSWORD"
+          LIWA_DATABASE_PASSWORD="$LIWA_DATABASE_PASSWORD"
+          DOCUMENTS_DATABASE_PASSWORD="$DOCUMENTS_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/nova-migrations bootstrap:roles
+      - name: Verify autonomous NOVA database, migrator, roles and schema isolation
+        shell: bash
+        run: |
+          nova_migrator_url="postgres://hyperion_nova_migrator:${NOVA_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          nova_runtime_url="postgres://hyperion_nova:${NOVA_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          voice_runtime_url="postgres://hyperion_voice:${VOICE_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          liwa_runtime_url="postgres://hyperion_liwa:${LIWA_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          documents_runtime_url="postgres://hyperion_documents:${DOCUMENTS_DATABASE_PASSWORD}@localhost:5432/hyperion_nova_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true \
+            TEST_NOVA_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres \
+            TEST_NOVA_POSTGRES_DB=hyperion_nova_ci \
+            TEST_NOVA_MIGRATOR_DATABASE_URL="$nova_migrator_url" \
+            TEST_NOVA_DATABASE_URL="$nova_runtime_url" \
+            TEST_VOICE_DATABASE_URL="$voice_runtime_url" \
+            TEST_LIWA_DATABASE_URL="$liwa_runtime_url" \
+            TEST_DOCUMENTS_DATABASE_URL="$documents_runtime_url" \
+            pnpm --filter @hyperion/nova-migrations exec vitest run src/autonomy.integration.test.ts
       - name: Verify service role ownership guard
         run: pnpm --filter @hyperion/migrations exec vitest run src/service-role-permissions.integration.test.ts
         env:
@@ -90,7 +158,7 @@ jobs:
         run: |
           docker run --detach --rm --name hyperion-ci-nats \
             --publish 4222:4222 --publish 8222:8222 \
-            --env NATS_TOPOLOGY_PASSWORD --env NATS_CHANNEL_PASSWORD \
+            --env NATS_TOPOLOGY_PASSWORD --env NATS_ACCESS_PASSWORD --env NATS_CHANNEL_PASSWORD \
             --env NATS_PULSO_PASSWORD --env NATS_SOFIA_PASSWORD \
             --env NATS_AUDIT_PASSWORD --env NATS_LUMEN_PASSWORD \
             --volume "$PWD/infra/nats/nats-server.conf:/etc/nats/nats-server.conf:ro" \
@@ -122,6 +190,7 @@ jobs:
         shell: bash
         run: >-
           TEST_NATS_ACL_URL=nats://127.0.0.1:4222
+          TEST_NATS_ACCESS_PASSWORD="$NATS_ACCESS_PASSWORD"
           TEST_NATS_CHANNEL_PASSWORD="$NATS_CHANNEL_PASSWORD"
           TEST_NATS_PULSO_PASSWORD="$NATS_PULSO_PASSWORD"
           TEST_NATS_SOFIA_PASSWORD="$NATS_SOFIA_PASSWORD"
@@ -143,19 +212,22 @@ jobs:
     timeout-minutes: 50
     env:
       HYPERION_ENVIRONMENT: ci
+      # The global gateway is no longer part of normal Compose execution. This
+      # main/scheduled full-stack rehearsal opts into the compatibility surface.
+      COMPOSE_PROFILES: legacy-gateway
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
           persist-credentials: false
+      - name: Materialize allowlisted Docker contexts
+        run: node scripts/docker/generate-cell-contexts.mjs
       - name: Build every deployable base image
         run: docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml build
       - name: Start and verify the base HTTP stack
         run: |
           docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml up --detach --no-build --wait --wait-timeout 240
-          curl --fail --silent http://127.0.0.1:8080/health >/dev/null
-          curl --fail --silent http://127.0.0.1:8080/ready >/dev/null
-          curl --fail --silent http://127.0.0.1:3000/ >/dev/null
+          bash scripts/ci/verify-compose-readiness.sh .env.example hyperion-ci-base infra/docker-compose.yml
       - name: Verify graceful shutdown for durable-event runtimes on HTTP
         shell: bash
         run: |
@@ -176,8 +248,7 @@ jobs:
       - name: Start and verify the JetStream stack
         run: |
           docker compose --env-file .env.example -p hyperion-ci-jetstream -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml up --detach --no-build --wait --wait-timeout 240
-          curl --fail --silent http://127.0.0.1:8080/health >/dev/null
-          curl --fail --silent http://127.0.0.1:8080/ready >/dev/null
+          bash scripts/ci/verify-compose-readiness.sh .env.example hyperion-ci-jetstream infra/docker-compose.yml infra/docker-compose.jetstream.yml
           docker compose --env-file .env.example -p hyperion-ci-jetstream -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml exec -T nats wget -q -O /dev/null 'http://127.0.0.1:8222/healthz?js-enabled-only=true'
       - name: Diagnose JetStream stack failure
         if: failure()
@@ -249,10 +320,12 @@ jobs:
           down --volumes --remove-orphans
 
   n-minus-one-upgrade-rollback:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
+      # Keep the N-1 bearer facade under explicit compatibility coverage while
+      # the default/current product paths use hostname edge -> dedicated BFF.
+      COMPOSE_PROFILES: legacy-gateway
       API_GATEWAY_HOST_PORT: "18080"
       WEB_CONSOLE_HOST_PORT: "13000"
       VITE_API_BASE_URL: http://localhost:18080
@@ -269,9 +342,24 @@ jobs:
       HYPERION_REPOSITORY_ROOT: ${{ github.workspace }}
     steps:
       - name: Checkout current revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: Materialize current allowlisted Docker contexts
+        run: node scripts/docker/generate-cell-contexts.mjs
+      - name: Resolve exact N-1 revision
+        id: n1_base
+        shell: bash
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          candidate="$EVENT_BEFORE"
+          if [[ -z "$candidate" || "$candidate" =~ ^0+$ ]]; then
+            candidate=$(git rev-parse HEAD^)
+          fi
+          git cat-file -e "$candidate^{commit}"
+          echo "sha=$candidate" >> "$GITHUB_OUTPUT"
       - name: Validate current Compose model
         shell: bash
         run: >-
@@ -286,15 +374,22 @@ jobs:
             -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml \
             build jetstream-topology-bootstrap
       - name: Checkout exact N-1 base revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ steps.n1_base.outputs.sha }}
           path: .ci/n-minus-one
           persist-credentials: false
+      - name: Materialize N-1 allowlisted Docker contexts when supported
+        shell: bash
+        run: |
+          if [[ -f .ci/n-minus-one/scripts/docker/generate-cell-contexts.mjs ]]; then
+            cd .ci/n-minus-one
+            node scripts/docker/generate-cell-contexts.mjs
+          fi
       - name: Record compatibility boundary
         shell: bash
         run: |
-          expected='${{ github.event.pull_request.base.sha }}'
+          expected='${{ steps.n1_base.outputs.sha }}'
           actual=$(git -C .ci/n-minus-one rev-parse HEAD)
           test "$actual" = "$expected"
           echo "current=$(git rev-parse HEAD)"
@@ -305,7 +400,7 @@ jobs:
         run: |
           resolved=$(node scripts/ci/resolve-n-minus-one-capabilities.mjs \
             --base-dir .ci/n-minus-one \
-            --expected-sha '${{ github.event.pull_request.base.sha }}' \
+            --expected-sha '${{ steps.n1_base.outputs.sha }}' \
             --policy infra/compatibility-policy.json)
           printf '%s\n' "$resolved" >> "$GITHUB_OUTPUT"
           channel_v1_compatibility=$(awk -F= '$1 == "channel_v1_compatibility" { print $2 }' <<<"$resolved")

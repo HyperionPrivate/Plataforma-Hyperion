@@ -1,0 +1,71 @@
+name: Security / Gitleaks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "43 8 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_LINUX_X64_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+
+jobs:
+  scan:
+    name: Scan introduced commits for secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install verified Gitleaks binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          curl --fail --location --silent --show-error "$url" --output "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$RUNNER_TEMP/$archive" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/$archive" --directory "$RUNNER_TEMP" gitleaks
+          chmod 0755 "$RUNNER_TEMP/gitleaks"
+          printf '%s\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Resolve the commit range
+        id: range
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          zero_sha='0000000000000000000000000000000000000000'
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            range="${PR_BASE_SHA}..${CURRENT_SHA}"
+          elif [[ "$EVENT_NAME" == "push" && -n "$BEFORE_SHA" && "$BEFORE_SHA" != "$zero_sha" ]]; then
+            range="${BEFORE_SHA}..${CURRENT_SHA}"
+          elif [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            range="--all"
+          elif git rev-parse "${CURRENT_SHA}^" >/dev/null 2>&1; then
+            range="${CURRENT_SHA}^..${CURRENT_SHA}"
+          else
+            range="$CURRENT_SHA"
+          fi
+          printf 'range=%s\n' "$range" >> "$GITHUB_OUTPUT"
+      - name: Scan introduced commits
+        env:
+          GITLEAKS_LOG_OPTS: ${{ steps.range.outputs.range }}
+        run: gitleaks git . --log-opts="$GITLEAKS_LOG_OPTS" --redact --verbose
