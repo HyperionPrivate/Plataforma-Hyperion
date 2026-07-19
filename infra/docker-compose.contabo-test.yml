@@ -4,14 +4,14 @@
 #   export COMPOSE_PROJECT_NAME=hyperion-test
 #   export API_GATEWAY_HOST_PORT=18081
 #   export WEB_CONSOLE_HOST_PORT=13001
-#   docker compose -p hyperion-test \
+#   docker compose --profile legacy-gateway -p hyperion-test \
 #     -f infra/docker-compose.yml \
 #     -f infra/docker-compose.contabo-test.yml \
 #     --env-file .env.contabo-test \
 #     up -d --build
 #
-# Webhook LIWA (prueba):
-#   http://144.91.100.31:18081/v1/liwa/webhooks
+# Webhook LIWA (prueba): publicar 127.0.0.1:18081 únicamente mediante
+# un túnel privado con TLS y usar https://<tunnel>/v1/liwa/webhooks.
 #   Header: X-LIWA-WEBHOOK-SECRET: <LIWA_WEBHOOK_SECRET del .env.contabo-test>
 #
 # No usar este overlay como prod; prod sigue 443 + dominio TLS.
@@ -21,8 +21,8 @@ name: hyperion-test
 services:
   api-gateway:
     ports:
-      - "${API_GATEWAY_HOST_PORT:-18081}:8080"
+      - "127.0.0.1:${API_GATEWAY_HOST_PORT:-18081}:8080"
 
   web-console:
     ports:
-      - "${WEB_CONSOLE_HOST_PORT:-13001}:8080"
+      - "127.0.0.1:${WEB_CONSOLE_HOST_PORT:-13001}:8080"

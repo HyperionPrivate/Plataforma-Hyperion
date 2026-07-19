@@ -1,0 +1,358 @@
+name: hyperion-pulso
+
+# Standalone extraction model for the PULSO cell. Materialize the allowlisted
+# source closure first with `node scripts/docker/generate-cell-contexts.mjs --cell pulso`.
+x-pulso-build: &pulso-build
+  context: ../.docker-contexts/pulso
+  dockerfile: Dockerfile
+
+x-pulso-postgres-admin-url: &pulso-postgres-admin-url postgres://${PULSO_POSTGRES_ADMIN_USER:?PULSO_POSTGRES_ADMIN_USER is required}:${PULSO_POSTGRES_ADMIN_PASSWORD:?PULSO_POSTGRES_ADMIN_PASSWORD is required}@postgres:5432/postgres
+x-pulso-migrator-url: &pulso-migrator-url postgres://hyperion_pulso_migrator:${PULSO_MIGRATOR_DATABASE_PASSWORD:?PULSO_MIGRATOR_DATABASE_PASSWORD is required}@postgres:5432/${PULSO_POSTGRES_DB:-hyperion_pulso}
+x-pulso-database-url: &pulso-database-url postgres://hyperion_pulso:${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}@postgres:5432/${PULSO_POSTGRES_DB:-hyperion_pulso}
+x-sofia-database-url: &sofia-database-url postgres://hyperion_sofia:${SOFIA_DATABASE_PASSWORD:?SOFIA_DATABASE_PASSWORD is required}@postgres:5432/${PULSO_POSTGRES_DB:-hyperion_pulso}
+x-knowledge-database-url: &knowledge-database-url postgres://hyperion_knowledge:${KNOWLEDGE_DATABASE_PASSWORD:?KNOWLEDGE_DATABASE_PASSWORD is required}@postgres:5432/${PULSO_POSTGRES_DB:-hyperion_pulso}
+x-integration-database-url: &integration-database-url postgres://hyperion_integration:${INTEGRATION_DATABASE_PASSWORD:?INTEGRATION_DATABASE_PASSWORD is required}@postgres:5432/${PULSO_POSTGRES_DB:-hyperion_pulso}
+x-channel-database-url: &channel-database-url postgres://hyperion_channel:${CHANNEL_DATABASE_PASSWORD:?CHANNEL_DATABASE_PASSWORD is required}@postgres:5432/${PULSO_POSTGRES_DB:-hyperion_pulso}
+
+x-pulso-runtime-env: &pulso-runtime-env
+  NODE_ENV: ${PULSO_NODE_ENV:?PULSO_NODE_ENV is required}
+  HYPERION_ENVIRONMENT: ${PULSO_DEPLOYMENT_ENVIRONMENT:?PULSO_DEPLOYMENT_ENVIRONMENT is required}
+  SHUTDOWN_TIMEOUT_MS: ${PULSO_SHUTDOWN_TIMEOUT_MS:-65000}
+  TRUST_PROXY: ${PULSO_TRUST_PROXY:-false}
+  DURABLE_EVENT_TRANSPORT: http
+  DURABLE_OUTBOX_ENABLED: ${PULSO_DURABLE_OUTBOX_ENABLED:-true}
+  DURABLE_HTTP_OUTBOX_ENABLED: ${PULSO_DURABLE_HTTP_OUTBOX_ENABLED:-true}
+
+x-node-readycheck: &node-readycheck
+  test:
+    [
+      "CMD",
+      "node",
+      "-e",
+      "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/ready').then((r)=>r.json()).then((body)=>process.exit(body.status==='ok'?0:1)).catch(()=>process.exit(1))"
+    ]
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 20s
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PULSO_POSTGRES_ADMIN_USER:?PULSO_POSTGRES_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${PULSO_POSTGRES_ADMIN_PASSWORD:?PULSO_POSTGRES_ADMIN_PASSWORD is required}
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:${PULSO_POSTGRES_HOST_PORT:-55440}:5432"
+    volumes:
+      - pulso_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${PULSO_POSTGRES_ADMIN_USER:?PULSO_POSTGRES_ADMIN_USER is required} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  pulso-database-bootstrap:
+    build:
+      <<: *pulso-build
+      target: pulso-migrations
+    restart: "no"
+    command: ["node", "packages/pulso-migrations/dist/bootstrap-database.js"]
+    environment:
+      NODE_ENV: ${PULSO_NODE_ENV:?PULSO_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PULSO_DEPLOYMENT_ENVIRONMENT:?PULSO_DEPLOYMENT_ENVIRONMENT is required}
+      PULSO_POSTGRES_ADMIN_URL: *pulso-postgres-admin-url
+      PULSO_POSTGRES_DB: ${PULSO_POSTGRES_DB:-hyperion_pulso}
+      PULSO_MIGRATOR_DATABASE_PASSWORD: ${PULSO_MIGRATOR_DATABASE_PASSWORD:?PULSO_MIGRATOR_DATABASE_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pulso-migrations:
+    build:
+      <<: *pulso-build
+      target: pulso-migrations
+    restart: "no"
+    command: ["node", "packages/pulso-migrations/dist/index.js"]
+    environment:
+      NODE_ENV: ${PULSO_NODE_ENV:?PULSO_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PULSO_DEPLOYMENT_ENVIRONMENT:?PULSO_DEPLOYMENT_ENVIRONMENT is required}
+      PULSO_MIGRATOR_DATABASE_URL: *pulso-migrator-url
+    depends_on:
+      pulso-database-bootstrap:
+        condition: service_completed_successfully
+
+  pulso-role-bootstrap:
+    build:
+      <<: *pulso-build
+      target: pulso-migrations
+    restart: "no"
+    command: ["node", "packages/pulso-migrations/dist/bootstrap-roles.js"]
+    environment:
+      NODE_ENV: ${PULSO_NODE_ENV:?PULSO_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PULSO_DEPLOYMENT_ENVIRONMENT:?PULSO_DEPLOYMENT_ENVIRONMENT is required}
+      PULSO_POSTGRES_ADMIN_URL: *pulso-postgres-admin-url
+      PULSO_POSTGRES_DB: ${PULSO_POSTGRES_DB:-hyperion_pulso}
+      PULSO_DATABASE_PASSWORD: ${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}
+      SOFIA_DATABASE_PASSWORD: ${SOFIA_DATABASE_PASSWORD:?SOFIA_DATABASE_PASSWORD is required}
+      KNOWLEDGE_DATABASE_PASSWORD: ${KNOWLEDGE_DATABASE_PASSWORD:?KNOWLEDGE_DATABASE_PASSWORD is required}
+      INTEGRATION_DATABASE_PASSWORD: ${INTEGRATION_DATABASE_PASSWORD:?INTEGRATION_DATABASE_PASSWORD is required}
+      CHANNEL_DATABASE_PASSWORD: ${CHANNEL_DATABASE_PASSWORD:?CHANNEL_DATABASE_PASSWORD is required}
+    depends_on:
+      pulso-migrations:
+        condition: service_completed_successfully
+
+  agent-service:
+    build:
+      <<: *pulso-build
+      target: pulso-runtime
+      args:
+        BUILD_FILTER: "@hyperion/agent-service"
+        DEPLOYABLE_PATH: services/agent-service
+    restart: unless-stopped
+    stop_grace_period: ${PULSO_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/agent-service/dist/index.js"]
+    environment:
+      <<: *pulso-runtime-env
+      SERVICE_VERSION: ${PULSO_AGENT_SERVICE_VERSION:-0.2.0}
+      DATABASE_URL: *sofia-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_sofia
+      PULSO_TO_SOFIA_TOKEN: ${PULSO_TO_SOFIA_TOKEN:?PULSO_TO_SOFIA_TOKEN is required}
+      INTEGRATION_TO_SOFIA_TOKEN: ${INTEGRATION_TO_SOFIA_TOKEN:?INTEGRATION_TO_SOFIA_TOKEN is required}
+      SOFIA_TO_CHANNEL_TOKEN: ${SOFIA_TO_CHANNEL_TOKEN:?SOFIA_TO_CHANNEL_TOKEN is required}
+      SOFIA_TO_PROMPT_FLOW_TOKEN: ${SOFIA_TO_PROMPT_FLOW_TOKEN:?SOFIA_TO_PROMPT_FLOW_TOKEN is required}
+      SOFIA_TO_PULSO_TOKEN: ${SOFIA_TO_PULSO_TOKEN:?SOFIA_TO_PULSO_TOKEN is required}
+      SOFIA_TO_AUDIT_TOKEN: ${SOFIA_TO_AUDIT_TOKEN:?SOFIA_TO_AUDIT_TOKEN is required}
+      WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
+      PROMPT_FLOW_SERVICE_URL: http://prompt-flow-service:8084
+      PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
+      AUDIT_SERVICE_URL: ${PULSO_AUDIT_SERVICE_URL:?PULSO_AUDIT_SERVICE_URL is required}
+      DEEPSEEK_API_KEY: ${PULSO_DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${PULSO_DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${PULSO_DEEPSEEK_MODEL:-deepseek-v4-flash}
+      SOFIA_WORKER_ENABLED: ${PULSO_SOFIA_WORKER_ENABLED:-true}
+      SOFIA_LEGACY_POLLING_ENABLED: "false"
+      PULSO_MESSAGE_V1_COMPATIBILITY: disabled
+      PORT: 8083
+    expose: ["8083"]
+    healthcheck: *node-readycheck
+    depends_on:
+      pulso-role-bootstrap:
+        condition: service_completed_successfully
+
+  prompt-flow-service:
+    build:
+      <<: *pulso-build
+      target: pulso-runtime
+      args:
+        BUILD_FILTER: "@hyperion/prompt-flow-service"
+        DEPLOYABLE_PATH: services/prompt-flow-service
+    restart: unless-stopped
+    stop_grace_period: ${PULSO_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/prompt-flow-service/dist/index.js"]
+    environment:
+      <<: *pulso-runtime-env
+      SERVICE_VERSION: ${PULSO_PROMPT_FLOW_SERVICE_VERSION:-0.2.0}
+      DATABASE_URL: *sofia-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_sofia
+      SOFIA_TO_PROMPT_FLOW_TOKEN: ${SOFIA_TO_PROMPT_FLOW_TOKEN:?SOFIA_TO_PROMPT_FLOW_TOKEN is required}
+      PORT: 8084
+    expose: ["8084"]
+    healthcheck: *node-readycheck
+    depends_on:
+      pulso-role-bootstrap:
+        condition: service_completed_successfully
+
+  knowledge-service:
+    build:
+      <<: *pulso-build
+      target: pulso-runtime
+      args:
+        BUILD_FILTER: "@hyperion/knowledge-service"
+        DEPLOYABLE_PATH: services/knowledge-service
+    restart: unless-stopped
+    stop_grace_period: ${PULSO_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/knowledge-service/dist/index.js"]
+    environment:
+      <<: *pulso-runtime-env
+      SERVICE_VERSION: ${PULSO_KNOWLEDGE_SERVICE_VERSION:-0.1.0}
+      DATABASE_URL: *knowledge-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_knowledge
+      PORT: 8085
+    expose: ["8085"]
+    healthcheck: *node-readycheck
+    depends_on:
+      pulso-role-bootstrap:
+        condition: service_completed_successfully
+
+  integration-service:
+    build:
+      <<: *pulso-build
+      target: pulso-runtime
+      args:
+        BUILD_FILTER: "@hyperion/integration-service"
+        DEPLOYABLE_PATH: services/integration-service
+    restart: unless-stopped
+    stop_grace_period: ${PULSO_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/integration-service/dist/index.js"]
+    environment:
+      <<: *pulso-runtime-env
+      SERVICE_VERSION: ${PULSO_INTEGRATION_SERVICE_VERSION:-0.1.0}
+      DATABASE_URL: *integration-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_integration
+      PULSO_BFF_TO_INTEGRATION_TOKEN: ${PULSO_BFF_TO_INTEGRATION_TOKEN:?PULSO_BFF_TO_INTEGRATION_TOKEN is required}
+      PULSO_OPERATOR_ASSERTION_KEY: ${PULSO_OPERATOR_ASSERTION_KEY:?PULSO_OPERATOR_ASSERTION_KEY is required}
+      INTEGRATION_TO_CHANNEL_TOKEN: ${INTEGRATION_TO_CHANNEL_TOKEN:?INTEGRATION_TO_CHANNEL_TOKEN is required}
+      INTEGRATION_TO_SOFIA_TOKEN: ${INTEGRATION_TO_SOFIA_TOKEN:?INTEGRATION_TO_SOFIA_TOKEN is required}
+      INTEGRATION_TO_PULSO_TOKEN: ${INTEGRATION_TO_PULSO_TOKEN:?INTEGRATION_TO_PULSO_TOKEN is required}
+      WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
+      AGENT_SERVICE_URL: http://agent-service:8083
+      PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
+      PORT: 8087
+    expose: ["8087"]
+    healthcheck: *node-readycheck
+    depends_on:
+      pulso-role-bootstrap:
+        condition: service_completed_successfully
+
+  pulso-iris-service:
+    build:
+      <<: *pulso-build
+      target: pulso-runtime
+      args:
+        BUILD_FILTER: "@hyperion/pulso-iris-service"
+        DEPLOYABLE_PATH: services/pulso-iris-service
+    restart: unless-stopped
+    stop_grace_period: ${PULSO_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/pulso-iris-service/dist/index.js"]
+    environment:
+      <<: *pulso-runtime-env
+      SERVICE_VERSION: ${PULSO_IRIS_SERVICE_VERSION:-0.1.0}
+      DATABASE_URL: *pulso-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_pulso
+      PULSO_BFF_TO_CORE_TOKEN: ${PULSO_BFF_TO_CORE_TOKEN:?PULSO_BFF_TO_CORE_TOKEN is required}
+      PULSO_OPERATOR_ASSERTION_KEY: ${PULSO_OPERATOR_ASSERTION_KEY:?PULSO_OPERATOR_ASSERTION_KEY is required}
+      CHANNEL_TO_PULSO_TOKEN: ${CHANNEL_TO_PULSO_TOKEN:?CHANNEL_TO_PULSO_TOKEN is required}
+      INTEGRATION_TO_PULSO_TOKEN: ${INTEGRATION_TO_PULSO_TOKEN:?INTEGRATION_TO_PULSO_TOKEN is required}
+      PULSO_TO_CHANNEL_TOKEN: ${PULSO_TO_CHANNEL_TOKEN:?PULSO_TO_CHANNEL_TOKEN is required}
+      SOFIA_TO_PULSO_TOKEN: ${SOFIA_TO_PULSO_TOKEN:?SOFIA_TO_PULSO_TOKEN is required}
+      PULSO_TO_SOFIA_TOKEN: ${PULSO_TO_SOFIA_TOKEN:?PULSO_TO_SOFIA_TOKEN is required}
+      PULSO_TO_AUDIT_TOKEN: ${PULSO_TO_AUDIT_TOKEN:?PULSO_TO_AUDIT_TOKEN is required}
+      AGENT_SERVICE_URL: http://agent-service:8083
+      WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
+      CHANNEL_INBOUND_V1_COMPATIBILITY: disabled
+      AUDIT_SERVICE_URL: ${PULSO_AUDIT_SERVICE_URL:?PULSO_AUDIT_SERVICE_URL is required}
+      VERIFICATION_SIMULATOR_ENABLED: ${PULSO_VERIFICATION_SIMULATOR_ENABLED:-false}
+      PORT: 8088
+    expose: ["8088"]
+    healthcheck: *node-readycheck
+    depends_on:
+      pulso-role-bootstrap:
+        condition: service_completed_successfully
+
+  whatsapp-channel-service:
+    build:
+      <<: *pulso-build
+      target: pulso-runtime
+      args:
+        BUILD_FILTER: "@hyperion/whatsapp-channel-service"
+        DEPLOYABLE_PATH: services/whatsapp-channel-service
+    restart: unless-stopped
+    stop_grace_period: ${PULSO_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/whatsapp-channel-service/dist/index.js"]
+    environment:
+      <<: *pulso-runtime-env
+      SERVICE_VERSION: ${PULSO_WHATSAPP_CHANNEL_SERVICE_VERSION:-0.2.0}
+      DATABASE_URL: *channel-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_channel
+      INTEGRATION_TO_CHANNEL_TOKEN: ${INTEGRATION_TO_CHANNEL_TOKEN:?INTEGRATION_TO_CHANNEL_TOKEN is required}
+      SOFIA_TO_CHANNEL_TOKEN: ${SOFIA_TO_CHANNEL_TOKEN:?SOFIA_TO_CHANNEL_TOKEN is required}
+      PULSO_TO_CHANNEL_TOKEN: ${PULSO_TO_CHANNEL_TOKEN:?PULSO_TO_CHANNEL_TOKEN is required}
+      CHANNEL_TO_PULSO_TOKEN: ${CHANNEL_TO_PULSO_TOKEN:?CHANNEL_TO_PULSO_TOKEN is required}
+      CHANNEL_TO_AUDIT_TOKEN: ${CHANNEL_TO_AUDIT_TOKEN:?CHANNEL_TO_AUDIT_TOKEN is required}
+      PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
+      AUDIT_SERVICE_URL: ${PULSO_AUDIT_SERVICE_URL:?PULSO_AUDIT_SERVICE_URL is required}
+      WHATSAPP_WEB_TEST_ENABLED: ${PULSO_WHATSAPP_WEB_TEST_ENABLED:-false}
+      WHATSAPP_TEST_ALLOWED_NUMBERS: ${PULSO_WHATSAPP_TEST_ALLOWED_NUMBERS:-}
+      WHATSAPP_PHONE_HASH_KEY: ${PULSO_WHATSAPP_PHONE_HASH_KEY:?PULSO_WHATSAPP_PHONE_HASH_KEY is required}
+      WHATSAPP_SESSION_DIR: /var/lib/hyperion/whatsapp-sessions
+      WHATSAPP_INBOUND_PERSIST_MAX_ATTEMPTS: ${PULSO_WHATSAPP_INBOUND_PERSIST_MAX_ATTEMPTS:-3}
+      WHATSAPP_INBOUND_PERSIST_RETRY_BASE_DELAY_MS: ${PULSO_WHATSAPP_INBOUND_PERSIST_RETRY_BASE_DELAY_MS:-250}
+      WHATSAPP_INBOUND_PERSIST_ATTEMPT_TIMEOUT_MS: ${PULSO_WHATSAPP_INBOUND_PERSIST_ATTEMPT_TIMEOUT_MS:-10000}
+      WHATSAPP_INBOUND_SPOOL_MAX_RECORDS: ${PULSO_WHATSAPP_INBOUND_SPOOL_MAX_RECORDS:-2000}
+      WHATSAPP_INBOUND_SPOOL_MAX_BYTES: ${PULSO_WHATSAPP_INBOUND_SPOOL_MAX_BYTES:-16777216}
+      PORT: 8089
+    expose: ["8089"]
+    volumes:
+      - pulso_whatsapp_sessions:/var/lib/hyperion/whatsapp-sessions
+    healthcheck: *node-readycheck
+    depends_on:
+      pulso-role-bootstrap:
+        condition: service_completed_successfully
+
+  pulso-bff:
+    build:
+      <<: *pulso-build
+      target: pulso-runtime
+      args:
+        BUILD_FILTER: "@hyperion/pulso-bff"
+        DEPLOYABLE_PATH: apps/pulso-bff
+    restart: unless-stopped
+    stop_grace_period: ${PULSO_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "apps/pulso-bff/dist/index.js"]
+    environment:
+      NODE_ENV: ${PULSO_NODE_ENV:?PULSO_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PULSO_DEPLOYMENT_ENVIRONMENT:?PULSO_DEPLOYMENT_ENVIRONMENT is required}
+      SERVICE_VERSION: ${PULSO_BFF_VERSION:-1.0.0}
+      PORT: 8097
+      ACCESS_JWKS_URL: ${PULSO_ACCESS_JWKS_URL:?PULSO_ACCESS_JWKS_URL is required}
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: ${PULSO_ACCESS_JWKS_ALLOW_PRIVATE_HTTP:-false}
+      ACCESS_TOKEN_ISSUER: ${PULSO_ACCESS_TOKEN_ISSUER:?PULSO_ACCESS_TOKEN_ISSUER is required}
+      ACCESS_TOKEN_AUDIENCE: pulso-bff
+      ACCESS_SERVICE_URL: ${PULSO_ACCESS_SERVICE_URL:?PULSO_ACCESS_SERVICE_URL is required}
+      PULSO_BFF_TO_ACCESS_TOKEN: ${PULSO_BFF_TO_ACCESS_TOKEN:?PULSO_BFF_TO_ACCESS_TOKEN is required}
+      PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088
+      AGENT_SERVICE_URL: http://agent-service:8083
+      PROMPT_FLOW_SERVICE_URL: http://prompt-flow-service:8084
+      KNOWLEDGE_SERVICE_URL: http://knowledge-service:8085
+      INTEGRATION_SERVICE_URL: http://integration-service:8087
+      WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
+      PULSO_BFF_TO_CORE_TOKEN: ${PULSO_BFF_TO_CORE_TOKEN:?PULSO_BFF_TO_CORE_TOKEN is required}
+      PULSO_BFF_TO_INTEGRATION_TOKEN: ${PULSO_BFF_TO_INTEGRATION_TOKEN:?PULSO_BFF_TO_INTEGRATION_TOKEN is required}
+      PULSO_OPERATOR_ASSERTION_KEY: ${PULSO_OPERATOR_ASSERTION_KEY:?PULSO_OPERATOR_ASSERTION_KEY is required}
+    ports:
+      - "127.0.0.1:${PULSO_BFF_HOST_PORT:-8097}:8097"
+    healthcheck: *node-readycheck
+    depends_on:
+      pulso-iris-service:
+        condition: service_healthy
+      integration-service:
+        condition: service_healthy
+
+  pulso-console:
+    build:
+      <<: *pulso-build
+      target: pulso-console
+    restart: unless-stopped
+    environment:
+      BFF_UPSTREAM: http://pulso-bff:8097
+      CONSOLE_CELL: pulso
+      CONSOLE_ROUTE_PATTERN: ^(?:/|/(?:operacion|conversaciones|agenda|rpa|campanas|bi|configuracion)/?)$
+    ports:
+      - "127.0.0.1:${PULSO_CONSOLE_HOST_PORT:-3000}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      pulso-bff:
+        condition: service_healthy
+
+volumes:
+  pulso_postgres_data:
+  pulso_whatsapp_sessions:

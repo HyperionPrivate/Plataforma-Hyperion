@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "1.0.0",
+  "updatedAt": "2026-07-18",
+  "registryOrigin": "https://registry.npmjs.org",
+  "artifacts": [
+    {
+      "packageName": "@hyperion/platform-contracts",
+      "kind": "provider-contract",
+      "owner": "platform-access",
+      "sourcePath": "packages/platform-contracts",
+      "currentVersion": "1.1.0",
+      "nMinusOneVersion": "1.0.0",
+      "publication": {
+        "state": "ready",
+        "workflow": ".github/workflows/publish-provider-contracts.yml",
+        "tagPattern": "contracts/platform-contracts/v{version}",
+        "issue": "HYP-FED-REGISTRY-001",
+        "expiresOn": "2026-10-31"
+      }
+    },
+    {
+      "packageName": "@hyperion/audit-contracts",
+      "kind": "provider-contract",
+      "owner": "platform-audit",
+      "sourcePath": "packages/audit-contracts",
+      "currentVersion": "1.1.0",
+      "nMinusOneVersion": "1.0.0",
+      "publication": {
+        "state": "ready",
+        "workflow": ".github/workflows/publish-provider-contracts.yml",
+        "tagPattern": "contracts/audit-contracts/v{version}",
+        "issue": "HYP-FED-REGISTRY-001",
+        "expiresOn": "2026-10-31"
+      }
+    },
+    {
+      "packageName": "@hyperion/nova-contracts",
+      "kind": "provider-contract",
+      "owner": "nova-core",
+      "sourcePath": "packages/nova-contracts",
+      "currentVersion": "1.1.0",
+      "nMinusOneVersion": "1.0.0",
+      "publication": {
+        "state": "ready",
+        "workflow": ".github/workflows/publish-provider-contracts.yml",
+        "tagPattern": "contracts/nova-contracts/v{version}",
+        "issue": "HYP-FED-REGISTRY-001",
+        "expiresOn": "2026-10-31"
+      }
+    },
+    {
+      "packageName": "@hyperion/lumen-contracts",
+      "kind": "provider-contract",
+      "owner": "lumen-core",
+      "sourcePath": "packages/lumen-contracts",
+      "currentVersion": "1.1.0",
+      "nMinusOneVersion": "1.0.0",
+      "publication": {
+        "state": "ready",
+        "workflow": ".github/workflows/publish-provider-contracts.yml",
+        "tagPattern": "contracts/lumen-contracts/v{version}",
+        "issue": "HYP-FED-REGISTRY-001",
+        "expiresOn": "2026-10-31"
+      }
+    },
+    {
+      "packageName": "@hyperion/pulso-contracts",
+      "kind": "provider-contract",
+      "owner": "pulso-core",
+      "sourcePath": "packages/pulso-contracts",
+      "currentVersion": "1.1.0",
+      "nMinusOneVersion": "1.0.0",
+      "publication": {
+        "state": "ready",
+        "workflow": ".github/workflows/publish-provider-contracts.yml",
+        "tagPattern": "contracts/pulso-contracts/v{version}",
+        "issue": "HYP-FED-REGISTRY-001",
+        "expiresOn": "2026-10-31"
+      }
+    },
+    {
+      "packageName": "@hyperion/database",
+      "kind": "shared-library",
+      "owner": "platform-data",
+      "sourcePath": "packages/database",
+      "currentVersion": "0.1.0",
+      "publication": {
+        "state": "ready",
+        "workflow": ".github/workflows/publish-shared-libraries.yml",
+        "tagPattern": "shared/database/v{version}",
+        "issue": "HYP-FED-REGISTRY-002",
+        "expiresOn": "2026-09-30"
+      }
+    },
+    {
+      "packageName": "@hyperion/logger",
+      "kind": "shared-library",
+      "owner": "platform-observability",
+      "sourcePath": "packages/logger",
+      "currentVersion": "0.1.0",
+      "publication": {
+        "state": "ready",
+        "workflow": ".github/workflows/publish-shared-libraries.yml",
+        "tagPattern": "shared/logger/v{version}",
+        "issue": "HYP-FED-REGISTRY-002",
+        "expiresOn": "2026-09-30"
+      }
+    }
+  ],
+  "novaExtraction": {
+    "sourcePackages": [
+      "apps/coopfuturo-console",
+      "apps/nova-bff",
+      "apps/nova-console",
+      "packages/nova-config",
+      "packages/nova-contracts",
+      "packages/nova-durable-events",
+      "packages/nova-migrations",
+      "packages/nova-service-runtime",
+      "services/documents-service",
+      "services/liwa-channel-service",
+      "services/nova-core-service",
+      "services/voice-channel-service"
+    ],
+    "requiredExternalArtifacts": [
+      "@hyperion/audit-contracts",
+      "@hyperion/database",
+      "@hyperion/logger",
+      "@hyperion/platform-contracts"
+    ],
+    "ownedWorkspaceProtocol": "workspace:*",
+    "externalDependencyPolicy": "exact-semver"
+  }
+}

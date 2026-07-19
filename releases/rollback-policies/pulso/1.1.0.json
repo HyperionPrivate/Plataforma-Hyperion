@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/rollback-policy.schema.json",
+  "schemaVersion": 1,
+  "cell": "pulso",
+  "policyVersion": "1.1.0",
+  "catalogVersion": "1.1.0",
+  "ociComponents": [
+    "agent-service",
+    "prompt-flow-service",
+    "knowledge-service",
+    "integration-service",
+    "pulso-iris-service",
+    "whatsapp-channel-service",
+    "pulso-bff",
+    "pulso-console",
+    "pulso-migrations"
+  ],
+  "migration": {
+    "componentId": "pulso-migrations",
+    "sourcePath": "packages/pulso-migrations",
+    "files": [
+      {
+        "path": "sql/001-pulso-autonomous-baseline.sql",
+        "sha256": "a1233377b6e391e541b02df88ffc23e1af45f50a9689110e6f3f816aca6a1c81"
+      },
+      {
+        "path": "sql/002-pulso-runtime-roles.sql",
+        "sha256": "260599d3c39cd77619a4bb28d68db087ff6e7b38999eca1553f4fb14079ea11c"
+      }
+    ]
+  }
+}

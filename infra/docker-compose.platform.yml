@@ -1,0 +1,309 @@
+name: hyperion-platform
+
+# Standalone neutral control plane. Materialize its provider-only source closure
+# first with `node scripts/docker/generate-cell-contexts.mjs --cell platform`.
+x-platform-build: &platform-build
+  context: ../.docker-contexts/platform
+  dockerfile: Dockerfile
+
+x-platform-postgres-admin-url: &platform-postgres-admin-url postgres://${PLATFORM_POSTGRES_ADMIN_USER:?PLATFORM_POSTGRES_ADMIN_USER is required}:${PLATFORM_POSTGRES_ADMIN_PASSWORD:?PLATFORM_POSTGRES_ADMIN_PASSWORD is required}@postgres:5432/postgres
+x-access-migrator-database-url: &access-migrator-database-url postgres://hyperion_access_migrator:${ACCESS_MIGRATOR_DATABASE_PASSWORD:?ACCESS_MIGRATOR_DATABASE_PASSWORD is required}@postgres:5432/${ACCESS_POSTGRES_DB:-hyperion_access}
+x-identity-database-url: &identity-database-url postgres://hyperion_identity:${IDENTITY_DATABASE_PASSWORD:?IDENTITY_DATABASE_PASSWORD is required}@postgres:5432/${ACCESS_POSTGRES_DB:-hyperion_access}
+x-tenant-database-url: &tenant-database-url postgres://hyperion_tenant:${TENANT_DATABASE_PASSWORD:?TENANT_DATABASE_PASSWORD is required}@postgres:5432/${ACCESS_POSTGRES_DB:-hyperion_access}
+x-audit-migrator-database-url: &audit-migrator-database-url postgres://hyperion_audit_migrator:${AUDIT_MIGRATOR_DATABASE_PASSWORD:?AUDIT_MIGRATOR_DATABASE_PASSWORD is required}@postgres:5432/${AUDIT_POSTGRES_DB:-hyperion_audit}
+x-audit-database-url: &audit-database-url postgres://hyperion_audit:${AUDIT_DATABASE_PASSWORD:?AUDIT_DATABASE_PASSWORD is required}@postgres:5432/${AUDIT_POSTGRES_DB:-hyperion_audit}
+
+x-platform-runtime-env: &platform-runtime-env
+  NODE_ENV: ${PLATFORM_NODE_ENV:?PLATFORM_NODE_ENV is required}
+  HYPERION_ENVIRONMENT: ${PLATFORM_DEPLOYMENT_ENVIRONMENT:?PLATFORM_DEPLOYMENT_ENVIRONMENT is required}
+  SHUTDOWN_TIMEOUT_MS: ${PLATFORM_SHUTDOWN_TIMEOUT_MS:-65000}
+  TRUST_PROXY: ${PLATFORM_TRUST_PROXY:-false}
+
+x-node-readycheck: &node-readycheck
+  test:
+    [
+      "CMD",
+      "node",
+      "-e",
+      "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/ready').then((r)=>r.json()).then((body)=>process.exit(body.status==='ok'?0:1)).catch(()=>process.exit(1))"
+    ]
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 20s
+
+x-node-healthcheck: &node-healthcheck
+  test:
+    [
+      "CMD",
+      "node",
+      "-e",
+      "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+    ]
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 20s
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PLATFORM_POSTGRES_ADMIN_USER:?PLATFORM_POSTGRES_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${PLATFORM_POSTGRES_ADMIN_PASSWORD:?PLATFORM_POSTGRES_ADMIN_PASSWORD is required}
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:${PLATFORM_POSTGRES_HOST_PORT:-55438}:5432"
+    volumes:
+      - platform_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${PLATFORM_POSTGRES_ADMIN_USER:?PLATFORM_POSTGRES_ADMIN_USER is required} -d postgres"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  access-database-bootstrap:
+    image: ${PLATFORM_ACCESS_MIGRATIONS_IMAGE:-hyperion/access-migrations:local}
+    build:
+      <<: *platform-build
+      target: access-migrations
+    restart: "no"
+    command: ["node", "packages/access-migrations/dist/bootstrap-database.js"]
+    environment:
+      NODE_ENV: ${PLATFORM_NODE_ENV:?PLATFORM_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PLATFORM_DEPLOYMENT_ENVIRONMENT:?PLATFORM_DEPLOYMENT_ENVIRONMENT is required}
+      ACCESS_POSTGRES_ADMIN_URL: *platform-postgres-admin-url
+      ACCESS_POSTGRES_DB: ${ACCESS_POSTGRES_DB:-hyperion_access}
+      ACCESS_MIGRATOR_DATABASE_PASSWORD: ${ACCESS_MIGRATOR_DATABASE_PASSWORD:?ACCESS_MIGRATOR_DATABASE_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  access-migrations:
+    image: ${PLATFORM_ACCESS_MIGRATIONS_IMAGE:-hyperion/access-migrations:local}
+    build:
+      <<: *platform-build
+      target: access-migrations
+    restart: "no"
+    command: ["node", "packages/access-migrations/dist/index.js"]
+    environment:
+      NODE_ENV: ${PLATFORM_NODE_ENV:?PLATFORM_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PLATFORM_DEPLOYMENT_ENVIRONMENT:?PLATFORM_DEPLOYMENT_ENVIRONMENT is required}
+      ACCESS_POSTGRES_DB: ${ACCESS_POSTGRES_DB:-hyperion_access}
+      ACCESS_MIGRATOR_DATABASE_URL: *access-migrator-database-url
+    depends_on:
+      access-database-bootstrap:
+        condition: service_completed_successfully
+
+  access-role-bootstrap:
+    image: ${PLATFORM_ACCESS_MIGRATIONS_IMAGE:-hyperion/access-migrations:local}
+    build:
+      <<: *platform-build
+      target: access-migrations
+    restart: "no"
+    command: ["node", "packages/access-migrations/dist/bootstrap-roles.js"]
+    environment:
+      NODE_ENV: ${PLATFORM_NODE_ENV:?PLATFORM_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PLATFORM_DEPLOYMENT_ENVIRONMENT:?PLATFORM_DEPLOYMENT_ENVIRONMENT is required}
+      ACCESS_POSTGRES_ADMIN_URL: *platform-postgres-admin-url
+      ACCESS_POSTGRES_DB: ${ACCESS_POSTGRES_DB:-hyperion_access}
+      ACCESS_MIGRATOR_DATABASE_PASSWORD: ${ACCESS_MIGRATOR_DATABASE_PASSWORD:?ACCESS_MIGRATOR_DATABASE_PASSWORD is required}
+      IDENTITY_DATABASE_PASSWORD: ${IDENTITY_DATABASE_PASSWORD:?IDENTITY_DATABASE_PASSWORD is required}
+      TENANT_DATABASE_PASSWORD: ${TENANT_DATABASE_PASSWORD:?TENANT_DATABASE_PASSWORD is required}
+    depends_on:
+      access-migrations:
+        condition: service_completed_successfully
+
+  audit-database-bootstrap:
+    image: ${PLATFORM_AUDIT_MIGRATIONS_IMAGE:-hyperion/audit-migrations:local}
+    build:
+      <<: *platform-build
+      target: audit-migrations
+    restart: "no"
+    command: ["node", "packages/audit-migrations/dist/bootstrap-database.js"]
+    environment:
+      NODE_ENV: ${PLATFORM_NODE_ENV:?PLATFORM_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PLATFORM_DEPLOYMENT_ENVIRONMENT:?PLATFORM_DEPLOYMENT_ENVIRONMENT is required}
+      AUDIT_POSTGRES_ADMIN_URL: *platform-postgres-admin-url
+      AUDIT_POSTGRES_DB: ${AUDIT_POSTGRES_DB:-hyperion_audit}
+      AUDIT_MIGRATOR_DATABASE_PASSWORD: ${AUDIT_MIGRATOR_DATABASE_PASSWORD:?AUDIT_MIGRATOR_DATABASE_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  audit-migrations:
+    image: ${PLATFORM_AUDIT_MIGRATIONS_IMAGE:-hyperion/audit-migrations:local}
+    build:
+      <<: *platform-build
+      target: audit-migrations
+    restart: "no"
+    command: ["node", "packages/audit-migrations/dist/index.js"]
+    environment:
+      NODE_ENV: ${PLATFORM_NODE_ENV:?PLATFORM_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PLATFORM_DEPLOYMENT_ENVIRONMENT:?PLATFORM_DEPLOYMENT_ENVIRONMENT is required}
+      AUDIT_MIGRATOR_DATABASE_URL: *audit-migrator-database-url
+    depends_on:
+      audit-database-bootstrap:
+        condition: service_completed_successfully
+
+  audit-role-bootstrap:
+    image: ${PLATFORM_AUDIT_MIGRATIONS_IMAGE:-hyperion/audit-migrations:local}
+    build:
+      <<: *platform-build
+      target: audit-migrations
+    restart: "no"
+    command: ["node", "packages/audit-migrations/dist/bootstrap-roles.js"]
+    environment:
+      NODE_ENV: ${PLATFORM_NODE_ENV:?PLATFORM_NODE_ENV is required}
+      HYPERION_ENVIRONMENT: ${PLATFORM_DEPLOYMENT_ENVIRONMENT:?PLATFORM_DEPLOYMENT_ENVIRONMENT is required}
+      AUDIT_POSTGRES_ADMIN_URL: *platform-postgres-admin-url
+      AUDIT_POSTGRES_DB: ${AUDIT_POSTGRES_DB:-hyperion_audit}
+      AUDIT_DATABASE_PASSWORD: ${AUDIT_DATABASE_PASSWORD:?AUDIT_DATABASE_PASSWORD is required}
+    depends_on:
+      audit-migrations:
+        condition: service_completed_successfully
+
+  identity-service:
+    build:
+      <<: *platform-build
+      target: identity-service
+    restart: unless-stopped
+    stop_grace_period: ${PLATFORM_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/identity-service/dist/index.js"]
+    environment:
+      <<: *platform-runtime-env
+      SERVICE_VERSION: ${PLATFORM_IDENTITY_SERVICE_VERSION:-0.1.0}
+      DATABASE_URL: *identity-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_identity
+      INITIAL_ADMIN_EMAIL: ${PLATFORM_INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${PLATFORM_INITIAL_ADMIN_PASSWORD:-}
+      SESSION_TTL_HOURS: ${PLATFORM_SESSION_TTL_HOURS:-12}
+      PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN: ${PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN:?PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN is required}
+      PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN: ${PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN:?PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN is required}
+      PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY: ${PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY:?PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY is required}
+      ACCESS_TOKEN_PRIVATE_KEY_FILE: /run/secrets/access_token_private_key
+      ACCESS_TOKEN_ISSUER: ${PLATFORM_ACCESS_TOKEN_ISSUER:?PLATFORM_ACCESS_TOKEN_ISSUER is required}
+      ACCESS_TOKEN_AUDIENCES: platform-admin-bff
+      ACCESS_TOKEN_KEY_ID: ${PLATFORM_ACCESS_TOKEN_KEY_ID:?PLATFORM_ACCESS_TOKEN_KEY_ID is required}
+      ACCESS_TOKEN_TTL_SECONDS: ${PLATFORM_ACCESS_TOKEN_TTL_SECONDS:-300}
+      DURABLE_EVENT_TRANSPORT: http
+      DURABLE_OUTBOX_ENABLED: "false"
+      DURABLE_HTTP_OUTBOX_ENABLED: "false"
+      ACCESS_TENANT_SNAPSHOT_TRANSPORT: disabled
+      ACCESS_LUMEN_PROJECTION_TRANSPORT: disabled
+      PORT: 8081
+    secrets:
+      - source: access_token_private_key
+        target: access_token_private_key
+        mode: 0444
+    ports:
+      - "127.0.0.1:${PLATFORM_ACCESS_HOST_PORT:-8081}:8081"
+    healthcheck: *node-readycheck
+    depends_on:
+      access-role-bootstrap:
+        condition: service_completed_successfully
+
+  tenant-service:
+    build:
+      <<: *platform-build
+      target: tenant-service
+    restart: unless-stopped
+    stop_grace_period: ${PLATFORM_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/tenant-service/dist/index.js"]
+    environment:
+      <<: *platform-runtime-env
+      SERVICE_VERSION: ${PLATFORM_TENANT_SERVICE_VERSION:-0.1.0}
+      DATABASE_URL: *tenant-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_tenant
+      PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN: ${PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN:?PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN is required}
+      PORT: 8082
+    expose: ["8082"]
+    healthcheck: *node-readycheck
+    depends_on:
+      access-role-bootstrap:
+        condition: service_completed_successfully
+
+  audit-service:
+    build:
+      <<: *platform-build
+      target: audit-service
+    restart: unless-stopped
+    stop_grace_period: ${PLATFORM_SHUTDOWN_GRACE_PERIOD:-75s}
+    command: ["node", "services/audit-service/dist/index.js"]
+    environment:
+      <<: *platform-runtime-env
+      SERVICE_VERSION: ${PLATFORM_AUDIT_SERVICE_VERSION:-0.1.0}
+      DATABASE_URL: *audit-database-url
+      EXPECTED_DATABASE_ROLE: hyperion_audit
+      DURABLE_EVENT_TRANSPORT: http
+      DURABLE_OUTBOX_ENABLED: "false"
+      DURABLE_HTTP_OUTBOX_ENABLED: "false"
+      PORT: 8086
+    ports:
+      - "127.0.0.1:${PLATFORM_AUDIT_HOST_PORT:-8086}:8086"
+    healthcheck: *node-readycheck
+    depends_on:
+      audit-role-bootstrap:
+        condition: service_completed_successfully
+
+  platform-admin-bff:
+    build:
+      <<: *platform-build
+      target: platform-admin-bff
+    restart: unless-stopped
+    stop_grace_period: ${PLATFORM_SHUTDOWN_GRACE_PERIOD:-75s}
+    environment:
+      <<: *platform-runtime-env
+      SERVICE_VERSION: ${PLATFORM_ADMIN_BFF_VERSION:-1.0.0}
+      PORT: 8098
+      ACCESS_JWKS_URL: http://identity-service:8081/.well-known/jwks.json
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: ${PLATFORM_ACCESS_JWKS_ALLOW_PRIVATE_HTTP:-true}
+      ACCESS_TOKEN_ISSUER: ${PLATFORM_ACCESS_TOKEN_ISSUER:?PLATFORM_ACCESS_TOKEN_ISSUER is required}
+      ACCESS_SERVICE_URL: http://identity-service:8081
+      IDENTITY_SERVICE_URL: http://identity-service:8081
+      TENANT_SERVICE_URL: http://tenant-service:8082
+      PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN: ${PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN:?PLATFORM_ADMIN_BFF_TO_ACCESS_TOKEN is required}
+      PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN: ${PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN:?PLATFORM_ADMIN_BFF_TO_IDENTITY_TOKEN is required}
+      PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN: ${PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN:?PLATFORM_ADMIN_BFF_TO_TENANT_TOKEN is required}
+      PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY: ${PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY:?PLATFORM_ADMIN_OPERATOR_ASSERTION_KEY is required}
+    ports:
+      - "127.0.0.1:${PLATFORM_ADMIN_BFF_HOST_PORT:-8098}:8098"
+    healthcheck: *node-healthcheck
+    depends_on:
+      identity-service:
+        condition: service_healthy
+      tenant-service:
+        condition: service_healthy
+
+  platform-admin-console:
+    build:
+      <<: *platform-build
+      target: platform-admin-console
+    restart: unless-stopped
+    environment:
+      BFF_UPSTREAM: http://platform-admin-bff:8098
+      CONSOLE_CELL: platform
+      CONSOLE_ROUTE_PATTERN: ^(?:/|/(?:operators|tenants|grants|catalog)/?)$
+    ports:
+      - "127.0.0.1:${PLATFORM_ADMIN_CONSOLE_HOST_PORT:-3003}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      platform-admin-bff:
+        condition: service_healthy
+
+volumes:
+  platform_postgres_data:
+
+secrets:
+  access_token_private_key:
+    file: ${PLATFORM_ACCESS_TOKEN_PRIVATE_KEY_FILE:?PLATFORM_ACCESS_TOKEN_PRIVATE_KEY_FILE is required}

@@ -1,0 +1,40 @@
+{
+  "$schema": "../../schemas/rollback-policy.schema.json",
+  "schemaVersion": 2,
+  "cell": "pulso",
+  "policyVersion": "1.3.0",
+  "catalogVersion": "1.3.0",
+  "rollbackOciComponents": [
+    "agent-service",
+    "prompt-flow-service",
+    "knowledge-service",
+    "integration-service",
+    "pulso-iris-service",
+    "whatsapp-channel-service",
+    "pulso-bff",
+    "pulso-console"
+  ],
+  "forwardOnlyOciComponents": ["pulso-migrations"],
+  "migration": {
+    "componentId": "pulso-migrations",
+    "sourcePath": "packages/pulso-migrations",
+    "files": [
+      {
+        "path": "sql/001-pulso-autonomous-baseline.sql",
+        "sha256": "a1233377b6e391e541b02df88ffc23e1af45f50a9689110e6f3f816aca6a1c81"
+      },
+      {
+        "path": "sql/002-pulso-runtime-roles.sql",
+        "sha256": "260599d3c39cd77619a4bb28d68db087ff6e7b38999eca1553f4fb14079ea11c"
+      },
+      {
+        "path": "sql/003-sofia-readiness-marker.sql",
+        "sha256": "d972b08edbfdb44225f8de1a25892d449dddfb6f3c29bb918b9581107c1bba84"
+      },
+      {
+        "path": "sql/004-access-channel-tenant-projection.sql",
+        "sha256": "cffde8ed7621c40ae9ba4e80969928b705654e530019edf49dacf81730d57c77"
+      }
+    ]
+  }
+}

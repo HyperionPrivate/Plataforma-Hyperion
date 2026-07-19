@@ -1,0 +1,50 @@
+name: hyperion-hostname-edge
+
+services:
+  hostname-edge:
+    build:
+      context: docker/hostname-edge
+      dockerfile: Dockerfile
+      target: hostname-edge
+    restart: unless-stopped
+    environment:
+      PLATFORM_ADMIN_HOST: ${PLATFORM_ADMIN_HOST:-admin.hyperion.test}
+      NOVA_HOST: ${NOVA_HOST:-nova.hyperion.test}
+      COOPFUTURO_HOST: ${COOPFUTURO_HOST:-coopfuturo.hyperion.test}
+      LUMEN_HOST: ${LUMEN_HOST:-lumen.hyperion.test}
+      PULSO_HOST: ${PULSO_HOST:-pulso.hyperion.test}
+      PLATFORM_ADMIN_CONSOLE_UPSTREAM: ${PLATFORM_ADMIN_CONSOLE_UPSTREAM:-http://platform-admin-console:8080}
+      PLATFORM_ADMIN_BFF_UPSTREAM: ${PLATFORM_ADMIN_BFF_UPSTREAM:-http://platform-admin-bff:8098}
+      NOVA_CONSOLE_UPSTREAM: ${NOVA_CONSOLE_UPSTREAM:-http://nova-console:8080}
+      NOVA_BFF_UPSTREAM: ${NOVA_BFF_UPSTREAM:-http://nova-bff:8095}
+      COOPFUTURO_CONSOLE_UPSTREAM: ${COOPFUTURO_CONSOLE_UPSTREAM:-http://coopfuturo-console:3000}
+      LUMEN_CONSOLE_UPSTREAM: ${LUMEN_CONSOLE_UPSTREAM:-http://lumen-console:8080}
+      LUMEN_BFF_UPSTREAM: ${LUMEN_BFF_UPSTREAM:-http://lumen-bff:8096}
+      PULSO_CONSOLE_UPSTREAM: ${PULSO_CONSOLE_UPSTREAM:-http://pulso-console:8080}
+      PULSO_BFF_UPSTREAM: ${PULSO_BFF_UPSTREAM:-http://pulso-bff:8097}
+      EDGE_FORWARDED_PROTO: ${EDGE_FORWARDED_PROTO:-http}
+      EDGE_TRUSTED_PROXY_CIDR: ${EDGE_TRUSTED_PROXY_CIDR:-127.0.0.1/32}
+      NOVA_PROVIDER_EDGE_TOKEN: ${NOVA_PROVIDER_EDGE_TOKEN:?NOVA_PROVIDER_EDGE_TOKEN is required}
+    ports:
+      - name: http
+        target: 8080
+        host_ip: 127.0.0.1
+        published: "${HYPERION_HOSTNAME_EDGE_PORT:-8080}"
+        protocol: tcp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", 'wget -q --header="Host: $${NOVA_HOST}" -O /dev/null http://127.0.0.1:8080/healthz']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - cell-ingress
+
+networks:
+  cell-ingress:
+    external: true
+    name: ${HYPERION_CELL_INGRESS_NETWORK:-plataforma-hyperion_default}

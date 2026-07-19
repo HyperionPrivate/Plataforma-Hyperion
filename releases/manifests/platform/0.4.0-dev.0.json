@@ -1,0 +1,57 @@
+{
+  "$schema": "../../schemas/release-manifest.schema.json",
+  "schemaVersion": 1,
+  "cell": "platform",
+  "catalogVersion": "2.2.0",
+  "releaseVersion": "0.4.0-dev.0",
+  "status": "draft",
+  "generatedAt": "2026-07-19T18:05:00Z",
+  "imagesVerified": false,
+  "components": [
+    {
+      "id": "identity-service",
+      "version": "0.2.0",
+      "image": "ghcr.io/administracionhyperion/identity-service@sha256:f2fd0cb89df8081671d785495f6d9ca06114c209cb0f7309575c119a5ffee858"
+    },
+    {
+      "id": "tenant-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/tenant-service@sha256:171e5eed7e4899a3e850c9987b04ecde86d513af8782d90c6d58caa11af67fc9"
+    },
+    {
+      "id": "audit-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/audit-service@sha256:0b0ddde75446e4d57f8467553e0e3b2b77c3ab474fed43cdde9d79244fb7a864"
+    },
+    {
+      "id": "access-migrations",
+      "version": "1.2.0",
+      "image": "ghcr.io/administracionhyperion/access-migrations@sha256:5043eadb9ada12b3da9c7f6c8da4ce01181b051de2db807ecd05a480dcf072b4"
+    },
+    {
+      "id": "audit-migrations",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/audit-migrations@sha256:7f7aa7b1393a40e51cd78a90b765820be9bc90341610e39f1cc95340da5bfb80"
+    },
+    {
+      "id": "platform-admin-bff",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/platform-admin-bff@sha256:ef961b1727268d2c4ad527a2ac84bccb874ed89bfae2d809555242340cc2c609"
+    },
+    {
+      "id": "platform-admin-console",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/platform-admin-console@sha256:e62a51672a26a75e7852cf8de8653dca1e22b72e1bb8b86e6889e428b5443188"
+    },
+    {
+      "id": "platform-contracts",
+      "version": "1.1.0",
+      "package": "@hyperion/platform-contracts@1.1.0"
+    },
+    {
+      "id": "audit-contracts",
+      "version": "1.1.0",
+      "package": "@hyperion/audit-contracts@1.1.0"
+    }
+  ]
+}

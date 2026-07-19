@@ -1,0 +1,26 @@
+name: hyperion-nova
+
+# Provider-owned NOVA side of the authenticated Platform <-> NOVA acceptance
+# rehearsal. Access and Audit remain Platform workloads reached only through
+# the externally-created internal network.
+services:
+  nova-core-service:
+    environment:
+      AUDIT_SERVICE_URL: http://audit-service:8086
+    networks:
+      default: {}
+      platform-nova-acceptance: {}
+
+  nova-bff:
+    environment:
+      ACCESS_SERVICE_URL: http://identity-service:8081
+      ACCESS_JWKS_URL: http://identity-service:8081/.well-known/jwks.json
+      ACCESS_JWKS_ALLOW_PRIVATE_HTTP: "true"
+    networks:
+      default: {}
+      platform-nova-acceptance: {}
+
+networks:
+  platform-nova-acceptance:
+    external: true
+    name: ${PLATFORM_NOVA_ACCEPTANCE_NETWORK:?PLATFORM_NOVA_ACCEPTANCE_NETWORK is required}

@@ -1,0 +1,57 @@
+{
+  "$schema": "../../schemas/release-manifest.schema.json",
+  "schemaVersion": 1,
+  "cell": "nova",
+  "catalogVersion": "1.0.0",
+  "releaseVersion": "0.1.0-dev.0",
+  "status": "draft",
+  "generatedAt": "2026-07-17T00:00:00Z",
+  "imagesVerified": false,
+  "components": [
+    {
+      "id": "nova-core-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/nova-core-service@sha256:c2db7d4cf43f1b678d8ebe12078e85d29454f6e4d8fc298699c271bc262c1eba"
+    },
+    {
+      "id": "voice-channel-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/voice-channel-service@sha256:3b9f603b76f89697724f6d3129adb8c9e24baedf8e15e3d0f87beab72e12a004"
+    },
+    {
+      "id": "liwa-channel-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/liwa-channel-service@sha256:9ed71794b43c756e1b38f6d0015acdb68ab522080dc4cf97f15e22fe08b08d61"
+    },
+    {
+      "id": "documents-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/documents-service@sha256:0685ebf03f94179c0f68db7a3c45c9c0992618c52784a5b18c1560081421f0b4"
+    },
+    {
+      "id": "nova-bff",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/nova-bff@sha256:f29d3ffbc30f4090b89b685f5651d6c934c80e6921438c23821a2837fb284221"
+    },
+    {
+      "id": "nova-console",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/nova-console@sha256:6adbc14d454fbfe76106dc3a6329dc8ef596e056b981241d7989d91ea40007a4"
+    },
+    {
+      "id": "coopfuturo-console",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/coopfuturo-console@sha256:527f1dbfb5ce3bd5fab22bbc80ff496969aa4cfb498538bddc644c89b736d594"
+    },
+    {
+      "id": "nova-migrations",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/nova-migrations@sha256:35ed04fc30f189f7ca130d35bbde8b123ee661fae7e9fdcc3dbaf9b6bdb92295"
+    },
+    {
+      "id": "nova-contracts",
+      "version": "1.1.0",
+      "package": "@hyperion/nova-contracts@1.1.0"
+    }
+  ]
+}

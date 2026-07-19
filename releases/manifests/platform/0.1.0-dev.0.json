@@ -1,0 +1,72 @@
+{
+  "$schema": "../../schemas/release-manifest.schema.json",
+  "schemaVersion": 1,
+  "cell": "platform",
+  "catalogVersion": "1.0.0",
+  "releaseVersion": "0.1.0-dev.0",
+  "status": "draft",
+  "generatedAt": "2026-07-17T00:00:00Z",
+  "imagesVerified": false,
+  "components": [
+    {
+      "id": "identity-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/identity-service@sha256:d981772d47e2e83c53bc15a94971b83d67caba9a14975a62e5114d12889d2568"
+    },
+    {
+      "id": "tenant-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/tenant-service@sha256:2a81f36fc419c1f8ca52799285c1c9f0e992648813fad2e497b03bd64dbfdd8f"
+    },
+    {
+      "id": "audit-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/audit-service@sha256:99a160edcc57c33fdab87f0ff24397a641fec8b11df5e6e03a948b25d2925eea"
+    },
+    {
+      "id": "audit-migrations",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/audit-migrations@sha256:3d2f2224a34eb6156d354a900a0e74e97677f4ef829112786e877eb03327d2cc"
+    },
+    {
+      "id": "api-gateway",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/api-gateway@sha256:38358ce0a27512b141a7b97bbc442e1a984384dbee7e51971d0ab984bcb6c632"
+    },
+    {
+      "id": "platform-admin-bff",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/platform-admin-bff@sha256:d7710320ade62c427b8b68c4fa54310fe00d95619a393a5878dc57c130ee3f93"
+    },
+    {
+      "id": "platform-admin-console",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/platform-admin-console@sha256:93db8e551fdad2b62639d573046ac57fb82e28a8732dad58d9b244c271122f0c"
+    },
+    {
+      "id": "web-console",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/web-console@sha256:dcaac7f0118ac4c7933cd0cc82d14ca246b28764a8bc32428a4f7a37fe969852"
+    },
+    {
+      "id": "legacy-global-migrations",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/legacy-global-migrations@sha256:85ee65988a51c344b6c67d0c87af4702dab235caa88f10a914960e74b114af2a"
+    },
+    {
+      "id": "platform-migrations",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/platform-migrations@sha256:ed0c93f1fd2c708643f6163c6d7837a8dc444cefd3bf5bc77155cdb62514c02d"
+    },
+    {
+      "id": "platform-contracts",
+      "version": "1.0.0",
+      "package": "@hyperion/platform-contracts@1.0.0"
+    },
+    {
+      "id": "audit-contracts",
+      "version": "1.0.0",
+      "package": "@hyperion/audit-contracts@1.0.0"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+log_format cell_json escape=json
+  '{"time":"$time_iso8601","requestId":"$request_id","cell":"${CONSOLE_CELL}",'
+  '"method":"$request_method","uri":"$uri","status":$status,'
+  '"bytes":$body_bytes_sent,"requestTime":$request_time}';
+
+server {
+  listen 8080;
+  server_name _;
+  root /usr/share/nginx/html;
+
+  access_log /dev/stdout cell_json;
+  error_log /dev/stderr warn;
+
+  resolver 127.0.0.11 valid=10s ipv6=off;
+  set $cell_bff "${BFF_UPSTREAM}";
+
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Referrer-Policy "same-origin" always;
+  add_header X-Frame-Options "DENY" always;
+
+  location = /healthz {
+    access_log off;
+    default_type application/json;
+    return 200 '{"status":"ok","cell":"${CONSOLE_CELL}"}';
+  }
+
+  # Browsers only know the console origin. /api is the sole backend aperture;
+  # the prefix is stripped before the request reaches the cell-owned BFF.
+  # The variable form defers Docker DNS resolution until request time, allowing
+  # a console image to start before its independently deployed BFF is ready.
+  location ^~ /api/ {
+    rewrite ^/api(/.*)$ $1 break;
+    proxy_pass $cell_bff;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Request-Id $request_id;
+    proxy_set_header Connection "";
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 65s;
+    proxy_send_timeout 65s;
+  }
+
+  location = /api {
+    return 404;
+  }
+
+  location ^~ /assets/ {
+    try_files $uri =404;
+  }
+
+  # Only the routes owned by this console receive the SPA entrypoint. A route
+  # from another product never falls through to a 200 index response.
+  location ~ ${CONSOLE_ROUTE_PATTERN} {
+    try_files $uri $uri/ /index.html;
+  }
+
+  location / {
+    try_files $uri =404;
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "../../schemas/release-manifest.schema.json",
+  "schemaVersion": 1,
+  "cell": "pulso",
+  "catalogVersion": "1.1.0",
+  "releaseVersion": "0.2.0-dev.0",
+  "status": "draft",
+  "generatedAt": "2026-07-18T10:00:00Z",
+  "imagesVerified": false,
+  "components": [
+    {
+      "id": "agent-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/agent-service@sha256:0e1c74b01e9bc79e84289dcf58d4df168d9a7dcfba4e4a79cb36aae56d4bf823"
+    },
+    {
+      "id": "prompt-flow-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/prompt-flow-service@sha256:b33f1a8041284916027e4c37f2e7fe0d11e58101ed556b820481a67caf20ec05"
+    },
+    {
+      "id": "knowledge-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/knowledge-service@sha256:e7d9871665c5a0466c11d6083d180d81884b8bf65297e8a93a8cf0aea2bfddaf"
+    },
+    {
+      "id": "integration-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/integration-service@sha256:4292849d3511411dfd823954ee47e9c5ee694722bc27fe84f418c2620666cb6d"
+    },
+    {
+      "id": "pulso-iris-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/pulso-iris-service@sha256:f44d5a472ecabda7ef847901b9dadbb2212e676ee7cd4fa030f1e36935b79212"
+    },
+    {
+      "id": "whatsapp-channel-service",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/whatsapp-channel-service@sha256:f6b89606b4c993fcfdc20acc1ce48c11202d3f7c57048b2e8adc094b38360266"
+    },
+    {
+      "id": "pulso-bff",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/pulso-bff@sha256:70bcdee71f4c7f9c264358c3b33f3e0172b2c36f26bcf6eb36891a6c0f570bbb"
+    },
+    {
+      "id": "pulso-console",
+      "version": "0.1.0",
+      "image": "ghcr.io/administracionhyperion/pulso-console@sha256:8f6563790ec4af347fc31603e3644d3fa9755fbe9b9cce2aa578e4ce846de024"
+    },
+    {
+      "id": "pulso-migrations",
+      "version": "1.0.0",
+      "image": "ghcr.io/administracionhyperion/pulso-migrations@sha256:9257fef9cd35732cb67a86c4db8e13c6accb48e29277613e042648844a88defd"
+    },
+    {
+      "id": "pulso-contracts",
+      "version": "1.1.0",
+      "package": "@hyperion/pulso-contracts@1.1.0"
+    }
+  ]
+}

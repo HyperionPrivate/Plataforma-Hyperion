@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:22-bookworm-slim AS build
+FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS build
 
 WORKDIR /app
 
@@ -16,18 +16,10 @@ COPY services ./services
 # from source-only workspace directories.
 RUN find apps packages services -type d -name dist -prune -exec rm -rf '{}' +
 
-ARG VITE_API_BASE_URL=http://localhost:8080
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
-
-# Per-product console builds. VITE_PRODUCT scopes the web console to a single
-# product (nova|pulso|lumen) or keeps the full shared console (all).
-ARG VITE_PRODUCT=all
-ENV VITE_PRODUCT=$VITE_PRODUCT
-ARG VITE_BRAND_LABEL=HYPERION
-ENV VITE_BRAND_LABEL=$VITE_BRAND_LABEL
-
 RUN pnpm install --frozen-lockfile
-RUN pnpm -r build
+ARG BUILD_FILTER
+RUN test -n "$BUILD_FILTER" \
+  && pnpm --filter "${BUILD_FILTER}..." build
 
 # Runtime images need executable JavaScript only. Keep tests, declarations and
 # source maps out of every later COPY --from=build boundary.
@@ -47,15 +39,9 @@ USER node
 
 CMD ["node", "scripts/autonomy/real-flow.e2e.mjs"]
 
-# Static web console served by unprivileged nginx (no Node, no devDependencies).
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS web-console
-
-COPY infra/docker/web-console.nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/apps/web-console/dist /usr/share/nginx/html
-
 # Minimal common base for isolated Node runtimes. Service source and service
 # artifacts are deliberately not present in this layer.
-FROM node:22-bookworm-slim AS runtime-base
+FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS runtime-base
 
 WORKDIR /app
 
@@ -109,8 +95,14 @@ CMD ["node", "apps/api-gateway/dist/index.js"]
 
 FROM service-runtime-base AS identity-service
 
+COPY packages/access-migrations/package.json packages/access-migrations/package.json
+COPY packages/platform-contracts/package.json packages/platform-contracts/package.json
 COPY services/identity-service/package.json services/identity-service/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/identity-service..."
+COPY --from=build /app/packages/access-migrations/dist/schema-manifest.js packages/access-migrations/dist/schema-manifest.js
+COPY --from=build /app/packages/access-migrations/dist/runtime-boundary.js packages/access-migrations/dist/runtime-boundary.js
+COPY --from=build /app/packages/access-migrations/dist/config.js packages/access-migrations/dist/config.js
+COPY --from=build /app/packages/platform-contracts/dist packages/platform-contracts/dist
 COPY --from=build /app/services/identity-service/dist services/identity-service/dist
 
 USER node
@@ -119,8 +111,14 @@ CMD ["node", "services/identity-service/dist/index.js"]
 
 FROM service-runtime-base AS tenant-service
 
+COPY packages/access-migrations/package.json packages/access-migrations/package.json
+COPY packages/platform-contracts/package.json packages/platform-contracts/package.json
 COPY services/tenant-service/package.json services/tenant-service/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/tenant-service..."
+COPY --from=build /app/packages/access-migrations/dist/schema-manifest.js packages/access-migrations/dist/schema-manifest.js
+COPY --from=build /app/packages/access-migrations/dist/runtime-boundary.js packages/access-migrations/dist/runtime-boundary.js
+COPY --from=build /app/packages/access-migrations/dist/config.js packages/access-migrations/dist/config.js
+COPY --from=build /app/packages/platform-contracts/dist packages/platform-contracts/dist
 COPY --from=build /app/services/tenant-service/dist services/tenant-service/dist
 
 USER node
@@ -139,8 +137,14 @@ CMD ["node", "services/agent-service/dist/index.js"]
 
 FROM durable-service-runtime-base AS audit-service
 
+COPY packages/audit-contracts/package.json packages/audit-contracts/package.json
+COPY packages/audit-migrations/package.json packages/audit-migrations/package.json
+COPY packages/platform-contracts/package.json packages/platform-contracts/package.json
 COPY services/audit-service/package.json services/audit-service/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/audit-service..."
+COPY --from=build /app/packages/audit-contracts/dist packages/audit-contracts/dist
+COPY --from=build /app/packages/audit-migrations/dist/schema-manifest.js packages/audit-migrations/dist/schema-manifest.js
+COPY --from=build /app/packages/platform-contracts/dist packages/platform-contracts/dist
 COPY --from=build /app/services/audit-service/dist services/audit-service/dist
 
 USER node
@@ -271,6 +275,46 @@ COPY --from=build /app/packages/migrations/sql packages/migrations/sql
 USER node
 
 CMD ["node", "packages/migrations/dist/index.js"]
+
+# Platform-owned Access schema and ledger. This image contains no product SQL.
+FROM runtime-base AS platform-migrations
+
+COPY packages/platform-migrations/package.json packages/platform-migrations/package.json
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/platform-migrations"
+COPY --from=build /app/packages/platform-migrations/dist packages/platform-migrations/dist
+COPY --from=build /app/packages/platform-migrations/sql packages/platform-migrations/sql
+
+USER node
+
+CMD ["node", "packages/platform-migrations/dist/index.js"]
+
+# Neutral Access database bootstrap, migrations and role activation. Runtime
+# images receive only the schema manifest and boundary probe above; SQL and
+# database-admin entrypoints remain confined to this one-shot image.
+FROM runtime-base AS access-migrations
+
+COPY packages/access-migrations/package.json packages/access-migrations/package.json
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/access-migrations"
+COPY --from=build /app/packages/access-migrations/dist packages/access-migrations/dist
+COPY --from=build /app/packages/access-migrations/sql packages/access-migrations/sql
+
+USER node
+
+CMD ["node", "packages/access-migrations/dist/index.js"]
+
+# Audit owns a logical database and a provider-only migration image. The
+# service image receives only schema-manifest.js; SQL and bootstrap code stay
+# confined to this one-shot target.
+FROM runtime-base AS audit-migrations
+
+COPY packages/audit-migrations/package.json packages/audit-migrations/package.json
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/audit-migrations"
+COPY --from=build /app/packages/audit-migrations/dist packages/audit-migrations/dist
+COPY --from=build /app/packages/audit-migrations/sql packages/audit-migrations/sql
+
+USER node
+
+CMD ["node", "packages/audit-migrations/dist/index.js"]
 
 # Backward-compatible default target. It is intentionally no longer an
 # all-services image; Compose selects an explicit target for every workload.

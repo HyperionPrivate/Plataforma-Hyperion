@@ -1,0 +1,29 @@
+name: hyperion-platform
+
+# Provider-owned Platform side of the authenticated Platform <-> NOVA
+# acceptance rehearsal. The external network is created and destroyed by the
+# E2E orchestrator; this descriptor never merges the two Compose projects.
+services:
+  identity-service:
+    environment:
+      NOVA_BFF_TO_ACCESS_TOKEN: ${NOVA_BFF_TO_ACCESS_TOKEN:?NOVA_BFF_TO_ACCESS_TOKEN is required}
+      ACCESS_TOKEN_AUDIENCES: platform-admin-bff,nova-bff
+    networks:
+      default: {}
+      platform-nova-acceptance:
+        aliases:
+          - identity-service
+
+  audit-service:
+    environment:
+      NOVA_TO_AUDIT_TOKEN: ${NOVA_TO_AUDIT_TOKEN:?NOVA_TO_AUDIT_TOKEN is required}
+    networks:
+      default: {}
+      platform-nova-acceptance:
+        aliases:
+          - audit-service
+
+networks:
+  platform-nova-acceptance:
+    external: true
+    name: ${PLATFORM_NOVA_ACCEPTANCE_NETWORK:?PLATFORM_NOVA_ACCEPTANCE_NETWORK is required}

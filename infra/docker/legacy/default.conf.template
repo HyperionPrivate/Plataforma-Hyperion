@@ -1,0 +1,97 @@
+map $uri $legacy_product {
+  default "unknown";
+  ~^/nova/?$ "nova";
+  ~^/lumen(?:/(?:preconsulta|dictado|historia|laboratorios|asistente|modelos|consentimientos|facturacion|dashboard))?/?$ "lumen";
+  ~^/(?:operacion|conversaciones|agenda|rpa|campanas|bi|configuracion)/?$ "pulso";
+  "/" "pulso";
+}
+
+map $legacy_product $legacy_redirect_header {
+  default "";
+  "nova" "nova";
+  "lumen" "lumen";
+  "pulso" "pulso";
+}
+
+# Rebuild compatibility queries from product-owned UUID parameters. Unknown or
+# sensitive parameters never become part of Location, and duplicate owned keys
+# fail closed to an empty query.
+map $args $legacy_lumen_query {
+  default "";
+  "~^(?:(?!encounter=)[^&]+&)*encounter=(?<legacy_lumen_encounter>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})(?:&(?!(?:encounter)=)[^&]+)*$" "?encounter=$legacy_lumen_encounter";
+}
+
+map $args $legacy_pulso_query {
+  default "";
+  "~^(?:(?!conversationId=)[^&]+&)*conversationId=(?<legacy_pulso_conversation>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})(?:&(?!(?:conversationId)=)[^&]+)*$" "?conversationId=$legacy_pulso_conversation";
+}
+
+map $args $legacy_query_disposition {
+  "" "none";
+  default "filtered";
+}
+
+log_format legacy_redirect_json escape=json
+  '{"time":"$time_iso8601","event":"legacy_console_redirect",'
+  '"requestId":"$request_id","method":"$request_method","status":$status,'
+  '"product":"$legacy_product","queryDisposition":"$legacy_query_disposition"}';
+
+server {
+  listen 8080;
+  server_name _;
+
+  access_log /dev/stdout legacy_redirect_json;
+  error_log /dev/stderr warn;
+
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Referrer-Policy "no-referrer" always;
+  add_header Cache-Control "no-store" always;
+  add_header X-Hyperion-Legacy-Redirect $legacy_redirect_header always;
+
+  if ($request_method !~ ^(?:GET|HEAD)$) {
+    return 405;
+  }
+
+  location = /healthz {
+    access_log off;
+    default_type application/json;
+    return 200 '{"status":"ok","surface":"legacy-redirect"}';
+  }
+
+  location = /nova {
+    return 307 ${NOVA_CONSOLE_ORIGIN}/;
+  }
+
+  location = /nova/ {
+    return 307 ${NOVA_CONSOLE_ORIGIN}/;
+  }
+
+  location = /lumen {
+    return 307 ${LUMEN_CONSOLE_ORIGIN}/lumen$legacy_lumen_query;
+  }
+
+  location = /lumen/ {
+    return 307 ${LUMEN_CONSOLE_ORIGIN}/lumen$legacy_lumen_query;
+  }
+
+  location ~ ^/lumen/(?<legacy_lumen_view>preconsulta|dictado|historia|laboratorios|asistente|modelos|consentimientos|facturacion|dashboard)/?$ {
+    return 307 ${LUMEN_CONSOLE_ORIGIN}/lumen/$legacy_lumen_view$legacy_lumen_query;
+  }
+
+  location = / {
+    return 307 ${PULSO_CONSOLE_ORIGIN}/;
+  }
+
+  location ~ ^/(?<legacy_pulso_route>operacion|agenda|rpa|campanas|bi|configuracion)/?$ {
+    return 307 ${PULSO_CONSOLE_ORIGIN}/$legacy_pulso_route;
+  }
+
+  location ~ ^/conversaciones/?$ {
+    return 307 ${PULSO_CONSOLE_ORIGIN}/conversaciones$legacy_pulso_query;
+  }
+
+  location / {
+    default_type application/json;
+    return 404 '{"error":"legacy console only redirects known product routes"}';
+  }
+}
