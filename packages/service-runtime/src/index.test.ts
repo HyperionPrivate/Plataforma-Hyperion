@@ -363,6 +363,23 @@ describe("service runtime", () => {
     );
   });
 
+  it("accepts bootstrap VALID UNTIL infinity as a never-expiring password", async () => {
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    process.env.EXPECTED_DATABASE_ROLE = "hyperion_channel";
+    for (const rolvaliduntil of ["infinity", "Infinity", new Date(Number.POSITIVE_INFINITY)]) {
+      const db = createFakeDatabase([], {}, { currentRole: "hyperion_channel", rolvaliduntil });
+      ({ app } = await createService({
+        serviceName: "whatsapp-channel-service",
+        databaseRequired: true,
+        createDatabase: () => db
+      }));
+      const response = await app.inject({ method: "GET", url: "/ready" });
+      expect(response.statusCode).toBe(200);
+      await app.close();
+      app = undefined as never;
+    }
+  });
+
   it("fails closed before route or worker registration for a wrong or administrative database identity", async () => {
     for (const identity of [
       { currentRole: "hyperion_audit" },
@@ -371,6 +388,7 @@ describe("service runtime", () => {
       { currentRole: "hyperion_tenant", rolsuper: true },
       { currentRole: "hyperion_tenant", rolconnlimit: 10 },
       { currentRole: "hyperion_tenant", rolvaliduntil: "2099-01-01T00:00:00Z" },
+      { currentRole: "hyperion_tenant", rolvaliduntil: new Date("2099-01-01T00:00:00Z") },
       { currentRole: "hyperion_tenant", rolconfig: ["search_path=attacker,pg_catalog"] }
     ]) {
       process.env.DATABASE_URL = "postgres://runtime-test";
@@ -725,7 +743,7 @@ function createFakeDatabase(
     rolinherit: boolean;
     rolreplication: boolean;
     rolsuper: boolean;
-    rolvaliduntil: string | null;
+    rolvaliduntil: string | Date | null;
     sessionRole: string;
   }> = {}
 ): DatabaseClient {

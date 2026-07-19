@@ -469,6 +469,14 @@ async function buildReadinessHealth(
   return buildHealth(service, version, status, [...dependencies, ...runtimeDependencies]);
 }
 
+/** NULL and PostgreSQL infinity both mean the password never expires. */
+function isSafeRolePasswordExpiry(value: string | Date | null | undefined): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim().toLowerCase() === "infinity";
+  if (value instanceof Date) return !Number.isFinite(value.getTime());
+  return false;
+}
+
 async function findDatabaseRoleProblem(db: DatabaseClient, expectedRole: string): Promise<string | undefined> {
   try {
     await db.query("select pg_catalog.set_config('search_path', 'pg_catalog', false)");
@@ -512,7 +520,7 @@ async function findDatabaseRoleProblem(db: DatabaseClient, expectedRole: string)
       identity.rolreplication ||
       identity.rolbypassrls ||
       identity.rolconnlimit !== -1 ||
-      identity.rolvaliduntil !== null ||
+      !isSafeRolePasswordExpiry(identity.rolvaliduntil) ||
       identity.rolconfig !== null
     ) {
       return "database role has unsafe PostgreSQL capabilities";
