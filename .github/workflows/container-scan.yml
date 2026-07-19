@@ -21,7 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TRIVY_VERSION: v0.68.2
+  TRIVY_VERSION: "0.68.2"
+  TRIVY_LINUX_64BIT_SHA256: 3d933bbc3685f95ec15280f620583d05d97ee3affb66944d14481d5d6d567064
 
 jobs:
   impact:
@@ -95,11 +96,17 @@ jobs:
           test "${#services[@]}" -gt 0
           docker compose --env-file "$COMPOSE_ENV_FILE" -p "hyperion-security-${CELL}" \
             -f "$COMPOSE_FILE" build --pull "${services[@]}"
-      - name: Install Trivy
-        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
-        with:
-          version: ${{ env.TRIVY_VERSION }}
-          cache: false
+      - name: Install verified Trivy binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+          curl --fail --location --silent --show-error "$url" --output "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$TRIVY_LINUX_64BIT_SHA256" "$RUNNER_TEMP/$archive" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/$archive" --directory "$RUNNER_TEMP" trivy
+          chmod 0755 "$RUNNER_TEMP/trivy"
+          printf '%s\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Scan images and enforce severity policy
         id: trivy
         shell: bash
@@ -136,7 +143,7 @@ jobs:
           done
           exit "$status"
       - name: Upload image findings
-        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ always() && steps.trivy.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: github/codeql-action/upload-sarif@bb16b9baa2ec4010b29f5c606d57d01190139edd # v4.37.1
         with:
           sarif_file: trivy-results

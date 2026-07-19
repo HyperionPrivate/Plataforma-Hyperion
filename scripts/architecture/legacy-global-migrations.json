@@ -41,7 +41,7 @@
     { "name": "010-agenda-rules.sql", "sha256": "e8376e5318c65870cd3d6ca316de3445b0767fcbb4b8027b4544f5e775fe86f1" },
     {
       "name": "011-configurable-agenda.sql",
-      "sha256": "7d12e6192f0ffb96eab4c989adb77b585976899b717e1f901389fa40700c0b38"
+      "sha256": "22d95ed57fc6e464fc96d1abe140cddc4c097cc537e873fbc73465b8aa101620"
     },
     {
       "name": "012-whatsapp-sofia-runtime.sql",

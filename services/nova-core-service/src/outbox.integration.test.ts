@@ -125,7 +125,11 @@ describeIntegration("NOVA Audit outbox PostgreSQL recovery", () => {
     });
     for (const [destination, init] of fetch.mock.calls) {
       expect(destination).toBe(AUDIT_DESTINATION);
-      expect(init?.headers).toMatchObject({
+      const headers =
+        init?.headers instanceof Headers
+          ? Object.fromEntries(init.headers.entries())
+          : ((init?.headers as Record<string, string> | undefined) ?? {});
+      expect(headers).toMatchObject({
         "x-hyperion-event-id": eventId,
         "x-hyperion-event-type": novaAuditEventRecordContract.eventType,
         "x-hyperion-event-version": "1"

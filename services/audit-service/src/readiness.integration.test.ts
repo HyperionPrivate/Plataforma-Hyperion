@@ -8,8 +8,11 @@ const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
 
 describeIntegration("Audit provider-owned readiness", () => {
   let service: ServiceHandle;
+  let previousDatabaseUrl: string | undefined;
 
   beforeAll(async () => {
+    previousDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = TEST_DATABASE_URL;
     service = await createService({
       serviceName: "audit-service",
       databaseRequired: true,
@@ -20,6 +23,11 @@ describeIntegration("Audit provider-owned readiness", () => {
 
   afterAll(async () => {
     await service?.app.close();
+    if (previousDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = previousDatabaseUrl;
+    }
   });
 
   it("becomes ready from audit_runtime.migration_ledger without the global ledger", async () => {

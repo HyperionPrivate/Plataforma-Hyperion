@@ -1,0 +1,10 @@
+title = "Hyperion gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented placeholder templates are not live secrets"
+paths = [
+  '''(^|/)(\.env\.example|.+\.env\.example)$'''
+]
