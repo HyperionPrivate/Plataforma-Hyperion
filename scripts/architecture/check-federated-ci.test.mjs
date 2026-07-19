@@ -402,6 +402,32 @@ test("the complete stack is restricted to main and scheduled execution", async (
   assert.ok(auditFlow > auditRoleActivation, "Audit must be active before the autonomous event flow");
 });
 
+test("Audit integration tests are pinned to the provider-owned logical database", async () => {
+  const fullStackWorkflow = await readFile(path.join(workflowRoot, "check.yml"), "utf8");
+  const reusableWorkflow = await readFile(path.join(workflowRoot, "_cell-ci.yml"), "utf8");
+  const auditIntegrationSources = await Promise.all(
+    ["internal-events.integration.test.ts", "readiness.integration.test.ts"].map((file) =>
+      readFile(path.join(root, "services", "audit-service", "src", file), "utf8")
+    )
+  );
+
+  for (const source of auditIntegrationSources) {
+    assert.match(source, /process\.env\.TEST_AUDIT_DATABASE_URL/);
+    assert.doesNotMatch(source, /process\.env\.TEST_DATABASE_URL/);
+  }
+
+  const fullStackTest = fullStackWorkflow.slice(fullStackWorkflow.indexOf("      - name: Test\n"));
+  assert.match(fullStackTest, /TEST_AUDIT_DATABASE_URL="\$audit_runtime_url" pnpm -r test/);
+  assert.match(fullStackTest, /TEST_DATABASE_URL: postgres:\/\/hyperion:hyperion_test@localhost:5432\/hyperion_test/);
+
+  const auditJobStart = reusableWorkflow.indexOf("  audit-database-smoke:");
+  const auditJobEnd = reusableWorkflow.indexOf("\n  image:", auditJobStart);
+  assert.ok(auditJobStart >= 0 && auditJobEnd > auditJobStart);
+  const auditJob = reusableWorkflow.slice(auditJobStart, auditJobEnd);
+  assert.match(auditJob, /TEST_AUDIT_DATABASE_URL="\$audit_runtime_url"/);
+  assert.doesNotMatch(auditJob, /TEST_DATABASE_URL="\$audit_runtime_url"/);
+});
+
 test("workflow actions are immutable SHA references", async () => {
   const workflowFiles = (await readdir(workflowRoot)).filter((entry) => entry.endsWith(".yml"));
   const mutable = [];
