@@ -391,6 +391,17 @@ test("the complete stack is restricted to main and scheduled execution", async (
   assert.match(compatibilityJob, /^\s{6}COMPOSE_PROFILES: legacy-gateway$/m);
   assert.match(dockerJob, /^\s{6}COMPOSE_PARALLEL_LIMIT: 2$/m);
   assert.match(compatibilityJob, /^\s{6}COMPOSE_PARALLEL_LIMIT: 2$/m);
+  assert.match(dockerJob, /Generate ephemeral Access signing key[\s\S]*ACCESS_TOKEN_PRIVATE_KEY_PEM/);
+
+  const baseStart = dockerJob.indexOf("Start and verify the base HTTP stack");
+  const baseDiagnostics = dockerJob.indexOf("Diagnose base HTTP stack failure");
+  const baseStop = dockerJob.indexOf("Stop the base stack");
+  assert.ok(baseStart >= 0, "full-stack CI must start the base HTTP stack");
+  assert.ok(baseDiagnostics > baseStart, "base HTTP diagnostics must follow the failed startup");
+  assert.ok(baseStop > baseDiagnostics, "base HTTP diagnostics must run before teardown");
+  assert.match(dockerJob, /if: \$\{\{ failure\(\) && steps\.base_http\.outcome == 'failure' \}\}/);
+  assert.match(dockerJob, /if: \$\{\{ failure\(\) && steps\.jetstream\.outcome == 'failure' \}\}/);
+  assert.match(dockerJob, /--workdir \/app\/packages\/durable-events/);
 
   const ownershipGuard = checkJob.indexOf("Verify service role ownership guard");
   const legacyRoleRestore = checkJob.indexOf("Restore ephemeral service database passwords");

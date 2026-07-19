@@ -261,12 +261,44 @@ jobs:
           persist-credentials: false
       - name: Materialize allowlisted Docker contexts
         run: node scripts/docker/generate-cell-contexts.mjs
+      - name: Generate ephemeral Access signing key
+        shell: bash
+        run: |
+          node -e "const fs=require('node:fs');const crypto=require('node:crypto');
+          const delimiter='HYPERION_ACCESS_KEY_'+crypto.randomBytes(12).toString('hex');
+          const {privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
+          const pem=privateKey.export({format:'pem',type:'pkcs8'}).toString().trimEnd();
+          fs.appendFileSync(process.env.GITHUB_ENV,'ACCESS_TOKEN_PRIVATE_KEY_PEM<<'+delimiter+'\n'+pem+'\n'+delimiter+'\n',{mode:0o600})"
       - name: Build every deployable base image
         run: docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml build
       - name: Start and verify the base HTTP stack
+        id: base_http
         run: |
           docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml up --detach --no-build --wait --wait-timeout 240
           bash scripts/ci/verify-compose-readiness.sh .env.example hyperion-ci-base infra/docker-compose.yml
+      - name: Diagnose base HTTP stack failure
+        if: ${{ failure() && steps.base_http.outcome == 'failure' }}
+        shell: bash
+        run: |
+          set +e
+          compose=(docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml)
+          echo '## compose ps --all'
+          "${compose[@]}" ps --all || true
+          for service in postgres access-database-bootstrap access-migrations access-role-bootstrap audit-database-bootstrap audit-migrations audit-role-bootstrap identity-service tenant-service audit-service; do
+            echo "## ${service} State/Health"
+            container_id=$("${compose[@]}" ps --all --quiet "$service")
+            if [[ -n $container_id ]]; then
+              docker inspect "$container_id" --format '{{json .State}}' || true
+            fi
+            echo "## ${service} logs"
+            "${compose[@]}" logs --no-color --tail=160 "$service" || true
+          done
+          for runtime in identity-service:8081 tenant-service:8082 audit-service:8086; do
+            service=${runtime%%:*}
+            port=${runtime##*:}
+            echo "## ${service} /ready"
+            "${compose[@]}" exec -T "$service" node -e "fetch('http://127.0.0.1:${port}/ready').then(async (response)=>console.log(await response.text())).catch((error)=>console.error(String(error)))" || true
+          done
       - name: Verify graceful shutdown for durable-event runtimes on HTTP
         shell: bash
         run: |
@@ -285,12 +317,13 @@ jobs:
           docker compose --env-file .env.example -p hyperion-ci-jetstream
           -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml build
       - name: Start and verify the JetStream stack
+        id: jetstream
         run: |
           docker compose --env-file .env.example -p hyperion-ci-jetstream -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml up --detach --no-build --wait --wait-timeout 240
           bash scripts/ci/verify-compose-readiness.sh .env.example hyperion-ci-jetstream infra/docker-compose.yml infra/docker-compose.jetstream.yml
           docker compose --env-file .env.example -p hyperion-ci-jetstream -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml exec -T nats wget -q -O /dev/null 'http://127.0.0.1:8222/healthz?js-enabled-only=true'
       - name: Diagnose JetStream stack failure
-        if: failure()
+        if: ${{ failure() && steps.jetstream.outcome == 'failure' }}
         shell: bash
         run: |
           set +e
@@ -313,6 +346,7 @@ jobs:
           "${compose[@]}" logs --no-color --tail=120 jetstream-topology-bootstrap || true
           echo '## JetStream stream/consumer summary (topology identity)'
           "${compose[@]}" run --rm --no-deps \
+            --workdir /app/packages/durable-events \
             -e NATS_URL=nats://nats:4222 \
             -e NATS_USERNAME=topology \
             -e NATS_PASSWORD \
