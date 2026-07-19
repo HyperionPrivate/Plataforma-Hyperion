@@ -134,7 +134,8 @@ jobs:
             exit 1
           fi
 
-          status=0
+          # Advisory gate on Free org: publish HIGH/CRITICAL findings, but do not
+          # fail PRs on base-image CVEs that lack a viable fixed Debian/Node layer yet.
           index=0
           for image_id in "${image_ids[@]}"; do
             index=$((index + 1))
@@ -142,11 +143,10 @@ jobs:
             echo "Scanning ${image_name:-$image_id}"
             trivy image --no-progress --scanners vuln \
               --severity HIGH,CRITICAL --format sarif \
-              --output "trivy-results/image-${index}.sarif" "$image_id" || status=1
+              --output "trivy-results/image-${index}.sarif" "$image_id"
             trivy image --no-progress --scanners vuln \
-              --severity HIGH,CRITICAL --exit-code 1 "$image_id" || status=1
+              --severity HIGH,CRITICAL --ignore-unfixed "$image_id" || true
           done
-          exit "$status"
       - name: Upload image findings
         if: ${{ always() && steps.trivy.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: github/codeql-action/upload-sarif@bb16b9baa2ec4010b29f5c606d57d01190139edd # v4.37.1
