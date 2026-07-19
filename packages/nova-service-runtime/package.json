@@ -19,7 +19,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@fastify/cors": "^10.0.2",
+    "@fastify/cors": "^11.3.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^11.1.0",
     "@hyperion/database": "0.1.0",
