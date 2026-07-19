@@ -56,7 +56,10 @@ try {
 } catch (error) {
   const errorCode =
     error instanceof Error && /^[a-z0-9_]{1,128}$/.test(error.message) ? error.message : "autonomy_e2e_failed";
-  process.stderr.write(`${JSON.stringify({ status: "failed", phase, errorCode, diagnostics: failureDiagnostics })}\n`);
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  process.stderr.write(
+    `${JSON.stringify({ status: "failed", phase, errorCode, errorMessage, diagnostics: failureDiagnostics })}\n`
+  );
   process.exitCode = 1;
 }
 
