@@ -11,7 +11,7 @@ import { StatCard } from "@/components/data/stat-card";
 import { ChartCard } from "@/components/data/chart-card";
 import { DualSeriesChart, FunnelChart, DonutChart } from "@/components/charts";
 import { LiveFeed, type LiveEvent } from "@/components/domain/live-feed";
-import { useDashboard, useLiveFeed } from "@/hooks/use-pulso";
+import { useDashboard, useLiveFeed } from "@/hooks/use-nova";
 import { fetchSettings } from "@/services/ops-client";
 import { stagger } from "@/lib/motion";
 import { cn, formatNumber } from "@/lib/utils";

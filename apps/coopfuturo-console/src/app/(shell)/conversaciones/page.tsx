@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { GaugeChart } from "@/components/charts";
-import { useConversations } from "@/hooks/use-pulso";
+import { useConversations } from "@/hooks/use-nova";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -70,16 +70,17 @@ function ConversacionesContent() {
     () => list.find((c) => c.id === selectedId) ?? list[0],
     [list, selectedId],
   );
+  const selectedConversationId = selected?.id;
 
   useEffect(() => {
-    if (!selected?.id) {
+    if (!selectedConversationId) {
       setLiwaStatus(null);
       return;
     }
     let cancelled = false;
     async function pollLiwa() {
       try {
-        const status = await fetchConversationLiwaStatus(selected!.id);
+        const status = await fetchConversationLiwaStatus(selectedConversationId);
         if (cancelled) return;
         setLiwaStatus(status);
         if (status.synced || status.handoff_detected) {
@@ -97,14 +98,14 @@ function ConversacionesContent() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [selected?.id, refetch]);
+  }, [selectedConversationId, refetch]);
 
   useEffect(() => {
     if (selected) {
       const paused = Boolean(selected.botPaused || selected.claimedBy);
       setBotActive(!paused && (selected.botActive ?? true));
     }
-  }, [selected?.id, selected?.botPaused, selected?.claimedBy]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   useEffect(() => {
     setPendingMsgs([]);

@@ -3,7 +3,7 @@ import { Providers } from "@/components/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "PULSO · Coopfuturo",
+  title: "NOVA · Coopfuturo",
   description: "Plataforma de contactación inteligente — Hyperion One",
 };
 

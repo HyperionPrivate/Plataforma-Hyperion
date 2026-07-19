@@ -14,6 +14,7 @@
   "dependencies": {
     "@hyperion/config": "workspace:*",
     "@hyperion/contracts": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
     "@hyperion/service-runtime": "workspace:*",
     "fastify": "^5.2.1"
   }

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/data/stat-card";
 import { ChartCard } from "@/components/data/chart-card";
 import { ConversionHeatmap } from "@/components/charts";
-import { useCampaigns } from "@/hooks/use-pulso";
+import { useCampaigns } from "@/hooks/use-nova";
 import { cn, formatNumber } from "@/lib/utils";
 import { Plus, Phone, MessageCircle } from "lucide-react";
 

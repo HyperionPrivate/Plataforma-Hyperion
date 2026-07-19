@@ -1,8 +1,9 @@
-# Ops UI PULSO — módulos y fuentes de datos
+# NOVA Coopfuturo Console — módulos y fuentes de datos
 
-App: `apps/web` (Next.js).  
-- `NEXT_PUBLIC_API_MODE=mock` → JSON en `src/data/`.  
-- `NEXT_PUBLIC_API_MODE=live` → `src/services/live/` + `ops-client.ts` contra `pilot-core` `/ops` (Traefik o URL directa).
+App: `apps/coopfuturo-console` (Next.js).
+
+- `NEXT_PUBLIC_API_MODE=mock` → JSON en `src/data/`.
+- `NEXT_PUBLIC_API_MODE=live` → `src/services/live/` + `ops-client.ts` contra el adapter same-origin `/pilot-core/ops` y después `nova-bff`.
 
 ## Mapa rápido
 
@@ -103,42 +104,30 @@ Agregados exportables (Excel mock). Live: job de export + URL firmada (documents
 
 ## 8. Configuración (`/configuracion`)
 
-Preferencias white-label, ventanas, canales. Live: settings service + roles OIDC (backlog #13).
+Preferencias white-label, ventanas y canales NOVA.
 
 ---
 
-Live: `src/services/live/` → `pilot-core` `GET/POST /ops/*` (`NEXT_PUBLIC_API_MODE=live`, `NEXT_PUBLIC_PILOT_CORE_URL`).
+Live: `src/services/live/` → adapter same-origin `GET/POST /pilot-core/ops/*`
+(`NEXT_PUBLIC_API_MODE=live`, `NEXT_PUBLIC_REQUIRE_AUTH=true`). El origen interno
+se configura únicamente con `NOVA_BFF_URL` server-side.
 
 ## Arranque
 
 ```powershell
-cd apps/web
+cd apps/coopfuturo-console
 npm install
 npm run dev
 ```
 
 http://localhost:3000 → `/dashboard`
 
-API producto (misma forma de datos):
-
-```powershell
-# terminal 2 — desde raíz del monorepo
-$env:APP_ENV="development"; $env:AUTH_DISABLED="true"; $env:EVENT_WORKERS_ENABLED="false"
-$env:DATABASE_URL="sqlite+aiosqlite:///./tmp-pilot.db"
-$env:REDIS_URL="redis://127.0.0.1:6379/15"
-$env:PYTHONPATH="packages/platform-kit/src;apps/pilot-core/src"
-.\.venv\Scripts\python.exe -m uvicorn pilot_core.main:app --host 127.0.0.1 --port 8201
-```
-
-- `GET /ops/dashboard|campaigns|conversations|crm|handoff`
-- `POST /ops/campaigns`
-- `POST /ops/calls/dispatch` (mock si no hay `DIALER_BASE_URL`)
-
-Docker/Traefik: servicio `web` en `docker-compose.dev.yml` (path `/` excluyendo APIs).
+El adapter traduce únicamente las rutas declaradas en
+`src/server/coopfuturo-route-policy.mjs`; las demás devuelven 404.
 
 ## Qué falta para producto completo
 
-- Auth OIDC / masking PII en API
-- Persistencia real (no solo fixtures + memoria)
-- Cableado Dialer/WhatsApp/LIWA productivos
+- Selector explícito y validado cuando un operador tenga varios grants NOVA
+- Persistencia provider-owned para preferencias que aún sean locales
+- Completar operaciones customer-specific que todavía no tengan endpoint NOVA
 - Importer VIP-II, compliance, scoring, CRM state machines

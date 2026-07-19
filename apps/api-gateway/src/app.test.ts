@@ -1,5 +1,5 @@
 import { OPERATOR_ASSERTION_HEADER, createService, verifyOperatorAssertion } from "@hyperion/service-runtime";
-import type { AuthMe } from "@hyperion/contracts";
+import type { AccessMe, ProductGrant } from "@hyperion/platform-contracts";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createGatewayRoutes } from "./app.js";
@@ -10,10 +10,17 @@ const ADMIN_TOKEN = "admin-test-token-1234567890";
 const COORDINATOR_TOKEN = "coordinator-test-token-1234567890";
 const ADVISOR_TOKEN = "advisor-test-token-1234567890";
 const AUDITOR_TOKEN = "auditor-test-token-1234567890";
+const NO_GRANT_ADMIN_TOKEN = "no-grant-admin-test-token-1234567890";
+const NO_GRANT_ADVISOR_TOKEN = "no-grant-advisor-test-token-1234567890";
+const NOVA_ONLY_ADMIN_TOKEN = "nova-only-admin-test-token-1234567890";
+const INACTIVE_NOVA_ADMIN_TOKEN = "inactive-nova-admin-test-token-1234567890";
+const PULSO_READ_ONLY_ADMIN_TOKEN = "pulso-read-only-admin-token-1234567890";
 const GATEWAY_TO_IDENTITY_TOKEN = "gateway-to-identity-test-token-001";
 const GATEWAY_TO_INTEGRATION_TOKEN = "gateway-to-integration-test-token-02";
 const GATEWAY_TO_PULSO_TOKEN = "gateway-to-pulso-test-token-0001";
 const GATEWAY_TO_LUMEN_TOKEN = "gateway-to-lumen-test-token-0002";
+const GATEWAY_TO_NOVA_TOKEN = "gateway-to-nova-test-token-000004";
+const GATEWAY_TO_VOICE_TOKEN = "gateway-to-voice-test-token-00003";
 const GATEWAY_TO_TENANT_TOKEN = "gateway-to-tenant-test-token-00016";
 const OPERATOR_ASSERTION_KEY = "gateway-operator-assertion-key-01";
 
@@ -27,7 +34,11 @@ const isolatedServiceUrls = {
   INTEGRATION_SERVICE_URL: "http://127.0.0.1:65517",
   PULSO_IRIS_SERVICE_URL: "http://127.0.0.1:65518",
   WHATSAPP_CHANNEL_SERVICE_URL: "http://127.0.0.1:65519",
-  LUMEN_SERVICE_URL: "http://127.0.0.1:65520"
+  LUMEN_SERVICE_URL: "http://127.0.0.1:65520",
+  NOVA_CORE_SERVICE_URL: "http://127.0.0.1:65521",
+  VOICE_CHANNEL_SERVICE_URL: "http://127.0.0.1:65522",
+  LIWA_CHANNEL_SERVICE_URL: "http://127.0.0.1:65523",
+  DOCUMENTS_SERVICE_URL: "http://127.0.0.1:65524"
 } as const;
 
 const previousServiceUrls = Object.fromEntries(
@@ -35,7 +46,16 @@ const previousServiceUrls = Object.fromEntries(
 );
 const previousOperatorAssertionKey = process.env.GATEWAY_OPERATOR_ASSERTION_KEY;
 
-const sessions: Record<string, AuthMe> = {
+function productGrant(
+  productId: "NOVA" | "LUMEN" | "PULSO_IRIS",
+  roles: string[],
+  capabilities: string[],
+  active = true
+): ProductGrant {
+  return { tenantId: AUTHORIZED_TENANT_ID, productId, roles, capabilities, active };
+}
+
+const sessions: Record<string, AccessMe> = {
   [ADMIN_TOKEN]: {
     operator: {
       id: "9c8b7a6d-5e4f-4a3b-8c9d-0e1f2a3b4c5d",
@@ -43,7 +63,12 @@ const sessions: Record<string, AuthMe> = {
       displayName: "Admin",
       role: "admin"
     },
-    tenantIds: []
+    tenantIds: [AUTHORIZED_TENANT_ID],
+    grants: [
+      productGrant("NOVA", ["admin"], ["nova:admin"]),
+      productGrant("LUMEN", ["admin"], ["lumen:admin"]),
+      productGrant("PULSO_IRIS", ["admin"], ["pulso:admin"])
+    ]
   },
   [COORDINATOR_TOKEN]: {
     operator: {
@@ -52,7 +77,12 @@ const sessions: Record<string, AuthMe> = {
       displayName: "Coordinador",
       role: "coordinator"
     },
-    tenantIds: [AUTHORIZED_TENANT_ID]
+    tenantIds: [AUTHORIZED_TENANT_ID],
+    grants: [
+      productGrant("NOVA", ["supervisor"], ["nova:read", "nova:write"]),
+      productGrant("LUMEN", ["coordinator"], ["lumen:read", "lumen:write"]),
+      productGrant("PULSO_IRIS", ["coordinator"], ["pulso:read", "pulso:write"])
+    ]
   },
   [ADVISOR_TOKEN]: {
     operator: {
@@ -61,7 +91,12 @@ const sessions: Record<string, AuthMe> = {
       displayName: "Asesor",
       role: "advisor"
     },
-    tenantIds: [AUTHORIZED_TENANT_ID]
+    tenantIds: [AUTHORIZED_TENANT_ID],
+    grants: [
+      productGrant("NOVA", ["asesor"], ["nova:read", "nova:write"]),
+      productGrant("LUMEN", ["advisor"], ["lumen:read", "lumen:write"]),
+      productGrant("PULSO_IRIS", ["advisor"], ["pulso:read", "pulso:write"])
+    ]
   },
   [AUDITOR_TOKEN]: {
     operator: {
@@ -70,7 +105,62 @@ const sessions: Record<string, AuthMe> = {
       displayName: "Auditor",
       role: "auditor"
     },
-    tenantIds: [AUTHORIZED_TENANT_ID]
+    tenantIds: [AUTHORIZED_TENANT_ID],
+    grants: [
+      productGrant("NOVA", ["asesor"], ["nova:read"]),
+      productGrant("LUMEN", ["auditor"], ["lumen:read"]),
+      productGrant("PULSO_IRIS", ["auditor"], ["pulso:read"])
+    ]
+  },
+  [NO_GRANT_ADMIN_TOKEN]: {
+    operator: {
+      id: "4d5e6f70-8192-4a8b-9c0d-1e2f3a4b5c6d",
+      email: "admin-no-grant@hyperion.local",
+      displayName: "Admin without grant",
+      role: "admin"
+    },
+    tenantIds: [],
+    grants: []
+  },
+  [NO_GRANT_ADVISOR_TOKEN]: {
+    operator: {
+      id: "5e6f7081-92a3-4a8b-9c0d-1e2f3a4b5c6d",
+      email: "advisor-no-grant@hyperion.local",
+      displayName: "Advisor without grant",
+      role: "advisor"
+    },
+    tenantIds: [],
+    grants: []
+  },
+  [NOVA_ONLY_ADMIN_TOKEN]: {
+    operator: {
+      id: "6f708192-a3b4-4a8b-9c0d-1e2f3a4b5c6d",
+      email: "nova-only-admin@hyperion.local",
+      displayName: "NOVA-only admin",
+      role: "admin"
+    },
+    tenantIds: [AUTHORIZED_TENANT_ID],
+    grants: [productGrant("NOVA", ["admin"], ["nova:admin"])]
+  },
+  [INACTIVE_NOVA_ADMIN_TOKEN]: {
+    operator: {
+      id: "8192a3b4-c5d6-4a8b-9c0d-1e2f3a4b5c6d",
+      email: "inactive-nova-admin@hyperion.local",
+      displayName: "Inactive NOVA admin",
+      role: "admin"
+    },
+    tenantIds: [],
+    grants: [productGrant("NOVA", ["admin"], ["nova:admin"], false)]
+  },
+  [PULSO_READ_ONLY_ADMIN_TOKEN]: {
+    operator: {
+      id: "708192a3-b4c5-4a8b-9c0d-1e2f3a4b5c6d",
+      email: "pulso-read-only-admin@hyperion.local",
+      displayName: "PULSO read-only admin",
+      role: "admin"
+    },
+    tenantIds: [AUTHORIZED_TENANT_ID],
+    grants: [productGrant("PULSO_IRIS", ["admin"], ["pulso:read"])]
   }
 };
 
@@ -91,6 +181,8 @@ beforeAll(async () => {
         integration: GATEWAY_TO_INTEGRATION_TOKEN,
         pulsoIris: GATEWAY_TO_PULSO_TOKEN,
         lumen: GATEWAY_TO_LUMEN_TOKEN,
+        nova: GATEWAY_TO_NOVA_TOKEN,
+        voice: GATEWAY_TO_VOICE_TOKEN,
         tenant: GATEWAY_TO_TENANT_TOKEN
       }
     })
@@ -152,6 +244,45 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(502);
   });
 
+  it("preserves grants returned for an opaque N-1 session token", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v1/auth/me")) {
+        return Response.json({ data: sessions[COORDINATOR_TOKEN] });
+      }
+      if (url.includes(`/v1/tenants/${AUTHORIZED_TENANT_ID}/nova/campaigns`)) {
+        return Response.json({ data: { authorized: true } });
+      }
+      throw new Error(`Unexpected upstream request: ${url}`);
+    });
+    let opaqueApp: FastifyInstance | undefined;
+    try {
+      const handle = await createService({
+        serviceName: "api-gateway",
+        databaseRequired: false,
+        publicApi: true,
+        registerRoutes: createGatewayRoutes({
+          gatewayCredentials: { nova: GATEWAY_TO_NOVA_TOKEN }
+        })
+      });
+      opaqueApp = handle.app;
+
+      const response = await opaqueApp.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/nova/campaigns`,
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+
+      expect(COORDINATOR_TOKEN.split(".")).toHaveLength(1);
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.authorized).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      await opaqueApp?.close();
+      fetchMock.mockRestore();
+    }
+  });
+
   it("forbids tenants the operator is not assigned to", async () => {
     const response = await app.inject({
       method: "GET",
@@ -171,6 +302,150 @@ describe("api-gateway authentication", () => {
 
     // Authorization passed; upstream is not running in tests.
     expect(response.statusCode).toBe(502);
+  });
+
+  it.each([
+    ["admin", NO_GRANT_ADMIN_TOKEN],
+    ["advisor", NO_GRANT_ADVISOR_TOKEN]
+  ])("rejects a %s platform role without an exact product grant", async (_role, token) => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
+      headers: { authorization: `Bearer ${token}` }
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().data.error).toContain("PULSO_IRIS grant required");
+  });
+
+  it("does not let an admin use a tenant A grant against tenant B", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${OTHER_TENANT_ID}/nova/campaigns`,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().data.error).toContain("NOVA grant required for this tenant");
+  });
+
+  it("requires the exact product and method capability even for a platform admin", async () => {
+    const wrongProduct = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/worklist`,
+      headers: { authorization: `Bearer ${NOVA_ONLY_ADMIN_TOKEN}` }
+    });
+    const missingWrite = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments`,
+      headers: { authorization: `Bearer ${PULSO_READ_ONLY_ADMIN_TOKEN}` },
+      payload: {}
+    });
+
+    expect(wrongProduct.statusCode).toBe(403);
+    expect(wrongProduct.json().data.error).toContain("LUMEN grant required");
+    expect(missingWrite.statusCode).toBe(403);
+    expect(missingWrite.json().data.error).toContain("pulso:write capability required");
+  });
+
+  it("proxies a tenant request only after its exact active grant and read capability pass", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ data: { allowed: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.allowed).toBe(true);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+        `${isolatedServiceUrls.PULSO_IRIS_SERVICE_URL}/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`
+      );
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("error");
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("requires a product grant but never proxies legacy product discovery directly", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    try {
+      const withoutGrant = await app.inject({
+        method: "GET",
+        url: "/v1/nova/health",
+        headers: { authorization: `Bearer ${NO_GRANT_ADMIN_TOKEN}` }
+      });
+      const wrongProduct = await app.inject({
+        method: "GET",
+        url: "/v1/lumen/catalog",
+        headers: { authorization: `Bearer ${NOVA_ONLY_ADMIN_TOKEN}` }
+      });
+      const inactiveGrant = await app.inject({
+        method: "GET",
+        url: "/v1/nova/catalog",
+        headers: { authorization: `Bearer ${INACTIVE_NOVA_ADMIN_TOKEN}` }
+      });
+      const activeGrant = await app.inject({
+        method: "GET",
+        url: "/v1/nova/health",
+        headers: { authorization: `Bearer ${NOVA_ONLY_ADMIN_TOKEN}` }
+      });
+
+      expect(withoutGrant.statusCode).toBe(403);
+      expect(wrongProduct.statusCode).toBe(403);
+      expect(inactiveGrant.statusCode).toBe(403);
+      expect(activeGrant.statusCode).toBe(404);
+      expect(activeGrant.json().data.error).toContain("product-owned BFF");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("enforces the NOVA BFF capability policy instead of the generic read grant", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/voice/calls/reconciliation`,
+        headers: { authorization: `Bearer ${ADVISOR_TOKEN}` }
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json().data.error).toContain("nova:admin capability required");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("returns 404 for product routes outside the owner BFF allowlist", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    try {
+      const novaInternal = await app.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/voice/internal/events`,
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
+      const foreignNamespace = await app.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/nova/lumen/worklist`,
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
+
+      expect(novaInternal.statusCode).toBe(404);
+      expect(foreignNamespace.statusCode).toBe(404);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("fails closed when a product-specific gateway identity is missing", async () => {
@@ -265,6 +540,35 @@ describe("api-gateway authentication", () => {
       expect(
         verifyOperatorAssertion(identityHeaders.get(OPERATOR_ASSERTION_HEADER) ?? undefined, OPERATOR_ASSERTION_KEY)
       ).not.toHaveProperty("tenantId");
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("signs the NOVA product together with operator and tenant context", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/voice/campaigns`,
+        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
+      });
+
+      expect(response.statusCode).toBe(200);
+      const forwarded = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(
+        verifyOperatorAssertion(forwarded.get(OPERATOR_ASSERTION_HEADER) ?? undefined, OPERATOR_ASSERTION_KEY)
+      ).toMatchObject({
+        operatorId: sessions[COORDINATOR_TOKEN]!.operator.id,
+        role: "coordinator",
+        tenantId: AUTHORIZED_TENANT_ID,
+        productId: "NOVA"
+      });
     } finally {
       fetchMock.mockRestore();
     }
@@ -767,6 +1071,29 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(502);
   });
 
+  it("filters the tenant directory by active product grants without an admin bypass", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: [
+          { id: AUTHORIZED_TENANT_ID, name: "Authorized" },
+          { id: OTHER_TENANT_ID, name: "Foreign" }
+        ]
+      })
+    );
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/tenants",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data).toEqual([{ id: AUTHORIZED_TENANT_ID, name: "Authorized" }]);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("fails closed on /v1/tenants without contacting upstream when the tenant edge is missing", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     let isolatedApp: FastifyInstance | undefined;
@@ -932,15 +1259,22 @@ describe("api-gateway routes", () => {
   });
 
   it("reports platform health as down when no downstream responds", async () => {
-    const response = await app.inject({
-      method: "GET",
-      url: "/v1/platform/health",
-      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
-    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("downstream unavailable"));
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/platform/health",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
+      });
 
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.status).toBe("down");
-    expect(body.services).toHaveLength(14);
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.status).toBe("down");
+      expect(body.services).toHaveLength(14);
+      expect(fetchMock).toHaveBeenCalledTimes(14);
+      expect(fetchMock.mock.calls.every(([, init]) => init?.redirect === "error")).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
   }, 15_000);
 });

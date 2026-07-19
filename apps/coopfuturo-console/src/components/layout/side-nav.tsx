@@ -82,7 +82,7 @@ export function SideNav() {
           <span className="size-3 rounded-full bg-[var(--accent)] shadow-[0_0_12px_var(--accent)]" />
         </span>
         <div className="min-w-0">
-          <span className="block text-lg font-semibold tracking-wide">PULSO</span>
+          <span className="block text-lg font-semibold tracking-wide">NOVA</span>
           <span className="block text-[10px] uppercase tracking-wider text-[var(--muted)]">
             Coopfuturo
           </span>
@@ -130,7 +130,7 @@ export function MobileNav() {
         >
           {open ? <X className="size-5" /> : <Menu className="size-5" />}
         </button>
-        <span className="text-sm font-semibold tracking-wide">PULSO</span>
+        <span className="text-sm font-semibold tracking-wide">NOVA</span>
       </header>
 
       {open ? (
@@ -143,7 +143,7 @@ export function MobileNav() {
           />
           <aside className="relative flex h-full w-[min(100%,280px)] flex-col border-r border-[var(--border)] bg-[var(--bg)]">
             <div className="flex items-center justify-between px-4 py-4">
-              <span className="font-semibold">PULSO</span>
+              <span className="font-semibold">NOVA</span>
               <button type="button" aria-label="Cerrar" onClick={() => setOpen(false)}>
                 <X className="size-5" />
               </button>

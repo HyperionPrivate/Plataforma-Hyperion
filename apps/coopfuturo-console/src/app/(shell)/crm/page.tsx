@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useCrm } from "@/hooks/use-pulso";
+import { useCrm } from "@/hooks/use-nova";
 import { moveCrmLead } from "@/services/ops-client";
 import { cn } from "@/lib/utils";
 import { Phone, MessageCircle, X, ArrowRight } from "lucide-react";

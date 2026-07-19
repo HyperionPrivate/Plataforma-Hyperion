@@ -165,7 +165,6 @@ export default function LaboratorioPage() {
             : liwaEvent === "handoff_requested"
               ? "Quiere hablar con un asesor"
               : undefined,
-        tenant_id: "coopfuturo",
       });
       setLastResult(JSON.stringify(res, null, 2));
       toast.success(`Evento ${liwaEvent}`, {

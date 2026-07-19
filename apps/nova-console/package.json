@@ -1,0 +1,33 @@
+{
+  "name": "@hyperion/nova-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/check-bundle.mjs",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "dev": "vite --host 0.0.0.0 --port 3010",
+    "lint": "eslint --max-warnings 0 src tests scripts vite.config.ts",
+    "preview": "vite preview --host 0.0.0.0 --port 3010",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hyperion/nova-contracts": "1.1.0",
+    "@hyperion/platform-contracts": "1.1.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.18.1",
+    "recharts": "^3.9.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2",
+    "vitest": "^3.0.8"
+  }
+}
