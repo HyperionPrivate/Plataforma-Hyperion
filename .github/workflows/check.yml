@@ -366,6 +366,9 @@ jobs:
       POSTGRES_PASSWORD: compatibility-postgres-password-0001
       POSTGRES_DB: hyperion
       HYPERION_ENVIRONMENT: ci
+      # Revisions predating the canonical deployment variable still read this
+      # alias. Keep it only in the bounded N-1 compatibility rehearsal.
+      HYPERION_ENV: ci
       INTERNAL_SERVICE_TOKEN: compatibility-internal-token-0002
       WHATSAPP_PHONE_HASH_KEY: compatibility-phone-hash-key-0000003
       HYPERION_COMPAT_POSTGRES_VOLUME: hyperion-compat-postgres-${{ github.run_id }}-${{ github.run_attempt }}

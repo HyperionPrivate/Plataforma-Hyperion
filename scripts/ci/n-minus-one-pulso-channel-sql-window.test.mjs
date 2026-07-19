@@ -16,6 +16,7 @@ const channelPulsoDriftProbe = readFileSync(
   "utf8"
 );
 const workflow = readFileSync(join(directory, "../../.github/workflows/check.yml"), "utf8");
+const compatibilityOverlay = readFileSync(join(directory, "../../infra/docker-compose.compatibility-ci.yml"), "utf8");
 
 function section(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -374,6 +375,8 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
   const diagnostics = workflow.indexOf("- name: Print compatibility diagnostics");
   const teardown = workflow.indexOf("- name: Remove compatibility containers and volumes");
   assert.match(jobEnvironment, /HYPERION_ENVIRONMENT:\s*ci/);
+  assert.match(jobEnvironment, /HYPERION_ENV:\s*ci/);
+  assert.match(jobEnvironment, /Revisions predating the canonical deployment variable/);
   assert.ok(
     stopped < stateProbeStep &&
       stateProbeStep < driftProbeStep &&
@@ -556,4 +559,16 @@ test("workflow gates N-1 workloads, compares the immutable snapshot and always c
       sofiaClosed < channelPulsoClosed
   );
   assert.match(cleanupStep, /for status in[\s\S]*exit "\$overall_status"/);
+});
+
+test("N-1 forwards the legacy deployment alias only to historical NOVA one-shots", () => {
+  for (const [service, endMarker] of [
+    ["nova-database-bootstrap", "  nova-migrations:"],
+    ["nova-migrations", "  nova-role-bootstrap:"],
+    ["nova-role-bootstrap", "volumes:"]
+  ]) {
+    const block = section(compatibilityOverlay, `  ${service}:`, endMarker);
+    assert.match(block, /HYPERION_ENV:\s*\$\{HYPERION_ENV:\?HYPERION_ENV is required\}/);
+  }
+  assert.equal((compatibilityOverlay.match(/^\s+HYPERION_ENV:/gm) ?? []).length, 3);
 });
