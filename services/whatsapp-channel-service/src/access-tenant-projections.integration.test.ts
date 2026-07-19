@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { consumeAccessTenantSnapshot } from "./access-tenant-projections.js";
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
+const databaseUrl = process.env.TEST_CHANNEL_DATABASE_URL;
 const describeIntegration = databaseUrl ? describe : describe.skip;
 
 describeIntegration("Access → Channel tenant snapshot projection", () => {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -80,7 +81,8 @@ test("PULSO runtime suites use only their fenced database role and execute every
       outputFile,
       root
     );
-    assert.equal(new URL(execution.env.TEST_DATABASE_URL).username, suite.expectedDatabaseRole);
+    assert.equal(execution.env.TEST_DATABASE_URL, undefined);
+    assert.equal(new URL(execution.env[suite.databaseUrlEnvironment]).username, suite.expectedDatabaseRole);
     assert.equal(new URL(execution.env.TEST_PULSO_FIXTURE_DATABASE_URL).username, "hyperion");
     assert.equal(execution.env.EXPECTED_DATABASE_ROLE, suite.expectedDatabaseRole);
     assert.equal(execution.env.UNRELATED_SENTINEL, "preserved");
@@ -88,10 +90,17 @@ test("PULSO runtime suites use only their fenced database role and execute every
       const expectedFixtureUrl =
         databaseUrlEnvironment === "TEST_PULSO_FIXTURE_DATABASE_URL"
           ? databaseUrls.TEST_PULSO_FIXTURE_DATABASE_URL
-          : undefined;
+          : databaseUrlEnvironment === suite.databaseUrlEnvironment
+            ? databaseUrls[databaseUrlEnvironment]
+            : undefined;
       assert.equal(execution.env[databaseUrlEnvironment], expectedFixtureUrl);
     }
-    for (const file of suite.files) assert(execution.args.includes(file.path));
+    for (const file of suite.files) {
+      assert(execution.args.includes(file.path));
+      const source = readFileSync(path.join(root, suite.packageDirectory, file.path), "utf8");
+      assert.match(source, new RegExp(`process\\.env\\.${suite.databaseUrlEnvironment}`));
+      assert.doesNotMatch(source, /process\.env\.TEST_DATABASE_URL/);
+    }
     assert(execution.args.includes("--no-file-parallelism"));
     assert(execution.args.includes("--reporter=json"));
     assert(!execution.args.includes("--passWithNoTests"));

@@ -8,7 +8,7 @@ import {
 } from "./pulso-events.js";
 import type { PulsoEventPosition } from "./pulso-position-client.js";
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.TEST_SOFIA_DATABASE_URL;
 const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
 const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createDatabase, type DatabaseClient } from "@hyperion/database";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.TEST_SOFIA_DATABASE_URL;
 const TEST_PULSO_FIXTURE_DATABASE_URL = process.env.TEST_PULSO_FIXTURE_DATABASE_URL;
 const describeIntegration = TEST_DATABASE_URL && TEST_PULSO_FIXTURE_DATABASE_URL ? describe : describe.skip;
 
