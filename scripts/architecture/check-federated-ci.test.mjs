@@ -395,10 +395,12 @@ test("the complete stack is restricted to main and scheduled execution", async (
   const ownershipGuard = checkJob.indexOf("Verify service role ownership guard");
   const legacyRoleRestore = checkJob.indexOf("Restore ephemeral service database passwords");
   const auditRoleActivation = checkJob.indexOf("Activate Audit runtime role with the provider-owned one-shot");
+  const auditIntegration = checkJob.indexOf("Verify provider-owned Audit readiness and idempotency");
   const auditFlow = checkJob.indexOf("Test autonomous Channel to Audit flow");
   assert.ok(ownershipGuard >= 0, "full-stack CI must exercise the historical service-role fence");
   assert.ok(legacyRoleRestore > ownershipGuard, "legacy runtime roles must be restored after the historical fence");
   assert.ok(auditRoleActivation > legacyRoleRestore, "Audit must be reactivated after the historical global fence");
+  assert.ok(auditIntegration > auditRoleActivation, "Audit integration tests must run after provider-owned activation");
   assert.ok(auditFlow > auditRoleActivation, "Audit must be active before the autonomous event flow");
 });
 
@@ -416,8 +418,18 @@ test("Audit integration tests are pinned to the provider-owned logical database"
     assert.doesNotMatch(source, /process\.env\.TEST_DATABASE_URL/);
   }
 
-  const fullStackTest = fullStackWorkflow.slice(fullStackWorkflow.indexOf("      - name: Test\n"));
-  assert.match(fullStackTest, /TEST_AUDIT_DATABASE_URL="\$audit_runtime_url" pnpm -r test/);
+  const checkJobStart = fullStackWorkflow.indexOf("  check:");
+  const checkJobEnd = fullStackWorkflow.indexOf("  docker-build-and-smoke:", checkJobStart);
+  const fullStackCheckJob = fullStackWorkflow.slice(checkJobStart, checkJobEnd);
+  const recursiveTestStart = fullStackCheckJob.indexOf("      - name: Test\n");
+  assert.ok(recursiveTestStart >= 0, "full-stack CI must retain the recursive test suite");
+  const fullStackTest = fullStackCheckJob.slice(recursiveTestStart);
+  assert.match(
+    fullStackCheckJob,
+    /Verify provider-owned Audit readiness and idempotency[\s\S]*TEST_AUDIT_DATABASE_URL="\$audit_runtime_url"[\s\S]*pnpm --filter @hyperion\/audit-service exec vitest run[\s\S]*src\/readiness\.integration\.test\.ts src\/internal-events\.integration\.test\.ts/
+  );
+  assert.doesNotMatch(fullStackTest, /TEST_AUDIT_DATABASE_URL/);
+  assert.match(fullStackTest, /run: pnpm -r test/);
   assert.match(fullStackTest, /TEST_DATABASE_URL: postgres:\/\/hyperion:hyperion_test@localhost:5432\/hyperion_test/);
 
   const auditJobStart = reusableWorkflow.indexOf("  audit-database-smoke:");
