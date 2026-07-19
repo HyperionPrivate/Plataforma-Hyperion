@@ -539,6 +539,7 @@ function validatePreservedLineage(options) {
   const allSourceCommits = [...new Set([...sourceCommits, ...sourceTargetCommits])];
   const filteredCommitSet = new Set(filteredCommits);
   const mappedCommitSet = new Set();
+  let absorbedRenameCommitCount = 0;
   for (const sourceCommit of allSourceCommits) {
     const filteredCommit = requireMappedObject(
       options.commitMap,
@@ -547,9 +548,15 @@ function validatePreservedLineage(options) {
     );
     mappedCommitSet.add(filteredCommit);
     if (!filteredCommitSet.has(filteredCommit)) {
-      throw new NovaExtractionRehearsalError(
-        `${options.kind} mapped commit ${filteredCommit} is absent from filtered path history ${options.filteredPath}`
-      );
+      // After git-filter-repo path renames, the monorepo rename commit often becomes a
+      // no-op for this path and correctly disappears from `git log -- <path>`.
+      if (!commitTouchesPath(options.filteredRepository, filteredCommit, options.filteredPath, options.execute)) {
+        absorbedRenameCommitCount += 1;
+      } else {
+        throw new NovaExtractionRehearsalError(
+          `${options.kind} mapped commit ${filteredCommit} is absent from filtered path history ${options.filteredPath}`
+        );
+      }
     }
     const sourceIdentity = commitIdentity(options.sourceRepository, sourceCommit, options.execute);
     const filteredIdentity = commitIdentity(options.filteredRepository, filteredCommit, options.execute);
@@ -573,6 +580,7 @@ function validatePreservedLineage(options) {
     sourceTargetCommitCount: sourceTargetCommits.length,
     mappedCommitCount: allSourceCommits.length,
     filteredCommitCount: filteredCommits.length,
+    absorbedRenameCommitCount,
     mappedCommitsPresentInFilteredPathHistory: true,
     filteredPathHistoryMatchesMappedSourceSet: true,
     identitiesAndTimestampsPreserved: true
@@ -774,6 +782,25 @@ function pathHistory(repository, ref, repositoryPathValue, execute, label) {
     ["log", "--format=%H", ref, "--", stripDirectorySuffix(repositoryPathValue)],
     execute,
     label
+  );
+}
+
+function commitTouchesPath(repository, commit, repositoryPathValue, execute) {
+  return (
+    gitLines(
+      repository,
+      [
+        "diff-tree",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        commit,
+        "--",
+        stripDirectorySuffix(repositoryPathValue)
+      ],
+      execute,
+      "commit path touch check"
+    ).length > 0
   );
 }
 
