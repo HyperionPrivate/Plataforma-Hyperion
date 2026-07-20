@@ -67,17 +67,19 @@ correctamente en el SHA publicado. El full-stack quedó temporalmente restringid
 
 ## Wave F — canary restoration (2026-07-20)
 
-Estado: **hold desbloqueado y restauración gradual iniciada**. El repositorio es público, GitHub Actions está
+Estado: **hold desbloqueado y restauración gradual validada**. El repositorio es público, GitHub Actions está
 habilitado con acciones fijadas por SHA y `main` está protegida con checks obligatorios, historial lineal,
-administradores incluidos y force-push/eliminación bloqueados. `pulso-cell` es el único canario con `push` a
-`main`; los demás workflows conservan sus triggers anteriores hasta que el canario cierre en verde.
+administradores incluidos y force-push/eliminación bloqueados. `pulso-cell` cerró en verde sobre el evento `push`
+del SHA `3af2b60fe6275127bda78b438896402d34fef053` (run `29780031326`), incluyendo las 93 integraciones PostgreSQL,
+la clausura de código, recovery gates, smoke de imagen y el gate requerido. Con ese canario acreditado se restauran
+los triggers históricos de `push` y `schedule` para el resto de CI.
 
-| Ítem                                                       | Estado                        |
-| ---------------------------------------------------------- | ----------------------------- |
-| Local-first (`pnpm check` / Compose) como fuente de verdad | vigente                       |
-| Workflows solo `workflow_dispatch` + `pull_request`        | verificado                    |
-| Restaurar `on.push` / `schedule`                           | canario `pulso-cell` en curso |
-| Org rulesets / branch protection                           | branch protection aplicada    |
+| Ítem                                                       | Estado                          |
+| ---------------------------------------------------------- | ------------------------------- |
+| Local-first (`pnpm check` / Compose) como fuente de verdad | vigente                         |
+| Workflows solo `workflow_dispatch` + `pull_request`        | verificado                      |
+| Restaurar `on.push` / `schedule`                           | canario verde; ampliación lista |
+| Org rulesets / branch protection                           | branch protection aplicada      |
 
 ### Criterios de avance
 
@@ -85,7 +87,7 @@ administradores incluidos y force-push/eliminación bloqueados. `pulso-cell` es 
    estándar alojados por GitHub no consumen cuota de minutos.
 2. ~~Transferencia a Organization con rulesets en `main` (require status checks, block force-push).~~ Resuelto con
    branch protection y checks requeridos.
-3. Reintroducir `push`/`schedule` de forma gradual: primero `pulso-cell`, observar su ejecución sobre el merge y
-   sólo después ampliar a las otras celdas, seguridad y full-stack.
+3. ~~Reintroducir `push`/`schedule` de forma gradual.~~ Canario `pulso-cell` observado en verde; triggers históricos
+   restaurados para Access, NOVA, LUMEN, Platform, seguridad y full-stack.
 
-No ampliar triggers hasta que el canario de `pulso-cell` termine correctamente sobre `main`.
+Conservar `workflow_dispatch` para recuperación manual y vigilar la primera ejecución completa sobre `main`.
