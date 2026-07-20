@@ -739,6 +739,9 @@ importers:
 
   services/integration-service:
     dependencies:
+      '@hyperion/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       '@hyperion/platform-contracts':
         specifier: 1.1.0
         version: link:../../packages/platform-contracts
@@ -754,6 +757,9 @@ importers:
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
 
   services/knowledge-service:
     dependencies:

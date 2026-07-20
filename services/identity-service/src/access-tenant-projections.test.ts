@@ -227,7 +227,7 @@ describe("Access tenant snapshot delivery configuration", () => {
       readAccessTenantProjectionConfiguration({
         ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
         ACCESS_TENANT_SNAPSHOT_HTTP_URL:
-          "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots,http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots,http://agent-service:8083/internal/v1/events/access-tenant-snapshots",
+          "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots,http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots,http://agent-service:8083/internal/v1/events/access-tenant-snapshots,http://integration-service:8087/internal/v1/events/access-tenant-snapshots",
         ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
         ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
         HYPERION_ENVIRONMENT: "ci"
@@ -237,7 +237,8 @@ describe("Access tenant snapshot delivery configuration", () => {
       destinations: [
         "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots",
         "http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots",
-        "http://agent-service:8083/internal/v1/events/access-tenant-snapshots"
+        "http://agent-service:8083/internal/v1/events/access-tenant-snapshots",
+        "http://integration-service:8087/internal/v1/events/access-tenant-snapshots"
       ]
     });
   });

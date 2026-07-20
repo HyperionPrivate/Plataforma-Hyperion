@@ -141,7 +141,8 @@ const HTTP_EDGE_IDENTITIES = {
     { service: "identity-service", variable: "ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN" },
     "whatsapp-channel-service",
     { service: "pulso-iris-service", variable: "ACCESS_TO_PULSO_TOKEN" },
-    { service: "agent-service", variable: "ACCESS_TO_SOFIA_TOKEN" }
+    { service: "agent-service", variable: "ACCESS_TO_SOFIA_TOKEN" },
+    { service: "integration-service", variable: "ACCESS_TO_INTEGRATION_TOKEN" }
   ],
   PULSO_TO_SOFIA_TOKEN: ["pulso-iris-service", "agent-service"],
   PULSO_TO_AUDIT_TOKEN: ["pulso-iris-service", "audit-service"],

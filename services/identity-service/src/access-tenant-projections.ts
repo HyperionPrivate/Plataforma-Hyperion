@@ -34,6 +34,7 @@ const PRIVATE_HTTP_HOSTS = new Set([
   "whatsapp-channel-service",
   "pulso-iris-service",
   "agent-service",
+  "integration-service",
   "localhost",
   "127.0.0.1",
   "[::1]"

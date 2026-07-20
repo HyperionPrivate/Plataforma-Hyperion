@@ -1,5 +1,5 @@
 {
-  "policyVersion": "1.7.0",
+  "policyVersion": "1.8.0",
   "owner": "pulso-data",
   "issue": "HYP-DEBT-027",
   "reviewBy": "2026-10-31",
@@ -42,8 +42,8 @@
     "globalTransition": {
       "schema": "pulso_iris",
       "serviceName": "pulso",
-      "minimumVersion": 6,
-      "migration": "006-access-sofia-tenant-projection.sql",
+      "minimumVersion": 7,
+      "migration": "007-access-integration-tenant-projection.sql",
       "currentConsumers": [
         "pulso-iris-service",
         "knowledge-service",
@@ -67,6 +67,7 @@
       "packages/pulso-migrations/sql/004-access-channel-tenant-projection.sql",
       "packages/pulso-migrations/sql/005-access-iris-tenant-projection.sql",
       "packages/pulso-migrations/sql/006-access-sofia-tenant-projection.sql",
+      "packages/pulso-migrations/sql/007-access-integration-tenant-projection.sql",
       "packages/pulso-migrations/src/schema-manifest.ts",
       "packages/pulso-migrations/src/autonomy.integration.test.ts",
       "packages/service-runtime/src/sofia-n-minus-one-readiness.integration.test.ts"

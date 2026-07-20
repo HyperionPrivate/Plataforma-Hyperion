@@ -121,6 +121,14 @@ const TABLE_PRIVILEGE_MATRIX: Readonly<Record<RuntimeRole, readonly TablePrivile
     { table: "platform.integrations", privilege: "SELECT", allowed: true },
     { table: "platform.integrations", privilege: "UPDATE", allowed: false },
     { table: "platform.knowledge_sources", privilege: "SELECT", allowed: false },
+    { table: "integration_runtime.tenant_snapshots", privilege: "SELECT", allowed: true },
+    { table: "integration_runtime.tenant_snapshots", privilege: "INSERT", allowed: true },
+    { table: "integration_runtime.tenant_snapshots", privilege: "UPDATE", allowed: true },
+    { table: "integration_runtime.tenant_snapshots", privilege: "DELETE", allowed: false },
+    { table: "integration_runtime.access_projection_inbox", privilege: "SELECT", allowed: true },
+    { table: "integration_runtime.access_projection_inbox", privilege: "INSERT", allowed: true },
+    { table: "integration_runtime.access_projection_inbox", privilege: "UPDATE", allowed: true },
+    { table: "integration_runtime.access_projection_inbox", privilege: "DELETE", allowed: false },
     { table: "channel_runtime.tenant_snapshots", privilege: "SELECT", allowed: false },
     { table: "pulso_iris.appointments", privilege: "SELECT", allowed: false },
     { table: "pulso_iris.migration_ledger", privilege: "SELECT", allowed: false }
@@ -216,7 +224,8 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       "003-sofia-readiness-marker.sql",
       "004-access-channel-tenant-projection.sql",
       "005-access-iris-tenant-projection.sql",
-      "006-access-sofia-tenant-projection.sql"
+      "006-access-sofia-tenant-projection.sql",
+      "007-access-integration-tenant-projection.sql"
     ]);
     expect(inspection.ledgerEntries.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum))).toBe(true);
 
@@ -268,7 +277,7 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       [PULSO_PROVIDER_SCHEMAS]
     );
     expect(catalog.rows[0]).toEqual({
-      tables: 61,
+      tables: 63,
       functions: 19,
       triggers: 17,
       invalid_constraints: 0,

@@ -16,6 +16,7 @@ import {
   type RouteRegistrar
 } from "@hyperion/service-runtime";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { registerAccessTenantProjectionRoutes, requireIntegrationTenantAccess } from "./access-tenant-projections.js";
 
 const CHANNEL_TIMEOUT_MS = 5_000;
 const READINESS_TIMEOUT_MS = 3_000;
@@ -23,6 +24,7 @@ const READINESS_TIMEOUT_MS = 3_000;
 type OperatorRole = "admin" | "coordinator" | "advisor" | "auditor";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  registerAccessTenantProjectionRoutes(app, context);
   const channelUrl = (process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089").replace(/\/$/, "");
   const agentUrl = (process.env.AGENT_SERVICE_URL ?? "http://localhost:8083").replace(/\/$/, "");
   const pulsoUrl = (process.env.PULSO_IRIS_SERVICE_URL ?? "http://localhost:8088").replace(/\/$/, "");
@@ -60,6 +62,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       pulsoAssertionKey
     );
     if (!tenantId) return;
+    const snapshot = await requireIntegrationTenantAccess(context.db, tenantId, reply, request.id, "exists");
+    if (!snapshot) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/status`,
       "GET",
@@ -74,6 +78,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     if (!requireProductEdge(request, reply, gatewayToken, pulsoBffToken)) return;
     const tenantId = requireTenantAndRole(request, reply, ["admin"], gatewayAssertionKey, pulsoAssertionKey);
     if (!tenantId) return;
+    const snapshot = await requireIntegrationTenantAccess(context.db, tenantId, reply, request.id, "active");
+    if (!snapshot) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/connect`,
       "POST",
@@ -88,6 +94,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     if (!requireProductEdge(request, reply, gatewayToken, pulsoBffToken)) return;
     const tenantId = requireTenantAndRole(request, reply, ["admin"], gatewayAssertionKey, pulsoAssertionKey);
     if (!tenantId) return;
+    const snapshot = await requireIntegrationTenantAccess(context.db, tenantId, reply, request.id, "exists");
+    if (!snapshot) return;
     reply.header("cache-control", "no-store, private, max-age=0");
     reply.header("pragma", "no-cache");
     reply.header("expires", "0");
@@ -104,6 +112,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     if (!requireProductEdge(request, reply, gatewayToken, pulsoBffToken)) return;
     const tenantId = requireTenantAndRole(request, reply, ["admin"], gatewayAssertionKey, pulsoAssertionKey);
     if (!tenantId) return;
+    const snapshot = await requireIntegrationTenantAccess(context.db, tenantId, reply, request.id, "active");
+    if (!snapshot) return;
     const response = await callInternal(
       `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/disconnect`,
       "POST",
@@ -124,6 +134,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       pulsoAssertionKey
     );
     if (!tenantId) return;
+    const snapshot = await requireIntegrationTenantAccess(context.db, tenantId, reply, request.id, "exists");
+    if (!snapshot) return;
     const [channel, agent, agenda] = await Promise.all([
       callInternal(
         `${channelUrl}/internal/v1/tenants/${tenantId}/whatsapp/status`,

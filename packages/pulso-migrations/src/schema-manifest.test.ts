@@ -15,6 +15,7 @@ import {
   PULSO_MANAGED_SCHEMA_MANIFEST_004,
   PULSO_MANAGED_SCHEMA_MANIFEST_005,
   PULSO_MANAGED_SCHEMA_MANIFEST_006,
+  PULSO_MANAGED_SCHEMA_MANIFEST_007,
   PULSO_PROVIDER_SCHEMAS,
   PULSO_RUNTIME_POLICIES,
   PULSO_SCHEMA_MANIFEST,
@@ -96,7 +97,7 @@ describe("PULSO structural manifest", () => {
   it("has no LUMEN clinical inventory in the production manifest identities", () => {
     const serialized = JSON.stringify(PULSO_SCHEMA_MANIFEST);
     expect(serialized).not.toMatch(/clinical_records|dictations|encounters|audio_cleanup|lumen/i);
-    expect(PULSO_CURRENT_SCHEMA_VERSION).toBe(6);
+    expect(PULSO_CURRENT_SCHEMA_VERSION).toBe(7);
     expect(PULSO_FUNCTIONS).toHaveLength(19);
   });
 
@@ -210,6 +211,7 @@ describe("PULSO managed manifest transitions", () => {
     expect(PULSO_SCHEMA_MANIFEST.managedByVersion?.[4]).toBe(PULSO_MANAGED_SCHEMA_MANIFEST_004);
     expect(PULSO_SCHEMA_MANIFEST.managedByVersion?.[5]).toBe(PULSO_MANAGED_SCHEMA_MANIFEST_005);
     expect(PULSO_SCHEMA_MANIFEST.managedByVersion?.[6]).toBe(PULSO_MANAGED_SCHEMA_MANIFEST_006);
+    expect(PULSO_SCHEMA_MANIFEST.managedByVersion?.[7]).toBe(PULSO_MANAGED_SCHEMA_MANIFEST_007);
     expect(PULSO_MANAGED_SCHEMA_MANIFEST_001.constraint.fingerprint).not.toBe(
       PULSO_MANAGED_SCHEMA_MANIFEST_002.constraint.fingerprint
     );
@@ -218,6 +220,7 @@ describe("PULSO managed manifest transitions", () => {
     expect(PULSO_MANAGED_SCHEMA_MANIFEST_004.table.count).toBe(57);
     expect(PULSO_MANAGED_SCHEMA_MANIFEST_005.table.count).toBe(59);
     expect(PULSO_MANAGED_SCHEMA_MANIFEST_006.table.count).toBe(61);
+    expect(PULSO_MANAGED_SCHEMA_MANIFEST_007.table.count).toBe(63);
     expect(PULSO_MANAGED_SCHEMA_MANIFEST_004.table.identities).toEqual(
       expect.arrayContaining(["channel_runtime.access_projection_inbox", "channel_runtime.tenant_snapshots"])
     );
@@ -226,6 +229,9 @@ describe("PULSO managed manifest transitions", () => {
     );
     expect(PULSO_MANAGED_SCHEMA_MANIFEST_006.table.identities).toEqual(
       expect.arrayContaining(["agent_runtime.access_projection_inbox", "agent_runtime.tenant_snapshots"])
+    );
+    expect(PULSO_MANAGED_SCHEMA_MANIFEST_007.table.identities).toEqual(
+      expect.arrayContaining(["integration_runtime.access_projection_inbox", "integration_runtime.tenant_snapshots"])
     );
   });
 
@@ -251,15 +257,28 @@ describe("PULSO managed manifest transitions", () => {
       row("table", "agent_runtime.access_projection_inbox"),
       row("table", "agent_runtime.tenant_snapshots")
     ];
+    const managedCatalogV7 = [
+      ...managedCatalogV6,
+      row("table", "integration_runtime.access_projection_inbox"),
+      row("table", "integration_runtime.tenant_snapshots")
+    ];
     const manifestV2 = createPulsoStructuralManifest(managedCatalogV2);
     const manifestV3 = createPulsoStructuralManifest(managedCatalogV3);
     const manifestV4 = createPulsoStructuralManifest(managedCatalogV4);
     const manifestV5 = createPulsoStructuralManifest(managedCatalogV5);
     const manifestV6 = createPulsoStructuralManifest(managedCatalogV6);
+    const manifestV7 = createPulsoStructuralManifest(managedCatalogV7);
     const manifests = {
       legacy: manifestV2,
-      managed: manifestV6,
-      managedByVersion: { 2: manifestV2, 3: manifestV3, 4: manifestV4, 5: manifestV5, 6: manifestV6 }
+      managed: manifestV7,
+      managedByVersion: {
+        2: manifestV2,
+        3: manifestV3,
+        4: manifestV4,
+        5: manifestV5,
+        6: manifestV6,
+        7: manifestV7
+      }
     };
     const ledger = [{ name: PULSO_BASELINE_MIGRATION, checksum: "a".repeat(64) }];
 
@@ -298,20 +317,28 @@ describe("PULSO managed manifest transitions", () => {
     expect(
       evaluatePulsoSchemaSnapshot(
         managedCatalogV6,
-        [{ current_version: 6, migration_name: PULSO_CURRENT_MIGRATION }],
+        [{ current_version: 6, migration_name: "006-access-sofia-tenant-projection.sql" }],
+        ledger,
+        manifests
+      ).state
+    ).toBe("managed");
+    expect(
+      evaluatePulsoSchemaSnapshot(
+        managedCatalogV7,
+        [{ current_version: 7, migration_name: PULSO_CURRENT_MIGRATION }],
         ledger,
         manifests
       ).state
     ).toBe("managed");
 
     const unknown = evaluatePulsoSchemaSnapshot(
-      managedCatalogV6,
-      [{ current_version: 7, migration_name: "007-unknown.sql" }],
+      managedCatalogV7,
+      [{ current_version: 8, migration_name: "008-unknown.sql" }],
       ledger,
       manifests
     );
     expect(unknown.state).toBe("incompatible");
-    expect(unknown.issues).toContain("managed PULSO schema version 7 has no structural manifest");
+    expect(unknown.issues).toContain("managed PULSO schema version 8 has no structural manifest");
   });
 });
 

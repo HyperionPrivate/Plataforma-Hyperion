@@ -346,7 +346,7 @@ services:
       ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-300}
       ACCESS_TO_LUMEN_TOKEN: ${ACCESS_TO_LUMEN_TOKEN:-}
       ACCESS_TENANT_SNAPSHOT_TRANSPORT: ${ACCESS_TENANT_SNAPSHOT_TRANSPORT:-disabled}
-      ACCESS_TENANT_SNAPSHOT_HTTP_URL: ${ACCESS_TENANT_SNAPSHOT_HTTP_URL:-http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots,http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots,http://agent-service:8083/internal/v1/events/access-tenant-snapshots}
+      ACCESS_TENANT_SNAPSHOT_HTTP_URL: ${ACCESS_TENANT_SNAPSHOT_HTTP_URL:-http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots,http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots,http://agent-service:8083/internal/v1/events/access-tenant-snapshots,http://integration-service:8087/internal/v1/events/access-tenant-snapshots}
       ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: ${ACCESS_TO_CHANNEL_TOKEN:-}
       ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: ${ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP:-false}
       ACCESS_LUMEN_PROJECTION_TRANSPORT: ${ACCESS_LUMEN_PROJECTION_TRANSPORT:-disabled}
@@ -528,6 +528,7 @@ services:
       INTEGRATION_TO_CHANNEL_TOKEN: ${INTEGRATION_TO_CHANNEL_TOKEN:?INTEGRATION_TO_CHANNEL_TOKEN is required}
       INTEGRATION_TO_SOFIA_TOKEN: ${INTEGRATION_TO_SOFIA_TOKEN:?INTEGRATION_TO_SOFIA_TOKEN is required}
       INTEGRATION_TO_PULSO_TOKEN: ${INTEGRATION_TO_PULSO_TOKEN:?INTEGRATION_TO_PULSO_TOKEN is required}
+      ACCESS_TO_INTEGRATION_TOKEN: ${ACCESS_TO_CHANNEL_TOKEN:-}
       WHATSAPP_CHANNEL_SERVICE_URL: http://whatsapp-channel-service:8089
       AGENT_SERVICE_URL: http://agent-service:8083
       PULSO_IRIS_SERVICE_URL: http://pulso-iris-service:8088

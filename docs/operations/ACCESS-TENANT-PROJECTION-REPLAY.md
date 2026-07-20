@@ -8,10 +8,10 @@ reviewDue: 2026-10-31
 
 # Access tenant projection replay
 
-Status: current for Access→Channel (PULSO 004), Access→Iris (PULSO 005) and Access→SOFIA (PULSO 006).
-Channel, Iris and SOFIA migrate gates read their local `tenant_snapshots` for tenant-scoped eligibility;
-historical FKs to `platform.tenants` remain until each contract cut. Identity may HTTP fan-out the same
-snapshot event to Channel, Iris and Agent.
+Status: current for Access→Channel (004), Iris (005), SOFIA (006) and Integration (007).
+Channel, Iris, SOFIA and Integration migrate gates read their local `tenant_snapshots` for tenant-scoped
+eligibility; historical FKs to `platform.tenants` remain until each contract cut. Identity may HTTP fan-out
+the same snapshot event to Channel, Iris, Agent and Integration.
 
 `access.tenant.snapshot.v1` is delivered at least once and applied exactly once at the logical level by Channel's
 inbox. A `published` Access outbox row proves broker acceptance, not Channel application. Operators must therefore

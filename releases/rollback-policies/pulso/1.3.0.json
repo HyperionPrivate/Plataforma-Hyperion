@@ -44,6 +44,10 @@
       {
         "path": "sql/006-access-sofia-tenant-projection.sql",
         "sha256": "b2750ee6f2347883df55e666b9eeee4195928041be89e84311b0fcde128c60dc"
+      },
+      {
+        "path": "sql/007-access-integration-tenant-projection.sql",
+        "sha256": "b4a7ca5b90c4832c748d058cdb3ae89fd377432d90ce49b42151846a865c8991"
       }
     ]
   }

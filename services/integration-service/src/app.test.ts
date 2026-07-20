@@ -52,7 +52,18 @@ describe("WhatsApp integration facade RBAC", () => {
     process.env.PULSO_OPERATOR_ASSERTION_KEY = PULSO_ASSERTION_KEY;
     fetchImpl.mockReset();
     dbQuery.mockReset();
-    dbQuery.mockResolvedValue({ rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] });
+    dbQuery.mockImplementation(async (sql: string) => {
+      if (String(sql).includes("integration_runtime.tenant_snapshots")) {
+        return {
+          rows: [{ status: "active", sourceVersion: "1" }],
+          rowCount: 1,
+          command: "SELECT",
+          oid: 0,
+          fields: []
+        };
+      }
+      return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+    });
     vi.stubGlobal("fetch", fetchImpl);
     app = Fastify();
     await registerRoutes(app, {
@@ -190,7 +201,8 @@ describe("WhatsApp integration facade RBAC", () => {
       `http://pulso-owner.test/internal/v1/tenants/${tenantId}/pulso-iris/agenda/readiness`
     );
     expect(fetchImpl.mock.calls[2]?.[1]?.headers).toMatchObject({ authorization: `Bearer ${PULSO_TOKEN}` });
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+    expect(String(dbQuery.mock.calls[0]?.[0])).toContain("integration_runtime.tenant_snapshots");
   });
 
   it("fails closed with 502 when the PULSO owner API returns an upstream failure", async () => {
@@ -221,7 +233,8 @@ describe("WhatsApp integration facade RBAC", () => {
 
     expect(response.statusCode).toBe(502);
     expect(response.json().data).toEqual({ error: "PULSO agenda readiness unavailable" });
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+    expect(String(dbQuery.mock.calls[0]?.[0])).toContain("integration_runtime.tenant_snapshots");
   });
 
   it("fails closed with 502 when the PULSO owner API times out", async () => {
@@ -248,7 +261,8 @@ describe("WhatsApp integration facade RBAC", () => {
     expect(response.statusCode).toBe(502);
     expect(response.json().data).toEqual({ error: "PULSO agenda readiness unavailable" });
     expect(fetchImpl.mock.calls[2]?.[1]?.signal).toBeInstanceOf(AbortSignal);
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+    expect(String(dbQuery.mock.calls[0]?.[0])).toContain("integration_runtime.tenant_snapshots");
   });
 
   it("fails closed when the PULSO owner response belongs to another tenant", async () => {

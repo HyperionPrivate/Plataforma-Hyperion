@@ -16,8 +16,8 @@ const CURRENT_SOFIA_REQUIREMENT = Object.freeze<SchemaVersionRequirement>({
   minimumVersion: 2
 });
 const CURRENT_PULSO_MARKER = Object.freeze({
-  currentVersion: 6,
-  migrationName: "006-access-sofia-tenant-projection.sql"
+  currentVersion: 7,
+  migrationName: "007-access-integration-tenant-projection.sql"
 });
 const CURRENT_SOFIA_MARKER = Object.freeze({
   currentVersion: 2,
