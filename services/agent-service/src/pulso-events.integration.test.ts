@@ -41,8 +41,8 @@ describeIntegration("durable PULSO -> SOFIA persistence", () => {
       await db.query("delete from agent_runtime.inbox_events where tenant_id = $1", [tenantId]);
       await db.query("delete from agent_runtime.job_stream_positions where tenant_id = $1", [tenantId]);
       await db.query("delete from agent_runtime.pulso_stream_positions where tenant_id = $1", [tenantId]);
-      await db.query("delete from agent_runtime.access_projection_inbox where tenant_id = $1", [tenantId]);
-      await db.query("delete from agent_runtime.tenant_snapshots where tenant_id = $1", [tenantId]);
+      await fixtureDb.query("delete from agent_runtime.access_projection_inbox where tenant_id = $1", [tenantId]);
+      await fixtureDb.query("delete from agent_runtime.tenant_snapshots where tenant_id = $1", [tenantId]);
       await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
