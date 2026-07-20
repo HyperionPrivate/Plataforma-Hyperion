@@ -12,10 +12,10 @@ import { createRegistryImageInventory } from "./create-registry-image-inventory.
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const sourceRevision = "c".repeat(40);
 const catalogVersionByCell = Object.freeze({
-  platform: "2.2.0",
+  platform: "2.3.0",
   nova: "1.0.0",
   lumen: "1.1.0",
-  pulso: "1.3.0"
+  pulso: "1.4.0"
 });
 
 async function findDockerfiles(directory) {

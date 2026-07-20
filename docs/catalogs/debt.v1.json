@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.13.0",
+  "catalogVersion": "1.14.0",
   "updatedAt": "2026-07-20",
   "baseline": "docs/architecture/boundary-baseline.json",
   "baselineStats": {
@@ -11,12 +11,14 @@
   "items": [
     {
       "id": "DEBT-005",
-      "title": "Access FK contracts 009–013 applied in tip before attested multi-consumer parity; cutover gated",
+      "title": "Access FK contract 009–016 implemented and locally rehearsed; multi-consumer production cutover remains gated",
       "source": "transition-inventory",
       "owner": "pulso-data",
       "status": "retiring",
       "evidence": [
         "packages/pulso-migrations/src/access-fk-contract-gate.ts",
+        "packages/pulso-migrations/sql/016-attest-access-fk-contract.sql",
+        "scripts/autonomy/access-fk-contract-parity.mjs",
         "docs/operations/ACCESS-TENANT-PROJECTION-REPLAY.md",
         "docs/evidence/access-fk-contract-parity-20260720.json"
       ],

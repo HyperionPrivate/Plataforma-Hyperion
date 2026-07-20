@@ -27,8 +27,8 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 test("validates every historical catalog and release manifest across all cells", async () => {
   const result = await validateRepositoryReleases(repositoryRoot);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.catalogCount, 11);
-  assert.equal(result.manifestCount, 11);
+  assert.equal(result.catalogCount, 13);
+  assert.equal(result.manifestCount, 13);
   assert.equal(result.rollbackPolicyCount, 3);
   assert.deepEqual(result.cells, ["platform", "nova", "lumen", "pulso"]);
 });
@@ -76,7 +76,7 @@ test("keeps the latest catalogs complete for federated cells and provider contra
   }
 });
 
-test("preserves Platform 1.0.0 as historical traceability while 2.2.0 keeps four artifacts retired", async () => {
+test("preserves Platform 1.0.0 as historical traceability while 2.3.0 keeps four artifacts retired", async () => {
   const historical = JSON.parse(
     await readFile(path.join(repositoryRoot, "releases/catalogs/platform/1.0.0.json"), "utf8")
   );
@@ -89,7 +89,7 @@ test("preserves Platform 1.0.0 as historical traceability while 2.2.0 keeps four
   );
 
   const latest = await readCatalog("platform");
-  assert.equal(latest.catalogVersion, "2.2.0");
+  assert.equal(latest.catalogVersion, "2.3.0");
   assert.equal(latest.components.length, 9);
   assert.equal(latest.components.filter((component) => component.distribution === "oci").length, 7);
   assert.equal(latest.components.filter((component) => component.distribution === "npm").length, 2);
@@ -436,10 +436,10 @@ test("generator and validator CLIs expose deterministic automation entrypoints",
     encoding: "utf8"
   });
   assert.equal(validated.status, 0, validated.stderr);
-  assert.match(validated.stdout, /Validated 11 catalog\(s\) and 11 manifest\(s\)/);
+  assert.match(validated.stdout, /Validated 13 catalog\(s\) and 13 manifest\(s\)/);
 });
 
 async function readCatalog(cell) {
-  const version = cell === "platform" ? "2.2.0" : cell === "pulso" ? "1.3.0" : cell === "lumen" ? "1.1.0" : "1.0.0";
+  const version = cell === "platform" ? "2.3.0" : cell === "pulso" ? "1.4.0" : cell === "lumen" ? "1.1.0" : "1.0.0";
   return JSON.parse(await readFile(path.join(repositoryRoot, "releases", "catalogs", cell, `${version}.json`), "utf8"));
 }

@@ -12,7 +12,7 @@ reviewDue: 2027-03-31
 
 `retiring` — **code freeze completo** (2026-07-20). Historical chain `001`–`046` remains sealed for
 compatibility bytes. Append-only contract migrations `047`–`052` cleared Access FK and N-1 adapter debt.
-Provider-owned PULSO tip (`15/015-…`) is the autonomous cell source of truth.
+Provider-owned PULSO tip (`16/016-attest-access-fk-contract.sql`) is the autonomous cell source of truth.
 
 ## Code-side cutover (done)
 

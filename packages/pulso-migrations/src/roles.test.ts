@@ -46,7 +46,7 @@ function createClient(
     if (sql.includes("from pulso_iris.schema_version")) {
       const marker =
         options.globalMarker === undefined
-          ? { current_version: 15, migration_name: "015-revoke-sofia-pulso-iris-control-plane-grants.sql" }
+          ? { current_version: 16, migration_name: "016-attest-access-fk-contract.sql" }
           : options.globalMarker;
       return { rows: marker ? [marker] : [] };
     }
@@ -103,12 +103,19 @@ describe("PULSO runtime role bootstrap", () => {
     expect(statements.some((statement) => statement.includes("with login password"))).toBe(false);
   });
 
-  it("activates on the PULSO tip marker without reading SOFÍA schema_version", async () => {
+  it("activates only on the contract tip marker without reading SOFÍA schema_version", async () => {
     const { client, statements } = createClient({
-      globalMarker: { current_version: 15, migration_name: "015-revoke-sofia-pulso-iris-control-plane-grants.sql" }
+      globalMarker: { current_version: 16, migration_name: "016-attest-access-fk-contract.sql" }
     });
     await expect(applyPulsoRolePasswords(client, "hyperion_pulso", PASSWORDS)).resolves.toBeUndefined();
     expect(statements.some((statement) => statement.includes("agent_runtime.schema_version"))).toBe(false);
+  });
+
+  it("activates the expand runtime set only at marker 008", async () => {
+    const { client } = createClient({
+      globalMarker: { current_version: 8, migration_name: "008-access-knowledge-tenant-projection.sql" }
+    });
+    await expect(applyPulsoRolePasswords(client, "hyperion_pulso", PASSWORDS, "expand")).resolves.toBeUndefined();
   });
 
   it("requires all runtime passwords before acquiring the bootstrap lock", async () => {

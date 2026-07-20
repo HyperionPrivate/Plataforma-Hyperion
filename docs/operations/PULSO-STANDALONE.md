@@ -37,6 +37,7 @@ build recursivo `pnpm -r build`. Las URLs de Access/JWKS y Audit deben ser HTTPS
 ## Build, arranque y salud
 
 ```powershell
+$env:PULSO_MIGRATION_PHASE = "contract" # greenfield; use expand first for an existing cutover
 docker compose --project-name $PulsoProject --env-file .env.pulso -f infra/docker-compose.pulso.yml build
 docker compose --project-name $PulsoProject --env-file .env.pulso -f infra/docker-compose.pulso.yml up --detach --wait
 docker compose --project-name $PulsoProject --env-file .env.pulso -f infra/docker-compose.pulso.yml ps
@@ -46,7 +47,7 @@ docker compose --project-name $PulsoProject --env-file .env.pulso -f infra/docke
 docker compose --project-name $PulsoProject --env-file .env.pulso -f infra/docker-compose.pulso.yml exec -T postgres psql -U hyperion_pulso_admin -d hyperion_pulso -Atc "select current_version || '/' || migration_name from agent_runtime.schema_version where service_name = 'sofia'"
 ```
 
-PostgreSQL debe responder `15/015-revoke-sofia-pulso-iris-control-plane-grants.sql` para PULSO y
+PostgreSQL debe responder `16/016-attest-access-fk-contract.sql` para PULSO y
 `2/006-access-sofia-tenant-projection.sql` para SOFÍA. Un despliegue aceptable usa el migrador
 `hyperion_pulso_migrator` y exactamente cinco roles runtime: `hyperion_pulso`, `hyperion_sofia`,
 `hyperion_knowledge`, `hyperion_integration` y `hyperion_channel`. Cada servicio debe llegar a `healthy` con su rol
@@ -54,9 +55,9 @@ propio; que el BFF o la consola respondan no sustituye esa comprobación.
 
 El descriptor standalone construye desde la clausura local y no representa por sí mismo un manifiesto publicado.
 Sus siete runtimes Node reciben una variable `SERVICE_VERSION` específica, con defaults iguales al catálogo PULSO
-`1.3.0`; no existe un fallback compartido que pueda hacer pasar Agent o Prompt Flow `0.2.0` por otra versión. Para
+`1.4.0`; no existe un fallback compartido que pueda hacer pasar Agent o Prompt Flow `0.2.0` por otra versión. Para
 staging o producción, las imágenes deben provenir de un manifiesto `published`, verificadas y fijadas por digest;
-el borrador `0.4.0-dev.0` conserva `imagesVerified: false` y no autoriza despliegue.
+el borrador `0.5.0-dev.0` conserva `imagesVerified: false` y no autoriza despliegue.
 
 Las claves de DeepSeek y la conectividad real de WhatsApp están vacías o deshabilitadas por defecto. Ese modo
 permite validar infraestructura y salud, pero no acredita generación con IA, mensajería real ni operación de

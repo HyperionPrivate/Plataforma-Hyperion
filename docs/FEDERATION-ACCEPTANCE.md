@@ -149,6 +149,13 @@ verificado. El recibo v3 permanece únicamente como antecedente histórico. La f
 terminada: el detector efectivo sigue mostrando 46 hallazgos dentro del migrador PULSO y las ventanas N−1
 permanecen hasta publicar y ensayar una imagen histórica por digest.
 
+El 2026-07-20 se añadió y ensayó localmente el flujo explícito `expand → contract` del nuevo tip 016 sobre
+PostgreSQL 16 desechable. Expand terminó exactamente en `8/008`; role bootstrap validó la ACL N-1; contract aplicó
+`009–016`; role bootstrap validó la ACL cerrada; un rerun no aplicó migraciones y la consulta final devolvió
+`16/016` con una única atestación `greenfield`. El reseal descubrió y corrigió los fingerprints de constraints
+005–015 para que describan el DDL real del runner. Este ensayo no acredita datos, recibo multi-consumer, artefactos
+publicados, staging ni producción; DEBT-005 permanece abierto hasta ese cutover.
+
 La frontera Access→Channel se ensayó además contra dos bases lógicas efímeras en un mismo clúster aislado. Access
 aplicó su guard de lifecycle 004 y PULSO su proyección 004; Identity no pudo conectar a PULSO y Channel no pudo
 conectar a Access. El [recibo de paridad](evidence/access-channel-projection-parity-20260719.json), cuyo

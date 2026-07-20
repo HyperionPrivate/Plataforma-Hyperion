@@ -81,6 +81,13 @@ services:
       NODE_ENV: ${PULSO_NODE_ENV:?PULSO_NODE_ENV is required}
       HYPERION_ENVIRONMENT: ${PULSO_DEPLOYMENT_ENVIRONMENT:?PULSO_DEPLOYMENT_ENVIRONMENT is required}
       PULSO_MIGRATOR_DATABASE_URL: *pulso-migrator-url
+      PULSO_MIGRATION_PHASE: ${PULSO_MIGRATION_PHASE:?PULSO_MIGRATION_PHASE must be expand or contract}
+      PULSO_ACCESS_FK_CONTRACT_RECEIPT: ${PULSO_ACCESS_FK_CONTRACT_RECEIPT:-}
+      PULSO_ACCESS_FK_CONTRACT_RECEIPT_SHA256: ${PULSO_ACCESS_FK_CONTRACT_RECEIPT_SHA256:-}
+      PULSO_ACCESS_FK_CONTRACT_DEPLOYMENT_ID: ${PULSO_ACCESS_FK_CONTRACT_DEPLOYMENT_ID:-}
+      PULSO_ACCESS_FK_CONTRACT_ACCESS_DATABASE: ${PULSO_ACCESS_FK_CONTRACT_ACCESS_DATABASE:-}
+      PULSO_RELEASE_SOURCE_REVISION: ${PULSO_RELEASE_SOURCE_REVISION:-}
+      PULSO_ACCESS_FK_PARTIAL_RECOVERY_CONFIRM: ${PULSO_ACCESS_FK_PARTIAL_RECOVERY_CONFIRM:-}
     depends_on:
       pulso-database-bootstrap:
         condition: service_completed_successfully
@@ -94,6 +101,7 @@ services:
     environment:
       NODE_ENV: ${PULSO_NODE_ENV:?PULSO_NODE_ENV is required}
       HYPERION_ENVIRONMENT: ${PULSO_DEPLOYMENT_ENVIRONMENT:?PULSO_DEPLOYMENT_ENVIRONMENT is required}
+      PULSO_MIGRATION_PHASE: ${PULSO_MIGRATION_PHASE:?PULSO_MIGRATION_PHASE must be expand or contract}
       PULSO_POSTGRES_ADMIN_URL: *pulso-postgres-admin-url
       PULSO_POSTGRES_DB: ${PULSO_POSTGRES_DB:-hyperion_pulso}
       PULSO_DATABASE_PASSWORD: ${PULSO_DATABASE_PASSWORD:?PULSO_DATABASE_PASSWORD is required}
@@ -179,7 +187,7 @@ services:
     command: ["node", "services/knowledge-service/dist/index.js"]
     environment:
       <<: *pulso-runtime-env
-      SERVICE_VERSION: ${PULSO_KNOWLEDGE_SERVICE_VERSION:-0.1.0}
+      SERVICE_VERSION: ${PULSO_KNOWLEDGE_SERVICE_VERSION:-0.2.0}
       DATABASE_URL: *knowledge-database-url
       EXPECTED_DATABASE_ROLE: hyperion_knowledge
       ACCESS_TO_KNOWLEDGE_TOKEN: ${ACCESS_TO_KNOWLEDGE_TOKEN:-}
@@ -202,7 +210,7 @@ services:
     command: ["node", "services/integration-service/dist/index.js"]
     environment:
       <<: *pulso-runtime-env
-      SERVICE_VERSION: ${PULSO_INTEGRATION_SERVICE_VERSION:-0.1.0}
+      SERVICE_VERSION: ${PULSO_INTEGRATION_SERVICE_VERSION:-0.2.0}
       DATABASE_URL: *integration-database-url
       EXPECTED_DATABASE_ROLE: hyperion_integration
       PULSO_BFF_TO_INTEGRATION_TOKEN: ${PULSO_BFF_TO_INTEGRATION_TOKEN:?PULSO_BFF_TO_INTEGRATION_TOKEN is required}
@@ -233,7 +241,7 @@ services:
     command: ["node", "services/pulso-iris-service/dist/index.js"]
     environment:
       <<: *pulso-runtime-env
-      SERVICE_VERSION: ${PULSO_IRIS_SERVICE_VERSION:-0.1.0}
+      SERVICE_VERSION: ${PULSO_IRIS_SERVICE_VERSION:-0.2.0}
       DATABASE_URL: *pulso-database-url
       EXPECTED_DATABASE_ROLE: hyperion_pulso
       PULSO_BFF_TO_CORE_TOKEN: ${PULSO_BFF_TO_CORE_TOKEN:?PULSO_BFF_TO_CORE_TOKEN is required}
@@ -269,7 +277,7 @@ services:
     command: ["node", "services/whatsapp-channel-service/dist/index.js"]
     environment:
       <<: *pulso-runtime-env
-      SERVICE_VERSION: ${PULSO_WHATSAPP_CHANNEL_SERVICE_VERSION:-0.2.0}
+      SERVICE_VERSION: ${PULSO_WHATSAPP_CHANNEL_SERVICE_VERSION:-0.3.0}
       DATABASE_URL: *channel-database-url
       EXPECTED_DATABASE_ROLE: hyperion_channel
       INTEGRATION_TO_CHANNEL_TOKEN: ${INTEGRATION_TO_CHANNEL_TOKEN:?INTEGRATION_TO_CHANNEL_TOKEN is required}

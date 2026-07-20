@@ -1,9 +1,31 @@
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { assertPulsoProviderMigrationNames, computePulsoMigrationChecksum } from "./runner.js";
+import {
+  PULSO_ACCESS_FK_PARTIAL_RECOVERY_CONFIRMATION,
+  assertAccessFkPartialRecovery,
+  assertPulsoProviderMigrationNames,
+  computePulsoMigrationChecksum,
+  readPulsoMigrationPhase
+} from "./runner.js";
 
 describe("PULSO provider-owned migration set", () => {
+  it("requires explicit phases in restricted environments and an exact partial-recovery confirmation", () => {
+    expect(readPulsoMigrationPhase({})).toBe("contract");
+    expect(readPulsoMigrationPhase({ PULSO_MIGRATION_PHASE: "expand", HYPERION_ENVIRONMENT: "production" })).toBe(
+      "expand"
+    );
+    expect(() => readPulsoMigrationPhase({ HYPERION_ENVIRONMENT: "staging" })).toThrow(/explicitly set/);
+    expect(() => assertAccessFkPartialRecovery("contract", 2, {})).toThrow(/Partial Access FK contract state/);
+    expect(() =>
+      assertAccessFkPartialRecovery("contract", 2, {
+        PULSO_ACCESS_FK_PARTIAL_RECOVERY_CONFIRM: PULSO_ACCESS_FK_PARTIAL_RECOVERY_CONFIRMATION
+      })
+    ).not.toThrow();
+    expect(() => assertAccessFkPartialRecovery("contract", 0, {})).not.toThrow();
+    expect(() => assertAccessFkPartialRecovery("contract", 5, {})).not.toThrow();
+  });
+
   it("contains exactly the terminal PULSO closure and no sibling product schema", async () => {
     const sqlDirectory = fileURLToPath(new URL("../sql/", import.meta.url));
     const files = (await readdir(sqlDirectory)).filter((file) => file.endsWith(".sql")).sort();
@@ -27,7 +49,8 @@ describe("PULSO provider-owned migration set", () => {
       "012-contract-iris-access-tenant-fks.sql",
       "013-contract-knowledge-access-tenant-fks.sql",
       "014-drop-n-minus-one-legacy-adapters.sql",
-      "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
+      "015-revoke-sofia-pulso-iris-control-plane-grants.sql",
+      "016-attest-access-fk-contract.sql"
     ]);
     expect(baseline.match(/^create schema /gm) ?? []).toHaveLength(4);
     expect(baseline.match(/^create table /gm) ?? []).toHaveLength(53);
@@ -131,7 +154,8 @@ describe("PULSO provider-owned migration set", () => {
       "012-contract-iris-access-tenant-fks.sql",
       "013-contract-knowledge-access-tenant-fks.sql",
       "014-drop-n-minus-one-legacy-adapters.sql",
-      "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
+      "015-revoke-sofia-pulso-iris-control-plane-grants.sql",
+      "016-attest-access-fk-contract.sql"
     ];
     expect(() => assertPulsoProviderMigrationNames(exact)).not.toThrow();
     expect(() => assertPulsoProviderMigrationNames(exact.slice(0, 1))).toThrow("migration set mismatch");

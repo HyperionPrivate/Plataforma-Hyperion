@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AccessTenantProjectionReconciler,
   PostgresAccessTenantProjectionOutbox,
+  backfillAllAccessTenantSnapshots,
   backfillAccessTenantSnapshots,
   createAccessTenantProjectionHttpDispatcher,
   createAccessTenantProjectionJetStreamDispatcher,
@@ -512,6 +513,39 @@ describe("Access tenant snapshot backfill", () => {
     expect(sql[0]).not.toContain("projection.source_updated_at < tenant.updated_at");
     expect(transactionCount).toBe(2);
     expect(sql.some((statement) => statement.includes("event_row.status = 'published'"))).toBe(true);
+  });
+
+  it("walks more than two pages with a stable updated_at/id keyset cursor", async () => {
+    const tenants = Array.from({ length: 2_501 }, (_, index) => ({
+      tenantId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      sourceUpdatedAt: new Date(Date.parse(SOURCE_UPDATED_AT) + index * 1_000).toISOString()
+    }));
+    const pageQueries: unknown[][] = [];
+    const db = {
+      query: async (text: string, values?: unknown[]) => {
+        if (text.includes("order by tenant.updated_at, tenant.id")) {
+          pageQueries.push(values ?? []);
+          const cursorId = values?.[2];
+          const start = cursorId == null ? 0 : tenants.findIndex((tenant) => tenant.tenantId === cursorId) + 1;
+          return { rows: tenants.slice(start, start + Number(values?.[0])) };
+        }
+        return { rows: [] };
+      },
+      transaction: async (work: (transaction: { query: () => Promise<{ rows: never[] }> }) => Promise<unknown>) =>
+        work({ query: async () => ({ rows: [] }) })
+    };
+
+    await expect(backfillAllAccessTenantSnapshots(db as never, 1_000)).resolves.toEqual({
+      pagesProcessed: 3,
+      candidatesProcessed: 2_501,
+      eventsEnqueued: 0,
+      replayed: 0,
+      hasMore: false
+    });
+    expect(pageQueries).toHaveLength(3);
+    expect(pageQueries[0]).toEqual([1_001, null, null]);
+    expect(pageQueries[1]?.[2]).toBe(tenants[999]?.tenantId);
+    expect(pageQueries[2]?.[2]).toBe(tenants[1_999]?.tenantId);
   });
 });
 

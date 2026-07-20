@@ -42,6 +42,7 @@ const irisContractName = "012-contract-iris-access-tenant-fks.sql";
 const knowledgeContractName = "013-contract-knowledge-access-tenant-fks.sql";
 const nMinusOneDropName = "014-drop-n-minus-one-legacy-adapters.sql";
 const sofiaGrantRevokeName = "015-revoke-sofia-pulso-iris-control-plane-grants.sql";
+const accessFkAttestationName = "016-attest-access-fk-contract.sql";
 const TIP_NAMES = [
   baselineName,
   rolesName,
@@ -57,7 +58,8 @@ const TIP_NAMES = [
   irisContractName,
   knowledgeContractName,
   nMinusOneDropName,
-  sofiaGrantRevokeName
+  sofiaGrantRevokeName,
+  accessFkAttestationName
 ] as const;
 
 describe("PULSO migration state recovery", () => {
@@ -70,7 +72,7 @@ describe("PULSO migration state recovery", () => {
     hooks.inspections.push(
       inspection("legacy", undefined, undefined, []),
       inspection("legacy", undefined, undefined, []),
-      inspection("managed", 15, sofiaGrantRevokeName, ledger(checksums))
+      inspection("managed", 16, accessFkAttestationName, ledger(checksums))
     );
     const client = new RecordingClient();
 
@@ -79,7 +81,7 @@ describe("PULSO migration state recovery", () => {
       adopted: [baselineName],
       skipped: [baselineName]
     });
-    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(15);
+    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(16);
     expect(client.sql.some((sql) => sql.includes("insert into pulso_iris.migration_ledger"))).toBe(true);
   });
 
@@ -87,7 +89,7 @@ describe("PULSO migration state recovery", () => {
     const checksums = await migrationChecksums();
     hooks.inspections.push(
       inspection("managed", 1, baselineName, [{ name: baselineName, checksum: checksums.get(baselineName)! }]),
-      inspection("managed", 15, sofiaGrantRevokeName, ledger(checksums))
+      inspection("managed", 16, accessFkAttestationName, ledger(checksums))
     );
     const client = new RecordingClient();
 
@@ -96,14 +98,14 @@ describe("PULSO migration state recovery", () => {
       adopted: [],
       skipped: [baselineName]
     });
-    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(14);
+    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(15);
   });
 
-  it("accepts a structurally valid managed 002 database and applies 003 through 015", async () => {
+  it("accepts a structurally valid managed 002 database and applies 003 through 016", async () => {
     const checksums = await migrationChecksums();
     hooks.inspections.push(
       inspection("managed", 2, rolesName, ledger(checksums, [baselineName, rolesName])),
-      inspection("managed", 15, sofiaGrantRevokeName, ledger(checksums))
+      inspection("managed", 16, accessFkAttestationName, ledger(checksums))
     );
     const client = new RecordingClient();
 
@@ -112,14 +114,14 @@ describe("PULSO migration state recovery", () => {
       adopted: [],
       skipped: [baselineName, rolesName]
     });
-    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(13);
+    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(14);
   });
 
   it("upgrades an exact managed 003 database with Channel, Iris, SOFIA, Integration and Knowledge projections", async () => {
     const checksums = await migrationChecksums();
     hooks.inspections.push(
       inspection("managed", 3, sofiaMarkerName, ledger(checksums, [baselineName, rolesName, sofiaMarkerName])),
-      inspection("managed", 15, sofiaGrantRevokeName, ledger(checksums))
+      inspection("managed", 16, accessFkAttestationName, ledger(checksums))
     );
     const client = new RecordingClient();
 
@@ -128,14 +130,38 @@ describe("PULSO migration state recovery", () => {
       adopted: [],
       skipped: [baselineName, rolesName, sofiaMarkerName]
     });
-    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(12);
+    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(13);
   });
 });
 
 class RecordingClient implements PulsoMigrationClient {
   readonly sql: string[] = [];
-  async query<T = Record<string, unknown>>(sql: string): Promise<{ rows: T[] }> {
-    this.sql.push(sql.replace(/\s+/g, " ").trim().toLowerCase());
+  private attestation?: Record<string, unknown>;
+  async query<T = Record<string, unknown>>(sql: string, values?: unknown[]): Promise<{ rows: T[] }> {
+    const normalized = sql.replace(/\s+/g, " ").trim().toLowerCase();
+    this.sql.push(normalized);
+    if (normalized.startsWith("insert into pulso_iris.access_fk_contract_attestations")) {
+      this.attestation = {
+        receipt_sha256: values?.[0],
+        attestation_mode: "greenfield",
+        migration_set_sha256: values?.[1],
+        target_schema_version: values?.[3],
+        target_migration: values?.[4],
+        receipt: JSON.parse(String(values?.[5]))
+      };
+    }
+    if (normalized.includes("from pulso_iris.access_fk_contract_attestations")) {
+      return { rows: (this.attestation ? [this.attestation] : []) as T[] };
+    }
+    if (normalized.includes("with referenced as")) {
+      return { rows: [{ referenced: 0, missing: 0 }] as T[] };
+    }
+    if (normalized.includes("tenant_snapshots") && normalized.includes("count(*)")) {
+      return { rows: [{ count: 0 }] as T[] };
+    }
+    if (normalized.includes("source.product_id")) {
+      return { rows: [{ referenced: 0, missing: 0 }] as T[] };
+    }
     return { rows: [] };
   }
 }

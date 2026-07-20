@@ -60,17 +60,17 @@ compatibilidad hasta terminar el cutover.
 
 ### Cortes completados (2026-07-20): proyecciones Access, contracts FK y N-1
 
-Tip provider-owned PULSO: `15/015-revoke-sofia-pulso-iris-control-plane-grants.sql`. Channel, Iris, SOFIA,
+Tip provider-owned PULSO: `16/016-attest-access-fk-contract.sql`. Channel, Iris, SOFIA,
 Integration y Knowledge tienen expand+migrate+contract SQL (proyecciones locales + DROP append-only de FKs a
 `platform.tenants` en `009`–`013`, espejo global `047`–`051`). Los adaptadores N-1 del baseline autónomo y de
-038 se retiraron en `014`/`052`. Los grants Iris de SOFÍA se revocaron en `015`. El baseline efectivo quedó
-**vacío**. El cutover FK **no** está atestado en producción: el runner de `@hyperion/pulso-migrations` exige
-recibo multi-consumer (`PULSO_ACCESS_FK_CONTRACT_RECEIPT` + `_SHA256`) vía `access-fk-contract-gate`; el stub
-en evidencia es `provisional-until-harness`. **DEBT-005** se reabrió como `retiring`.
+038 se retiraron en `014`/`052`. Los grants Iris de SOFÍA se revocaron en `015`; `016` persiste la atestación de
+cutover. El baseline efectivo quedó **vacío**. Expand→contract pasó localmente sobre PostgreSQL 16 greenfield, pero
+el cutover FK **no** está atestado en producción: el runner exige recibo multi-consumer v2 ligado y reciente; el
+stub en evidencia es `provisional-until-harness`. **DEBT-005** continúa `retiring`.
 
 Cola residual abierta (transición / ops):
 
-1. **DEBT-005** — contratos FK 009–013 en tip antes de paridad multi-consumer atestada; gate
+1. **DEBT-005** — 009–016 implementado/ensayado localmente; paridad multi-consumer, staging y producción pendientes; gate
    `packages/pulso-migrations/src/access-fk-contract-gate.ts` + runbook
    `docs/operations/ACCESS-TENANT-PROJECTION-REPLAY.md` + stub
    `docs/evidence/access-fk-contract-parity-20260720.json`.

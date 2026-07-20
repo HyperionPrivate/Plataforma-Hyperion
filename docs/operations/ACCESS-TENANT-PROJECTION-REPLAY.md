@@ -8,7 +8,7 @@ reviewDue: 2026-10-31
 
 # Access tenant projection replay
 
-Status: current for Access→Channel (004), Iris (005), SOFIA (006), Integration (007) and Knowledge expand (008) + Access FK contract SQL (009–013) + N-1 drop (014) + SOFIA grant revoke (015).
+Status: current for Access→Channel (004), Iris (005), SOFIA (006), Integration (007) and Knowledge expand (008) + Access FK contract SQL (009–013) + N-1 drop (014) + SOFIA grant revoke (015) + durable cutover attestation (016).
 Channel, Iris, SOFIA, Integration and Knowledge migrate gates read their local `tenant_snapshots` for
 tenant-scoped eligibility. Tip migrations `009`–`013` contain append-only FK DROP SQL, but the
 `@hyperion/pulso-migrations` runner refuses that cutover when operational data exists without a verified
@@ -106,29 +106,57 @@ Before any later migration removes Channel's five foreign keys to Access, record
 Migration 004 is expansion only. Do not remove the five foreign keys or close the corresponding debt until a later
 contract migration has this receipt and performs a locked, validated cutover.
 
-## Required cutover order (Access FK contracts 009–013)
+## Required cutover order (008 expand → 016 contract)
 
-Apply FK DROP contracts only after this sequence. The gate in
-`packages/pulso-migrations/src/access-fk-contract-gate.ts` enforces receipt presence when operational data exists.
+The runner has explicit `expand` and `contract` phases. Staging and production reject an omitted phase. Never run
+contract from a mutable tag or before both Access and PULSO backups have passed restore verification.
 
-1. **Transport ON** — HTTP fan-out and/or JetStream consumers delivering `access.tenant.snapshot.v1` to every
-   destination (Channel, Iris, SOFIA, Integration, Knowledge).
-2. **Backfill** — populate local `tenant_snapshots` for every eligible Access tenant:
-
-```text
-pnpm --filter @hyperion/identity-service tenant:projections -- backfill
-```
-
-(Use `reconcile --limit <n>` for bounded gap-fill until the dedicated `backfill` verb is available; drain
-outbox/`dead_letter` as above.) 3. **Per-consumer receipts** — generate a sealed multi-consumer parity receipt with `consumers.*` at
-`coverageBasisPoints` `10000` and zero mismatch/DLQ/conflict fields. The checked-in stub
-`docs/evidence/access-fk-contract-parity-20260720.json` is `provisional-until-harness` and must **not** be
-used as the operational receipt. 4. **Only then apply 009–013** — set env for the pulso-migrations runner:
+1. Record the immutable release/source SHA and database targets. Take independent Access and PULSO backups.
+2. Run `PULSO_MIGRATION_PHASE=expand`. This stops at `008`; then run role bootstrap with the same phase.
+3. Deploy the PULSO runtimes that accept only schema versions `8..16`, enable the five distinct `ACCESS_TO_*`
+   credentials, and turn on HTTP or JetStream fan-out.
+4. Backfill every eligible tenant. `--limit` is the page size, not a total cap; the command keyset-pages until done:
 
 ```text
-PULSO_ACCESS_FK_CONTRACT_RECEIPT=<path-to-sealed-receipt.json>
-PULSO_ACCESS_FK_CONTRACT_RECEIPT_SHA256=<canonical-json-sha256>
+pnpm --filter @hyperion/identity-service tenant:projections -- backfill --limit 1000
 ```
 
-Greenfield databases (empty operational tables and empty snapshots) may skip the receipt; any tenant operational
-data refuses the contract migrations without a verified receipt.
+5. Drain outbox, dead letters and consumer conflicts. Enter the maintenance window, stop tenant mutations and drain
+   all PULSO runtime database sessions.
+6. Generate the receipt no more than 30 minutes before contract. It binds the Access/PULSO database names,
+   deployment ID, environment, full source revision, exact `009–013` checksum set and current PULSO marker:
+
+```text
+RUN_ACCESS_FK_CONTRACT_ACCEPTANCE=1
+ACCESS_FK_PARITY_ACCESS_DATABASE_URL=<access-read-url>
+ACCESS_FK_PARITY_PULSO_DATABASE_URL=<pulso-read-url>
+PULSO_ACCESS_FK_CONTRACT_DEPLOYMENT_ID=<unique-cutover-id>
+PULSO_RELEASE_SOURCE_REVISION=<40-char-release-sha>
+HYPERION_ENVIRONMENT=staging|production
+node scripts/autonomy/access-fk-contract-parity.mjs --receipt <new-receipt-path>
+```
+
+The output file is created once with restrictive permissions. The checked-in
+`docs/evidence/access-fk-contract-parity-20260720.json` remains a provisional stub and is never a valid receipt.
+
+7. Set the following for the migrator, mount the receipt read-only at the declared container path, and run
+   `PULSO_MIGRATION_PHASE=contract`:
+
+```text
+PULSO_ACCESS_FK_CONTRACT_RECEIPT=<container-path-to-receipt.json>
+PULSO_ACCESS_FK_CONTRACT_RECEIPT_SHA256=<receiptSha256>
+PULSO_ACCESS_FK_CONTRACT_DEPLOYMENT_ID=<same-cutover-id>
+PULSO_ACCESS_FK_CONTRACT_ACCESS_DATABASE=<exact-access-database-name>
+PULSO_RELEASE_SOURCE_REVISION=<same-40-char-release-sha>
+```
+
+The gate audits all 36 tenant FK source tables plus `platform.agents.product_id`, verifies all five consumer parity
+sets, applies `009–016`, and stores the sealed receipt in `pulso_iris.access_fk_contract_attestations` in the same
+transaction as migration 016. Greenfield stores an explicit greenfield attestation.
+
+8. Run role bootstrap with `PULSO_MIGRATION_PHASE=contract`, restart runtimes, and verify marker `16/016`, exactly
+   one attestation, readiness, representative tenant/product access and zero new orphan references.
+
+If the ledger is partially through `009–013`, stop and treat it as an incident. Resume only after a new receipt and
+the exact `PULSO_ACCESS_FK_PARTIAL_RECOVERY_CONFIRM="RESUME PARTIAL ACCESS FK CONTRACT"`. Once 009 is committed,
+database rollback is forbidden; use forward completion or restore both databases to the pre-cutover backups.

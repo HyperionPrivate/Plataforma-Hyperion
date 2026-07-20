@@ -1,0 +1,40 @@
+{
+  "$schema": "../../schemas/rollback-policy.schema.json",
+  "schemaVersion": 2,
+  "cell": "pulso",
+  "policyVersion": "1.4.0",
+  "catalogVersion": "1.4.0",
+  "rollbackOciComponents": [
+    "agent-service",
+    "prompt-flow-service",
+    "knowledge-service",
+    "integration-service",
+    "pulso-iris-service",
+    "whatsapp-channel-service",
+    "pulso-bff",
+    "pulso-console"
+  ],
+  "forwardOnlyOciComponents": ["pulso-migrations"],
+  "migration": {
+    "componentId": "pulso-migrations",
+    "sourcePath": "packages/pulso-migrations",
+    "files": [
+      { "path": "sql/001-pulso-autonomous-baseline.sql", "sha256": "78166aae10fc425e1d16718c39e387e1d0fdbb3227c7a9a08528fb95379a3904" },
+      { "path": "sql/002-pulso-runtime-roles.sql", "sha256": "260599d3c39cd77619a4bb28d68db087ff6e7b38999eca1553f4fb14079ea11c" },
+      { "path": "sql/003-sofia-readiness-marker.sql", "sha256": "d972b08edbfdb44225f8de1a25892d449dddfb6f3c29bb918b9581107c1bba84" },
+      { "path": "sql/004-access-channel-tenant-projection.sql", "sha256": "cffde8ed7621c40ae9ba4e80969928b705654e530019edf49dacf81730d57c77" },
+      { "path": "sql/005-access-iris-tenant-projection.sql", "sha256": "bfa7462090f4626f34096deabcb16f2745539a12a888ed904e79f042ea26959d" },
+      { "path": "sql/006-access-sofia-tenant-projection.sql", "sha256": "b2750ee6f2347883df55e666b9eeee4195928041be89e84311b0fcde128c60dc" },
+      { "path": "sql/007-access-integration-tenant-projection.sql", "sha256": "b4a7ca5b90c4832c748d058cdb3ae89fd377432d90ce49b42151846a865c8991" },
+      { "path": "sql/008-access-knowledge-tenant-projection.sql", "sha256": "483b1c4c04e1f4c5cdef8855314647a54b7b8174fb5c5c187e748651f506fbdf" },
+      { "path": "sql/009-contract-channel-access-tenant-fks.sql", "sha256": "1d49fdb5bedb22a3be18dea4e75daf1385d88f3e5e15ddfc171ecd0e7247ca3b" },
+      { "path": "sql/010-contract-integration-access-tenant-fks.sql", "sha256": "0338bc0773dadfd1a999bd4c972f5c07ca70b804ac53d1cd51651bd4d2f4ddaf" },
+      { "path": "sql/011-contract-sofia-access-tenant-fks.sql", "sha256": "bedea536424eea2a5879a07e1442cc092c7f93a90c2d3a84704297c719f4d41f" },
+      { "path": "sql/012-contract-iris-access-tenant-fks.sql", "sha256": "920461285ba1bf044dbeba831ce438c324dc072b2e446fcb302ba99b6cecebee" },
+      { "path": "sql/013-contract-knowledge-access-tenant-fks.sql", "sha256": "84cefbbcaf514025dbde2261175103ba9ddb712bc03c12014713ffbae663d911" },
+      { "path": "sql/014-drop-n-minus-one-legacy-adapters.sql", "sha256": "4e47caa8c78dca99d10d4b4631740268b476633eee96e93da9493f213679f616" },
+      { "path": "sql/015-revoke-sofia-pulso-iris-control-plane-grants.sql", "sha256": "99bd6b7ed9d69f2c7f37aba0186fe02115fbbecfc6fcc73ba768d90a9ce13bf2" },
+      { "path": "sql/016-attest-access-fk-contract.sql", "sha256": "d9dba2e459b6fc66071e4ccc32088f19434413d1d13873da4892fd9b8a851510" }
+    ]
+  }
+}

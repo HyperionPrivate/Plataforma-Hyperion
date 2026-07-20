@@ -3,7 +3,7 @@ import { createDatabase, type DatabaseClient } from "@hyperion/database";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  backfillAccessTenantSnapshots,
+  backfillAllAccessTenantSnapshots,
   reconcileAccessTenantSnapshots,
   replayCurrentAccessTenantProjection,
   redriveAccessTenantProjectionDeadLetter,
@@ -87,7 +87,7 @@ export async function runAccessTenantProjectionOperation(
       return { command: operation.command, ...(await reconcileAccessTenantSnapshots(db, operation.limit)) };
     }
     if (operation.command === "backfill") {
-      return { command: operation.command, ...(await backfillAccessTenantSnapshots(db, operation.limit)) };
+      return { command: operation.command, ...(await backfillAllAccessTenantSnapshots(db, operation.limit)) };
     }
     if (operation.command === "replay") {
       const replayed = await replayCurrentAccessTenantProjection(db, operation);

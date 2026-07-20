@@ -50,6 +50,7 @@ interface TenantSourceRow {
 
 interface TenantCandidateRow {
   readonly tenantId: string;
+  readonly sourceUpdatedAt?: Date | string;
 }
 
 interface ProjectionStateRow {
@@ -82,6 +83,20 @@ export interface AccessTenantBackfillResult {
   readonly eventsEnqueued: number;
   readonly replayed: number;
   readonly hasMore: boolean;
+  readonly nextCursor?: AccessTenantBackfillCursor;
+}
+
+export interface AccessTenantBackfillCursor {
+  readonly sourceUpdatedAt: string;
+  readonly tenantId: string;
+}
+
+export interface AccessTenantCompleteBackfillResult {
+  readonly pagesProcessed: number;
+  readonly candidatesProcessed: number;
+  readonly eventsEnqueued: number;
+  readonly replayed: number;
+  readonly hasMore: false;
 }
 
 const DESTINATION_HOST_TOKEN_ENV: ReadonlyMap<string, string> = new Map([
@@ -192,20 +207,25 @@ export async function reconcileAccessTenantSnapshots(
  */
 export async function backfillAccessTenantSnapshots(
   db: DatabaseClient,
-  limit = DEFAULT_RECONCILE_LIMIT
+  limit = DEFAULT_RECONCILE_LIMIT,
+  cursor?: AccessTenantBackfillCursor
 ): Promise<AccessTenantBackfillResult> {
   const boundedLimit = normalizeReconcileLimit(limit);
   const candidates = await db.query<TenantCandidateRow>(
-    `select tenant.id as "tenantId"
+    `select tenant.id as "tenantId", tenant.updated_at as "sourceUpdatedAt"
          from platform.tenants tenant
         where not exists (
                 select 1
                   from access_runtime.bootstrap_tenants bootstrap
                  where bootstrap.tenant_id = tenant.id
               )
+          and (
+            $2::timestamptz is null
+            or (tenant.updated_at, tenant.id) > ($2::timestamptz, $3::uuid)
+          )
         order by tenant.updated_at, tenant.id
         limit $1`,
-    [boundedLimit + 1]
+    [boundedLimit + 1, cursor?.sourceUpdatedAt ?? null, cursor?.tenantId ?? null]
   );
   const selected = candidates.rows.slice(0, boundedLimit);
   let eventsEnqueued = 0;
@@ -216,12 +236,44 @@ export async function backfillAccessTenantSnapshots(
     const replayResult = await replayCurrentAccessTenantProjection(db, { tenantId: tenant.tenantId });
     if (replayResult) replayed += 1;
   }
+  const lastSelected = selected.at(-1);
+  const hasMore = candidates.rows.length > boundedLimit;
   return {
     candidatesProcessed: selected.length,
     eventsEnqueued,
     replayed,
-    hasMore: candidates.rows.length > boundedLimit
+    hasMore,
+    ...(hasMore && lastSelected?.sourceUpdatedAt
+      ? {
+          nextCursor: {
+            sourceUpdatedAt: toIsoDate(lastSelected.sourceUpdatedAt, "tenant.updated_at"),
+            tenantId: lastSelected.tenantId
+          }
+        }
+      : {})
   };
+}
+
+export async function backfillAllAccessTenantSnapshots(
+  db: DatabaseClient,
+  limit = DEFAULT_RECONCILE_LIMIT
+): Promise<AccessTenantCompleteBackfillResult> {
+  let cursor: AccessTenantBackfillCursor | undefined;
+  let pagesProcessed = 0;
+  let candidatesProcessed = 0;
+  let eventsEnqueued = 0;
+  let replayed = 0;
+  for (;;) {
+    const page = await backfillAccessTenantSnapshots(db, limit, cursor);
+    pagesProcessed += 1;
+    candidatesProcessed += page.candidatesProcessed;
+    eventsEnqueued += page.eventsEnqueued;
+    replayed += page.replayed;
+    if (!page.hasMore) break;
+    if (!page.nextCursor) throw new Error("Access tenant snapshot backfill returned hasMore without a cursor");
+    cursor = page.nextCursor;
+  }
+  return { pagesProcessed, candidatesProcessed, eventsEnqueued, replayed, hasMore: false };
 }
 
 /**
