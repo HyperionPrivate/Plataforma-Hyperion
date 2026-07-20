@@ -268,10 +268,26 @@ function expectRevokedFrozenReadiness(response: { body: ReadinessBody; statusCod
   expect(response.body.status).toBe("down");
   expect(response.body.dependencies).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ name: "postgres", status: "down", detail: "database readiness failed" })
+      expect.objectContaining({ name: "postgres", status: "ok" }),
+      expect.objectContaining({
+        name: "postgres_role",
+        status: "ok",
+        detail: "connected as hyperion_sofia"
+      }),
+      expect.objectContaining({
+        name: "pulso_iris.schema_version",
+        status: "down",
+        detail: "schema version is unavailable; require >= 2"
+      })
     ])
   );
-  expect(response.body.dependencies.some(({ name }) => name.endsWith(".schema_version"))).toBe(false);
+  expect(response.body.dependencies.filter(({ name }) => name.endsWith(".schema_version"))).toEqual([
+    expect.objectContaining({
+      name: "pulso_iris.schema_version",
+      status: "down",
+      detail: "schema version is unavailable; require >= 2"
+    })
+  ]);
 }
 
 function expectReadiness(
