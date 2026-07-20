@@ -82,8 +82,9 @@ Cola residual abierta (transición / ops):
    Organization (`docs/operations/REGISTRY-PUBLISH-PATH.md`).
 5. **DEBT-026** — HA / edge productivo / recovery offsite de LUMEN pendientes en entorno objetivo (checklist en
    `docs/evidence/lumen-recovery-validation-checklist-20260720.json`).
-6. **Gobernanza CI (Wave F)** — hold local-first: no restaurar `push`/`schedule` hasta haber cupo Actions; rulesets
-   de Organization pendientes (`docs/audits/federation-ci-hardening-20260719.md`).
+6. **Gobernanza CI (Wave F)** — repositorio público y `main` protegida; restauración gradual iniciada con
+   `pulso-cell` como único canario de `push`. Schedules y los demás workflows permanecen pendientes hasta observar
+   el canario en verde (`docs/audits/federation-ci-hardening-20260719.md`).
 
 Cerrados en código (2026-07-20): DEBT-020/032 (fachada gateway multiproducto), DEBT-021 (gateway sin
 `@hyperion/contracts`), DEBT-025 (bridge N-1 administrativo retirado). DEBT-023 queda operativo (`retiring`).

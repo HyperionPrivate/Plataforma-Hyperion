@@ -1,7 +1,10 @@
 name: pulso-cell
 
-# Temporary: no push triggers while Actions minutes are exhausted. PR + manual only.
+# Wave F canary: public-repository Actions capacity and protected main are active.
 on:
+  push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
