@@ -215,6 +215,7 @@ export async function runAccessChannelAcceptance(environment = process.env, opti
     await runPackage("@hyperion/access-migrations", "bootstrap:roles", accessEnvironment);
 
     const pulsoEnvironment = {
+      PULSO_MIGRATION_PHASE: "contract",
       PULSO_POSTGRES_ADMIN_URL: adminUrl,
       PULSO_POSTGRES_DB: names.pulsoDatabase,
       PULSO_MIGRATOR_DATABASE_PASSWORD: secrets.pulsoMigrator,
@@ -463,14 +464,14 @@ export async function runAccessChannelAcceptance(environment = process.env, opti
       identityCanMutateTenant: false,
       channelProjectionDelete: false,
       projectionForeignKeysToPlatformTenants: 0,
-      legacyChannelForeignKeysToPlatformTenants: 5,
+      legacyChannelForeignKeysToPlatformTenants: 0,
       hardDeleteSqlState: "55000"
     });
 
     const ledgers = await readLedgers(accessFixtureDb, pulsoFixtureDb);
     assert.equal(ledgers.access.at(-1)?.name, "004-access-tenant-lifecycle-integrity.sql");
-    // Channel projection lands at 004; tip also applies Iris 005 / SOFIA 006 / Integration 007 / Knowledge 008.
-    assert.equal(ledgers.pulso.at(-1)?.name, "015-revoke-sofia-pulso-iris-control-plane-grants.sql");
+    // Channel projection lands at 004; the current contract tip persists the Access FK attestation at 016.
+    assert.equal(ledgers.pulso.at(-1)?.name, "016-attest-access-fk-contract.sql");
     assert.ok(
       ledgers.pulso.some((entry) => entry.name === "004-access-channel-tenant-projection.sql"),
       "Access→Channel projection 004 must remain in the PULSO ledger"

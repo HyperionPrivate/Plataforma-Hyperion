@@ -169,14 +169,15 @@ test("the real boundary rehearsal is opt-in, isolated and preserves exact eviden
   assert.doesNotMatch(source, /inboxConflicts/);
   assert.match(source, /referencedTenantIdsMissingSnapshot: 0/);
   assert.match(source, /projectionForeignKeysToPlatformTenants: 0/);
-  assert.match(source, /legacyChannelForeignKeysToPlatformTenants: 5/);
+  assert.match(source, /legacyChannelForeignKeysToPlatformTenants: 0/);
   assert.match(source, /hardDeleteSqlState: "55000"/);
   assert.match(source, /004-access-tenant-lifecycle-integrity\.sql/);
   assert.match(source, /004-access-channel-tenant-projection\.sql/);
   assert.match(source, /005-access-iris-tenant-projection\.sql/);
   assert.match(source, /006-access-sofia-tenant-projection\.sql/);
   assert.match(source, /007-access-integration-tenant-projection\.sql/);
-  assert.match(source, /015-revoke-sofia-pulso-iris-control-plane-grants\.sql/);
+  assert.match(source, /016-attest-access-fk-contract\.sql/);
+  assert.match(source, /PULSO_MIGRATION_PHASE: "contract"/);
   assert.match(source, /container", "rm", "--force", "--volumes"/);
   assert.match(source, /removeExactAcceptanceResources/);
   assert.match(source, /waitForChildExit/);
