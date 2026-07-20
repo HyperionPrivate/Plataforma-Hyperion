@@ -142,7 +142,7 @@ jobs:
             TEST_INTEGRATION_DATABASE_URL="$integration_runtime_url" \
             TEST_CHANNEL_DATABASE_URL="$channel_runtime_url" \
             pnpm --filter @hyperion/pulso-migrations exec vitest run src/autonomy.integration.test.ts
-      - name: Exercise the frozen SOFIA 002 readiness contract fixture against 003
+      - name: Exercise the frozen SOFIA 002 readiness contract fixture against the current contract
         shell: bash
         run: |
           pulso_migrator_url="postgres://hyperion_pulso_migrator:${PULSO_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"

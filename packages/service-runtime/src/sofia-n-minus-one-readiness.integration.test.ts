@@ -16,8 +16,8 @@ const CURRENT_SOFIA_REQUIREMENT = Object.freeze<SchemaVersionRequirement>({
   minimumVersion: 2
 });
 const CURRENT_PULSO_MARKER = Object.freeze({
-  currentVersion: 15,
-  migrationName: "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
+  currentVersion: 16,
+  migrationName: "016-attest-access-fk-contract.sql"
 });
 const CURRENT_SOFIA_MARKER = Object.freeze({
   currentVersion: 2,
@@ -187,7 +187,7 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
     }
   });
 
-  it("keeps the frozen 002 and current markers independent through the 004 expansion", async () => {
+  it("keeps the frozen 002 and current markers independent through the current contract", async () => {
     const frozenInitial = await injectReadiness(requiredHandle(frozen002Service, "frozen 002"));
     expectReadiness(frozenInitial, 200, "ok", "pulso_iris.schema_version", "ok", "schema version >= 2");
 

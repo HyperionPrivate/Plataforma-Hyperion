@@ -321,7 +321,9 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   }
   assert.match(job, /autonomy\.integration\.test\.ts/);
   const autonomyStart = job.indexOf("Verify autonomous PULSO catalog and five runtime privilege fences");
-  const fixtureStart = job.indexOf("Exercise the frozen SOFIA 002 readiness contract fixture against 003");
+  const fixtureStart = job.indexOf(
+    "Exercise the frozen SOFIA 002 readiness contract fixture against the current contract"
+  );
   const runtimeStart = job.indexOf("Run all 93 PULSO runtime PostgreSQL integrations with fenced roles");
   assert.ok(autonomyStart >= 0 && fixtureStart > autonomyStart && runtimeStart > fixtureStart);
   const autonomyStep = job.slice(autonomyStart, fixtureStart);
