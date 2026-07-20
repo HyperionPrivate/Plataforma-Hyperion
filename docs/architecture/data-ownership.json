@@ -246,6 +246,8 @@
     "agent_runtime.outbox_events": "sofia-automation",
     "agent_runtime.pulso_stream_positions": "sofia-automation",
     "agent_runtime.job_stream_positions": "sofia-automation",
+    "agent_runtime.tenant_snapshots": "sofia-automation",
+    "agent_runtime.access_projection_inbox": "sofia-automation",
     "lumen.service_migrations": "lumen",
     "lumen.schema_version": "lumen",
     "lumen.migration_ledger": "lumen",

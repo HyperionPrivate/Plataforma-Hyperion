@@ -13,15 +13,15 @@ const FROZEN_002_SOFIA_REQUIREMENT = Object.freeze<SchemaVersionRequirement>({
 const CURRENT_SOFIA_REQUIREMENT = Object.freeze<SchemaVersionRequirement>({
   schema: "agent_runtime",
   serviceName: "sofia",
-  minimumVersion: 1
+  minimumVersion: 2
 });
 const CURRENT_PULSO_MARKER = Object.freeze({
-  currentVersion: 4,
-  migrationName: "005-access-iris-tenant-projection.sql"
+  currentVersion: 6,
+  migrationName: "006-access-sofia-tenant-projection.sql"
 });
 const CURRENT_SOFIA_MARKER = Object.freeze({
-  currentVersion: 1,
-  migrationName: "003-sofia-readiness-marker.sql"
+  currentVersion: 2,
+  migrationName: "006-access-sofia-tenant-projection.sql"
 });
 
 const migratorUrl = process.env.TEST_PULSO_MIGRATOR_DATABASE_URL?.trim();
@@ -192,7 +192,7 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
     expectReadiness(frozenInitial, 200, "ok", "pulso_iris.schema_version", "ok", "schema version >= 2");
 
     const currentInitial = await injectReadiness(requiredHandle(currentService, "current"));
-    expectReadiness(currentInitial, 200, "ok", "agent_runtime.schema_version", "ok", "schema version >= 1");
+    expectReadiness(currentInitial, 200, "ok", "agent_runtime.schema_version", "ok", "schema version >= 2");
 
     restoreGlobalMarker = true;
     await requiredDatabase(migrator, "migrator").query(
@@ -213,7 +213,7 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
       );
 
       const currentWithStaleGlobal = await injectReadiness(requiredHandle(currentService, "current"));
-      expectReadiness(currentWithStaleGlobal, 200, "ok", "agent_runtime.schema_version", "ok", "schema version >= 1");
+      expectReadiness(currentWithStaleGlobal, 200, "ok", "agent_runtime.schema_version", "ok", "schema version >= 2");
     } finally {
       await writeGlobalMarker(
         requiredDatabase(migrator, "migrator"),
@@ -236,7 +236,7 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
         "down",
         "agent_runtime.schema_version",
         "down",
-        "schema version is missing; require >= 1"
+        "schema version is missing; require >= 2"
       );
 
       const frozenWithCurrentGlobal = await injectReadiness(requiredHandle(frozen002Service, "frozen 002"));
@@ -251,7 +251,7 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
 
     expect(await readLocalMarker(requiredDatabase(migrator, "migrator"))).toEqual(originalLocalMarker);
     const currentRestored = await injectReadiness(requiredHandle(currentService, "current"));
-    expectReadiness(currentRestored, 200, "ok", "agent_runtime.schema_version", "ok", "schema version >= 1");
+    expectReadiness(currentRestored, 200, "ok", "agent_runtime.schema_version", "ok", "schema version >= 2");
   }, 60_000);
 });
 

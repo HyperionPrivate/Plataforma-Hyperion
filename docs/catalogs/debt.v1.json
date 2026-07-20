@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.9.3",
-  "updatedAt": "2026-07-19",
+  "catalogVersion": "1.9.4",
+  "updatedAt": "2026-07-20",
   "baseline": "docs/architecture/boundary-baseline.json",
   "baselineStats": {
     "findingGroups": 84,
@@ -11,13 +11,20 @@
   "items": [
     {
       "id": "DEBT-001",
-      "title": "SOFIA foreign keys hacia Access",
+      "title": "SOFIA foreign keys hacia Access; migrate lee tenant_snapshots; contract pendiente",
       "findingType": "cross-owner-fk",
       "edge": "sofia-automation->access",
       "owner": "pulso-sofia",
-      "status": "accepted",
+      "status": "retiring",
+      "evidence": [
+        "packages/pulso-migrations/sql/006-access-sofia-tenant-projection.sql",
+        "services/identity-service/src/access-tenant-projections.ts",
+        "services/agent-service/src/access-tenant-projections.ts",
+        "services/prompt-flow-service/src/access-tenant-gate.ts",
+        "docs/products/PULSO-IRIS.md"
+      ],
       "issue": "HYP-DEBT-001",
-      "dueDate": "2027-01-31"
+      "dueDate": "2027-03-31"
     },
     {
       "id": "DEBT-002",

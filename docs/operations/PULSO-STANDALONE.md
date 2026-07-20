@@ -46,8 +46,8 @@ docker compose --project-name $PulsoProject --env-file .env.pulso -f infra/docke
 docker compose --project-name $PulsoProject --env-file .env.pulso -f infra/docker-compose.pulso.yml exec -T postgres psql -U hyperion_pulso_admin -d hyperion_pulso -Atc "select current_version || '/' || migration_name from agent_runtime.schema_version where service_name = 'sofia'"
 ```
 
-PostgreSQL debe responder `5/005-access-iris-tenant-projection.sql` para PULSO y
-`1/003-sofia-readiness-marker.sql` para SOFÍA. Un despliegue aceptable usa el migrador
+PostgreSQL debe responder `6/006-access-sofia-tenant-projection.sql` para PULSO y
+`2/006-access-sofia-tenant-projection.sql` para SOFÍA. Un despliegue aceptable usa el migrador
 `hyperion_pulso_migrator` y exactamente cinco roles runtime: `hyperion_pulso`, `hyperion_sofia`,
 `hyperion_knowledge`, `hyperion_integration` y `hyperion_channel`. Cada servicio debe llegar a `healthy` con su rol
 propio; que el BFF o la consola respondan no sustituye esa comprobación.

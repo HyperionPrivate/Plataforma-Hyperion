@@ -33,6 +33,7 @@ const HYPERION_EVENTS_STREAM = "HYPERION_EVENTS";
 const PRIVATE_HTTP_HOSTS = new Set([
   "whatsapp-channel-service",
   "pulso-iris-service",
+  "agent-service",
   "localhost",
   "127.0.0.1",
   "[::1]"

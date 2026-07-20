@@ -75,10 +75,10 @@ describe("consumePulsoMessageEvent", () => {
     const accepted = acceptedDatabase(jobId);
     await consumePulsoMessageEvent(accepted.client, EVENT);
     const payloadHash = insertedInboxHash(accepted.calls);
-    const replay = scriptedDatabase([[existingInbox(payloadHash, jobId)]]);
+    const replay = scriptedDatabase([[activeSofiaSnapshot()], [existingInbox(payloadHash, jobId)]]);
 
     await expect(consumePulsoMessageEvent(replay.client, EVENT)).resolves.toEqual({ status: "duplicate", jobId });
-    expect(replay.calls).toHaveLength(1);
+    expect(replay.calls).toHaveLength(2);
   });
 
   it("normalizes an owner-resolved v1 replay to the same v2 contract", async () => {
@@ -86,17 +86,17 @@ describe("consumePulsoMessageEvent", () => {
     const accepted = acceptedDatabase(jobId);
     await consumePulsoMessageEvent(accepted.client, EVENT);
     const payloadHash = insertedInboxHash(accepted.calls);
-    const replay = scriptedDatabase([[existingInbox(payloadHash, jobId)]]);
+    const replay = scriptedDatabase([[activeSofiaSnapshot()], [existingInbox(payloadHash, jobId)]]);
 
     await expect(consumePulsoMessageEvent(replay.client, LEGACY_EVENT, POSITION)).resolves.toEqual({
       status: "duplicate",
       jobId
     });
-    expect(replay.calls).toHaveLength(1);
+    expect(replay.calls).toHaveLength(2);
   });
 
   it("fails closed when v1 has no owner-resolved position", async () => {
-    const db = scriptedDatabase([]);
+    const db = scriptedDatabase([[activeSofiaSnapshot()]]);
     await expect(consumePulsoMessageEvent(db.client, LEGACY_EVENT)).rejects.toThrow("owner-resolved stream position");
     expect(db.transactions).toBe(0);
   });
@@ -119,7 +119,7 @@ describe("consumePulsoMessageEvent", () => {
       id: "00000000-0000-4000-8000-000000000211",
       streamSequence: 2
     };
-    const db = scriptedDatabase([[], [], [], [], [{ lastSequence: 0 }]]);
+    const db = scriptedDatabase([[activeSofiaSnapshot()], [], [], [], [], [{ lastSequence: 0 }]]);
 
     await expect(consumePulsoMessageEvent(db.client, gapEvent)).resolves.toEqual({
       status: "gap",
@@ -131,9 +131,20 @@ describe("consumePulsoMessageEvent", () => {
   });
 
   it("rejects event-id reuse with another envelope or stream position", async () => {
-    const db = scriptedDatabase([[existingInbox("f".repeat(64), "00000000-0000-4000-8000-000000000208")]]);
+    const db = scriptedDatabase([
+      [activeSofiaSnapshot()],
+      [existingInbox("f".repeat(64), "00000000-0000-4000-8000-000000000208")]
+    ]);
     await expect(consumePulsoMessageEvent(db.client, EVENT)).resolves.toEqual({ status: "conflict" });
-    expect(db.calls).toHaveLength(1);
+    expect(db.calls).toHaveLength(2);
+  });
+
+  it("fails closed when the local Access→SOFIA snapshot is missing", async () => {
+    const db = scriptedDatabase([[]]);
+    await expect(consumePulsoMessageEvent(db.client, EVENT)).rejects.toThrow(
+      "Tenant snapshot not found; bootstrap required"
+    );
+    expect(db.transactions).toBe(0);
   });
 });
 
@@ -174,7 +185,24 @@ describe("PULSO to SOFIA workload identity", () => {
 });
 
 function acceptedDatabase(jobId: string) {
-  return scriptedDatabase([[], [], [], [], [{ lastSequence: 0 }], [], [], [{ id: jobId }], [], [], [{}]]);
+  return scriptedDatabase([
+    [activeSofiaSnapshot()],
+    [],
+    [],
+    [],
+    [],
+    [{ lastSequence: 0 }],
+    [],
+    [],
+    [{ id: jobId }],
+    [],
+    [],
+    [{}]
+  ]);
+}
+
+function activeSofiaSnapshot() {
+  return { status: "active" as const, sourceVersion: "1" };
 }
 
 function existingInbox(payloadHash: string, jobId: string) {

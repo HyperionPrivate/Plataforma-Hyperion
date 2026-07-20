@@ -1,5 +1,6 @@
 import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import { readInternalCredential, validateInternalAuthorization, type RouteRegistrar } from "@hyperion/service-runtime";
+import { requireSofiaTenantAccess } from "./access-tenant-gate.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const sofiaToken = readInternalCredential(process.env, "SOFIA_TO_PROMPT_FLOW_TOKEN");
@@ -23,6 +24,8 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     const tenantId = tenantIdSchema.safeParse(params.tenantId);
     if (!tenantId.success) return reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
     if (!context.db) return reply.code(503).send(envelope({ error: "Database unavailable" }, request.id));
+    const snapshot = await requireSofiaTenantAccess(context.db, tenantId.data, reply, request.id, "exists");
+    if (!snapshot) return;
 
     const result = await context.db.query<{
       id: string;

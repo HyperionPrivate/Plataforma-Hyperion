@@ -19,9 +19,11 @@ import { DeepSeekLlmProvider } from "./deepseek-llm-provider.js";
 import { readPulsoMessageV1Compatibility, registerPulsoEventRoutesWithCompatibility } from "./pulso-events.js";
 import { startPulsoMessageJetStreamConsumers, type ManagedJetStreamConsumer } from "./pulso-jetstream.js";
 import { createLegacyPulsoPositionResolver } from "./pulso-position-client.js";
+import { registerAccessTenantProjectionRoutes } from "./access-tenant-projections.js";
 import { registerSofiaReadinessRoute, SofiaRuntime } from "./sofia-runtime.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  registerAccessTenantProjectionRoutes(app, context);
   const durableOutbox = readDurableOutboxConfiguration(process.env);
   const lifecycle: {
     dispatcher?: Pick<HttpOutboxDispatcher<unknown> | JetStreamOutboxDispatcher<unknown>, "stop">;

@@ -23,8 +23,9 @@ PostgreSQL sin snapshot consistente de WhatsApp **no es un backup completo de PU
 - El owner de toda base restaurada es `hyperion_pulso_migrator`.
 - El catálogo efectivo contiene únicamente las migraciones provider-owned `001-pulso-autonomous-baseline.sql`,
   `002-pulso-runtime-roles.sql`, `003-sofia-readiness-marker.sql`,
-  `004-access-channel-tenant-projection.sql` y `005-access-iris-tenant-projection.sql`, con versión global
-  terminal 5 y marker local SOFÍA versión 1 en `agent_runtime.schema_version`.
+  `004-access-channel-tenant-projection.sql`, `005-access-iris-tenant-projection.sql` y
+  `006-access-sofia-tenant-projection.sql`, con versión global terminal 6 y marker local SOFÍA versión 2 en
+  `agent_runtime.schema_version`.
 - Los cinco roles runtime son `hyperion_pulso`, `hyperion_sofia`, `hyperion_knowledge`, `hyperion_integration` y
   `hyperion_channel`; ninguno recibe DDL ni acceso al ledger.
 - Los dumps viven en `backups/pulso/pulso-<UTC>.dump.gz` y el restore exige su SHA-256 exacto y confirmación
@@ -202,8 +203,8 @@ El recibo current completo está en
 `20260719T055031Z` ejecutó backup y restore PostgreSQL aislados desde el worktree federado y acreditó:
 
 - las migraciones provider-owned 001–004 y el rerun skip-only exacto de las cuatro;
-- el marker global `5/005-access-iris-tenant-projection.sql` y el marker local SOFÍA
-  `1/003-sofia-readiness-marker.sql`;
+- el marker global `6/006-access-sofia-tenant-projection.sql` y el marker local SOFÍA
+  `2/006-access-sofia-tenant-projection.sql`;
 - restore con owner `hyperion_pulso_migrator`, cinco roles runtime, bootstrap de cinco roles, ACL exactas y
   privilegios públicos de base revocados;
 - un canario de recuperación preservado byte a byte: fuente y restore comparten SHA-256

@@ -37,16 +37,21 @@ describe("prompt-flow workload identity", () => {
 
   it("accepts only the agent-service edge", async () => {
     process.env.SOFIA_TO_PROMPT_FLOW_TOKEN = TOKEN;
-    const query = vi.fn().mockResolvedValue({
-      rows: [
-        {
-          id: "00000000-0000-4000-8000-000000000002",
-          name: "SOFIA",
-          version: 1,
-          definition: { systemPrompt: "A sufficiently long controlled system prompt." }
-        }
-      ]
-    });
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ status: "active", sourceVersion: "1" }]
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "00000000-0000-4000-8000-000000000002",
+            name: "SOFIA",
+            version: 1,
+            definition: { systemPrompt: "A sufficiently long controlled system prompt." }
+          }
+        ]
+      });
     const app = await buildApp(query);
     const response = await app.inject({
       method: "GET",
@@ -55,7 +60,8 @@ describe("prompt-flow workload identity", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(query).toHaveBeenCalledOnce();
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(String(query.mock.calls[0]?.[0])).toContain("agent_runtime.tenant_snapshots");
     await app.close();
   });
 });

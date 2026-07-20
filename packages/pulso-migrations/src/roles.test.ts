@@ -44,14 +44,14 @@ function createClient(
     if (sql.includes("from pulso_iris.schema_version")) {
       const marker =
         options.globalMarker === undefined
-          ? { current_version: 5, migration_name: "005-access-iris-tenant-projection.sql" }
+          ? { current_version: 6, migration_name: "006-access-sofia-tenant-projection.sql" }
           : options.globalMarker;
       return { rows: marker ? [marker] : [] };
     }
     if (sql.includes("from agent_runtime.schema_version")) {
       const marker =
         options.sofiaMarker === undefined
-          ? { current_version: 1, migration_name: "003-sofia-readiness-marker.sql" }
+          ? { current_version: 2, migration_name: "006-access-sofia-tenant-projection.sql" }
           : options.sofiaMarker;
       return { rows: marker ? [marker] : [] };
     }
@@ -108,10 +108,10 @@ describe("PULSO runtime role bootstrap", () => {
     expect(statements.some((statement) => statement.includes("with login password"))).toBe(false);
   });
 
-  it("keeps the SOFIA marker pinned to 003 when the global terminal advances", async () => {
+  it("keeps SOFIA and global markers on the Access?SOFIA projection tip", async () => {
     const { client } = createClient({
-      globalMarker: { current_version: 5, migration_name: "005-access-iris-tenant-projection.sql" },
-      sofiaMarker: { current_version: 1, migration_name: "003-sofia-readiness-marker.sql" }
+      globalMarker: { current_version: 6, migration_name: "006-access-sofia-tenant-projection.sql" },
+      sofiaMarker: { current_version: 2, migration_name: "006-access-sofia-tenant-projection.sql" }
     });
     await expect(applyPulsoRolePasswords(client, "hyperion_pulso", PASSWORDS)).resolves.toBeUndefined();
   });

@@ -3,6 +3,7 @@ import { envelope } from "@hyperion/platform-contracts";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import { readInternalCredential, validateInternalAuthorization, type RouteRegistrar } from "@hyperion/service-runtime";
 import { z } from "zod";
+import { readSofiaTenantSnapshot, requireSofiaTenantAccess } from "./access-tenant-projections.js";
 import {
   createLegacyPulsoPositionResolver,
   type LegacyPulsoPositionResolver,
@@ -139,6 +140,8 @@ export function registerPulsoEventRoutesWithCompatibility(
     if (!parsed.success) {
       return reply.code(400).send(envelope({ error: "Invalid durable event" }, request.id));
     }
+    const snapshot = await requireSofiaTenantAccess(context.db, parsed.data.tenantId, reply, request.id, "active");
+    if (!snapshot) return;
     if (isLegacyPulsoMessageEvent(parsed.data)) {
       context.logger.warn("legacy PULSO event accepted during the v2 rollout window", {
         requestId: request.id,
@@ -190,6 +193,13 @@ export async function consumePulsoMessageEvent(
   event: PulsoMessageEvent,
   legacyPosition?: PulsoEventPosition
 ): Promise<PulsoMessageConsumption> {
+  const snapshot = await readSofiaTenantSnapshot(db, event.tenantId);
+  if (!snapshot) {
+    throw new Error("Tenant snapshot not found; bootstrap required");
+  }
+  if (snapshot.status !== "active") {
+    throw new Error("Tenant is not active for sofia operations");
+  }
   const position = resolvePulsoMessagePosition(event, legacyPosition);
   const normalizedEvent = normalizePulsoMessageEvent(event, position);
   const payloadHash = createHash("sha256").update(canonicalJson(normalizedEvent)).digest("hex");

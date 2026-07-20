@@ -162,7 +162,7 @@ test("records exact Docker inventory and rejects any mutation of a preexisting c
   );
 });
 
-test("pins the provider ledger to PULSO migrations 001 through 004 without pinning mutable hashes", () => {
+test("pins the provider ledger to PULSO migrations 001 through 006 without pinning mutable hashes", () => {
   assert.deepEqual(expectedMigrationFiles(), EXPECTED_MIGRATIONS);
   assert.doesNotThrow(() => assertPulsoCatalogEvidence(validCatalogEvidence));
   assert.throws(
@@ -175,7 +175,7 @@ test("pins the provider ledger to PULSO migrations 001 through 004 without pinni
   );
 });
 
-test("requires global version 4, owner-local SOFIA version 1, all provider schemas and exact database ACL", () => {
+test("requires global version 6, owner-local SOFIA version 2, all provider schemas and exact database ACL", () => {
   assert.throws(
     () =>
       assertPulsoCatalogEvidence({

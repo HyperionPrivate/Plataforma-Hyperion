@@ -40,6 +40,10 @@
       {
         "path": "sql/005-access-iris-tenant-projection.sql",
         "sha256": "bfa7462090f4626f34096deabcb16f2745539a12a888ed904e79f042ea26959d"
+      },
+      {
+        "path": "sql/006-access-sofia-tenant-projection.sql",
+        "sha256": "b2750ee6f2347883df55e666b9eeee4195928041be89e84311b0fcde128c60dc"
       }
     ]
   }

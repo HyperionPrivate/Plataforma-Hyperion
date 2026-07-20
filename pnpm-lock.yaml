@@ -873,6 +873,9 @@ importers:
 
   services/prompt-flow-service:
     dependencies:
+      '@hyperion/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       '@hyperion/platform-contracts':
         specifier: 1.1.0
         version: link:../../packages/platform-contracts

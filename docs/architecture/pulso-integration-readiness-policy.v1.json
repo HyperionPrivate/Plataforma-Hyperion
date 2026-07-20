@@ -1,5 +1,5 @@
 {
-  "policyVersion": "1.6.0",
+  "policyVersion": "1.7.0",
   "owner": "pulso-data",
   "issue": "HYP-DEBT-027",
   "reviewBy": "2026-10-31",
@@ -34,16 +34,16 @@
     "sofiaCurrent": {
       "schema": "agent_runtime",
       "serviceName": "sofia",
-      "minimumVersion": 1,
-      "migration": "003-sofia-readiness-marker.sql",
+      "minimumVersion": 2,
+      "migration": "006-access-sofia-tenant-projection.sql",
       "role": "hyperion_sofia",
       "consumers": ["agent-service", "prompt-flow-service"]
     },
     "globalTransition": {
       "schema": "pulso_iris",
       "serviceName": "pulso",
-      "minimumVersion": 5,
-      "migration": "005-access-iris-tenant-projection.sql",
+      "minimumVersion": 6,
+      "migration": "006-access-sofia-tenant-projection.sql",
       "currentConsumers": [
         "pulso-iris-service",
         "knowledge-service",
@@ -66,6 +66,7 @@
       "packages/pulso-migrations/sql/003-sofia-readiness-marker.sql",
       "packages/pulso-migrations/sql/004-access-channel-tenant-projection.sql",
       "packages/pulso-migrations/sql/005-access-iris-tenant-projection.sql",
+      "packages/pulso-migrations/sql/006-access-sofia-tenant-projection.sql",
       "packages/pulso-migrations/src/schema-manifest.ts",
       "packages/pulso-migrations/src/autonomy.integration.test.ts",
       "packages/service-runtime/src/sofia-n-minus-one-readiness.integration.test.ts"

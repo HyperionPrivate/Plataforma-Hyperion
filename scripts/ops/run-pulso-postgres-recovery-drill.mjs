@@ -31,10 +31,11 @@ export const EXPECTED_MIGRATIONS = [
   "002-pulso-runtime-roles.sql",
   "003-sofia-readiness-marker.sql",
   "004-access-channel-tenant-projection.sql",
-  "005-access-iris-tenant-projection.sql"
+  "005-access-iris-tenant-projection.sql",
+  "006-access-sofia-tenant-projection.sql"
 ];
-export const EXPECTED_SCHEMA_VERSION = "5\t005-access-iris-tenant-projection.sql";
-export const EXPECTED_SOFIA_SCHEMA_VERSION = "1\t003-sofia-readiness-marker.sql";
+export const EXPECTED_SCHEMA_VERSION = "6\t006-access-sofia-tenant-projection.sql";
+export const EXPECTED_SOFIA_SCHEMA_VERSION = "2\t006-access-sofia-tenant-projection.sql";
 export const EXPECTED_OWNER_STATE = "4\t0\t0";
 export const EXPECTED_USER_SCHEMA_STATE = "agent_runtime\nchannel_runtime\nplatform\npulso_iris";
 export const RUNTIME_ROLES = [
@@ -256,7 +257,7 @@ export function isExpectedRuntimeDdlDenial(message) {
 export function expectedRuntimeState(role) {
   if (!RUNTIME_ROLES.includes(role)) throw new Error(`unknown PULSO runtime role: ${role}`);
   const canReadSofiaMarker = role === "hyperion_sofia";
-  return `${role}\t${RESTORE_DATABASE}\t5\t005-access-iris-tenant-projection.sql\ttrue\t${canReadSofiaMarker}\ttrue\ttrue\tfalse\tfalse\tfalse`;
+  return `${role}\t${RESTORE_DATABASE}\t6\t006-access-sofia-tenant-projection.sql\ttrue\t${canReadSofiaMarker}\ttrue\ttrue\tfalse\tfalse\tfalse`;
 }
 
 export function parsePulsoMigrationReceipt(output) {
@@ -949,10 +950,10 @@ export function runDrill(options) {
     }
     assertLedgerMatchesFiles(sourceLedger, expectedMigrations);
     if (schemaVersion(compose, SOURCE_DATABASE) !== EXPECTED_SCHEMA_VERSION) {
-      throw new Error("source PULSO schema is not at provider version 4 / 004");
+      throw new Error("source PULSO schema is not at provider version 6 / 006");
     }
     if (sofiaSchemaVersion(compose, SOURCE_DATABASE) !== EXPECTED_SOFIA_SCHEMA_VERSION) {
-      throw new Error("source SOFIA schema is not at owner-local version 1 / 003");
+      throw new Error("source SOFIA schema is not at owner-local version 2 / 006");
     }
     const sourceSchema = schemaDump(compose, SOURCE_DATABASE);
     const sourceSchemaSha256 = sha256(sourceSchema);

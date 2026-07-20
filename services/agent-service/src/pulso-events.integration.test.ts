@@ -26,6 +26,12 @@ describeIntegration("durable PULSO -> SOFIA persistence", () => {
       [`autonomous-sofia-${randomUUID()}`]
     );
     tenantId = tenant.rows[0]!.id;
+    await db.query(
+      `insert into agent_runtime.tenant_snapshots (
+         tenant_id, status, source_event_id, source_version, source_updated_at, payload_hash
+       ) values ($1::uuid, 'active', $2::uuid, 1, now(), $3)`,
+      [tenantId, randomUUID(), "a".repeat(64)]
+    );
   });
 
   afterAll(async () => {
@@ -35,6 +41,8 @@ describeIntegration("durable PULSO -> SOFIA persistence", () => {
       await db.query("delete from agent_runtime.inbox_events where tenant_id = $1", [tenantId]);
       await db.query("delete from agent_runtime.job_stream_positions where tenant_id = $1", [tenantId]);
       await db.query("delete from agent_runtime.pulso_stream_positions where tenant_id = $1", [tenantId]);
+      await db.query("delete from agent_runtime.access_projection_inbox where tenant_id = $1", [tenantId]);
+      await db.query("delete from agent_runtime.tenant_snapshots where tenant_id = $1", [tenantId]);
       await fixtureDb.query("delete from platform.tenants where id = $1", [tenantId]);
     }
     await db.close();
