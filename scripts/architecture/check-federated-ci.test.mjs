@@ -286,6 +286,7 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   assert.match(job, /bootstrap:database/);
   assert.match(job, /PULSO_MIGRATOR_DATABASE_URL/);
   assert.match(job, /bootstrap:roles/);
+  assert.equal(job.match(/PULSO_MIGRATION_PHASE=contract/g)?.length, 2);
   assert.match(job, /PULSO_POSTGRES_DB=hyperion_pulso_n1_fixture_ci/);
   assert.match(job, /const names=\['PULSO_MIGRATOR','PULSO','SOFIA','KNOWLEDGE','INTEGRATION','CHANNEL'\]/);
   for (const secret of [
