@@ -93,8 +93,13 @@ describeIntegration("pulso-iris configurable agenda", () => {
       await client.end();
     }
     if (fixtureClient) {
-      if (tenantA) await fixtureClient.query("delete from platform.tenants where id = $1", [tenantA]);
-      if (tenantB) await fixtureClient.query("delete from platform.tenants where id = $1", [tenantB]);
+      if (tenantA || tenantB) {
+        const tenantIds = [tenantA, tenantB].filter(Boolean);
+        await fixtureClient.query("delete from pulso_iris.tenant_snapshots where tenant_id = any($1::uuid[])", [
+          tenantIds
+        ]);
+        await fixtureClient.query("delete from platform.tenants where id = any($1::uuid[])", [tenantIds]);
+      }
       await fixtureClient.end();
     }
     delete process.env.DATABASE_URL;
@@ -362,7 +367,14 @@ async function createTenant(prefix: string): Promise<string> {
      values ($1, $2, 'active') returning id`,
     [slug, slug]
   );
-  return result.rows[0]!.id;
+  const tenantId = result.rows[0]!.id;
+  await fixtureClient.query(
+    `insert into pulso_iris.tenant_snapshots (
+       tenant_id, status, source_event_id, source_version, source_updated_at, payload_hash
+     ) values ($1, 'active', $2, 1, now(), repeat('0', 64))`,
+    [tenantId, randomUUID()]
+  );
+  return tenantId;
 }
 
 async function createCatalog(

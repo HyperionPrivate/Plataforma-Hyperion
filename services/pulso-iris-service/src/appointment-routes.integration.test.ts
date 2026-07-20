@@ -67,7 +67,10 @@ describeIntegration("pulso-iris appointment lifecycle", () => {
       await client.end();
     }
     if (fixtureClient) {
-      if (tenantId) await fixtureClient.query("delete from platform.tenants where id = $1", [tenantId]);
+      if (tenantId) {
+        await fixtureClient.query("delete from pulso_iris.tenant_snapshots where tenant_id = $1", [tenantId]);
+        await fixtureClient.query("delete from platform.tenants where id = $1", [tenantId]);
+      }
       await fixtureClient.end();
     }
     delete process.env.DATABASE_URL;
@@ -509,6 +512,12 @@ async function createFixtures(): Promise<string> {
     [slug]
   );
   const createdTenantId = tenant.rows[0]!.id;
+  await fixtureClient.query(
+    `insert into pulso_iris.tenant_snapshots (
+       tenant_id, status, source_event_id, source_version, source_updated_at, payload_hash
+     ) values ($1, 'active', $2, 1, now(), repeat('0', 64))`,
+    [createdTenantId, randomUUID()]
+  );
   await ensureAgendaSettingsExist(client, createdTenantId);
   const patient = await client.query<{ id: string }>(
     `insert into pulso_iris.administrative_patients (tenant_id, full_name)
