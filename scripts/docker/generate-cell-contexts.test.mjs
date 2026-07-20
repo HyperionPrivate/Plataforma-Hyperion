@@ -506,7 +506,7 @@ test("cada target NOVA compila y publica sólo su deployable y dependencias", as
 });
 
 test("todo workflow que construye Compose materializa primero los contextos allowlisted", async () => {
-  for (const workflow of ["_cell-ci.yml", "check.yml", "container-scan.yml"]) {
+  for (const workflow of ["_cell-ci.yml", "container-scan.yml"]) {
     const contents = await readFile(path.join(repositoryRoot, ".github/workflows", workflow), "utf8");
     const generatorIndex = contents.indexOf("scripts/docker/generate-cell-contexts.mjs");
     const composeIndex = contents.indexOf("docker compose");

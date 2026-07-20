@@ -120,18 +120,17 @@ cada BFF validará localmente mediante JWKS; una caída temporal de Identity no 
 El grant normativo es `tenantId × productId × roles/capabilities`. Las sesiones de navegador se aíslan por origen
 con cookies `HttpOnly`, `Secure` y `SameSite`, sin bearer común en `localStorage`.
 
-El modelo Compose normal no construye ni inicia `api-gateway`. El workflow full-stack se conserva como prueba de
-integración y, de forma temporal por límite de minutos de GitHub Actions, solo se dispara mediante
-`workflow_dispatch` (los cell-CI y escaneos de seguridad quedan en `pull_request` + manual, sin `push` ni
-`schedule`). Cuando hay minutos, activa `legacy-gateway` explícitamente y levanta dos smoke tests reales: el stack base
-HTTP y el stack con el overlay JetStream. Mientras tanto, la fuente de verdad es la validación local (`pnpm check` y
-Compose). Esto comprueba build, one-shots, healthchecks y convivencia legacy; no
-convierte el piloto JetStream de un nodo en una configuración productiva ni sustituye un ensayo de upgrade y
-rollback con datos representativos. Un job separado resuelve fail-closed las capacidades del SHA base y ensaya el
-upgrade HTTP exacto N-1→current: sólo una base pre-durable abre compatibilidad temporal y, al volver, valida su
-polling original; una base current permanece en v2 y debe completar tráfico durable nuevo con su escritor exacto
-sobre el esquema actualizado. No atribuye inbox/outbox a binarios que nunca los tuvieron ni prueba mensajes
-JetStream pendientes entre versiones.
+El modelo Compose normal no construye ni inicia `api-gateway`. El workflow `full-stack` compone las puertas
+provider-owned de Platform, NOVA, LUMEN y PULSO mediante `_cell-ci.yml`, además de validar los contratos globales
+del workspace. Se ejecuta en `main`, de noche y manualmente. No arranca binarios actuales contra la base global
+histórica: después del cutover de esquemas esa combinación dejó de representar una topología soportada y podía dar
+falsos negativos de readiness o, peor, incentivar que un proveedor volviera a crear tablas en el migrador global.
+
+El antiguo ensayo HTTP/JetStream y N−1 se conserva únicamente en
+`legacy-monolith-diagnostic.yml` como registro operativo congelado. Solo puede iniciarse manualmente escribiendo
+`RUN_UNSUPPORTED_LEGACY_DIAGNOSTIC`; no es una puerta de merge ni una afirmación de compatibilidad vigente. Los
+ensayos de base, roles, rollback y recovery normativos viven en la CI de cada célula y las aceptaciones entre
+proveedores usan bases lógicas aisladas y contratos autenticados.
 
 ### Wave F — governance hold (CI)
 

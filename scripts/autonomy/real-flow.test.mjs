@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = join(dirname(fileURLToPath(import.meta.url)), "real-flow.e2e.mjs");
 const source = readFileSync(scriptPath, "utf8");
-const workflowPath = join(dirname(fileURLToPath(import.meta.url)), "../../.github/workflows/check.yml");
+const workflowPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../.github/workflows/legacy-monolith-diagnostic.yml"
+);
 const workflow = readFileSync(workflowPath, "utf8");
 const natsAcl = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "../../infra/nats/nats-server.conf"),

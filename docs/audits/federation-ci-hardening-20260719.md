@@ -88,6 +88,9 @@ los triggers históricos de `push` y `schedule` para el resto de CI.
 2. ~~Transferencia a Organization con rulesets en `main` (require status checks, block force-push).~~ Resuelto con
    branch protection y checks requeridos.
 3. ~~Reintroducir `push`/`schedule` de forma gradual.~~ Canario `pulso-cell` observado en verde; triggers históricos
-   restaurados para Access, NOVA, LUMEN, Platform, seguridad y full-stack.
-
-Conservar `workflow_dispatch` para recuperación manual y vigilar la primera ejecución completa sobre `main`.
+   restaurados para Access, NOVA, LUMEN, Platform y seguridad.
+4. ~~Validar la primera ejecución full-stack.~~ Las ejecuciones `29781495766` y `29783686422` demostraron que el
+   ensayo monolítico había quedado obsoleto: mezclaba binarios federados actuales con el esquema global histórico.
+   La puerta automática ahora compone `_cell-ci.yml` para Platform, NOVA, LUMEN y PULSO y mantiene una validación
+   global del workspace. El ensayo anterior queda como `legacy-monolith-diagnostic.yml`, manual, congelado y no
+   soportado; requiere confirmación explícita y no cuenta como señal de merge readiness.
