@@ -19,7 +19,7 @@ import QRCode from "qrcode";
 import { z } from "zod";
 import { startAccessTenantProjectionJetStreamConsumer } from "./access-tenant-projection-jetstream.js";
 import { BaileysWhatsAppWebTestProvider } from "./baileys-provider.js";
-import { registerAccessTenantProjectionRoutes } from "./access-tenant-projections.js";
+import { registerAccessTenantProjectionRoutes, requireChannelTenantAccess } from "./access-tenant-projections.js";
 import { PostgresChannelAuditOutbox } from "./channel-audit-outbox.js";
 import { PostgresChannelDeliveryOutbox } from "./channel-delivery-outbox.js";
 import { PostgresChannelOutbox } from "./channel-outbox.js";
@@ -347,6 +347,8 @@ export function registerChannelRoutes(
   app.get("/internal/v1/tenants/:tenantId/whatsapp/status", async (request, reply) => {
     const params = tenantParamsSchema.safeParse(request.params);
     if (!params.success) return invalidRequest(reply, request.id);
+    const snapshot = await requireChannelTenantAccess(context?.db, params.data.tenantId, reply, request.id, "exists");
+    if (!snapshot) return;
     const channel = requireChannel(dependencies, reply, request.id);
     if (!channel) return;
     try {
@@ -359,6 +361,8 @@ export function registerChannelRoutes(
   app.post("/internal/v1/tenants/:tenantId/whatsapp/connect", async (request, reply) => {
     const params = tenantParamsSchema.safeParse(request.params);
     if (!params.success) return invalidRequest(reply, request.id);
+    const snapshot = await requireChannelTenantAccess(context?.db, params.data.tenantId, reply, request.id, "active");
+    if (!snapshot) return;
     const channel = requireChannel(dependencies, reply, request.id);
     if (!channel) return;
     try {
@@ -378,6 +382,8 @@ export function registerChannelRoutes(
     reply.header("pragma", "no-cache");
     const params = tenantParamsSchema.safeParse(request.params);
     if (!params.success) return invalidRequest(reply, request.id);
+    const snapshot = await requireChannelTenantAccess(context?.db, params.data.tenantId, reply, request.id, "exists");
+    if (!snapshot) return;
     const channel = requireChannel(dependencies, reply, request.id);
     if (!channel) return;
     const status = await channel.status(params.data.tenantId).catch(() => undefined);
@@ -404,6 +410,8 @@ export function registerChannelRoutes(
   app.post("/internal/v1/tenants/:tenantId/whatsapp/disconnect", async (request, reply) => {
     const params = tenantParamsSchema.safeParse(request.params);
     if (!params.success) return invalidRequest(reply, request.id);
+    const snapshot = await requireChannelTenantAccess(context?.db, params.data.tenantId, reply, request.id, "active");
+    if (!snapshot) return;
     const channel = requireChannel(dependencies, reply, request.id);
     if (!channel) return;
     try {
@@ -418,6 +426,8 @@ export function registerChannelRoutes(
     const params = tenantParamsSchema.safeParse(request.params);
     const body = outboundSchema.safeParse(request.body);
     if (!params.success || !body.success) return invalidRequest(reply, request.id);
+    const snapshot = await requireChannelTenantAccess(context?.db, params.data.tenantId, reply, request.id, "active");
+    if (!snapshot) return;
     const channel = requireChannel(dependencies, reply, request.id);
     if (!channel) return;
     try {
@@ -463,6 +473,8 @@ export function registerChannelRoutes(
     const params = eventParamsSchema.safeParse(request.params);
     const body = completionSchema.safeParse(request.body);
     if (!params.success || !body.success) return invalidRequest(reply, request.id);
+    const snapshot = await requireChannelTenantAccess(context?.db, params.data.tenantId, reply, request.id, "active");
+    if (!snapshot) return;
     const channel = requireChannel(dependencies, reply, request.id);
     if (!channel) return;
     const completed = await channel.completeInbound(params.data.tenantId, params.data.eventId, body.data.workerId);
@@ -476,6 +488,8 @@ export function registerChannelRoutes(
     const params = eventParamsSchema.safeParse(request.params);
     const body = failureSchema.safeParse(request.body);
     if (!params.success || !body.success) return invalidRequest(reply, request.id);
+    const snapshot = await requireChannelTenantAccess(context?.db, params.data.tenantId, reply, request.id, "active");
+    if (!snapshot) return;
     const channel = requireChannel(dependencies, reply, request.id);
     if (!channel) return;
     const failed = await channel.failInbound(

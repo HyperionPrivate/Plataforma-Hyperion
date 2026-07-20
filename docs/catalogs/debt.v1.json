@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.9.1",
+  "catalogVersion": "1.9.2",
   "updatedAt": "2026-07-19",
   "baseline": "docs/architecture/boundary-baseline.json",
   "baselineStats": {
@@ -51,7 +51,7 @@
     },
     {
       "id": "DEBT-005",
-      "title": "Channel foreign keys hacia Access en fase expand; contract pendiente de paridad",
+      "title": "Channel foreign keys hacia Access; migrate lee tenant_snapshots; contract pendiente",
       "findingType": "cross-owner-fk",
       "edge": "channel->access",
       "owner": "pulso-channels",
@@ -62,7 +62,9 @@
         "packages/pulso-migrations/sql/004-access-channel-tenant-projection.sql",
         "services/identity-service/src/access-tenant-projections.ts",
         "services/whatsapp-channel-service/src/access-tenant-projections.ts",
-        "docs/operations/ACCESS-TENANT-PROJECTION-REPLAY.md"
+        "services/whatsapp-channel-service/src/app.ts",
+        "docs/operations/ACCESS-TENANT-PROJECTION-REPLAY.md",
+        "docs/products/PULSO-IRIS.md"
       ],
       "issue": "HYP-DEBT-005",
       "dueDate": "2027-03-31"

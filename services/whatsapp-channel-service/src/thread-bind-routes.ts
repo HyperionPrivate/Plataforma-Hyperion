@@ -2,6 +2,7 @@ import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { DatabaseClient } from "@hyperion/database";
 import { validateInternalAuthorization, type RouteRegistrar, type ServiceContext } from "@hyperion/service-runtime";
 import { z } from "zod";
+import { requireChannelTenantAccess } from "./access-tenant-projections.js";
 
 const uuid = z.string().uuid();
 
@@ -42,11 +43,11 @@ export function registerThreadBindRoutes(
     if (!params.success) {
       return reply.code(400).send(envelope({ error: "Invalid thread lookup" }, request.id));
     }
-    if (!context.db) {
-      return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
-    }
+    const db = context.db;
+    const snapshot = await requireChannelTenantAccess(db, params.data.tenantId, reply, request.id, "exists");
+    if (!snapshot || !db) return;
 
-    const result = await context.db.query<{
+    const result = await db.query<{
       id: string;
       patientId: string | null;
       conversationId: string | null;
@@ -74,11 +75,11 @@ export function registerThreadBindRoutes(
     if (!params.success || !body.success) {
       return reply.code(400).send(envelope({ error: "Invalid thread bind request" }, request.id));
     }
-    if (!context.db) {
-      return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
-    }
+    const db = context.db;
+    const snapshot = await requireChannelTenantAccess(db, params.data.tenantId, reply, request.id, "active");
+    if (!snapshot || !db) return;
 
-    const bound = await bindThreadPatient(context.db, params.data.tenantId, params.data.threadBindingId, body.data);
+    const bound = await bindThreadPatient(db, params.data.tenantId, params.data.threadBindingId, body.data);
     if (!bound) {
       return reply.code(404).send(envelope({ error: "thread_binding_not_found" }, request.id));
     }

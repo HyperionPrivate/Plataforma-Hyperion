@@ -9,6 +9,8 @@ reviewDue: 2026-10-31
 # Access tenant projection replay
 
 Status: current for the Access→Channel expansion introduced by Access migration 003 and PULSO migration 004.
+Channel runtime migrate reads `channel_runtime.tenant_snapshots` for tenant-scoped eligibility; the five
+historical FKs to `platform.tenants` remain until the contract cut.
 
 `access.tenant.snapshot.v1` is delivered at least once and applied exactly once at the logical level by Channel's
 inbox. A `published` Access outbox row proves broker acceptance, not Channel application. Operators must therefore

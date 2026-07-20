@@ -2,6 +2,7 @@ import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { DatabaseClient } from "@hyperion/database";
 import { validateInternalAuthorization, type RouteRegistrar, type ServiceContext } from "@hyperion/service-runtime";
 import { z } from "zod";
+import { requireChannelTenantAccess } from "./access-tenant-projections.js";
 
 const paramsSchema = z.object({
   tenantId: tenantIdSchema,
@@ -30,13 +31,13 @@ export function registerChannelEventPositionRoute(
     if (!params.success) {
       return reply.code(400).send(envelope({ error: "Invalid event position request" }, request.id));
     }
-    if (!context.db) {
-      return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
-    }
+    const db = context.db;
+    const snapshot = await requireChannelTenantAccess(db, params.data.tenantId, reply, request.id, "exists");
+    if (!snapshot || !db) return;
 
     let position: { streamId: string; streamSequence: number } | undefined;
     try {
-      position = await findChannelEventPosition(context.db, params.data.tenantId, params.data.eventId);
+      position = await findChannelEventPosition(db, params.data.tenantId, params.data.eventId);
     } catch {
       context.logger.error("channel event position ledger contains an invalid sequence", {
         tenantId: params.data.tenantId,

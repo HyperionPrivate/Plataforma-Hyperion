@@ -29,6 +29,15 @@ const projectionResultSchema = z.discriminatedUnion("status", [
 export type AccessTenantProjectionResult = z.infer<typeof projectionResultSchema>;
 export type AccessTenantProjectionReceiver = typeof consumeAccessTenantSnapshot;
 
+export type ChannelTenantSnapshotStatus = "active" | "paused" | "archived";
+
+export interface ChannelTenantSnapshot {
+  readonly status: ChannelTenantSnapshotStatus;
+  readonly sourceVersion: number;
+}
+
+export type ChannelTenantAccessMode = "exists" | "active";
+
 interface InboxRow {
   readonly envelopeHash: string;
   readonly result: unknown;
@@ -38,6 +47,15 @@ interface TenantSnapshotRow {
   readonly sourceVersion: string | number;
   readonly payloadHash: string;
 }
+
+interface ChannelTenantSnapshotQueryRow {
+  readonly status: string;
+  readonly sourceVersion: string | number;
+}
+
+type AccessGateReply = {
+  code(statusCode: number): { send(payload: unknown): unknown };
+};
 
 /**
  * Registers the Access-owned tenant lifecycle feed at Channel's internal edge.
@@ -142,6 +160,78 @@ export function createAccessTenantProjectionJetStreamHandler(
       return { action: "retry" };
     }
   };
+}
+
+/**
+ * Reads the local Access→Channel projection used for runtime eligibility.
+ * Does not join platform.tenants; contract FK retirement remains a separate cut.
+ */
+export async function readChannelTenantSnapshot(
+  db: DatabaseExecutor,
+  tenantId: string
+): Promise<ChannelTenantSnapshot | null> {
+  const result = await db.query<ChannelTenantSnapshotQueryRow>(
+    `select status, source_version::text as "sourceVersion"
+       from channel_runtime.tenant_snapshots
+      where tenant_id = $1`,
+    [tenantId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  if (row.status !== "active" && row.status !== "paused" && row.status !== "archived") {
+    throw new Error("Channel tenant snapshot status is invalid");
+  }
+  const sourceVersion = Number(row.sourceVersion);
+  if (!Number.isSafeInteger(sourceVersion) || sourceVersion < 1) {
+    throw new Error("Channel tenant snapshot source version is invalid");
+  }
+  return { status: row.status, sourceVersion };
+}
+
+/**
+ * Gates tenant-scoped Channel routes on the local projection.
+ * - exists: snapshot row required (reads)
+ * - active: snapshot must be active (mutations / control plane)
+ */
+export async function requireChannelTenantAccess(
+  db: DatabaseExecutor | undefined,
+  tenantId: string,
+  reply: AccessGateReply,
+  requestId: string,
+  mode: ChannelTenantAccessMode
+): Promise<ChannelTenantSnapshot | undefined> {
+  if (!db) {
+    void reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, requestId));
+    return undefined;
+  }
+
+  let snapshot: ChannelTenantSnapshot | null;
+  try {
+    snapshot = await readChannelTenantSnapshot(db, tenantId);
+  } catch {
+    void reply.code(503).send(envelope({ error: "Tenant snapshot is unavailable" }, requestId));
+    return undefined;
+  }
+
+  if (!snapshot) {
+    void reply.code(404).send(envelope({ error: "Tenant snapshot not found; bootstrap required" }, requestId));
+    return undefined;
+  }
+
+  if (mode === "active" && snapshot.status !== "active") {
+    void reply.code(403).send(
+      envelope(
+        {
+          error: "Tenant is not active for channel operations",
+          status: snapshot.status
+        },
+        requestId
+      )
+    );
+    return undefined;
+  }
+
+  return snapshot;
 }
 
 async function readInboxReplay(

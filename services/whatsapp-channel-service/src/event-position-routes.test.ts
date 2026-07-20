@@ -43,6 +43,27 @@ describe("Channel event position owner route", () => {
     expect(authorized.json().data).toEqual({ error: "DATABASE_URL is required" });
   });
 
+  it("rejects reads when the Access projection is missing", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("channel_runtime.tenant_snapshots")) return { rows: [], rowCount: 0 };
+      return { rows: [{ streamId: STREAM_ID, streamSequence: "3" }], rowCount: 1 };
+    });
+    ({ app } = await createService({
+      serviceName: "whatsapp-channel-service",
+      registerRoutes: (instance, context) =>
+        registerChannelEventPositionRoute(instance, { ...context, db: { query } as unknown as DatabaseClient }, TOKEN)
+    }));
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/v1/tenants/${TENANT_ID}/channel-inbound/${EVENT_ID}/stream-position`,
+      headers: { authorization: `Bearer ${TOKEN}`, "x-hyperion-caller": "pulso-iris-service" }
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().data).toEqual({ error: "Tenant snapshot not found; bootstrap required" });
+  });
+
   it("queries only the owner ledger with both tenant and event identity", async () => {
     const query = vi.fn(async (_sql: string, params: unknown[]) => ({
       rows: params[0] === TENANT_ID && params[1] === EVENT_ID ? [{ streamId: STREAM_ID, streamSequence: "3" }] : []

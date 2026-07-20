@@ -173,6 +173,9 @@ PULSO con base de datos usan requisitos provider-owned: Agent y Prompt Flow vali
 `agent_runtime.schema_version`/`sofia` versión 1, mientras Core, Knowledge, Integration y Channel conservan
 temporalmente el marker global `pulso_iris.schema_version` versión 4. La migración 004 añade la proyección local
 Access→Channel sin retirar todavía las cinco FKs históricas: el corte contract requiere primero un recibo de paridad.
+WhatsApp Channel ya aplica la fase migrate de lectura en runtime: las rutas tenant-scoped consultan
+`channel_runtime.tenant_snapshots` (existencia para lecturas; `active` para mutaciones) y no unen
+`platform.tenants`. DEBT-005 permanece `retiring` hasta dropear esas FKs.
 El catálogo `1.3.0` y el borrador `0.4.0-dev.0` registran esta transición, pero el borrador mantiene
 `imagesVerified: false`; esta evidencia describe
 el código y la topología versionados, no declara que el cutover, el restore, la publicación de imágenes o la
