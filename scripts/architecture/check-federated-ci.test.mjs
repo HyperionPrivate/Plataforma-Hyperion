@@ -361,9 +361,9 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   assert.match(required, /test "\$DATABASE_RESULT" = "success"/);
 });
 
-// Public-repository policy: keep manual recovery while validating every main
-// merge and the nightly full-stack path.
-test("the complete stack runs on main, schedule and manual dispatch", async () => {
+// Public-repository policy: compose the full-stack gate from provider-owned
+// cell workflows instead of running current binaries against the legacy DB.
+test("the federated full stack runs on main, schedule and manual dispatch", async () => {
   const workflow = await readFile(path.join(workflowRoot, "check.yml"), "utf8");
   const packageManifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const triggerBlock = workflow.slice(0, workflow.indexOf("permissions:"));
@@ -374,7 +374,13 @@ test("the complete stack runs on main, schedule and manual dispatch", async () =
   assert.match(triggerBlock, /cron:\s*["']17 3 \* \* \*["']/);
   assert.match(workflow, /cancel-in-progress:\s*true/);
   assert.match(workflow, /run:\s*pnpm federation:test\s*$/m);
-  assert.doesNotMatch(workflow, /federation:test:cell/);
+  for (const cell of ["platform", "nova", "lumen", "pulso"]) {
+    assert.match(workflow, new RegExp(`uses: \\.\\/.github/workflows/_cell-ci\\.yml[\\s\\S]*?cell: ${cell}`));
+  }
+  assert.match(workflow, /name: full-stack \/ required/);
+  assert.match(workflow, /needs: \[workspace, platform, nova, lumen, pulso\]/);
+  assert.doesNotMatch(workflow, /infra\/docker-compose\.yml/);
+  assert.doesNotMatch(workflow, /n-minus-one-upgrade-rollback/);
   assert.equal(
     packageManifest.scripts["federation:nova:extraction:rehearse"],
     "node scripts/federation/rehearse-nova-repository-extraction.mjs"
@@ -387,51 +393,10 @@ test("the complete stack runs on main, schedule and manual dispatch", async () =
   const federationTests = workflow.indexOf("run: pnpm federation:test");
   assert.ok(prerequisite >= 0, "full-stack CI must install an exact git-filter-repo version");
   assert.ok(prerequisite < federationTests, "git-filter-repo must be available before federation tests");
-
-  const checkJob = workflow.slice(workflow.indexOf("  check:"), workflow.indexOf("  docker-build-and-smoke:"));
-  const dockerJob = workflow.slice(
-    workflow.indexOf("  docker-build-and-smoke:"),
-    workflow.indexOf("  n-minus-one-upgrade-rollback:")
-  );
-  const compatibilityJob = workflow.slice(workflow.indexOf("  n-minus-one-upgrade-rollback:"));
-  assert.doesNotMatch(checkJob, /COMPOSE_PROFILES:\s*legacy-gateway/);
-  assert.match(dockerJob, /^\s{6}COMPOSE_PROFILES: legacy-gateway$/m);
-  assert.match(compatibilityJob, /^\s{6}COMPOSE_PROFILES: legacy-gateway$/m);
-  assert.match(dockerJob, /^\s{6}COMPOSE_PARALLEL_LIMIT: 2$/m);
-  assert.match(compatibilityJob, /^\s{6}COMPOSE_PARALLEL_LIMIT: 2$/m);
-  assert.match(dockerJob, /Generate ephemeral Access signing key[\s\S]*ACCESS_TOKEN_PRIVATE_KEY_PEM/);
-  assert.match(dockerJob, /Generate ephemeral Access signing key[\s\S]*::add-mask::/);
-  assert.match(compatibilityJob, /Generate ephemeral Access signing key[\s\S]*ACCESS_TOKEN_PRIVATE_KEY_PEM/);
-  assert.match(compatibilityJob, /Generate ephemeral Access signing key[\s\S]*::add-mask::/);
-
-  const baseStart = dockerJob.indexOf("Start and verify the base HTTP stack");
-  const baseDiagnostics = dockerJob.indexOf("Diagnose base HTTP stack failure");
-  const baseStop = dockerJob.indexOf("Stop the base stack");
-  assert.ok(baseStart >= 0, "full-stack CI must start the base HTTP stack");
-  assert.ok(baseDiagnostics > baseStart, "base HTTP diagnostics must follow the failed startup");
-  assert.ok(baseStop > baseDiagnostics, "base HTTP diagnostics must run before teardown");
-  assert.match(dockerJob, /if: \$\{\{ failure\(\) && steps\.base_http\.outcome == 'failure' \}\}/);
-  assert.match(dockerJob, /if: \$\{\{ failure\(\) && steps\.jetstream\.outcome == 'failure' \}\}/);
-  assert.match(dockerJob, /--workdir \/app\/packages\/durable-events/);
-  assert.match(
-    dockerJob,
-    /Diagnose base HTTP stack failure[\s\S]*identity-service:8081[\s\S]*agent-service:8083[\s\S]*api-gateway:8080/
-  );
-
-  const ownershipGuard = checkJob.indexOf("Verify service role ownership guard");
-  const legacyRoleRestore = checkJob.indexOf("Restore ephemeral service database passwords");
-  const auditRoleActivation = checkJob.indexOf("Activate Audit runtime role with the provider-owned one-shot");
-  const auditIntegration = checkJob.indexOf("Verify provider-owned Audit readiness and idempotency");
-  const auditFlow = checkJob.indexOf("Test autonomous Channel to Audit flow");
-  assert.ok(ownershipGuard >= 0, "full-stack CI must exercise the historical service-role fence");
-  assert.ok(legacyRoleRestore > ownershipGuard, "legacy runtime roles must be restored after the historical fence");
-  assert.ok(auditRoleActivation > legacyRoleRestore, "Audit must be reactivated after the historical global fence");
-  assert.ok(auditIntegration > auditRoleActivation, "Audit integration tests must run after provider-owned activation");
-  assert.ok(auditFlow > auditRoleActivation, "Audit must be active before the autonomous event flow");
 });
 
 test("Audit integration tests are pinned to the provider-owned logical database", async () => {
-  const fullStackWorkflow = await readFile(path.join(workflowRoot, "check.yml"), "utf8");
+  const fullStackWorkflow = await readFile(path.join(workflowRoot, "legacy-monolith-diagnostic.yml"), "utf8");
   const reusableWorkflow = await readFile(path.join(workflowRoot, "_cell-ci.yml"), "utf8");
   const auditIntegrationSources = await Promise.all(
     ["internal-events.integration.test.ts", "readiness.integration.test.ts"].map((file) =>

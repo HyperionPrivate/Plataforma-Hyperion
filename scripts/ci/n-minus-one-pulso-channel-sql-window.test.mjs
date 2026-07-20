@@ -15,7 +15,7 @@ const channelPulsoDriftProbe = readFileSync(
   join(directory, "verify-n-minus-one-channel-pulso-sql-window-drift.sh"),
   "utf8"
 );
-const workflow = readFileSync(join(directory, "../../.github/workflows/check.yml"), "utf8");
+const workflow = readFileSync(join(directory, "../../.github/workflows/legacy-monolith-diagnostic.yml"), "utf8");
 const compatibilityOverlay = readFileSync(join(directory, "../../infra/docker-compose.compatibility-ci.yml"), "utf8");
 
 function section(source, startMarker, endMarker) {

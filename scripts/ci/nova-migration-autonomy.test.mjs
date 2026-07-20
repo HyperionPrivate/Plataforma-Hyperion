@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-test("full-stack CI executes platform and autonomous NOVA migrations in dependency order", async () => {
-  const workflow = await readFile(resolve(repositoryRoot, ".github/workflows/check.yml"), "utf8");
+test("the frozen monolith diagnostic records platform and autonomous NOVA migration order", async () => {
+  const workflow = await readFile(resolve(repositoryRoot, ".github/workflows/legacy-monolith-diagnostic.yml"), "utf8");
   const orderedSteps = [
     "- name: Migrate test database",
     "- name: Migrate platform-owned Access schema",
@@ -34,7 +34,7 @@ test("full-stack CI executes platform and autonomous NOVA migrations in dependen
 });
 
 test("NOVA migration one-shots receive only the credentials required by their phase", async () => {
-  const workflow = await readFile(resolve(repositoryRoot, ".github/workflows/check.yml"), "utf8");
+  const workflow = await readFile(resolve(repositoryRoot, ".github/workflows/legacy-monolith-diagnostic.yml"), "utf8");
   const stepBlock = (name, nextName) => {
     const start = workflow.indexOf(`- name: ${name}`);
     const end = workflow.indexOf(`- name: ${nextName}`, start + 1);
