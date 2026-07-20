@@ -62,12 +62,13 @@ correctamente en el SHA publicado. El full-stack quedó temporalmente restringid
 3. Ejecutar backup/restore, TLS, telemetría de redirects y cutover en el ambiente objetivo.
 4. Resolver o aceptar explícitamente los hallazgos vigentes de imágenes; el workflow de Trivy sigue siendo advisory
    mientras la Organization no tenga el control de seguridad y una política de remediación aprobada.
-5. Continuar la separación profunda de datos LUMEN/PULSO y retirar el gateway/edge de compatibilidad cuando la
-   telemetría demuestre que ya no reciben tráfico.
+5. ~~Retirar gateway/edge de compatibilidad~~ — cerrado en código (DEBT-020/023/032, 2026-07-20). Pendiente ops:
+   cutover CEDCO/global migrator (DEBT-022), registry SemVer (DEBT-024), HA/offsite LUMEN (DEBT-026).
 
 ## Wave F — governance hold (2026-07-20)
 
-Estado: **completo como hold documentado** (no como restauración de CI en push).
+Estado: **completo como hold documentado** (no como restauración de CI en push). Confirmado vigente tras el
+cierre residual de edge/LUMEN N-1/contracts en catálogo v1.12.0.
 
 | Ítem                                                       | Estado                          |
 | ---------------------------------------------------------- | ------------------------------- |

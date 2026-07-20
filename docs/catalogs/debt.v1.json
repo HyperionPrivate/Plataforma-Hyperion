@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.11.0",
+  "catalogVersion": "1.12.0",
   "updatedAt": "2026-07-20",
   "baseline": "docs/architecture/boundary-baseline.json",
   "baselineStats": {
@@ -9,50 +9,6 @@
     "workstreams": 0
   },
   "items": [
-    {
-      "id": "DEBT-025",
-      "title": "Puente administrativo N-1 de LUMEN fail-closed; retiro definitivo tras cierre de ventana",
-      "source": "transition-inventory",
-      "owner": "lumen-data",
-      "status": "retiring",
-      "evidence": [
-        "packages/migrations/src/lumen-n-minus-one-compatibility.ts",
-        "packages/migrations/src/lumen-n-minus-one-compatibility.test.ts",
-        "docs/architecture/decisions/ADR-0002-lumen-audio-retention.md",
-        "docs/operations/LUMEN-STANDALONE.md",
-        "docs/evidence/lumen-n-minus-one-bridge-disabled-20260720.json"
-      ],
-      "issue": "HYP-DEBT-025",
-      "dueDate": "2026-10-31"
-    },
-    {
-      "id": "DEBT-020",
-      "title": "API Gateway multiproducto permanece como fachada legacy (gate fail-closed; drenaje pendiente)",
-      "source": "transition-inventory",
-      "owner": "platform-edge",
-      "status": "retiring",
-      "issue": "HYP-DEBT-020",
-      "dueDate": "2026-10-31",
-      "evidence": [
-        "apps/api-gateway/src/legacy-product-policy.ts",
-        "apps/api-gateway/src/app.ts",
-        "docs/evidence/legacy-gateway-env-gate-20260720.md"
-      ]
-    },
-    {
-      "id": "DEBT-021",
-      "title": "Catálogo cerrado @hyperion/contracts confinado al API Gateway de compatibilidad",
-      "source": "transition-inventory",
-      "owner": "platform-contracts",
-      "status": "transitioning",
-      "issue": "HYP-DEBT-021",
-      "dueDate": "2026-12-31",
-      "evidence": [
-        "docs/operations/REGISTRY-PUBLISH-PATH.md",
-        ".github/workflows/publish-shared-libraries.yml",
-        "scripts/releases/verify-registry-publish-path.mjs"
-      ]
-    },
     {
       "id": "DEBT-022",
       "title": "Migrador global conserva migraciones históricas 001–046 y el seed CEDCO por slug; code freeze hecho, cutover ops pendiente",
@@ -64,20 +20,11 @@
         "scripts/architecture/legacy-global-migrations.json",
         "packages/migrations/sql/047-contract-channel-access-tenant-fks.sql",
         "packages/migrations/sql/052-drop-n-minus-one-legacy-adapters.sql",
-        "docs/operations/GLOBAL-MIGRATOR-CUTOVER.md"
+        "docs/operations/GLOBAL-MIGRATOR-CUTOVER.md",
+        "packages/service-runtime/src/consumer-readiness.test.ts"
       ],
       "issue": "HYP-DEBT-022",
       "dueDate": "2027-03-31"
-    },
-    {
-      "id": "DEBT-023",
-      "title": "Edge de redirects legacy pendiente de telemetría productiva y retiro",
-      "source": "transition-inventory",
-      "owner": "platform-edge",
-      "status": "retiring",
-      "issue": "HYP-DEBT-023",
-      "dueDate": "2026-11-30",
-      "evidence": ["apps/api-gateway/src/app.ts", "docs/evidence/legacy-gateway-env-gate-20260720.md"]
     },
     {
       "id": "DEBT-024",
@@ -107,21 +54,6 @@
         "docs/evidence/lumen-recovery-validation-checklist-20260720.json"
       ],
       "issue": "HYP-DEBT-026",
-      "dueDate": "2026-12-31"
-    },
-    {
-      "id": "DEBT-032",
-      "title": "Fachada API legacy conserva un snapshot N-1 y proxies directos a los tres productos",
-      "source": "transition-inventory",
-      "owner": "platform-edge",
-      "status": "retiring",
-      "evidence": [
-        "apps/api-gateway/src/legacy-product-policy.ts",
-        "apps/api-gateway/src/app.ts",
-        "docs/operations/HOSTNAME-EDGE.md",
-        "docs/evidence/legacy-gateway-env-gate-20260720.md"
-      ],
-      "issue": "HYP-FED-004",
       "dueDate": "2026-12-31"
     }
   ]

@@ -22,8 +22,8 @@ const { Client } = pg;
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeIntegration = TEST_DATABASE_URL ? describe : describe.skip;
 const sqlDir = fileURLToPath(new URL("../sql", import.meta.url));
-// Attested rehearsal only; production CLI stays fail-closed without this flag.
-process.env.LUMEN_N1_COMPAT_ENABLED = "true";
+// Vitest-only rehearsal; production CLI permanently retired (DEBT-025).
+process.env.HYPERION_LUMEN_N1_TEST_REHEARSAL = "1";
 
 describeIntegration("029-039 LUMEN audio cleanup recovery", () => {
   it("permits only cleanup_pending -> confirmed terminal transitions and keeps terminal rows immutable", async () => {

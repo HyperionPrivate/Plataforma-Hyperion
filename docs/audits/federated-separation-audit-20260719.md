@@ -31,24 +31,24 @@ Leyenda de estado:
 
 ### 1.2 Criterios de aceptación federada (recorte NOVA)
 
-| #   | Criterio                                                        | Estado        | Notas                                                                                                        |
-| --- | --------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------ |
-| B1  | Consola + BFF + Coopfuturo como cliente NOVA                    | `listo local` | `apps/nova-console`, `apps/nova-bff`, `apps/coopfuturo-console`; cookies `__Host-*`; CSRF                    |
-| B2  | Sesión verificable con Identity caído (JWKS stale-if-error)     | `listo local` | Ensayo Docker real en aceptación Platform↔NOVA                                                               |
-| B3  | Audit `nova.audit.event.record.v1` con outbox/inbox idempotente | `listo local` | Caída Audit + retry; E2E `nova-audit-http`                                                                   |
-| B4  | Operator assertion en Voice/LIWA/Documents                      | `listo local` | `packages/nova-service-runtime`                                                                              |
-| B5  | Migraciones provider-owned fuera de la cadena global            | `listo local` | SQL 047–052 eliminados de `packages/migrations`; viven en `packages/nova-migrations`                         |
-| B6  | Contratos N/N−1 (`1.0.0` → `1.1.0`)                             | `parcial`     | Snapshots en repo; npm E404 para externos requeridos                                                         |
-| B7  | Extracción a repo `nova` con historial                          | `bloqueado`   | Rehearsal 16/16; gate exige árbol limpio + publish/readback de 4 paquetes                                    |
-| B8  | Retiro de gateway/redirects legacy                              | `parcial`     | Snapshot N−1 en `legacy-product-policy.ts`; [DEBT-032](../catalogs/debt.v1.json) `retiring` hasta 2026-12-31 |
+| #   | Criterio                                                        | Estado        | Notas                                                                                                     |
+| --- | --------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------- |
+| B1  | Consola + BFF + Coopfuturo como cliente NOVA                    | `listo local` | `apps/nova-console`, `apps/nova-bff`, `apps/coopfuturo-console`; cookies `__Host-*`; CSRF                 |
+| B2  | Sesión verificable con Identity caído (JWKS stale-if-error)     | `listo local` | Ensayo Docker real en aceptación Platform↔NOVA                                                            |
+| B3  | Audit `nova.audit.event.record.v1` con outbox/inbox idempotente | `listo local` | Caída Audit + retry; E2E `nova-audit-http`                                                                |
+| B4  | Operator assertion en Voice/LIWA/Documents                      | `listo local` | `packages/nova-service-runtime`                                                                           |
+| B5  | Migraciones provider-owned fuera de la cadena global            | `listo local` | SQL 047–052 eliminados de `packages/migrations`; viven en `packages/nova-migrations`                      |
+| B6  | Contratos N/N−1 (`1.0.0` → `1.1.0`)                             | `parcial`     | Snapshots en repo; npm E404 para externos requeridos                                                      |
+| B7  | Extracción a repo `nova` con historial                          | `bloqueado`   | Rehearsal 16/16; gate exige árbol limpio + publish/readback de 4 paquetes                                 |
+| B8  | Retiro de gateway/redirects legacy                              | `cerrado`     | Fachada/proxies retirados; redirects nginx/web-console → 404; DEBT-020/023/032 fuera del catálogo v1.12.0 |
 
 ### 1.3 Veredicto NOVA
 
-| Pregunta                                                          | Respuesta                                                                                                                                                                                                                                                                                                                                          |
-| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ¿NOVA es célula autónoma _dentro del monorepo_?                   | **Sí, a nivel local verificable** (build, Compose, DB, BFF, consola, CI afectada, aceptación Platform↔NOVA).                                                                                                                                                                                                                                       |
-| ¿NOVA está lista para extracción física / producción federada?    | **No.** Bloqueada por working tree sucio, paquetes externos sin publicar, gobernanza GitHub (Organization + `main` protegida) y recovery/cutover sobre entorno objetivo.                                                                                                                                                                           |
-| ¿Qué falta para declarar “independiente” en sentido ADR completo? | (1) Commit limpio del corte federado en `main`; (2) publish+readback de `@hyperion/platform-contracts`, `audit-contracts`, `database`, `logger`; (3) extracción según [NOVA-REPOSITORY-EXTRACTION.md](../operations/NOVA-REPOSITORY-EXTRACTION.md); (4) cutover/restore/TLS en entorno objetivo; (5) retiro planificado de DEBT-032 / edge legacy. |
+| Pregunta                                                          | Respuesta                                                                                                                                                                                                                                                                         |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ¿NOVA es célula autónoma _dentro del monorepo_?                   | **Sí, a nivel local verificable** (build, Compose, DB, BFF, consola, CI afectada, aceptación Platform↔NOVA).                                                                                                                                                                      |
+| ¿NOVA está lista para extracción física / producción federada?    | **No.** Bloqueada por working tree sucio, paquetes externos sin publicar, gobernanza GitHub (Organization + `main` protegida) y recovery/cutover sobre entorno objetivo.                                                                                                          |
+| ¿Qué falta para declarar “independiente” en sentido ADR completo? | (1) Commit limpio del corte federado en `main`; (2) publish+readback SemVer (DEBT-024); (3) extracción según [NOVA-REPOSITORY-EXTRACTION.md](../operations/NOVA-REPOSITORY-EXTRACTION.md); (4) cutover CEDCO/global (DEBT-022) + HA/offsite LUMEN (DEBT-026) en entorno objetivo. |
 
 ### 1.4 Deuda que NO bloquea el aislamiento local de NOVA (pero sí la federación global)
 
@@ -59,7 +59,7 @@ Estas entradas siguen abiertas y afectan a Platform/PULSO o al monorepo, no al a
 | DEBT-005 / FKs Channel→`platform.tenants` | Frontera Access↔PULSO; NOVA no la ejecuta en standalone                      |
 | DEBT-022                                  | Slugs en migrador global `004` (CEDCO); NOVA standalone no lo usa            |
 | DEBT-027 / DEBT-029–031                   | Baseline PULSO (grants, PL/pgSQL, SECURITY DEFINER) — 46 hallazgos efectivos |
-| DEBT-032                                  | Gateway legacy N−1 — convivencia hasta telemetría/cutover                    |
+| DEBT-032                                  | Cerrado — fachada/proxies retirados (catálogo v1.12.0)                       |
 
 ---
 

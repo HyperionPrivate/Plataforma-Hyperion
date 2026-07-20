@@ -686,10 +686,16 @@ function parsePastTimestamp(value: string): Date {
   return parsed;
 }
 
+/**
+ * Production CLI permanently retired (DEBT-025). Vitest rehearsals may open the
+ * library APIs only when HYPERION_LUMEN_N1_TEST_REHEARSAL=1 under VITEST.
+ */
 export function assertLumenNMinusOneCompatEnabled(env: NodeJS.ProcessEnv = process.env): void {
-  if (env.LUMEN_N1_COMPAT_ENABLED?.trim().toLowerCase() === "true") return;
+  const underVitest = env.VITEST === "true" || env.VITEST === "1";
+  const testRehearsal = env.HYPERION_LUMEN_N1_TEST_REHEARSAL?.trim() === "1";
+  if (underVitest && testRehearsal) return;
   throw new Error(
-    "LUMEN N-1 compatibility bridge is fail-closed (DEBT-025). Set LUMEN_N1_COMPAT_ENABLED=true only for an attested rehearsal."
+    "LUMEN N-1 compatibility bridge is permanently retired (DEBT-025). Administrative escape hatch removed."
   );
 }
 

@@ -11,8 +11,8 @@ reviewDue: 2026-10-31
 Esta plantilla sustituye la fachada de compatibilidad como destino de tráfico nuevo. Es una capa de routing
 neutral: decide únicamente `hostname → consola/BFF` y no contiene catálogo, grants ni lógica de dominio.
 `api-gateway` no participa: el Compose global lo excluye por defecto y sólo lo materializa al activar
-explícitamente el perfil `legacy-gateway` para ensayar clientes bearer heredados. Ese perfil no es upstream del
-edge y no cierra `DEBT-032`.
+explícitamente el perfil `legacy-gateway` (auth/plataforma residual; fachada de producto retirada — DEBT-020/032).
+Ese perfil no es upstream del edge hostname.
 
 | Host local por defecto | Consola exacta                | BFF same-origin exacto    | UI permitida                                          |
 | ---------------------- | ----------------------------- | ------------------------- | ----------------------------------------------------- |

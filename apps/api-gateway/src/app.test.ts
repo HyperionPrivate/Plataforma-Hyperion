@@ -3,24 +3,14 @@ import type { AccessMe, ProductGrant } from "@hyperion/platform-contracts";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createGatewayRoutes } from "./app.js";
+import { legacyGatewayTelemetry } from "./legacy-product-policy.js";
 
 const AUTHORIZED_TENANT_ID = "7d9a1a5e-1c2b-4f3a-9b8c-2d4e6f8a0b1c";
 const OTHER_TENANT_ID = "3b8e6d4c-2a19-4f87-b6e5-1d0c9b8a7f6e";
 const ADMIN_TOKEN = "admin-test-token-1234567890";
 const COORDINATOR_TOKEN = "coordinator-test-token-1234567890";
 const ADVISOR_TOKEN = "advisor-test-token-1234567890";
-const AUDITOR_TOKEN = "auditor-test-token-1234567890";
-const NO_GRANT_ADMIN_TOKEN = "no-grant-admin-test-token-1234567890";
-const NO_GRANT_ADVISOR_TOKEN = "no-grant-advisor-test-token-1234567890";
-const NOVA_ONLY_ADMIN_TOKEN = "nova-only-admin-test-token-1234567890";
-const INACTIVE_NOVA_ADMIN_TOKEN = "inactive-nova-admin-test-token-1234567890";
-const PULSO_READ_ONLY_ADMIN_TOKEN = "pulso-read-only-admin-token-1234567890";
 const GATEWAY_TO_IDENTITY_TOKEN = "gateway-to-identity-test-token-001";
-const GATEWAY_TO_INTEGRATION_TOKEN = "gateway-to-integration-test-token-02";
-const GATEWAY_TO_PULSO_TOKEN = "gateway-to-pulso-test-token-0001";
-const GATEWAY_TO_LUMEN_TOKEN = "gateway-to-lumen-test-token-0002";
-const GATEWAY_TO_NOVA_TOKEN = "gateway-to-nova-test-token-000004";
-const GATEWAY_TO_VOICE_TOKEN = "gateway-to-voice-test-token-00003";
 const GATEWAY_TO_TENANT_TOKEN = "gateway-to-tenant-test-token-00016";
 const OPERATOR_ASSERTION_KEY = "gateway-operator-assertion-key-01";
 
@@ -97,70 +87,6 @@ const sessions: Record<string, AccessMe> = {
       productGrant("LUMEN", ["advisor"], ["lumen:read", "lumen:write"]),
       productGrant("PULSO_IRIS", ["advisor"], ["pulso:read", "pulso:write"])
     ]
-  },
-  [AUDITOR_TOKEN]: {
-    operator: {
-      id: "3c4d5e6f-7081-4a8b-9c0d-1e2f3a4b5c6d",
-      email: "auditor@hyperion.local",
-      displayName: "Auditor",
-      role: "auditor"
-    },
-    tenantIds: [AUTHORIZED_TENANT_ID],
-    grants: [
-      productGrant("NOVA", ["asesor"], ["nova:read"]),
-      productGrant("LUMEN", ["auditor"], ["lumen:read"]),
-      productGrant("PULSO_IRIS", ["auditor"], ["pulso:read"])
-    ]
-  },
-  [NO_GRANT_ADMIN_TOKEN]: {
-    operator: {
-      id: "4d5e6f70-8192-4a8b-9c0d-1e2f3a4b5c6d",
-      email: "admin-no-grant@hyperion.local",
-      displayName: "Admin without grant",
-      role: "admin"
-    },
-    tenantIds: [],
-    grants: []
-  },
-  [NO_GRANT_ADVISOR_TOKEN]: {
-    operator: {
-      id: "5e6f7081-92a3-4a8b-9c0d-1e2f3a4b5c6d",
-      email: "advisor-no-grant@hyperion.local",
-      displayName: "Advisor without grant",
-      role: "advisor"
-    },
-    tenantIds: [],
-    grants: []
-  },
-  [NOVA_ONLY_ADMIN_TOKEN]: {
-    operator: {
-      id: "6f708192-a3b4-4a8b-9c0d-1e2f3a4b5c6d",
-      email: "nova-only-admin@hyperion.local",
-      displayName: "NOVA-only admin",
-      role: "admin"
-    },
-    tenantIds: [AUTHORIZED_TENANT_ID],
-    grants: [productGrant("NOVA", ["admin"], ["nova:admin"])]
-  },
-  [INACTIVE_NOVA_ADMIN_TOKEN]: {
-    operator: {
-      id: "8192a3b4-c5d6-4a8b-9c0d-1e2f3a4b5c6d",
-      email: "inactive-nova-admin@hyperion.local",
-      displayName: "Inactive NOVA admin",
-      role: "admin"
-    },
-    tenantIds: [],
-    grants: [productGrant("NOVA", ["admin"], ["nova:admin"], false)]
-  },
-  [PULSO_READ_ONLY_ADMIN_TOKEN]: {
-    operator: {
-      id: "708192a3-b4c5-4a8b-9c0d-1e2f3a4b5c6d",
-      email: "pulso-read-only-admin@hyperion.local",
-      displayName: "PULSO read-only admin",
-      role: "admin"
-    },
-    tenantIds: [AUTHORIZED_TENANT_ID],
-    grants: [productGrant("PULSO_IRIS", ["admin"], ["pulso:read"])]
   }
 };
 
@@ -168,10 +94,9 @@ let app: FastifyInstance;
 
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
+  delete process.env.LEGACY_GATEWAY_ENABLED;
   Object.assign(process.env, isolatedServiceUrls);
   process.env.GATEWAY_OPERATOR_ASSERTION_KEY = OPERATOR_ASSERTION_KEY;
-  // Suite exercises the frozen N-1 facade; production default remains fail-closed.
-  process.env.LEGACY_GATEWAY_ENABLED = "true";
   const handle = await createService({
     serviceName: "api-gateway",
     databaseRequired: false,
@@ -180,11 +105,6 @@ beforeAll(async () => {
       resolveSession: async (token) => sessions[token],
       gatewayCredentials: {
         identity: GATEWAY_TO_IDENTITY_TOKEN,
-        integration: GATEWAY_TO_INTEGRATION_TOKEN,
-        pulsoIris: GATEWAY_TO_PULSO_TOKEN,
-        lumen: GATEWAY_TO_LUMEN_TOKEN,
-        nova: GATEWAY_TO_NOVA_TOKEN,
-        voice: GATEWAY_TO_VOICE_TOKEN,
         tenant: GATEWAY_TO_TENANT_TOKEN
       }
     })
@@ -215,7 +135,7 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it("rejects unauthenticated LUMEN payloads before parsing their body", async () => {
+  it("rejects unauthenticated product payloads before parsing their body", async () => {
     const response = await app.inject({
       method: "POST",
       url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/encounters/00000000-0000-4000-8000-000000000001/transcriptions/audio`,
@@ -246,14 +166,11 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(502);
   });
 
-  it("preserves grants returned for an opaque N-1 session token", async () => {
+  it("preserves grants returned for an opaque session token on platform routes", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith("/v1/auth/me")) {
         return Response.json({ data: sessions[COORDINATOR_TOKEN] });
-      }
-      if (url.includes(`/v1/tenants/${AUTHORIZED_TENANT_ID}/nova/campaigns`)) {
-        return Response.json({ data: { authorized: true } });
       }
       throw new Error(`Unexpected upstream request: ${url}`);
     });
@@ -263,194 +180,78 @@ describe("api-gateway authentication", () => {
         serviceName: "api-gateway",
         databaseRequired: false,
         publicApi: true,
-        registerRoutes: createGatewayRoutes({
-          gatewayCredentials: { nova: GATEWAY_TO_NOVA_TOKEN }
-        })
+        registerRoutes: createGatewayRoutes()
       });
       opaqueApp = handle.app;
 
       const response = await opaqueApp.inject({
         method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/nova/campaigns`,
+        url: "/v1/platform/catalog",
         headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
       });
 
       expect(COORDINATOR_TOKEN.split(".")).toHaveLength(1);
       expect(response.statusCode).toBe(200);
-      expect(response.json().data.authorized).toBe(true);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(response.json().data.services).toBeTruthy();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       await opaqueApp?.close();
       fetchMock.mockRestore();
     }
   });
 
-  it("forbids tenants the operator is not assigned to", async () => {
-    const response = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${OTHER_TENANT_ID}/pulso-iris/overview`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
-    });
-
-    expect(response.statusCode).toBe(403);
-  });
-
-  it("lets an operator through to an assigned tenant", async () => {
-    const response = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
-    });
-
-    // Authorization passed; upstream is not running in tests.
-    expect(response.statusCode).toBe(502);
-  });
-
-  it.each([
-    ["admin", NO_GRANT_ADMIN_TOKEN],
-    ["advisor", NO_GRANT_ADVISOR_TOKEN]
-  ])("rejects a %s platform role without an exact product grant", async (_role, token) => {
-    const response = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
-      headers: { authorization: `Bearer ${token}` }
-    });
-
-    expect(response.statusCode).toBe(403);
-    expect(response.json().data.error).toContain("PULSO_IRIS grant required");
-  });
-
-  it("does not let an admin use a tenant A grant against tenant B", async () => {
-    const response = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${OTHER_TENANT_ID}/nova/campaigns`,
-      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
-    });
-
-    expect(response.statusCode).toBe(403);
-    expect(response.json().data.error).toContain("NOVA grant required for this tenant");
-  });
-
-  it("requires the exact product and method capability even for a platform admin", async () => {
-    const wrongProduct = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/worklist`,
-      headers: { authorization: `Bearer ${NOVA_ONLY_ADMIN_TOKEN}` }
-    });
-    const missingWrite = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments`,
-      headers: { authorization: `Bearer ${PULSO_READ_ONLY_ADMIN_TOKEN}` },
-      payload: {}
-    });
-
-    expect(wrongProduct.statusCode).toBe(403);
-    expect(wrongProduct.json().data.error).toContain("LUMEN grant required");
-    expect(missingWrite.statusCode).toBe(403);
-    expect(missingWrite.json().data.error).toContain("pulso:write capability required");
-  });
-
-  it("proxies a tenant request only after its exact active grant and read capability pass", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ data: { allowed: true } }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      })
-    );
+  it("returns 410 for retired product facade routes and increments telemetry", async () => {
+    const before = legacyGatewayTelemetry.disabledRejects;
+    const fetchMock = vi.spyOn(globalThis, "fetch");
     try {
-      const response = await app.inject({
+      const tenantProduct = await app.inject({
         method: "GET",
         url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
         headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
       });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.json().data.allowed).toBe(true);
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-        `${isolatedServiceUrls.PULSO_IRIS_SERVICE_URL}/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`
-      );
-      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("error");
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  it("requires a product grant but never proxies legacy product discovery directly", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch");
-    try {
-      const withoutGrant = await app.inject({
+      const discovery = await app.inject({
         method: "GET",
         url: "/v1/nova/health",
-        headers: { authorization: `Bearer ${NO_GRANT_ADMIN_TOKEN}` }
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
       });
-      const wrongProduct = await app.inject({
+      const whatsapp = await app.inject({
         method: "GET",
-        url: "/v1/lumen/catalog",
-        headers: { authorization: `Bearer ${NOVA_ONLY_ADMIN_TOKEN}` }
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/integrations/whatsapp/status`,
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
       });
-      const inactiveGrant = await app.inject({
+      const lumen = await app.inject({
         method: "GET",
-        url: "/v1/nova/catalog",
-        headers: { authorization: `Bearer ${INACTIVE_NOVA_ADMIN_TOKEN}` }
-      });
-      const activeGrant = await app.inject({
-        method: "GET",
-        url: "/v1/nova/health",
-        headers: { authorization: `Bearer ${NOVA_ONLY_ADMIN_TOKEN}` }
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/worklist`,
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
       });
 
-      expect(withoutGrant.statusCode).toBe(403);
-      expect(wrongProduct.statusCode).toBe(403);
-      expect(inactiveGrant.statusCode).toBe(403);
-      expect(activeGrant.statusCode).toBe(404);
-      expect(activeGrant.json().data.error).toContain("product-owned BFF");
+      expect(tenantProduct.statusCode).toBe(410);
+      expect(discovery.statusCode).toBe(410);
+      expect(whatsapp.statusCode).toBe(410);
+      expect(lumen.statusCode).toBe(410);
+      expect(tenantProduct.json().data.error).toContain("permanently retired");
+      expect(legacyGatewayTelemetry.disabledRejects).toBe(before + 4);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       fetchMock.mockRestore();
     }
   });
 
-  it("enforces the NOVA BFF capability policy instead of the generic read grant", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch");
+  it("ignores LEGACY_GATEWAY_ENABLED when retiring product routes", async () => {
+    process.env.LEGACY_GATEWAY_ENABLED = "true";
     try {
       const response = await app.inject({
         method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/voice/calls/reconciliation`,
-        headers: { authorization: `Bearer ${ADVISOR_TOKEN}` }
+        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/nova/campaigns`,
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
       });
-
-      expect(response.statusCode).toBe(403);
-      expect(response.json().data.error).toContain("nova:admin capability required");
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(response.statusCode).toBe(410);
     } finally {
-      fetchMock.mockRestore();
+      delete process.env.LEGACY_GATEWAY_ENABLED;
     }
   });
 
-  it("returns 404 for product routes outside the owner BFF allowlist", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch");
-    try {
-      const novaInternal = await app.inject({
-        method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/voice/internal/events`,
-        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
-      });
-      const foreignNamespace = await app.inject({
-        method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/nova/lumen/worklist`,
-        headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
-      });
-
-      expect(novaInternal.statusCode).toBe(404);
-      expect(foreignNamespace.statusCode).toBe(404);
-      expect(fetchMock).not.toHaveBeenCalled();
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  it("fails closed when a product-specific gateway identity is missing", async () => {
+  it("fails closed when the identity gateway credential is missing", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     let isolatedApp: FastifyInstance | undefined;
     try {
@@ -460,30 +261,15 @@ describe("api-gateway authentication", () => {
         publicApi: true,
         registerRoutes: createGatewayRoutes({
           resolveSession: async (token) => sessions[token],
-          gatewayCredentials: { identity: "", integration: "", pulsoIris: "", lumen: "", tenant: "" }
+          gatewayCredentials: { identity: "", tenant: "" }
         })
       });
       isolatedApp = handle.app;
 
-      const pulso = await isolatedApp.inject({
-        method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
-        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
-      });
-      const lumen = await isolatedApp.inject({
-        method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/worklist`,
-        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
-      });
       const identity = await isolatedApp.inject({
         method: "GET",
         url: "/v1/identity/operators",
         headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
-      });
-      const integration = await isolatedApp.inject({
-        method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/integrations/whatsapp/status`,
-        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
       });
       const tenants = await isolatedApp.inject({
         method: "GET",
@@ -491,10 +277,7 @@ describe("api-gateway authentication", () => {
         headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
       });
 
-      expect(pulso.statusCode).toBe(503);
-      expect(lumen.statusCode).toBe(503);
       expect(identity.statusCode).toBe(503);
-      expect(integration.statusCode).toBe(503);
       expect(tenants.statusCode).toBe(503);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
@@ -503,7 +286,7 @@ describe("api-gateway authentication", () => {
     }
   });
 
-  it("uses distinct gateway identities for Identity and Integration", async () => {
+  it("uses the dedicated gateway identity for Identity operator routes", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response(JSON.stringify({ data: [] }), {
@@ -517,137 +300,14 @@ describe("api-gateway authentication", () => {
         url: "/v1/identity/operators",
         headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
       });
-      const integration = await app.inject({
-        method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/integrations/whatsapp/status`,
-        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
-      });
 
       expect(identity.statusCode).toBe(200);
-      expect(integration.statusCode).toBe(200);
       const identityHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-      const integrationHeaders = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
       expect(identityHeaders.get("authorization")).toBe(`Bearer ${GATEWAY_TO_IDENTITY_TOKEN}`);
-      expect(integrationHeaders.get("authorization")).toBe(`Bearer ${GATEWAY_TO_INTEGRATION_TOKEN}`);
       expect(identityHeaders.get("x-hyperion-caller")).toBe("api-gateway");
-      expect(integrationHeaders.get("x-hyperion-caller")).toBe("api-gateway");
-      expect(identityHeaders.get("authorization")).not.toBe(integrationHeaders.get("authorization"));
-      expect(
-        verifyOperatorAssertion(integrationHeaders.get(OPERATOR_ASSERTION_HEADER) ?? undefined, OPERATOR_ASSERTION_KEY)
-      ).toMatchObject({
-        operatorId: sessions[COORDINATOR_TOKEN]!.operator.id,
-        role: "coordinator",
-        tenantId: AUTHORIZED_TENANT_ID
-      });
       expect(
         verifyOperatorAssertion(identityHeaders.get(OPERATOR_ASSERTION_HEADER) ?? undefined, OPERATOR_ASSERTION_KEY)
       ).not.toHaveProperty("tenantId");
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  it("signs the NOVA product together with operator and tenant context", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ data: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      })
-    );
-    try {
-      const response = await app.inject({
-        method: "GET",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/voice/campaigns`,
-        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
-      });
-
-      expect(response.statusCode).toBe(200);
-      const forwarded = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-      expect(
-        verifyOperatorAssertion(forwarded.get(OPERATOR_ASSERTION_HEADER) ?? undefined, OPERATOR_ASSERTION_KEY)
-      ).toMatchObject({
-        operatorId: sessions[COORDINATOR_TOKEN]!.operator.id,
-        role: "coordinator",
-        tenantId: AUTHORIZED_TENANT_ID,
-        productId: "NOVA"
-      });
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  it("allows coordinator to write configuration", async () => {
-    const response = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/sites`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
-      payload: { name: "Sede de prueba" }
-    });
-
-    // Authorization and routing passed; upstream is not running in tests.
-    expect(response.statusCode).toBe(502);
-  });
-
-  it("allows coordinator to write holidays and payer exclusions", async () => {
-    const holiday = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/holidays`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
-      payload: { holidayDate: "2026-12-25", name: "Navidad" }
-    });
-    const exclusion = await app.inject({
-      method: "PATCH",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/payer-exclusions/00000000-0000-4000-8000-000000000001`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
-      payload: { status: "paused" }
-    });
-
-    expect(holiday.statusCode).toBe(502);
-    expect(exclusion.statusCode).toBe(502);
-  });
-
-  it("forbids advisor from writing configuration", async () => {
-    const response = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/sites`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-      payload: { name: "Sede de prueba" }
-    });
-
-    expect(response.statusCode).toBe(403);
-  });
-
-  it("authorizes percent-encoded path segments using their canonical representation", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ data: { created: true } }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      })
-    );
-    try {
-      const forbidden = await app.inject({
-        method: "POST",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/%63onfig/sites`,
-        headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-        payload: { name: "Sede de prueba" }
-      });
-      const allowed = await app.inject({
-        method: "POST",
-        url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/%63onfig/sites`,
-        headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
-        payload: { name: "Sede de prueba" }
-      });
-
-      expect(forbidden.statusCode).toBe(403);
-      expect(allowed.statusCode).toBe(200);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-        `${isolatedServiceUrls.PULSO_IRIS_SERVICE_URL}/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/sites`
-      );
-      const upstreamHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-      expect(upstreamHeaders.get("authorization")).toBe(`Bearer ${GATEWAY_TO_PULSO_TOKEN}`);
-      expect(upstreamHeaders.get("x-hyperion-caller")).toBe("api-gateway");
-      expect(upstreamHeaders.get("authorization")).not.toBe(`Bearer ${COORDINATOR_TOKEN}`);
     } finally {
       fetchMock.mockRestore();
     }
@@ -664,7 +324,7 @@ describe("api-gateway authentication", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("rejects ambiguous separators before authorization and proxying", async () => {
+  it("rejects ambiguous separators before authorization", async () => {
     const encodedSeparator = await app.inject({
       method: "GET",
       url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config%2Fsites`,
@@ -901,94 +561,6 @@ describe("api-gateway authentication", () => {
     }
   });
 
-  it("forbids advisor from writing holidays and payer exclusions", async () => {
-    const holiday = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/holidays`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-      payload: { holidayDate: "2026-12-25", name: "Navidad" }
-    });
-    const exclusion = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/payer-exclusions`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-      payload: {
-        professionalId: "00000000-0000-4000-8000-000000000001",
-        payerId: "00000000-0000-4000-8000-000000000002"
-      }
-    });
-
-    expect(holiday.statusCode).toBe(403);
-    expect(exclusion.statusCode).toBe(403);
-  });
-
-  it("allows advisor to write operational records", async () => {
-    const response = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-      payload: {}
-    });
-
-    expect(response.statusCode).toBe(502);
-  });
-
-  it("reserves appointment verification and state changes for coordinators", async () => {
-    const appointmentId = "00000000-0000-4000-8000-000000000010";
-    const advisorVerify = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments/${appointmentId}/manual-verify`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-      payload: { externalReference: "masked-reference", externalSystem: "manual" }
-    });
-    const advisorPatch = await app.inject({
-      method: "PATCH",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments/${appointmentId}`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-      payload: { status: "verified" }
-    });
-    const coordinatorVerify = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments/${appointmentId}/manual-verify`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
-      payload: { externalReference: "masked-reference", externalSystem: "manual" }
-    });
-
-    expect(advisorVerify.statusCode).toBe(403);
-    expect(advisorPatch.statusCode).toBe(403);
-    expect(coordinatorVerify.statusCode).toBe(502);
-  });
-
-  it("keeps auditor as read-only", async () => {
-    const read = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/dashboard/live`,
-      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` }
-    });
-    const write = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/appointments`,
-      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` },
-      payload: {}
-    });
-    const holidayWrite = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/holidays`,
-      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` },
-      payload: { holidayDate: "2026-12-25", name: "Navidad" }
-    });
-    const holidayRead = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/config/holidays`,
-      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` }
-    });
-
-    expect(read.statusCode).toBe(502);
-    expect(write.statusCode).toBe(403);
-    expect(holidayWrite.statusCode).toBe(403);
-    expect(holidayRead.statusCode).toBe(502);
-  });
-
   it("requires admin role for operator management", async () => {
     const forbidden = await app.inject({
       method: "POST",
@@ -1007,52 +579,7 @@ describe("api-gateway authentication", () => {
     expect(allowed.statusCode).toBe(502);
   });
 
-  it("enforces WhatsApp integration RBAC at the gateway", async () => {
-    const base = `/v1/tenants/${AUTHORIZED_TENANT_ID}/integrations/whatsapp`;
-    const coordinatorStatus = await app.inject({
-      method: "GET",
-      url: `${base}/status`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
-    });
-    const advisorStatus = await app.inject({
-      method: "GET",
-      url: `${base}/status`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` }
-    });
-    const auditorQr = await app.inject({
-      method: "GET",
-      url: `${base}/qr`,
-      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` }
-    });
-    const adminQr = await app.inject({
-      method: "GET",
-      url: `${base}/qr`,
-      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
-    });
-    const coordinatorConnect = await app.inject({
-      method: "POST",
-      url: `${base}/connect`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` },
-      payload: {}
-    });
-    const adminConnect = await app.inject({
-      method: "POST",
-      url: `${base}/connect`,
-      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
-      payload: {}
-    });
-
-    expect(coordinatorStatus.statusCode).toBe(502);
-    expect(advisorStatus.statusCode).toBe(403);
-    expect(auditorQr.statusCode).toBe(403);
-    expect(adminQr.statusCode).toBe(502);
-    expect(adminQr.headers["cache-control"]).toContain("no-store");
-    expect(adminQr.headers.pragma).toBe("no-cache");
-    expect(coordinatorConnect.statusCode).toBe(403);
-    expect(adminConnect.statusCode).toBe(502);
-  });
-
-  it("rejects path traversal in the proxied suffix", async () => {
+  it("rejects path traversal in tenant product path segments", async () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/..%2Fadmin`,
@@ -1069,7 +596,6 @@ describe("api-gateway authentication", () => {
       headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
     });
 
-    // Tenant edge credential is present; upstream is intentionally down → 502.
     expect(response.statusCode).toBe(502);
   });
 
@@ -1108,9 +634,6 @@ describe("api-gateway authentication", () => {
           resolveSession: async (token) => sessions[token],
           gatewayCredentials: {
             identity: GATEWAY_TO_IDENTITY_TOKEN,
-            integration: GATEWAY_TO_INTEGRATION_TOKEN,
-            pulsoIris: GATEWAY_TO_PULSO_TOKEN,
-            lumen: GATEWAY_TO_LUMEN_TOKEN,
             tenant: ""
           }
         })
@@ -1157,55 +680,10 @@ describe("api-gateway authentication", () => {
     }
   });
 
-  it("enforces tenant membership and role permissions for LUMEN", async () => {
-    const encounterId = "00000000-0000-4000-8000-000000000020";
-    const advisorWrite = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/encounters/${encounterId}/start`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-      payload: {}
-    });
-    const auditorRead = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/worklist`,
-      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` }
-    });
-    const auditorWrite = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/encounters/${encounterId}/start`,
-      headers: { authorization: `Bearer ${AUDITOR_TOKEN}` },
-      payload: {}
-    });
-    const foreignTenant = await app.inject({
-      method: "GET",
-      url: `/v1/tenants/${OTHER_TENANT_ID}/lumen/worklist`,
-      headers: { authorization: `Bearer ${COORDINATOR_TOKEN}` }
-    });
-
-    expect(advisorWrite.statusCode).toBe(502);
-    expect(auditorRead.statusCode).toBe(502);
-    expect(auditorWrite.statusCode).toBe(403);
-    expect(foreignTenant.statusCode).toBe(403);
-  });
-
-  it("accepts a validated LUMEN audio payload above the global API body limit", async () => {
-    const encounterId = "00000000-0000-4000-8000-000000000020";
-    const response = await app.inject({
-      method: "POST",
-      url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/lumen/encounters/${encounterId}/transcriptions`,
-      headers: { authorization: `Bearer ${ADVISOR_TOKEN}` },
-      payload: {
-        audioBase64: "A".repeat(1_200_000),
-        mimeType: "audio/webm",
-        source: "authorized_upload",
-        durationSeconds: 30,
-        idempotencyKey: "ad67c1d8-09c7-4f75-82bb-f55ec14d33ba"
-      }
-    });
-
-    // The isolated upstream is intentionally unavailable; reaching the proxy
-    // proves the LUMEN route overrode Fastify's 1 MiB global body limit.
-    expect(response.statusCode).toBe(502);
+  it("keeps LIWA webhook probes public", async () => {
+    const response = await app.inject({ method: "GET", url: "/v1/liwa/webhooks" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.ok).toBe(true);
   });
 });
 
@@ -1223,17 +701,6 @@ describe("api-gateway routes", () => {
     expect(body.meta.generatedAt).toBeTruthy();
   });
 
-  it("rejects tenant ids that are not UUIDs before proxying", async () => {
-    const response = await app.inject({
-      method: "GET",
-      url: "/v1/tenants/not-a-uuid/pulso-iris/overview",
-      headers: { authorization: `Bearer ${ADMIN_TOKEN}` }
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json().data.error).toContain("UUID");
-  });
-
   it("blocks path traversal attempts in the tenant segment", async () => {
     const response = await app.inject({
       method: "GET",
@@ -1244,20 +711,20 @@ describe("api-gateway routes", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("returns an enveloped 502 when the upstream service is unavailable", async () => {
+  it("returns an enveloped 410 for retired product routes", async () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/tenants/${AUTHORIZED_TENANT_ID}/pulso-iris/overview`,
       headers: {
         authorization: `Bearer ${ADMIN_TOKEN}`,
-        "x-request-id": "corr-gateway-502"
+        "x-request-id": "corr-gateway-410"
       }
     });
 
-    expect(response.statusCode).toBe(502);
+    expect(response.statusCode).toBe(410);
     const body = response.json();
-    expect(body.data.error).toBeTruthy();
-    expect(body.meta.requestId).toBe("corr-gateway-502");
+    expect(body.data.error).toContain("permanently retired");
+    expect(body.meta.requestId).toBe("corr-gateway-410");
   });
 
   it("reports platform health as down when no downstream responds", async () => {

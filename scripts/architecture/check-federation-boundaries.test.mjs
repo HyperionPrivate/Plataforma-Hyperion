@@ -409,7 +409,7 @@ test("rejects provider contract dependencies from the compatibility gateway", as
   }
 });
 
-test("rejects the closed global contract catalog outside the compatibility gateway", async () => {
+test("rejects the retired global contract catalog for every runtime package (DEBT-021)", async () => {
   const root = await fixture();
   try {
     await packageAt(root, "apps/api-gateway", "@hyperion/api-gateway", {
@@ -430,9 +430,12 @@ test("rejects the closed global contract catalog outside the compatibility gatew
     assert.deepEqual(
       violations
         .filter((entry) => entry.kind.startsWith("legacy-global-contract"))
-        .map((entry) => `${entry.kind}|${entry.path}`),
+        .map((entry) => `${entry.kind}|${entry.path}`)
+        .sort(),
       [
+        "legacy-global-contract-dependency|apps/api-gateway/package.json",
         "legacy-global-contract-dependency|services/nova-core-service/package.json",
+        "legacy-global-contract-import|apps/api-gateway/src/legacy.ts",
         "legacy-global-contract-import|services/nova-core-service/src/legacy.ts"
       ]
     );

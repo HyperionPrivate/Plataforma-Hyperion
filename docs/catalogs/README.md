@@ -4,8 +4,8 @@ Los archivos de esta carpeta son fuentes de verdad legibles por herramientas dur
 `catalogVersion` sigue SemVer y cada entrada conserva propietario, estado, identificador de seguimiento y fecha
 de revisión o vencimiento.
 
-Estadísticas normativas: `products=4`, `services=32`, `debtItems=8`, `findingGroups=0`, `instances=0`,
-`workstreams=0`, `temporaryExceptions=0` y `transitionInventory=8`.
+Estadísticas normativas: `products=4`, `services=32`, `debtItems=3`, `findingGroups=0`, `instances=0`,
+`workstreams=0`, `temporaryExceptions=0` y `transitionInventory=3`.
 
 - [`products.v1.json`](products.v1.json): productos comerciales y plano neutral de plataforma.
 - [`services.v1.json`](services.v1.json): aplicaciones, servicios y one-shots desplegables actuales, junto con sus
@@ -13,10 +13,11 @@ Estadísticas normativas: `products=4`, `services=32`, `debtItems=8`, `findingGr
   figura una sola vez aunque sus comandos se ejecuten mediante dos alias Compose, está marcado `retiring` y no
   acredita autonomía de datos.
 - [`debt.v1.json`](debt.v1.json): agrupación exhaustiva del estado efectivo por tipo y arista. Incluye tanto la
-  cadena global congelada como los migradores provider-owned independientes. DEBT-010/027 cerrados (baseline vacío;
-  bootstrap PULSO ya no lee markers SOFÍA). DEBT-025 permanece `retiring` con bridge fail-closed. `DEBT-022` es la
-  única excepción del gate de tenant: fija las cuatro selecciones CEDCO por slug a bytes, cantidad, owner, issue y
-  vencimiento.
+  cadena global congelada como los migradores provider-owned independientes. DEBT-010/020/021/023/025/027/032
+  cerrados (baseline vacío; edge legacy y bridge LUMEN N-1 retirados en código; gateway sin `@hyperion/contracts`).
+  Quedan `DEBT-022` (cutover ops + CEDCO), `DEBT-024` (registry SemVer) y `DEBT-026` (HA/offsite en entorno
+  objetivo). `DEBT-022` es la única excepción del gate de tenant: fija las cuatro selecciones CEDCO por slug a
+  bytes, cantidad, owner, issue y vencimiento.
 
 Mientras el proyecto no esté en una GitHub Organization, los valores `issue` son identificadores locales estables
 del backlog `HYP-*`. Al migrarlos a issues externos se mantiene el identificador en el título o cuerpo para no

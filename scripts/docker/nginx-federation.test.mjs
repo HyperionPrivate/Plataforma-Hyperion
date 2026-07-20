@@ -115,35 +115,39 @@ test("el edge por hostname no registra query strings", async () => {
   assert.match(template, /map "\$request_method:\$request_uri" \$nova_provider_request_allowed/);
 });
 
-test("el edge legacy filtra deep links, emite telemetría segura y rechaza rutas desconocidas", async () => {
-  const [template, legacyHtml, redirects] = await Promise.all([
+test("el edge legacy retira redirects productivos, emite telemetría segura y falla cerrado", async () => {
+  const [template, legacyHtml, redirects, dockerfile, compose] = await Promise.all([
     source("infra/docker/legacy/default.conf.template"),
     source("apps/web-console/index.html"),
-    source("apps/web-console/src/redirects.ts")
+    source("apps/web-console/src/redirects.ts"),
+    source("infra/docker/legacy/Dockerfile"),
+    source("infra/docker-compose.yml")
   ]);
   for (const product of ["nova", "lumen"]) {
     assert.match(template, new RegExp(`location = /${product}`));
     assert.match(template, new RegExp(`"${product}" "${product}"`));
   }
-  assert.match(template, /X-Hyperion-Legacy-Redirect \$legacy_redirect_header always/);
-  assert.match(template, /map \$args \$legacy_lumen_query/);
-  assert.match(template, /\?encounter=\$legacy_lumen_encounter/);
-  assert.match(template, /map \$args \$legacy_pulso_query/);
-  assert.match(template, /\?conversationId=\$legacy_pulso_conversation/);
+  assert.match(template, /X-Hyperion-Legacy-Redirect \$legacy_retired_header always/);
   assert.match(template, /location ~ \^\/conversaciones\/\?\$/);
-  assert.match(template, /return 307 \$\{NOVA_CONSOLE_ORIGIN\}\//);
+  assert.match(template, /location ~ \^\/lumen\/\(\?:preconsulta\|dictado/);
+  assert.match(template, /return 404 '\{"error":"legacy console redirects retired"\}'/);
   assert.match(template, /if \(\$request_method !~ \^\(\?:GET\|HEAD\)\$\)/);
   assert.match(template, /Cache-Control "no-store"/);
-  assert.doesNotMatch(template, /\$is_args\$args/);
-  assert.doesNotMatch(template, /return 30[78][^;]*\$args/);
+  assert.doesNotMatch(template, /return 30[78]/);
+  assert.doesNotMatch(template, /NOVA_CONSOLE_ORIGIN|LUMEN_CONSOLE_ORIGIN|PULSO_CONSOLE_ORIGIN/);
+  assert.doesNotMatch(template, /map \$args \$legacy_(?:lumen|pulso)_query/);
+  assert.doesNotMatch(template, /\$is_args\$args|\$legacy_lumen_query|\$legacy_pulso_query/);
   assert.doesNotMatch(template, /location ~ \^\/nova\/\(\.\*\)|location ~ \^\/lumen\/\(\.\*\)/);
-  assert.match(template, /"event":"legacy_console_redirect"/);
-  const logFormat = template.slice(template.indexOf("log_format legacy_redirect_json"), template.indexOf("server {"));
+  assert.match(template, /"event":"legacy_console_retired"/);
+  const logFormat = template.slice(template.indexOf("log_format legacy_retired_json"), template.indexOf("server {"));
   assert.match(logFormat, /"product":"\$legacy_product"/);
   assert.match(logFormat, /"queryDisposition":"\$legacy_query_disposition"/);
   assert.doesNotMatch(logFormat, /\$request_uri|\$sent_http_location|\$args|\$remote_addr|\$http_user_agent/);
   assert.match(legacyHtml, /<meta name="referrer" content="no-referrer"/);
+  assert.match(redirects, /always returns undefined/);
   assert.doesNotMatch(redirects, /hash:\s*string|location\.hash|access_token|id_token/);
+  assert.doesNotMatch(dockerfile, /NOVA_CONSOLE_ORIGIN|LUMEN_CONSOLE_ORIGIN|PULSO_CONSOLE_ORIGIN|NGINX_ENVSUBST/);
+  assert.doesNotMatch(compose, /NOVA_CONSOLE_ORIGIN|LUMEN_CONSOLE_ORIGIN|PULSO_CONSOLE_ORIGIN/);
   assert.match(template, /location \/ \{\s*default_type application\/json;\s*return 404\b/s);
 });
 

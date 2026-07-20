@@ -21,15 +21,21 @@ Provider-owned PULSO tip (`15/015-…`) is the autonomous cell source of truth.
 3. CEDCO slug seed in `004-cedco-catalog.sql` stays sealed with acceptedFindings bound to DEBT-022.
 4. Do not delete `001`–`046`; retirement is allow-list freeze + consumer migration to provider packages.
 
+## Code-side consumer drain (done 2026-07-20)
+
+- `packages/service-runtime` consumer-readiness gate asserts zero `requiredLegacyMigrationNames` runtime consumers.
+- Provider-owned migrators own live schema authority; global chain is compatibility bytes only.
+
 ## Ops residual (blocks catalog retirement)
 
-1. Confirm no production workload still boots via the global migrator path.
-2. Observe telemetría / deploy inventories for zero global-migrator consumers.
+1. Confirm no production workload still boots via the global migrator Compose one-shot / image.
+2. Observe deploy inventories for zero global-migrator consumers in the objective environment.
 3. Schedule a dedicated tenant-bootstrap cut to replace CEDCO slug seed with provider-owned bootstrap.
-4. Only then remove DEBT-022 acceptedFindings and archive the global chain.
+4. Only then remove DEBT-022 acceptedFindings and archive the global chain `001`–`046`.
 
 ## Evidence
 
 - `scripts/architecture/legacy-global-migrations.json`
 - `packages/migrations/sql/047-contract-channel-access-tenant-fks.sql` … `052-drop-n-minus-one-legacy-adapters.sql`
 - `packages/pulso-migrations` tip 015
+- `packages/service-runtime/src/consumer-readiness.test.ts`

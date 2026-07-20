@@ -69,15 +69,16 @@ Integration y Knowledge tienen expand+migrate+contract (proyecciones locales + D
 Cola residual abierta (transición / ops):
 
 1. **DEBT-022** — code freeze del migrador global hecho; cutover operativo + retiro CEDCO slug seed pendientes
-   (`docs/operations/GLOBAL-MIGRATOR-CUTOVER.md`).
-2. **Edge (DEBT-020 / 023 / 032)** — fachada legacy fail-closed por defecto; falta drenar telemetría productiva y
-   retirar proxies/snapshot N-1.
-3. **LUMEN (DEBT-025 / 026)** — bridge N-1 fail-closed salvo ensayo atestado; HA / edge / offsite en entorno
-   objetivo pendientes.
-4. **Registry (DEBT-021 / 024)** — dry-run path verificado (`verify-registry-publish-path.mjs`); publish real
-   bloqueado a credenciales de Organization.
-5. **Gobernanza CI (Wave F)** — hold local-first: no restaurar `push`/`schedule` hasta haber cupo Actions; rulesets
+   (`docs/operations/GLOBAL-MIGRATOR-CUTOVER.md`). Runtime ya no usa `requiredLegacyMigrationNames`.
+2. **DEBT-024** — dry-run de publish path verificado; publish/readback SemVer real bloqueado a credenciales de
+   Organization (`docs/operations/REGISTRY-PUBLISH-PATH.md`).
+3. **DEBT-026** — HA / edge productivo / recovery offsite de LUMEN pendientes en entorno objetivo (checklist en
+   `docs/evidence/lumen-recovery-validation-checklist-20260720.json`).
+4. **Gobernanza CI (Wave F)** — hold local-first: no restaurar `push`/`schedule` hasta haber cupo Actions; rulesets
    de Organization pendientes (`docs/audits/federation-ci-hardening-20260719.md`).
+
+Cerrados en código (2026-07-20): DEBT-020/023/032 (fachada gateway + redirects nginx/web-console), DEBT-021
+(gateway sin `@hyperion/contracts`), DEBT-025 (bridge N-1 administrativo retirado).
 
 ## Regla
 

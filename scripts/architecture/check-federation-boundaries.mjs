@@ -33,7 +33,8 @@ const DEBT_ID = /^DEBT-\d{3}$/u;
 const ISSUE_ID = /^HYP-[A-Z]+-\d{3}$/u;
 const OWNER_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const LEGACY_GLOBAL_CONTRACTS = "@hyperion/contracts";
-const LEGACY_GLOBAL_CONTRACT_CONSUMERS = new Set(["@hyperion/api-gateway"]);
+/** Empty: DEBT-021 closed; no runtime package may consume `@hyperion/contracts`. */
+const LEGACY_GLOBAL_CONTRACT_CONSUMERS = new Set();
 const PRODUCT_BFF_POLICIES = [
   {
     path: "apps/nova-bff/src/app.ts",
@@ -726,7 +727,7 @@ export async function detectFederationViolations(root, options = {}) {
         violations.push({
           kind: "legacy-global-contract-dependency",
           path: `${packageEntry.directory}/package.json`,
-          message: `${packageEntry.name} must consume provider-owned contracts; @hyperion/contracts is reserved for the temporary compatibility gateway`
+          message: `${packageEntry.name} must consume provider-owned contracts; @hyperion/contracts is retired (DEBT-021)`
         });
       }
       const targetPackage = packagesByName.get(dependencyName);
@@ -758,7 +759,7 @@ export async function detectFederationViolations(root, options = {}) {
           violations.push({
             kind: "legacy-global-contract-import",
             path: relativeSourcePath,
-            message: `${packageEntry.name} must import its provider-owned contract package; @hyperion/contracts is legacy gateway-only`
+            message: `${packageEntry.name} must import its provider-owned contract package; @hyperion/contracts is retired (DEBT-021)`
           });
         }
         const targetPackage = targetPackageForSpecifier(root, packages, packagesByName, sourceFile, specifier);

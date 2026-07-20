@@ -56,9 +56,6 @@ importers:
       '@hyperion/config':
         specifier: workspace:*
         version: link:../../packages/config
-      '@hyperion/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@hyperion/platform-contracts':
         specifier: 1.1.0
         version: link:../../packages/platform-contracts

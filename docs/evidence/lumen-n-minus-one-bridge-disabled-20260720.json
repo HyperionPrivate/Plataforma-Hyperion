@@ -1,8 +1,7 @@
 {
   "debtId": "DEBT-025",
-  "module": "packages/migrations/src/lumen-n-minus-one-compatibility.ts",
-  "mode": "fail-closed-unless-LUMEN_N1_COMPAT_ENABLED",
-  "defaultEnabled": false,
-  "capturedAt": "2026-07-20",
-  "note": "Default deny. Attested N-1 rehearsals may set LUMEN_N1_COMPAT_ENABLED=true; DEBT-025 remains retiring until the window is fully closed in ops."
+  "status": "retired",
+  "mode": "permanently-retired",
+  "closedAt": "2026-07-20",
+  "note": "Administrative CLI escape hatch removed. Library APIs remain callable only under VITEST with HYPERION_LUMEN_N1_TEST_REHEARSAL=1 for audio cleanup recovery integration tests. Production must not set LUMEN_N1_COMPAT_ENABLED."
 }

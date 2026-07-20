@@ -1,12 +1,13 @@
-# Legacy multiproduct gateway gate (DEBT-020 / 023 / 032)
+# Legacy multiproduct gateway product facade retired (DEBT-020 / DEBT-032)
 
-Default: `LEGACY_GATEWAY_ENABLED` unset/false → product-scoped routes return `410` and increment
-`legacyGatewayTelemetry.disabledRejects`.
+The multiproduct legacy API gateway **product facade is permanently retired**.
 
-When explicitly enabled (`true`), deprecated route hits increment `legacyGatewayTelemetry.deprecatedRouteHits`
-for drain observation before proxy/snapshot retirement.
+- `isLegacyGatewayEnabled()` always returns `false` (environment variable ignored).
+- Any product-scoped path detected by `readLegacyProductRequestScope` returns **HTTP 410** and increments
+  `legacyGatewayTelemetry.disabledRejects`.
+- Product proxy wildcards (pulso-iris / lumen / nova / voice / liwa / documents / WhatsApp integration /
+  Sofia readiness via gateway) are removed from `apps/api-gateway`.
+- Platform auth routes (login / me / logout / operators / tenants list / platform catalog / health) and
+  public LIWA webhooks remain.
 
-## Residual ops
-
-1. Export/observe counters in the deployment environment until hits ≈ 0.
-2. Delete legacy proxies + N-1 snapshot in `apps/api-gateway` and close DEBT-020/023/032.
+Clients must use product-owned BFFs. DEBT-020 / DEBT-032 closed in `docs/catalogs/debt.v1.json` (v1.12.0).

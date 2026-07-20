@@ -1,10 +1,29 @@
 {
   "debtId": "DEBT-026",
+  "status": "repo-ready-target-env-pending",
   "checklist": [
-    "dry-run recovery drill script asserts expected schema markers",
-    "offsite restore path documented in LUMEN-RECOVERY.md",
-    "HA/edge productive validation still pending outside this stub"
+    {
+      "id": "dry-run-recovery-drill",
+      "state": "ready-in-repo",
+      "detail": "scripts/ops/run-lumen-postgres-recovery-drill.mjs asserts expected schema markers"
+    },
+    {
+      "id": "offsite-restore-runbook",
+      "state": "documented",
+      "detail": "docs/operations/LUMEN-RECOVERY.md"
+    },
+    {
+      "id": "ha-edge-productive",
+      "state": "blocked-external",
+      "detail": "Requires target HA topology and hostname-edge cutover outside this repository"
+    },
+    {
+      "id": "offsite-recovery-attested",
+      "state": "blocked-external",
+      "detail": "Requires attested restore from offsite backup in the objective environment"
+    }
   ],
   "drillScript": "scripts/ops/run-lumen-postgres-recovery-drill.mjs",
-  "capturedAt": "2026-07-20"
+  "capturedAt": "2026-07-20",
+  "blocksCatalogRetirement": true
 }

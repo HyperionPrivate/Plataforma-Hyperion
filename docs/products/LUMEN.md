@@ -229,11 +229,11 @@ durable, lease de limpieza, reconciliación e índices. Los cambios posteriores 
 [fence del rol runtime](../../packages/lumen-migrations/sql/002-lumen-runtime-role.sql). Ninguno de esos pasos depende
 del historial global para arrancar o quedar listo.
 
-La única excepción heredada es el
-[comando administrativo del puente N-1](../../packages/migrations/src/lumen-n-minus-one-compatibility.ts). No forma
-parte de la imagen ni del runtime autónomo; el bridge queda fail-closed salvo
-`LUMEN_N1_COMPAT_ENABLED=true` en un ensayo atestado (`DEBT-025`). No autoriza nuevas migraciones LUMEN en el
-paquete global.
+El
+[puente administrativo N-1](../../packages/migrations/src/lumen-n-minus-one-compatibility.ts) está
+permanentemente retirado (DEBT-025): el CLI y `LUMEN_N1_COMPAT_ENABLED` ya no abren ventana en producción. Solo
+Vitest con `HYPERION_LUMEN_N1_TEST_REHEARSAL=1` puede ejercitar las APIs de biblioteca. No autoriza nuevas
+migraciones LUMEN en el paquete global.
 
 ## 9. Consola funcional
 

@@ -159,10 +159,9 @@ ser un trigger de Access y se materializa idempotentemente en el primer uso auto
 
 PULSO avanzó el contract tip a `015` (FK Access + drop N-1 + revoke grants Iris de SOFÍA); el baseline de ownership
 ya no registra esos hallazgos. También faltan cutover, backup, restore y rollback con evidencia del ambiente
-objetivo. Los redirects y la fachada de gateway pueden convivir durante ese corte bajo el perfil `legacy-gateway`
-con `LEGACY_GATEWAY_ENABLED=false` por defecto, pero se retiran con telemetría y no reciben lógica de dominio nueva.
-Este aislamiento de ejecución no resuelve
-`DEBT-032`: el snapshot y los proxies directos siguen vivos mientras exista compatibilidad bearer N-1.
+objetivo. La fachada multiproducto del `api-gateway` y los redirects legacy (web-console / nginx) quedaron
+retirados en código (DEBT-020/023/032): rutas de producto responden 410/404 y no hay proxies N-1. El perfil
+`legacy-gateway` sólo conserva auth/plataforma residual y no es el borde objetivo (`HOSTNAME-EDGE.md`).
 
 ## Regla para agregar productos
 

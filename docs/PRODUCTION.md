@@ -579,6 +579,12 @@ réplica distinta no reclama ni borra automáticamente directorios ajenos.
 
 ### Ventana de rollback LUMEN N-1
 
+**Retirada (DEBT-025, 2026-07-20).** El CLI administrativo
+`lumen-n-minus-one-compatibility.js` y el escape hatch `LUMEN_N1_COMPAT_ENABLED` están permanentemente cerrados.
+Los ensayos de contrato de audio cleanup viven solo en Vitest
+(`HYPERION_LUMEN_N1_TEST_REHEARSAL=1`). El texto siguiente es histórico de procedimiento y no autoriza reabrir la
+ventana en producción.
+
 La imagen exacta anterior a la migración 029 usa directorios aleatorios y no conoce `cleanup_owner`. No se debe
 asignarle un owner ficticio ni permitir que el reconciliador actual calcule una ruta para esos intentos. Sólo puede
 existir una ventana administrativa global, identificada por un scope nuevo con formato `lumen-n1-...`. Todos los
@@ -594,6 +600,7 @@ de PostgreSQL el SHA-256 de la evidencia aprobada del rollback y abre la ventana
 y su conexión administrativa privada:
 
 ```bash
+# HISTÓRICO — CLI retirado; no ejecutar en producción.
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
   -e LUMEN_N1_COMPAT_ENABLED=true \
   -e LUMEN_N1_CLEANUP_SCOPE_ID="$LUMEN_N1_CLEANUP_SCOPE_ID" \
@@ -726,7 +733,8 @@ docker compose --env-file .env -f infra/docker-compose.yml up -d --no-deps --no-
   --wait --wait-timeout 120 web-console
 ```
 
-El perfil sólo conserva coexistencia; no resuelve `DEBT-032`, no convierte el gateway en borde objetivo y no
+El perfil sólo conserva coexistencia residual de auth/plataforma; la fachada de producto ya está retirada
+(DEBT-020/032), no convierte el gateway en borde objetivo y no
 autoriza tráfico público nuevo. Esperar `healthy` antes de continuar y confirmar migraciones/checksums, readiness, rutas profundas y logs
 sanitizados. Comparar IDs e imágenes antes/después: PostgreSQL nunca debe recrearse; PULSO y WhatsApp tampoco deben
 cambiar salvo que el release los incluya explícitamente. Si gateway o consola no cambiaron, omitir únicamente su
