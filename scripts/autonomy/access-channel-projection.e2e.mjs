@@ -267,7 +267,11 @@ export async function runAccessChannelAcceptance(environment = process.env, opti
     const channelPort = await reserveLoopbackPort();
     const destination = `http://127.0.0.1:${channelPort}/internal/v1/events/access-tenant-snapshots`;
     const outbox = new projections.PostgresAccessTenantProjectionOutbox(identityDb, workerId, destination, true);
-    const dispatcher = projections.createAccessTenantProjectionHttpDispatcher(outbox, workerId, secrets.edgeToken);
+    const dispatcher = projections.createAccessTenantProjectionHttpDispatcher(
+      outbox,
+      workerId,
+      new Map([[destination, secrets.edgeToken]])
+    );
 
     phase("proving outage retry before the Channel process exists");
     assert.deepEqual(await projections.reconcileAccessTenantSnapshots(identityDb, 10), {

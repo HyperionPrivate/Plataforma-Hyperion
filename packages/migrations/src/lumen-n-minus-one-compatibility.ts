@@ -226,6 +226,7 @@ export async function attestDestroyedLegacyAudioScope(
   input: DestroyedLegacyScopeAttestationInput,
   executionOptions: MigrationExecutionOptions = readMigrationExecutionOptions()
 ): Promise<DestroyedLegacyScopeAttestationResult> {
+  assertLumenNMinusOneCompatEnabled();
   validateScopeId(input.cleanupScopeId);
   validateSha256(input.evidenceSha256, "scope destruction evidence");
   if (!UUID_PATTERN.test(input.attestationId)) throw new Error("LUMEN N-1 scope attestation id must be a UUID");

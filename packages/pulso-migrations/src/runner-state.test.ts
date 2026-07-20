@@ -18,7 +18,13 @@ vi.mock("./schema-manifest.js", async (importOriginal) => {
   };
 });
 
+import { createSkipAccessFkContractGate } from "./access-fk-contract-gate.js";
 import { computePulsoMigrationChecksum, runPulsoMigrationsWithClient, type PulsoMigrationClient } from "./runner.js";
+
+const recordingRunnerOptions = () => ({
+  manifests: emptyManifests(),
+  accessFkContractGate: createSkipAccessFkContractGate()
+});
 
 const sqlDirectory = fileURLToPath(new URL("../sql/", import.meta.url));
 const baselineName = "001-pulso-autonomous-baseline.sql";
@@ -68,7 +74,7 @@ describe("PULSO migration state recovery", () => {
     );
     const client = new RecordingClient();
 
-    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
+    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, recordingRunnerOptions())).resolves.toEqual({
       applied: TIP_NAMES.slice(1) as unknown as string[],
       adopted: [baselineName],
       skipped: [baselineName]
@@ -85,7 +91,7 @@ describe("PULSO migration state recovery", () => {
     );
     const client = new RecordingClient();
 
-    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
+    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, recordingRunnerOptions())).resolves.toEqual({
       applied: TIP_NAMES.slice(1) as unknown as string[],
       adopted: [],
       skipped: [baselineName]
@@ -101,7 +107,7 @@ describe("PULSO migration state recovery", () => {
     );
     const client = new RecordingClient();
 
-    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
+    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, recordingRunnerOptions())).resolves.toEqual({
       applied: TIP_NAMES.slice(2) as unknown as string[],
       adopted: [],
       skipped: [baselineName, rolesName]
@@ -117,7 +123,7 @@ describe("PULSO migration state recovery", () => {
     );
     const client = new RecordingClient();
 
-    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
+    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, recordingRunnerOptions())).resolves.toEqual({
       applied: TIP_NAMES.slice(3) as unknown as string[],
       adopted: [],
       skipped: [baselineName, rolesName, sofiaMarkerName]

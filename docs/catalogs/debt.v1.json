@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.12.0",
+  "catalogVersion": "1.13.0",
   "updatedAt": "2026-07-20",
   "baseline": "docs/architecture/boundary-baseline.json",
   "baselineStats": {
@@ -9,6 +9,20 @@
     "workstreams": 0
   },
   "items": [
+    {
+      "id": "DEBT-005",
+      "title": "Access FK contracts 009–013 applied in tip before attested multi-consumer parity; cutover gated",
+      "source": "transition-inventory",
+      "owner": "pulso-data",
+      "status": "retiring",
+      "evidence": [
+        "packages/pulso-migrations/src/access-fk-contract-gate.ts",
+        "docs/operations/ACCESS-TENANT-PROJECTION-REPLAY.md",
+        "docs/evidence/access-fk-contract-parity-20260720.json"
+      ],
+      "issue": "HYP-DEBT-005",
+      "dueDate": "2026-10-31"
+    },
     {
       "id": "DEBT-022",
       "title": "Migrador global conserva migraciones históricas 001–046 y el seed CEDCO por slug; code freeze hecho, cutover ops pendiente",
@@ -25,6 +39,20 @@
       ],
       "issue": "HYP-DEBT-022",
       "dueDate": "2027-03-31"
+    },
+    {
+      "id": "DEBT-023",
+      "title": "Redirects legacy retirados en código; ops debe confirmar que access logs no muestran dependencia",
+      "source": "transition-inventory",
+      "owner": "platform-edge",
+      "status": "retiring",
+      "evidence": [
+        "docs/evidence/legacy-console-redirects-retired-20260720.md",
+        "apps/web-console/src/redirects.ts",
+        "infra/docker/legacy/default.conf.template"
+      ],
+      "issue": "HYP-DEBT-023",
+      "dueDate": "2026-11-30"
     },
     {
       "id": "DEBT-024",

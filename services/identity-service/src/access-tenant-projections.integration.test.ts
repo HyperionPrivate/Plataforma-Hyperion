@@ -142,7 +142,12 @@ integration("Access tenant snapshot producer on disposable PostgreSQL", () => {
     const dispatcher = createAccessTenantProjectionHttpDispatcher(
       outbox,
       workerId,
-      "access-projection-integration-token-0001",
+      new Map([
+        [
+          "https://channel.example/internal/v1/events/access-tenant-snapshots",
+          "access-projection-integration-token-0001"
+        ]
+      ]),
       fetch
     );
 

@@ -77,6 +77,21 @@ export interface AccessTenantReconcileResult {
   readonly hasMore: boolean;
 }
 
+export interface AccessTenantBackfillResult {
+  readonly candidatesProcessed: number;
+  readonly eventsEnqueued: number;
+  readonly replayed: number;
+  readonly hasMore: boolean;
+}
+
+const DESTINATION_HOST_TOKEN_ENV: ReadonlyMap<string, string> = new Map([
+  ["whatsapp-channel-service", "ACCESS_TO_CHANNEL_TOKEN"],
+  ["pulso-iris-service", "ACCESS_TO_PULSO_TOKEN"],
+  ["agent-service", "ACCESS_TO_SOFIA_TOKEN"],
+  ["integration-service", "ACCESS_TO_INTEGRATION_TOKEN"],
+  ["knowledge-service", "ACCESS_TO_KNOWLEDGE_TOKEN"]
+]);
+
 interface ReconcileConfiguration {
   readonly reconcileLimit: number;
   readonly reconcileIntervalMs: number;
@@ -87,7 +102,7 @@ export type AccessTenantProjectionConfiguration =
   | (ReconcileConfiguration & {
       readonly transport: "http";
       readonly destinations: readonly string[];
-      readonly internalToken: string;
+      readonly destinationTokens: ReadonlyMap<string, string>;
       readonly deliveryEnabled: boolean;
       readonly allowPrivateHttp: boolean;
     })
@@ -166,6 +181,45 @@ export async function reconcileAccessTenantSnapshots(
   return {
     candidatesProcessed: selected.length,
     eventsEnqueued,
+    hasMore: candidates.rows.length > boundedLimit
+  };
+}
+
+/**
+ * Pages every non-bootstrap customer tenant and enqueues a snapshot when the
+ * payload changed. Tenants whose current outbox row is already published and
+ * outside the 3-minute dedupe window are also replayed so delivery re-fans out.
+ */
+export async function backfillAccessTenantSnapshots(
+  db: DatabaseClient,
+  limit = DEFAULT_RECONCILE_LIMIT
+): Promise<AccessTenantBackfillResult> {
+  const boundedLimit = normalizeReconcileLimit(limit);
+  const candidates = await db.query<TenantCandidateRow>(
+    `select tenant.id as "tenantId"
+         from platform.tenants tenant
+        where not exists (
+                select 1
+                  from access_runtime.bootstrap_tenants bootstrap
+                 where bootstrap.tenant_id = tenant.id
+              )
+        order by tenant.updated_at, tenant.id
+        limit $1`,
+    [boundedLimit + 1]
+  );
+  const selected = candidates.rows.slice(0, boundedLimit);
+  let eventsEnqueued = 0;
+  let replayed = 0;
+  for (const tenant of selected) {
+    const result = await db.transaction((transaction) => enqueueAccessTenantSnapshot(transaction, tenant.tenantId));
+    eventsEnqueued += result.eventsEnqueued;
+    const replayResult = await replayCurrentAccessTenantProjection(db, { tenantId: tenant.tenantId });
+    if (replayResult) replayed += 1;
+  }
+  return {
+    candidatesProcessed: selected.length,
+    eventsEnqueued,
+    replayed,
     hasMore: candidates.rows.length > boundedLimit
   };
 }
@@ -536,13 +590,18 @@ export async function replayCurrentAccessTenantProjection(
 export function createAccessTenantProjectionHttpDispatcher(
   outbox: PostgresAccessTenantProjectionOutbox,
   workerId: string,
-  internalToken: string,
+  destinationTokens: ReadonlyMap<string, string>,
   fetchImplementation: HttpOutboxFetch = globalThis.fetch
 ): HttpOutboxDispatcher<AccessTenantSnapshotPayload> {
+  const dispatcherToken = destinationTokens.values().next().value;
+  if (!dispatcherToken) {
+    throw new Error("Access tenant snapshot HTTP delivery requires at least one destination token");
+  }
   return new HttpOutboxDispatcher<AccessTenantSnapshotPayload>({
     workerId,
-    internalToken,
-    fetch: createAccessTenantWorkloadFetch(internalToken, fetchImplementation),
+    // Sentinel for HttpOutboxDispatcher; workload fetch overwrites Authorization per URL.
+    internalToken: dispatcherToken,
+    fetch: createAccessTenantWorkloadFetch(destinationTokens, fetchImplementation),
     claim: (limit) => outbox.claim(limit),
     complete: (eventId) => outbox.complete(eventId),
     fail: (eventId, errorCode) => outbox.fail(eventId, errorCode),
@@ -577,11 +636,16 @@ export function createAccessTenantProjectionJetStreamDispatcher(
 }
 
 export function createAccessTenantWorkloadFetch(
-  internalToken: string,
+  destinationTokens: ReadonlyMap<string, string>,
   fetchImplementation: HttpOutboxFetch = globalThis.fetch
 ): HttpOutboxFetch {
-  const workloadHeaders = createInternalAuthorizationHeaders("identity-service", internalToken);
   return (input, init) => {
+    const destinationUrl = resolveFetchDestinationUrl(input);
+    const token = destinationTokens.get(destinationUrl);
+    if (!token) {
+      throw new Error(`No Access tenant snapshot token configured for destination ${destinationUrl}`);
+    }
+    const workloadHeaders = createInternalAuthorizationHeaders("identity-service", token);
     const headers = new Headers(init?.headers);
     for (const [name, value] of Object.entries(workloadHeaders)) headers.set(name, value);
     return fetchImplementation(input, { ...init, headers, redirect: "error" });
@@ -622,18 +686,62 @@ export function readAccessTenantProjectionConfiguration(env: NodeJS.ProcessEnv):
   if (env.DURABLE_EVENT_TRANSPORT?.trim() === "jetstream") {
     throw new Error("Access tenant snapshot HTTP delivery requires DURABLE_EVENT_TRANSPORT=http");
   }
-  const internalToken = readInternalCredential(env, "ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN");
-  if (!internalToken) throw new Error("ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN is required for HTTP delivery");
   const allowPrivateHttp = readPrivateHttpOptIn(env);
+  const destinations = normalizeHttpDestinations(env.ACCESS_TENANT_SNAPSHOT_HTTP_URL ?? "", allowPrivateHttp);
   return {
     transport,
-    destinations: normalizeHttpDestinations(env.ACCESS_TENANT_SNAPSHOT_HTTP_URL ?? "", allowPrivateHttp),
-    internalToken,
+    destinations,
+    destinationTokens: resolveDestinationTokens(destinations, env),
     deliveryEnabled: env.DURABLE_OUTBOX_ENABLED !== "false" && env.DURABLE_HTTP_OUTBOX_ENABLED !== "false",
     allowPrivateHttp,
     reconcileLimit,
     reconcileIntervalMs
   };
+}
+
+function resolveDestinationTokens(
+  destinations: readonly string[],
+  env: NodeJS.ProcessEnv
+): ReadonlyMap<string, string> {
+  const destinationTokens = new Map<string, string>();
+  const tokenOwners = new Map<string, string>();
+  for (const destination of destinations) {
+    const hostname = new URL(destination).hostname.toLowerCase();
+    const mappedVariable = DESTINATION_HOST_TOKEN_ENV.get(hostname);
+    let token: string | undefined;
+    if (mappedVariable) {
+      token = readInternalCredential(env, mappedVariable);
+      if (!token) {
+        throw new Error(`${mappedVariable} is required for Access tenant snapshot HTTP delivery to ${hostname}`);
+      }
+    } else if (destinations.length === 1) {
+      token = readInternalCredential(env, "ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN");
+      if (!token) {
+        throw new Error("ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN is required for a single unmatched HTTP destination");
+      }
+    } else {
+      throw new Error(
+        `Access tenant snapshot destination ${hostname} has no mapped ACCESS_TO_* token; ` +
+          "shared ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN is only allowed for a single unmatched destination"
+      );
+    }
+    const owner = tokenOwners.get(token);
+    if (owner !== undefined) {
+      throw new Error(
+        "Access tenant snapshot destination tokens must be distinct secrets; " +
+          `${destination} reuses the token already assigned to ${owner}`
+      );
+    }
+    tokenOwners.set(token, destination);
+    destinationTokens.set(destination, token);
+  }
+  return destinationTokens;
+}
+
+function resolveFetchDestinationUrl(input: Parameters<HttpOutboxFetch>[0]): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
 }
 
 function readNextSourceVersion(value: string | number): number {

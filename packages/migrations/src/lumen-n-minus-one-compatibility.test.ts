@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertLumenNMinusOneCompatEnabled } from "./lumen-n-minus-one-compatibility.js";
+import {
+  assertLumenNMinusOneCompatEnabled,
+  attestDestroyedLegacyAudioScope
+} from "./lumen-n-minus-one-compatibility.js";
 
 describe("LUMEN N-1 compatibility bridge gate", () => {
   it("is permanently retired outside vitest rehearsals (DEBT-025)", () => {
@@ -11,5 +14,9 @@ describe("LUMEN N-1 compatibility bridge gate", () => {
         HYPERION_LUMEN_N1_TEST_REHEARSAL: "1"
       })
     ).not.toThrow();
+  });
+
+  it("gates attestDestroyedLegacyAudioScope", () => {
+    expect(String(attestDestroyedLegacyAudioScope)).toMatch(/assertLumenNMinusOneCompatEnabled/);
   });
 });

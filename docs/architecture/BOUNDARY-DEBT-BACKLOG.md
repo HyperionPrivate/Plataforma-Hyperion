@@ -61,24 +61,32 @@ compatibilidad hasta terminar el cutover.
 ### Cortes completados (2026-07-20): proyecciones Access, contracts FK y N-1
 
 Tip provider-owned PULSO: `15/015-revoke-sofia-pulso-iris-control-plane-grants.sql`. Channel, Iris, SOFIA,
-Integration y Knowledge tienen expand+migrate+contract (proyecciones locales + DROP append-only de FKs a
+Integration y Knowledge tienen expand+migrate+contract SQL (proyecciones locales + DROP append-only de FKs a
 `platform.tenants` en `009`–`013`, espejo global `047`–`051`). Los adaptadores N-1 del baseline autónomo y de
-038 se retiraron en `014`/`052`. Los grants Iris de SOFÍA se revocaron en `015`. DEBT-001–005, 010, 018/019,
-027 y 029–031 salieron del catálogo; el baseline efectivo quedó **vacío**.
+038 se retiraron en `014`/`052`. Los grants Iris de SOFÍA se revocaron en `015`. El baseline efectivo quedó
+**vacío**. El cutover FK **no** está atestado en producción: el runner de `@hyperion/pulso-migrations` exige
+recibo multi-consumer (`PULSO_ACCESS_FK_CONTRACT_RECEIPT` + `_SHA256`) vía `access-fk-contract-gate`; el stub
+en evidencia es `provisional-until-harness`. **DEBT-005** se reabrió como `retiring`.
 
 Cola residual abierta (transición / ops):
 
-1. **DEBT-022** — code freeze del migrador global hecho; cutover operativo + retiro CEDCO slug seed pendientes
+1. **DEBT-005** — contratos FK 009–013 en tip antes de paridad multi-consumer atestada; gate
+   `packages/pulso-migrations/src/access-fk-contract-gate.ts` + runbook
+   `docs/operations/ACCESS-TENANT-PROJECTION-REPLAY.md` + stub
+   `docs/evidence/access-fk-contract-parity-20260720.json`.
+2. **DEBT-022** — code freeze del migrador global hecho; cutover operativo + retiro CEDCO slug seed pendientes
    (`docs/operations/GLOBAL-MIGRATOR-CUTOVER.md`). Runtime ya no usa `requiredLegacyMigrationNames`.
-2. **DEBT-024** — dry-run de publish path verificado; publish/readback SemVer real bloqueado a credenciales de
+3. **DEBT-023** — redirects legacy retirados en código (web-console + nginx legacy); ops debe confirmar que
+   access logs no muestran dependencia (`docs/evidence/legacy-console-redirects-retired-20260720.md`).
+4. **DEBT-024** — dry-run de publish path verificado; publish/readback SemVer real bloqueado a credenciales de
    Organization (`docs/operations/REGISTRY-PUBLISH-PATH.md`).
-3. **DEBT-026** — HA / edge productivo / recovery offsite de LUMEN pendientes en entorno objetivo (checklist en
+5. **DEBT-026** — HA / edge productivo / recovery offsite de LUMEN pendientes en entorno objetivo (checklist en
    `docs/evidence/lumen-recovery-validation-checklist-20260720.json`).
-4. **Gobernanza CI (Wave F)** — hold local-first: no restaurar `push`/`schedule` hasta haber cupo Actions; rulesets
+6. **Gobernanza CI (Wave F)** — hold local-first: no restaurar `push`/`schedule` hasta haber cupo Actions; rulesets
    de Organization pendientes (`docs/audits/federation-ci-hardening-20260719.md`).
 
-Cerrados en código (2026-07-20): DEBT-020/023/032 (fachada gateway + redirects nginx/web-console), DEBT-021
-(gateway sin `@hyperion/contracts`), DEBT-025 (bridge N-1 administrativo retirado).
+Cerrados en código (2026-07-20): DEBT-020/032 (fachada gateway multiproducto), DEBT-021 (gateway sin
+`@hyperion/contracts`), DEBT-025 (bridge N-1 administrativo retirado). DEBT-023 queda operativo (`retiring`).
 
 ## Regla
 

@@ -194,7 +194,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
         const dispatcher = createAccessTenantProjectionHttpDispatcher(
           tenantOutbox,
           workerId,
-          tenantProjectionConfiguration.internalToken
+          tenantProjectionConfiguration.destinationTokens
         );
         app.addHook("onClose", async () => {
           await Promise.all([tenantReconciler.stop(), dispatcher.stop()]);

@@ -10,10 +10,14 @@ const EVENT_ID = "22222222-2222-4222-8222-222222222222";
 const TENANT_ID = "11111111-1111-4111-8111-111111111111";
 
 describe("Access tenant projection operations", () => {
-  it("parses only bounded reconciliation and exact confirmed redrive", () => {
+  it("parses only bounded reconciliation, backfill, and exact confirmed redrive", () => {
     expect(parseAccessTenantProjectionOperation(["reconcile", "--limit", "25"])).toEqual({
       command: "reconcile",
       limit: 25
+    });
+    expect(parseAccessTenantProjectionOperation(["backfill", "--limit", "50"])).toEqual({
+      command: "backfill",
+      limit: 50
     });
     expect(
       parseAccessTenantProjectionOperation([
@@ -43,6 +47,7 @@ describe("Access tenant projection operations", () => {
       ])
     ).toThrow("--confirm must equal");
     expect(() => parseAccessTenantProjectionOperation(["reconcile", "--limit", "1001"])).toThrow("between 1 and 1000");
+    expect(() => parseAccessTenantProjectionOperation(["backfill", "--limit", "0"])).toThrow("between 1 and 1000");
     expect(
       parseAccessTenantProjectionOperation([
         "replay",
@@ -65,6 +70,7 @@ describe("Access tenant projection operations", () => {
         ACCESS_TENANT_PROJECTION_REDRIVE_CONFIRMATION
       ])
     ).toThrow("--confirm must equal REPLAY ACCESS TENANT SNAPSHOT");
+    expect(() => parseAccessTenantProjectionOperation(["unknown"])).toThrow("backfill --limit");
   });
 
   it("validates the Access runtime boundary and always closes the database", async () => {

@@ -9,6 +9,11 @@ import {
   configurePulsoMigrationTimeouts
 } from "./sql-policy.js";
 import {
+  createDefaultAccessFkContractGate,
+  isAccessFkContractMigration,
+  type AccessFkContractGate
+} from "./access-fk-contract-gate.js";
+import {
   assertPulsoMigratorDatabaseSecurity,
   assertPulsoSchemaCompatible,
   inspectPulsoSchema,
@@ -89,6 +94,12 @@ interface PulsoMigrationFile {
   checksum: string;
 }
 
+export interface PulsoMigrationRunnerOptions {
+  readonly manifests?: PulsoSchemaManifestSet;
+  readonly accessFkContractGate?: AccessFkContractGate;
+  readonly env?: NodeJS.ProcessEnv;
+}
+
 export async function runPulsoMigrations(databaseUrl: string, sqlDirectory: string): Promise<PulsoMigrationResult> {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
@@ -102,8 +113,15 @@ export async function runPulsoMigrations(databaseUrl: string, sqlDirectory: stri
 export async function runPulsoMigrationsWithClient(
   client: PulsoMigrationClient,
   sqlDirectory: string,
-  manifests: PulsoSchemaManifestSet = PULSO_SCHEMA_MANIFEST
+  manifestsOrOptions: PulsoSchemaManifestSet | PulsoMigrationRunnerOptions = PULSO_SCHEMA_MANIFEST
 ): Promise<PulsoMigrationResult> {
+  const options: PulsoMigrationRunnerOptions =
+    manifestsOrOptions && "managed" in manifestsOrOptions
+      ? { manifests: manifestsOrOptions }
+      : (manifestsOrOptions as PulsoMigrationRunnerOptions);
+  const manifests = options.manifests ?? PULSO_SCHEMA_MANIFEST;
+  const accessFkContractGate = options.accessFkContractGate ?? createDefaultAccessFkContractGate();
+  const env = options.env ?? process.env;
   const migrations = await readPulsoMigrationFiles(sqlDirectory);
   validateProviderOwnedMigrationSet(migrations);
   const baseline = migrations.find((migration) => migration.name === PULSO_BASELINE_MIGRATION);
@@ -151,6 +169,9 @@ export async function runPulsoMigrationsWithClient(
         if (prior !== migration.checksum) throw new Error(`PULSO migration ${migration.name} checksum mismatch`);
         result.skipped.push(migration.name);
         continue;
+      }
+      if (isAccessFkContractMigration(migration.name)) {
+        await accessFkContractGate(client, { migrationName: migration.name, env });
       }
       await applyMigration(client, migration);
       checksums.set(migration.name, migration.checksum);

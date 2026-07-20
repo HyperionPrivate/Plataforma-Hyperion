@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AccessTenantProjectionReconciler,
   PostgresAccessTenantProjectionOutbox,
+  backfillAccessTenantSnapshots,
   createAccessTenantProjectionHttpDispatcher,
   createAccessTenantProjectionJetStreamDispatcher,
   enqueueAccessTenantSnapshot,
@@ -16,6 +17,20 @@ const TENANT_ID = "11111111-1111-4111-8111-111111111111";
 const EVENT_ID = "22222222-2222-4222-8222-222222222222";
 const SOURCE_UPDATED_AT = "2026-07-18T12:00:00.000Z";
 const HTTP_TOKEN = "access-tenant-http-token-0001";
+const CHANNEL_TOKEN = "access-to-channel-token-0001";
+const PULSO_TOKEN = "access-to-pulso-token-00002";
+const SOFIA_TOKEN = "access-to-sofia-token-00003";
+const INTEGRATION_TOKEN = "access-to-integration-token-04";
+const KNOWLEDGE_TOKEN = "access-to-knowledge-token-005";
+const MULTI_EDGE_HTTP_URL =
+  "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots,http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots,http://agent-service:8083/internal/v1/events/access-tenant-snapshots,http://integration-service:8087/internal/v1/events/access-tenant-snapshots,http://knowledge-service:8085/internal/v1/events/access-tenant-snapshots";
+const MULTI_EDGE_TOKENS = {
+  ACCESS_TO_CHANNEL_TOKEN: CHANNEL_TOKEN,
+  ACCESS_TO_PULSO_TOKEN: PULSO_TOKEN,
+  ACCESS_TO_SOFIA_TOKEN: SOFIA_TOKEN,
+  ACCESS_TO_INTEGRATION_TOKEN: INTEGRATION_TOKEN,
+  ACCESS_TO_KNOWLEDGE_TOKEN: KNOWLEDGE_TOKEN
+} as const;
 
 describe("Access tenant snapshot producer", () => {
   it("locks each tenant and persists the outbox before its monotonic watermark", async () => {
@@ -197,16 +212,17 @@ describe("Access tenant snapshot delivery configuration", () => {
   });
 
   it("validates exact HTTP endpoints and bounded reconciliation settings", () => {
-    expect(
-      readAccessTenantProjectionConfiguration({
-        ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
-        ACCESS_TENANT_SNAPSHOT_HTTP_URL: "https://projection-consumer.example/internal/v1/events/access-tenants",
-        ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
-        DURABLE_EVENT_TRANSPORT: "http",
-        ACCESS_TENANT_SNAPSHOT_RECONCILE_LIMIT: "25",
-        ACCESS_TENANT_SNAPSHOT_RECONCILE_INTERVAL_MS: "5000"
-      })
-    ).toMatchObject({ transport: "http", reconcileLimit: 25, reconcileIntervalMs: 5_000 });
+    const configuration = readAccessTenantProjectionConfiguration({
+      ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
+      ACCESS_TENANT_SNAPSHOT_HTTP_URL: "https://projection-consumer.example/internal/v1/events/access-tenants",
+      ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
+      DURABLE_EVENT_TRANSPORT: "http",
+      ACCESS_TENANT_SNAPSHOT_RECONCILE_LIMIT: "25",
+      ACCESS_TENANT_SNAPSHOT_RECONCILE_INTERVAL_MS: "5000"
+    });
+    expect(configuration).toMatchObject({ transport: "http", reconcileLimit: 25, reconcileIntervalMs: 5_000 });
+    if (configuration.transport !== "http") throw new Error("expected http configuration");
+    expect(configuration.destinationTokens.get(configuration.destinations[0]!)).toBe(HTTP_TOKEN);
     expect(() =>
       readAccessTenantProjectionConfiguration({
         ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
@@ -222,17 +238,15 @@ describe("Access tenant snapshot delivery configuration", () => {
     ).toThrow("between 1 and 1000");
   });
 
-  it("parses comma-separated HTTP destinations for Channel and Iris fan-out", () => {
-    expect(
-      readAccessTenantProjectionConfiguration({
-        ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
-        ACCESS_TENANT_SNAPSHOT_HTTP_URL:
-          "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots,http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots,http://agent-service:8083/internal/v1/events/access-tenant-snapshots,http://integration-service:8087/internal/v1/events/access-tenant-snapshots,http://knowledge-service:8085/internal/v1/events/access-tenant-snapshots",
-        ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
-        ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
-        HYPERION_ENVIRONMENT: "ci"
-      })
-    ).toMatchObject({
+  it("parses comma-separated HTTP destinations with distinct per-edge tokens", () => {
+    const configuration = readAccessTenantProjectionConfiguration({
+      ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
+      ACCESS_TENANT_SNAPSHOT_HTTP_URL: MULTI_EDGE_HTTP_URL,
+      ...MULTI_EDGE_TOKENS,
+      ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
+      HYPERION_ENVIRONMENT: "ci"
+    });
+    expect(configuration).toMatchObject({
       transport: "http",
       destinations: [
         "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots",
@@ -242,6 +256,37 @@ describe("Access tenant snapshot delivery configuration", () => {
         "http://knowledge-service:8085/internal/v1/events/access-tenant-snapshots"
       ]
     });
+    if (configuration.transport !== "http") throw new Error("expected http configuration");
+    expect(configuration.destinationTokens.get(configuration.destinations[0]!)).toBe(CHANNEL_TOKEN);
+    expect(configuration.destinationTokens.get(configuration.destinations[1]!)).toBe(PULSO_TOKEN);
+    expect(configuration.destinationTokens.get(configuration.destinations[2]!)).toBe(SOFIA_TOKEN);
+    expect(configuration.destinationTokens.get(configuration.destinations[3]!)).toBe(INTEGRATION_TOKEN);
+    expect(configuration.destinationTokens.get(configuration.destinations[4]!)).toBe(KNOWLEDGE_TOKEN);
+  });
+
+  it("rejects reused destination tokens and shared fallback for multi-edge fan-out", () => {
+    expect(() =>
+      readAccessTenantProjectionConfiguration({
+        ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
+        ACCESS_TENANT_SNAPSHOT_HTTP_URL: MULTI_EDGE_HTTP_URL,
+        ACCESS_TO_CHANNEL_TOKEN: CHANNEL_TOKEN,
+        ACCESS_TO_PULSO_TOKEN: CHANNEL_TOKEN,
+        ACCESS_TO_SOFIA_TOKEN: SOFIA_TOKEN,
+        ACCESS_TO_INTEGRATION_TOKEN: INTEGRATION_TOKEN,
+        ACCESS_TO_KNOWLEDGE_TOKEN: KNOWLEDGE_TOKEN,
+        ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
+        HYPERION_ENVIRONMENT: "ci"
+      })
+    ).toThrow("distinct secrets");
+    expect(() =>
+      readAccessTenantProjectionConfiguration({
+        ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
+        ACCESS_TENANT_SNAPSHOT_HTTP_URL: MULTI_EDGE_HTTP_URL,
+        ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
+        ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
+        HYPERION_ENVIRONMENT: "ci"
+      })
+    ).toThrow("ACCESS_TO_CHANNEL_TOKEN");
   });
 
   it("allows plaintext only for an explicitly enabled private local or CI destination", () => {
@@ -250,7 +295,7 @@ describe("Access tenant snapshot delivery configuration", () => {
         ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
         ACCESS_TENANT_SNAPSHOT_HTTP_URL:
           "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots",
-        ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
+        ACCESS_TO_CHANNEL_TOKEN: CHANNEL_TOKEN,
         ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
         HYPERION_ENVIRONMENT: "ci"
       })
@@ -260,17 +305,20 @@ describe("Access tenant snapshot delivery configuration", () => {
       {
         ACCESS_TENANT_SNAPSHOT_HTTP_URL:
           "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots",
+        ACCESS_TO_CHANNEL_TOKEN: CHANNEL_TOKEN,
         HYPERION_ENVIRONMENT: "local"
       },
       {
         ACCESS_TENANT_SNAPSHOT_HTTP_URL:
           "http://projection-consumer.example/internal/v1/events/access-tenant-snapshots",
+        ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
         ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
         HYPERION_ENVIRONMENT: "ci"
       },
       {
         ACCESS_TENANT_SNAPSHOT_HTTP_URL:
           "https://projection-consumer.example/internal/v1/events/access-tenant-snapshots",
+        ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
         ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
         HYPERION_ENVIRONMENT: "production"
       }
@@ -278,7 +326,6 @@ describe("Access tenant snapshot delivery configuration", () => {
       expect(() =>
         readAccessTenantProjectionConfiguration({
           ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
-          ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
           ...invalidEnvironment
         })
       ).toThrow();
@@ -310,8 +357,11 @@ describe("Access tenant snapshot delivery configuration", () => {
 describe("Access tenant snapshot durable dispatch", () => {
   it("delivers the strict envelope over HTTP with the Identity workload assertion", async () => {
     const model = outboxDatabase();
+    const destination = "https://consumer.example/internal/v1/events/access-tenants";
     const fetch: HttpOutboxFetch = vi.fn(async (_input, init) => {
-      expect(new Headers(init?.headers).get("x-hyperion-caller")).toBe("identity-service");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-hyperion-caller")).toBe("identity-service");
+      expect(headers.get("authorization")).toBe(`Bearer ${HTTP_TOKEN}`);
       expect(JSON.parse(String(init?.body))).toMatchObject({
         id: EVENT_ID,
         type: "access.tenant.snapshot.v1",
@@ -321,12 +371,13 @@ describe("Access tenant snapshot durable dispatch", () => {
       return new Response(undefined, { status: 204 });
     });
     const workerId = "access-tenant-http-worker";
-    const outbox = new PostgresAccessTenantProjectionOutbox(
-      model.database as never,
+    const outbox = new PostgresAccessTenantProjectionOutbox(model.database as never, workerId, destination);
+    const dispatcher = createAccessTenantProjectionHttpDispatcher(
+      outbox,
       workerId,
-      "https://consumer.example/internal/v1/events/access-tenants"
+      new Map([[destination, HTTP_TOKEN]]),
+      fetch
     );
-    const dispatcher = createAccessTenantProjectionHttpDispatcher(outbox, workerId, HTTP_TOKEN, fetch);
 
     await expect(dispatcher.drainOnce()).resolves.toMatchObject({ claimed: 1, completed: 1, failed: 0 });
     expect(model.completed).toEqual([EVENT_ID]);
@@ -399,6 +450,68 @@ describe("Access tenant snapshot dead-letter redrive", () => {
         tenantId: TENANT_ID
       })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("Access tenant snapshot backfill", () => {
+  it("pages every customer tenant, enqueues gaps, and replays published current rows", async () => {
+    const sql: string[] = [];
+    let transactionCount = 0;
+    const secondTenantId = "33333333-3333-4333-8333-333333333333";
+    const db = {
+      query: async (text: string, values?: unknown[]) => {
+        sql.push(normalizeSql(text));
+        if (text.includes("from platform.tenants tenant") && text.includes("order by tenant.updated_at")) {
+          return { rows: [{ tenantId: TENANT_ID }, { tenantId: secondTenantId }] };
+        }
+        if (normalizeSql(text).includes("event_row.status = 'published'")) {
+          return values?.[0] === TENANT_ID
+            ? {
+                rows: [
+                  {
+                    eventId: EVENT_ID,
+                    tenantId: TENANT_ID,
+                    sourceVersion: "7",
+                    eventType: "access.tenant.snapshot.v1"
+                  }
+                ]
+              }
+            : { rows: [] };
+        }
+        return { rows: [] };
+      },
+      transaction: async (work: (transaction: { query: typeof query }) => Promise<unknown>) => {
+        transactionCount += 1;
+        return work({ query });
+      }
+    };
+    async function query(text: string, values?: unknown[]) {
+      sql.push(normalizeSql(text));
+      if (text.includes("from platform.tenants tenant") && text.includes("tenant.id = $1")) {
+        return {
+          rows: [
+            {
+              tenantId: String(values?.[0]),
+              status: "active",
+              sourceUpdatedAt: SOURCE_UPDATED_AT
+            }
+          ]
+        };
+      }
+      if (text.includes("from access_runtime.tenant_projection_state")) return { rows: [] };
+      return { rows: [] };
+    }
+
+    await expect(backfillAccessTenantSnapshots(db as never, 2)).resolves.toEqual({
+      candidatesProcessed: 2,
+      eventsEnqueued: 2,
+      replayed: 1,
+      hasMore: false
+    });
+    expect(sql[0]).toContain("not exists ( select 1 from access_runtime.bootstrap_tenants bootstrap");
+    expect(sql[0]).not.toContain("projection.source_updated_at < tenant.updated_at");
+    expect(transactionCount).toBe(2);
+    expect(sql.some((statement) => statement.includes("event_row.status = 'published'"))).toBe(true);
   });
 });
 

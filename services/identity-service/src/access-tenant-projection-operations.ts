@@ -3,6 +3,7 @@ import { createDatabase, type DatabaseClient } from "@hyperion/database";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
+  backfillAccessTenantSnapshots,
   reconcileAccessTenantSnapshots,
   replayCurrentAccessTenantProjection,
   redriveAccessTenantProjectionDeadLetter,
@@ -14,6 +15,7 @@ export const ACCESS_TENANT_PROJECTION_REPLAY_CONFIRMATION = "REPLAY ACCESS TENAN
 
 export type AccessTenantProjectionOperation =
   | { readonly command: "reconcile"; readonly limit: number }
+  | { readonly command: "backfill"; readonly limit: number }
   | ({ readonly command: "redrive"; readonly confirmation: string } & AccessTenantDeadLetterSelection)
   | { readonly command: "replay"; readonly tenantId: string; readonly confirmation: string };
 
@@ -30,13 +32,13 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 export function parseAccessTenantProjectionOperation(argv: readonly string[]): AccessTenantProjectionOperation {
   const command = argv[0];
-  if (command !== "reconcile" && command !== "redrive" && command !== "replay") {
+  if (command !== "reconcile" && command !== "backfill" && command !== "redrive" && command !== "replay") {
     throw new Error(
-      "Usage: tenant:projections -- reconcile --limit <1..1000> | redrive <exact selector> | replay <exact tenant>"
+      "Usage: tenant:projections -- reconcile --limit <1..1000> | backfill --limit <1..1000> | redrive <exact selector> | replay <exact tenant>"
     );
   }
   const flags = parseFlags(argv.slice(1));
-  if (command === "reconcile") {
+  if (command === "reconcile" || command === "backfill") {
     assertOnlyFlags(flags, ["--limit"]);
     const rawLimit = flags.get("--limit") ?? "100";
     if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 1_000) {
@@ -83,6 +85,9 @@ export async function runAccessTenantProjectionOperation(
     await dependencies.assertRuntimeBoundary(db);
     if (operation.command === "reconcile") {
       return { command: operation.command, ...(await reconcileAccessTenantSnapshots(db, operation.limit)) };
+    }
+    if (operation.command === "backfill") {
+      return { command: operation.command, ...(await backfillAccessTenantSnapshots(db, operation.limit)) };
     }
     if (operation.command === "replay") {
       const replayed = await replayCurrentAccessTenantProjection(db, operation);

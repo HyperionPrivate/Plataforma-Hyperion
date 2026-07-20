@@ -428,14 +428,11 @@ test("identidades HTTP aceptan un secreto distinto limitado a cada vínculo", ()
 test("identidades HTTP comparan aliases provider-owned sin duplicar la variable del consumidor", () => {
   const secret = "controlled-access-channel-secret-001";
   const edges = {
-    ACCESS_TO_CHANNEL_TOKEN: [
-      { service: "identity-service", variable: "ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN" },
-      "whatsapp-channel-service"
-    ]
+    ACCESS_TO_CHANNEL_TOKEN: ["identity-service", "whatsapp-channel-service"]
   };
   const configuration = {
     services: {
-      "identity-service": { environment: { ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: secret } },
+      "identity-service": { environment: { ACCESS_TO_CHANNEL_TOKEN: secret } },
       "whatsapp-channel-service": {
         environment: {
           ACCESS_TO_CHANNEL_TOKEN: secret,

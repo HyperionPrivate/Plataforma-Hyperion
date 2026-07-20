@@ -8,10 +8,12 @@ reviewDue: 2026-10-31
 
 # Access tenant projection replay
 
-Status: current for Access→Channel (004), Iris (005), SOFIA (006), Integration (007) and Knowledge expand (008) + Access FK contracts (009–013) + N-1 drop (014) + SOFIA grant revoke (015).
+Status: current for Access→Channel (004), Iris (005), SOFIA (006), Integration (007) and Knowledge expand (008) + Access FK contract SQL (009–013) + N-1 drop (014) + SOFIA grant revoke (015).
 Channel, Iris, SOFIA, Integration and Knowledge migrate gates read their local `tenant_snapshots` for
-tenant-scoped eligibility; historical FKs to `platform.tenants` remain until each contract cut. Identity may
-HTTP fan-out the same snapshot event to Channel, Iris, Agent, Integration and Knowledge.
+tenant-scoped eligibility. Tip migrations `009`–`013` contain append-only FK DROP SQL, but the
+`@hyperion/pulso-migrations` runner refuses that cutover when operational data exists without a verified
+multi-consumer parity receipt (DEBT-005). Identity may HTTP fan-out the same snapshot event to Channel, Iris,
+Agent, Integration and Knowledge.
 
 `access.tenant.snapshot.v1` is delivered at least once and applied exactly once at the logical level by Channel's
 inbox. A `published` Access outbox row proves broker acceptance, not Channel application. Operators must therefore
@@ -103,3 +105,30 @@ Before any later migration removes Channel's five foreign keys to Access, record
 
 Migration 004 is expansion only. Do not remove the five foreign keys or close the corresponding debt until a later
 contract migration has this receipt and performs a locked, validated cutover.
+
+## Required cutover order (Access FK contracts 009–013)
+
+Apply FK DROP contracts only after this sequence. The gate in
+`packages/pulso-migrations/src/access-fk-contract-gate.ts` enforces receipt presence when operational data exists.
+
+1. **Transport ON** — HTTP fan-out and/or JetStream consumers delivering `access.tenant.snapshot.v1` to every
+   destination (Channel, Iris, SOFIA, Integration, Knowledge).
+2. **Backfill** — populate local `tenant_snapshots` for every eligible Access tenant:
+
+```text
+pnpm --filter @hyperion/identity-service tenant:projections -- backfill
+```
+
+(Use `reconcile --limit <n>` for bounded gap-fill until the dedicated `backfill` verb is available; drain
+outbox/`dead_letter` as above.) 3. **Per-consumer receipts** — generate a sealed multi-consumer parity receipt with `consumers.*` at
+`coverageBasisPoints` `10000` and zero mismatch/DLQ/conflict fields. The checked-in stub
+`docs/evidence/access-fk-contract-parity-20260720.json` is `provisional-until-harness` and must **not** be
+used as the operational receipt. 4. **Only then apply 009–013** — set env for the pulso-migrations runner:
+
+```text
+PULSO_ACCESS_FK_CONTRACT_RECEIPT=<path-to-sealed-receipt.json>
+PULSO_ACCESS_FK_CONTRACT_RECEIPT_SHA256=<canonical-json-sha256>
+```
+
+Greenfield databases (empty operational tables and empty snapshots) may skip the receipt; any tenant operational
+data refuses the contract migrations without a verified receipt.

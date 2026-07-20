@@ -68,7 +68,8 @@ correctamente en el SHA publicado. El full-stack quedó temporalmente restringid
 ## Wave F — governance hold (2026-07-20)
 
 Estado: **completo como hold documentado** (no como restauración de CI en push). Confirmado vigente tras el
-cierre residual de edge/LUMEN N-1/contracts en catálogo v1.12.0.
+cierre residual de edge/LUMEN N-1 en código; catálogo de deuda en v1.13.0 (reabiertos DEBT-005/023; residuales
+022/024/026).
 
 | Ítem                                                       | Estado                          |
 | ---------------------------------------------------------- | ------------------------------- |
