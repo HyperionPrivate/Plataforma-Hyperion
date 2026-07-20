@@ -93,4 +93,6 @@ los triggers históricos de `push` y `schedule` para el resto de CI.
    ensayo monolítico había quedado obsoleto: mezclaba binarios federados actuales con el esquema global histórico.
    La puerta automática ahora compone `_cell-ci.yml` para Platform, NOVA, LUMEN y PULSO y mantiene una validación
    global del workspace. El ensayo anterior queda como `legacy-monolith-diagnostic.yml`, manual, congelado y no
-   soportado; requiere confirmación explícita y no cuenta como señal de merge readiness.
+   soportado; requiere confirmación explícita y no cuenta como señal de merge readiness. La primera ejecución de la
+   composición federada, `29785646807` sobre `9b664214c0cc244f4c4fe776fa81fbffdb8a8a46`, terminó en verde,
+   incluido su agregador `full-stack / required`.
