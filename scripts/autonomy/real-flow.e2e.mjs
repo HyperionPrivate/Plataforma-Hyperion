@@ -39,6 +39,13 @@ const POLL_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 100;
 const CHANNEL_CONSUMER_PULL_EXPIRES_MS = 1_000;
 const NATS_SECRET_PATTERN = /^[A-Za-z][A-Za-z0-9._~-]{23,}$/;
+const TENANT_PROJECTION_TABLES = Object.freeze([
+  "channel_runtime.tenant_snapshots",
+  "integration_runtime.tenant_snapshots",
+  "agent_runtime.tenant_snapshots",
+  "pulso_iris.tenant_snapshots",
+  "knowledge_runtime.tenant_snapshots"
+]);
 
 let phase = "configuration";
 let failureDiagnostics;
@@ -868,14 +875,30 @@ async function assertRuntimeRole(database, expectedRole) {
 }
 
 async function createSyntheticTenant(adminDb, runId) {
-  const result = await adminDb.query(
-    `insert into platform.tenants (slug, display_name, metadata)
-     values ($1, 'Autonomy E2E synthetic tenant', '{"synthetic":true,"purpose":"autonomy_e2e"}'::jsonb)
-     returning id`,
-    [`autonomy-e2e-${runId}`]
-  );
-  assert.equal(result.rowCount, 1);
-  return result.rows[0].id;
+  return adminDb.transaction(async (transaction) => {
+    const result = await transaction.query(
+      `insert into platform.tenants (slug, display_name, metadata)
+       values ($1, 'Autonomy E2E synthetic tenant', '{"synthetic":true,"purpose":"autonomy_e2e"}'::jsonb)
+       returning id`,
+      [`autonomy-e2e-${runId}`]
+    );
+    assert.equal(result.rowCount, 1);
+
+    const tenantId = result.rows[0].id;
+    const sourceEventId = randomUUID();
+    const payloadHash = createHash("sha256")
+      .update(JSON.stringify({ tenantId, status: "active", sourceVersion: 1, sourceUpdatedAt: EVENT_TIME }))
+      .digest("hex");
+    for (const table of TENANT_PROJECTION_TABLES) {
+      await transaction.query(
+        `insert into ${table} (
+           tenant_id, status, source_event_id, source_version, source_updated_at, payload_hash
+         ) values ($1, 'active', $2, 1, $3, $4)`,
+        [tenantId, sourceEventId, EVENT_TIME, payloadHash]
+      );
+    }
+    return tenantId;
+  });
 }
 
 function syntheticInbound(tenantId, runId) {
@@ -958,6 +981,9 @@ async function cleanupSyntheticTenant(adminDb, auditAdminDb, tenantId) {
     await transaction.query("delete from agent_runtime.job_stream_positions where tenant_id = $1", [tenantId]);
     await transaction.query("delete from agent_runtime.outbox_events where tenant_id = $1", [tenantId]);
     await transaction.query("delete from agent_runtime.inbox_events where tenant_id = $1", [tenantId]);
+    for (const table of TENANT_PROJECTION_TABLES) {
+      await transaction.query(`delete from ${table} where tenant_id = $1`, [tenantId]);
+    }
     await transaction.query("delete from platform.tenants where id = $1", [tenantId]);
   });
 }

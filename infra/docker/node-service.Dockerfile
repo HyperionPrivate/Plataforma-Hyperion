@@ -100,13 +100,14 @@ USER node
 
 CMD ["node", "apps/api-gateway/dist/index.js"]
 
-FROM service-runtime-base AS identity-service
+FROM durable-service-runtime-base AS identity-service
 
 COPY packages/access-migrations/package.json packages/access-migrations/package.json
 COPY packages/platform-contracts/package.json packages/platform-contracts/package.json
 COPY services/identity-service/package.json services/identity-service/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/identity-service..."
 COPY --from=build /app/packages/access-migrations/dist/schema-manifest.js packages/access-migrations/dist/schema-manifest.js
+COPY --from=build /app/packages/access-migrations/dist/role-manifest.js packages/access-migrations/dist/role-manifest.js
 COPY --from=build /app/packages/access-migrations/dist/runtime-boundary.js packages/access-migrations/dist/runtime-boundary.js
 COPY --from=build /app/packages/access-migrations/dist/config.js packages/access-migrations/dist/config.js
 COPY --from=build /app/packages/platform-contracts/dist packages/platform-contracts/dist
@@ -123,6 +124,7 @@ COPY packages/platform-contracts/package.json packages/platform-contracts/packag
 COPY services/tenant-service/package.json services/tenant-service/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter "@hyperion/tenant-service..."
 COPY --from=build /app/packages/access-migrations/dist/schema-manifest.js packages/access-migrations/dist/schema-manifest.js
+COPY --from=build /app/packages/access-migrations/dist/role-manifest.js packages/access-migrations/dist/role-manifest.js
 COPY --from=build /app/packages/access-migrations/dist/runtime-boundary.js packages/access-migrations/dist/runtime-boundary.js
 COPY --from=build /app/packages/access-migrations/dist/config.js packages/access-migrations/dist/config.js
 COPY --from=build /app/packages/platform-contracts/dist packages/platform-contracts/dist
