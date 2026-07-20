@@ -9,6 +9,7 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const composePath = path.join(repositoryRoot, "infra/docker-compose.platform.yml");
 const environmentPath = path.join(repositoryRoot, "infra/platform.env.example");
 const dockerfilePath = path.join(repositoryRoot, "infra/docker/cells/platform.Dockerfile");
+const legacyDockerfilePath = path.join(repositoryRoot, "infra/docker/node-service.Dockerfile");
 const dockerEnvironment = Object.fromEntries(
   [
     "PATH",
@@ -175,6 +176,21 @@ test("Identity and Tenant images receive Access runtime evidence but never migra
   assert.match(runtimeBoundary, /from "\.\/role-manifest\.js"/);
   assert.doesNotMatch(runtimeBoundary, /from "\.\/config\.js"/);
   assert.doesNotMatch(dockerfile, /pnpm -r build/);
+});
+
+test("Full-stack Identity and Tenant images include the complete Access runtime module closure", async () => {
+  const dockerfile = await readFile(legacyDockerfilePath, "utf8");
+  const identityImage = dockerStage(dockerfile, "identity-service");
+  const tenantImage = dockerStage(dockerfile, "tenant-service");
+  for (const runtime of [identityImage, tenantImage]) {
+    assert.match(runtime, /dist\/schema-manifest\.js/);
+    assert.match(runtime, /dist\/role-manifest\.js/);
+    assert.match(runtime, /dist\/runtime-boundary\.js/);
+    assert.doesNotMatch(runtime, /packages\/access-migrations\/sql/);
+    assert.doesNotMatch(runtime, /access-migrations\/dist\/(?:bootstrap[^/]*|runner|index)\.js/);
+  }
+  assert.match(dockerfile, /FROM durable-service-runtime-base AS identity-service/);
+  assert.match(dockerStage(dockerfile, "durable-service-runtime-base"), /packages\/durable-events\/dist/);
 });
 
 test("Access one-shots fence runtime logins before reading target secrets", async () => {

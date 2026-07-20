@@ -142,6 +142,22 @@ test("the real autonomy flow uses the provider-owned Audit database instead of t
   assert.match(source, /cleanupSyntheticTenant\(adminDb, auditAdminDb, tenantId\)/);
 });
 
+test("the autonomy fixture provisions and removes every consumer-owned tenant projection", () => {
+  for (const table of [
+    "channel_runtime.tenant_snapshots",
+    "integration_runtime.tenant_snapshots",
+    "agent_runtime.tenant_snapshots",
+    "pulso_iris.tenant_snapshots",
+    "knowledge_runtime.tenant_snapshots"
+  ]) {
+    assert.match(source, new RegExp(`"${table.replace(".", "\\.")}"`));
+  }
+  assert.match(source, /return adminDb\.transaction\(async \(transaction\) =>/);
+  assert.match(source, /insert into \$\{table\} \(/);
+  assert.match(source, /delete from \$\{table\} where tenant_id = \$1/);
+  assert.ok(source.indexOf("delete from ${table}") < source.indexOf("delete from platform.tenants"));
+});
+
 test("LIWA tenant provisioning requires explicit account and tenant configuration", () => {
   assert.match(liwaBindingSource, /process\.env\.LIWA_ACCOUNT_ID \?\? ""/);
   assert.match(liwaBindingSource, /process\.env\.LIWA_BIND_TENANT_ID \?\? ""/);
