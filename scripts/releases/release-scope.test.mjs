@@ -145,9 +145,9 @@ test("all release CLIs fail closed for an invalid cell before running child rele
   }
 });
 
-// Temporary: full-stack is manual-only while Actions minutes are exhausted.
-// Cell CI still scopes release gates; the global workflow keeps unscoped gates.
-test("cell CI passes scope to both release commands while manual full-stack retains global gates", async () => {
+// Public-repository CI keeps scoped cell gates while full-stack validates the
+// unscoped release model on main, schedule and manual recovery.
+test("cell CI scopes release commands while full-stack retains global gates", async () => {
   const cellWorkflow = await readFile(path.join(repositoryRoot, ".github", "workflows", "_cell-ci.yml"), "utf8");
   assert.match(cellWorkflow, /pnpm release:test -- --cell "\$\{\{ inputs\.cell \}\}"/);
   assert.match(cellWorkflow, /pnpm release:check -- --cell "\$\{\{ inputs\.cell \}\}"/);
@@ -155,8 +155,8 @@ test("cell CI passes scope to both release commands while manual full-stack reta
   const fullWorkflow = await readFile(path.join(repositoryRoot, ".github", "workflows", "check.yml"), "utf8");
   const triggerBlock = fullWorkflow.slice(0, fullWorkflow.indexOf("permissions:"));
   assert.match(triggerBlock, /^\s+workflow_dispatch:/m);
-  assert.doesNotMatch(triggerBlock, /^\s+schedule:/m);
-  assert.doesNotMatch(triggerBlock, /^\s+push:/m);
+  assert.match(triggerBlock, /^\s+schedule:/m);
+  assert.match(triggerBlock, /^\s+push:/m);
   assert.match(fullWorkflow, /run: pnpm release:test\s*$/m);
   assert.match(fullWorkflow, /run: pnpm release:check\s*$/m);
   assert.doesNotMatch(fullWorkflow, /release:(?:test|check) -- --cell/);
