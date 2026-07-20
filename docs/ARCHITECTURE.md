@@ -120,9 +120,12 @@ cada BFF validará localmente mediante JWKS; una caída temporal de Identity no 
 El grant normativo es `tenantId × productId × roles/capabilities`. Las sesiones de navegador se aíslan por origen
 con cookies `HttpOnly`, `Secure` y `SameSite`, sin bearer común en `localStorage`.
 
-El modelo Compose normal no construye ni inicia `api-gateway`. El workflow full-stack se conserva para pushes a
-`main` y ejecuciones programadas; activa `legacy-gateway` explícitamente y levanta dos smoke tests reales: el stack base
-HTTP y el stack con el overlay JetStream. Esto comprueba build, one-shots, healthchecks y convivencia legacy; no
+El modelo Compose normal no construye ni inicia `api-gateway`. El workflow full-stack se conserva como prueba de
+integración y, de forma temporal por límite de minutos de GitHub Actions, solo se dispara mediante
+`workflow_dispatch` (los cell-CI y escaneos de seguridad quedan en `pull_request` + manual, sin `push` ni
+`schedule`). Cuando hay minutos, activa `legacy-gateway` explícitamente y levanta dos smoke tests reales: el stack base
+HTTP y el stack con el overlay JetStream. Mientras tanto, la fuente de verdad es la validación local (`pnpm check` y
+Compose). Esto comprueba build, one-shots, healthchecks y convivencia legacy; no
 convierte el piloto JetStream de un nodo en una configuración productiva ni sustituye un ensayo de upgrade y
 rollback con datos representativos. Un job separado resuelve fail-closed las capacidades del SHA base y ensaya el
 upgrade HTTP exacto N-1→current: sólo una base pre-durable abre compatibilidad temporal y, al volver, valida su

@@ -52,8 +52,8 @@ Evidencia local final sobre el working tree corregido:
 - Gitleaks 8.30.1 verificado por checksum: 199 commits escaneados con `--all`, sin filtraciones.
 
 La aceptación final exige además que los workflows por celda, Gitleaks, CodeQL y container scan terminen
-correctamente en el SHA publicado. El full-stack permanece deliberadamente restringido a `main` y ejecución
-programada por la política federada versionada.
+correctamente en el SHA publicado. El full-stack quedó temporalmente restringido a `workflow_dispatch` (sin
+`push`/`schedule`) por límite de minutos de Actions; la política versionada se restaurará cuando haya cupo.
 
 ## Pendientes externos y posteriores
 

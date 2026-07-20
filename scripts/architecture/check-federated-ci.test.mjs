@@ -356,14 +356,17 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   assert.match(required, /test "\$DATABASE_RESULT" = "success"/);
 });
 
-test("the complete stack is restricted to main and scheduled execution", async () => {
+// Temporary policy (Actions minutes exhausted): full-stack is manual-only.
+// Restore push-to-main + schedule when the Free-plan quota resets or a paid /
+// self-hosted runner path is chosen. Local `pnpm check` remains the gate.
+test("the complete stack is restricted to manual workflow_dispatch", async () => {
   const workflow = await readFile(path.join(workflowRoot, "check.yml"), "utf8");
   const packageManifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const triggerBlock = workflow.slice(0, workflow.indexOf("permissions:"));
+  assert.match(triggerBlock, /^\s+workflow_dispatch:/m);
   assert.doesNotMatch(triggerBlock, /^\s+pull_request:/m);
-  assert.match(triggerBlock, /^\s+schedule:/m);
-  assert.doesNotMatch(triggerBlock, /^\s+workflow_dispatch:/m);
-  assert.match(triggerBlock, /branches:\s*\r?\n\s+- main/);
+  assert.doesNotMatch(triggerBlock, /^\s+schedule:/m);
+  assert.doesNotMatch(triggerBlock, /^\s+push:/m);
   assert.match(workflow, /cancel-in-progress:\s*true/);
   assert.match(workflow, /run:\s*pnpm federation:test\s*$/m);
   assert.doesNotMatch(workflow, /federation:test:cell/);
@@ -392,6 +395,9 @@ test("the complete stack is restricted to main and scheduled execution", async (
   assert.match(dockerJob, /^\s{6}COMPOSE_PARALLEL_LIMIT: 2$/m);
   assert.match(compatibilityJob, /^\s{6}COMPOSE_PARALLEL_LIMIT: 2$/m);
   assert.match(dockerJob, /Generate ephemeral Access signing key[\s\S]*ACCESS_TOKEN_PRIVATE_KEY_PEM/);
+  assert.match(dockerJob, /Generate ephemeral Access signing key[\s\S]*::add-mask::/);
+  assert.match(compatibilityJob, /Generate ephemeral Access signing key[\s\S]*ACCESS_TOKEN_PRIVATE_KEY_PEM/);
+  assert.match(compatibilityJob, /Generate ephemeral Access signing key[\s\S]*::add-mask::/);
 
   const baseStart = dockerJob.indexOf("Start and verify the base HTTP stack");
   const baseDiagnostics = dockerJob.indexOf("Diagnose base HTTP stack failure");
@@ -402,6 +408,10 @@ test("the complete stack is restricted to main and scheduled execution", async (
   assert.match(dockerJob, /if: \$\{\{ failure\(\) && steps\.base_http\.outcome == 'failure' \}\}/);
   assert.match(dockerJob, /if: \$\{\{ failure\(\) && steps\.jetstream\.outcome == 'failure' \}\}/);
   assert.match(dockerJob, /--workdir \/app\/packages\/durable-events/);
+  assert.match(
+    dockerJob,
+    /Diagnose base HTTP stack failure[\s\S]*identity-service:8081[\s\S]*agent-service:8083[\s\S]*api-gateway:8080/
+  );
 
   const ownershipGuard = checkJob.indexOf("Verify service role ownership guard");
   const legacyRoleRestore = checkJob.indexOf("Restore ephemeral service database passwords");
@@ -486,10 +496,16 @@ test("mutating release workflows serialize without cancellation while CI workflo
   assert.deepEqual(invalidConcurrency, []);
 });
 
+// Temporary policy (Actions minutes exhausted): security workflows keep
+// pull_request + workflow_dispatch, but drop push/schedule so merges to main
+// do not burn minutes. Manual dispatch still scans the full history.
 test("security workflows remain eligible as required checks and scan the intended history", async () => {
   const containerScan = await readFile(path.join(workflowRoot, "container-scan.yml"), "utf8");
   const triggerBlock = containerScan.slice(0, containerScan.indexOf("permissions:"));
   assert.match(triggerBlock, /^\s+pull_request:/m);
+  assert.match(triggerBlock, /^\s+workflow_dispatch:/m);
+  assert.doesNotMatch(triggerBlock, /^\s+push:/m);
+  assert.doesNotMatch(triggerBlock, /^\s+schedule:/m);
   assert.doesNotMatch(triggerBlock, /^\s+paths:/m);
   assert.match(containerScan, /name: container images \/ required/);
   assert.match(containerScan, /needs: \[impact, scan\]/);
@@ -497,6 +513,11 @@ test("security workflows remain eligible as required checks and scan the intende
   assert.match(containerScan, /test "\$SCAN_RESULT" = "skipped"/);
 
   const gitleaks = await readFile(path.join(workflowRoot, "gitleaks.yml"), "utf8");
+  const gitleaksTriggers = gitleaks.slice(0, gitleaks.indexOf("permissions:"));
+  assert.match(gitleaksTriggers, /^\s+pull_request:/m);
+  assert.match(gitleaksTriggers, /^\s+workflow_dispatch:/m);
+  assert.doesNotMatch(gitleaksTriggers, /^\s+push:/m);
+  assert.doesNotMatch(gitleaksTriggers, /^\s+schedule:/m);
   assert.match(gitleaks, /EVENT_NAME" == "schedule" \|\| "\$EVENT_NAME" == "workflow_dispatch"/);
   assert.match(gitleaks, /range="--all"/);
 });

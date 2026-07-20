@@ -1,11 +1,10 @@
 name: full-stack
 
+# Temporary: Actions minutes exhausted. Full-stack runs only via manual dispatch
+# until the Free-plan quota resets or a paid/self-hosted path is chosen. Local
+# validation (`pnpm check` + Compose smokes) is the source of truth meanwhile.
 on:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -268,6 +267,11 @@ jobs:
           const delimiter='HYPERION_ACCESS_KEY_'+crypto.randomBytes(12).toString('hex');
           const {privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
           const pem=privateKey.export({format:'pem',type:'pkcs8'}).toString().trimEnd();
+          for (const line of pem.split(/\r?\n/)) {
+            if (line) process.stdout.write('::add-mask::'+line+'\n');
+          }
+          const encoded=pem.replace(/%/g,'%25').replace(/\r/g,'%0D').replace(/\n/g,'%0A');
+          process.stdout.write('::add-mask::'+encoded+'\n');
           fs.appendFileSync(process.env.GITHUB_ENV,'ACCESS_TOKEN_PRIVATE_KEY_PEM<<'+delimiter+'\n'+pem+'\n'+delimiter+'\n',{mode:0o600})"
       - name: Build every deployable base image
         run: docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml build
@@ -284,7 +288,7 @@ jobs:
           compose=(docker compose --env-file .env.example -p hyperion-ci-base -f infra/docker-compose.yml)
           echo '## compose ps --all'
           "${compose[@]}" ps --all || true
-          for service in postgres access-database-bootstrap access-migrations access-role-bootstrap audit-database-bootstrap audit-migrations audit-role-bootstrap identity-service tenant-service audit-service; do
+          for service in postgres access-database-bootstrap access-migrations access-role-bootstrap audit-database-bootstrap audit-migrations audit-role-bootstrap identity-service tenant-service agent-service prompt-flow-service knowledge-service audit-service integration-service pulso-iris-service whatsapp-channel-service lumen-service nova-core-service voice-channel-service liwa-channel-service documents-service nova-bff lumen-bff pulso-bff platform-admin-bff api-gateway; do
             echo "## ${service} State/Health"
             container_id=$("${compose[@]}" ps --all --quiet "$service")
             if [[ -n $container_id ]]; then
@@ -293,7 +297,7 @@ jobs:
             echo "## ${service} logs"
             "${compose[@]}" logs --no-color --tail=160 "$service" || true
           done
-          for runtime in identity-service:8081 tenant-service:8082 audit-service:8086; do
+          for runtime in identity-service:8081 tenant-service:8082 agent-service:8083 prompt-flow-service:8084 knowledge-service:8085 audit-service:8086 integration-service:8087 pulso-iris-service:8088 whatsapp-channel-service:8089 lumen-service:8090 nova-core-service:8091 voice-channel-service:8092 liwa-channel-service:8093 documents-service:8094 nova-bff:8095 lumen-bff:8096 pulso-bff:8097 platform-admin-bff:8098 api-gateway:8080; do
             service=${runtime%%:*}
             port=${runtime##*:}
             echo "## ${service} /ready"
@@ -425,6 +429,19 @@ jobs:
           persist-credentials: false
       - name: Materialize current allowlisted Docker contexts
         run: node scripts/docker/generate-cell-contexts.mjs
+      - name: Generate ephemeral Access signing key
+        shell: bash
+        run: |
+          node -e "const fs=require('node:fs');const crypto=require('node:crypto');
+          const delimiter='HYPERION_ACCESS_KEY_'+crypto.randomBytes(12).toString('hex');
+          const {privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
+          const pem=privateKey.export({format:'pem',type:'pkcs8'}).toString().trimEnd();
+          for (const line of pem.split(/\r?\n/)) {
+            if (line) process.stdout.write('::add-mask::'+line+'\n');
+          }
+          const encoded=pem.replace(/%/g,'%25').replace(/\r/g,'%0D').replace(/\n/g,'%0A');
+          process.stdout.write('::add-mask::'+encoded+'\n');
+          fs.appendFileSync(process.env.GITHUB_ENV,'ACCESS_TOKEN_PRIVATE_KEY_PEM<<'+delimiter+'\n'+pem+'\n'+delimiter+'\n',{mode:0o600})"
       - name: Resolve exact N-1 revision
         id: n1_base
         shell: bash

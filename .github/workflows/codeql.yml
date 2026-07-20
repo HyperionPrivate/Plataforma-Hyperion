@@ -3,14 +3,10 @@ name: Security / CodeQL
 on:
   # Private Free repositories cannot upload to Code Scanning, but CodeQL can
   # still produce a reviewable SARIF artifact without hiding analysis errors.
+  # Temporary: no push/schedule while Actions minutes are exhausted. PR + manual only.
   pull_request:
     branches:
       - main
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: "17 8 * * 2"
   workflow_dispatch:
 
 permissions:
