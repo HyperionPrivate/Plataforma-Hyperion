@@ -65,24 +65,27 @@ correctamente en el SHA publicado. El full-stack quedó temporalmente restringid
 5. ~~Retirar gateway/edge de compatibilidad~~ — cerrado en código (DEBT-020/023/032, 2026-07-20). Pendiente ops:
    cutover CEDCO/global migrator (DEBT-022), registry SemVer (DEBT-024), HA/offsite LUMEN (DEBT-026).
 
-## Wave F — governance hold (2026-07-20)
+## Wave F — canary restoration (2026-07-20)
 
-Estado: **completo como hold documentado** (no como restauración de CI en push). Confirmado vigente tras el
-cierre residual de edge/LUMEN N-1 en código; catálogo de deuda en v1.13.0 (reabiertos DEBT-005/023; residuales
-022/024/026).
+Estado: **hold desbloqueado y restauración gradual iniciada**. El repositorio es público, GitHub Actions está
+habilitado con acciones fijadas por SHA y `main` está protegida con checks obligatorios, historial lineal,
+administradores incluidos y force-push/eliminación bloqueados. `pulso-cell` es el único canario con `push` a
+`main`; los demás workflows conservan sus triggers anteriores hasta que el canario cierre en verde.
 
-| Ítem                                                       | Estado                          |
-| ---------------------------------------------------------- | ------------------------------- |
-| Local-first (`pnpm check` / Compose) como fuente de verdad | vigente                         |
-| Workflows solo `workflow_dispatch` + `pull_request`        | verificado                      |
-| Restaurar `on.push` / `schedule`                           | **bloqueado** por cuota Actions |
-| Org rulesets / branch protection                           | pendiente externo               |
+| Ítem                                                       | Estado                        |
+| ---------------------------------------------------------- | ----------------------------- |
+| Local-first (`pnpm check` / Compose) como fuente de verdad | vigente                       |
+| Workflows solo `workflow_dispatch` + `pull_request`        | verificado                    |
+| Restaurar `on.push` / `schedule`                           | canario `pulso-cell` en curso |
+| Org rulesets / branch protection                           | branch protection aplicada    |
 
-### Criterios de desbloqueo (externos)
+### Criterios de avance
 
-1. Cupo GitHub Actions recuperado (org billing / minutes).
-2. Transferencia a Organization con rulesets en `main` (require status checks, block force-push).
-3. Sólo entonces reintroducir `push`/`schedule` en `check.yml` y cells, empezando por `workflow_dispatch`+`push` en
-   un único cell workflow de canario.
+1. ~~Cupo GitHub Actions recuperado (org billing / minutes).~~ Resuelto al hacer público el repositorio; los runners
+   estándar alojados por GitHub no consumen cuota de minutos.
+2. ~~Transferencia a Organization con rulesets en `main` (require status checks, block force-push).~~ Resuelto con
+   branch protection y checks requeridos.
+3. Reintroducir `push`/`schedule` de forma gradual: primero `pulso-cell`, observar su ejecución sobre el merge y
+   sólo después ampliar a las otras celdas, seguridad y full-stack.
 
-No reactivar triggers de push/schedule mientras el hold esté vigente.
+No ampliar triggers hasta que el canario de `pulso-cell` termine correctamente sobre `main`.
