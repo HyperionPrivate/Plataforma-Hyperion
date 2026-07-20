@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   authorizeLegacyProductRequest,
   isLegacyCustomerProductId,
+  isLegacyGatewayEnabled,
   LEGACY_PRODUCT_POLICY_SNAPSHOT_VERSION,
   LEGACY_TENANT_ROUTE_POLICIES,
   readLegacyProductRequestScope
@@ -28,6 +29,12 @@ function grant(productId: string, roles: string[], capabilities: string[]): Prod
 }
 
 describe("frozen legacy gateway policy", () => {
+  it("defaults LEGACY_GATEWAY_ENABLED to fail-closed", () => {
+    expect(isLegacyGatewayEnabled({})).toBe(false);
+    expect(isLegacyGatewayEnabled({ LEGACY_GATEWAY_ENABLED: "true" })).toBe(true);
+    expect(isLegacyGatewayEnabled({ LEGACY_GATEWAY_ENABLED: "false" })).toBe(false);
+  });
+
   it("pins the complete N-1 route inventory without provider imports", () => {
     expect(LEGACY_PRODUCT_POLICY_SNAPSHOT_VERSION).toBe(1);
     expect(LEGACY_TENANT_ROUTE_POLICIES).toHaveLength(139);

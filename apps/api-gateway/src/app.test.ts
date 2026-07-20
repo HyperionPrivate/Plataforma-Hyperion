@@ -170,6 +170,8 @@ beforeAll(async () => {
   delete process.env.DATABASE_URL;
   Object.assign(process.env, isolatedServiceUrls);
   process.env.GATEWAY_OPERATOR_ASSERTION_KEY = OPERATOR_ASSERTION_KEY;
+  // Suite exercises the frozen N-1 facade; production default remains fail-closed.
+  process.env.LEGACY_GATEWAY_ENABLED = "true";
   const handle = await createService({
     serviceName: "api-gateway",
     databaseRequired: false,

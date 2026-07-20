@@ -7,6 +7,7 @@
     "channel_runtime",
     "agent_runtime",
     "integration_runtime",
+    "knowledge_runtime",
     "audit_runtime",
     "lumen",
     "nova",
@@ -28,44 +29,146 @@
         "expiresAt": "2026-10-31",
         "roots": ["packages/migrations/sql", "packages/platform-migrations/sql"]
       },
-      { "id": "access", "roots": ["packages/access-migrations/sql"] },
-      { "id": "audit", "roots": ["packages/audit-migrations/sql"] },
-      { "id": "nova", "roots": ["packages/nova-migrations/sql"] },
-      { "id": "lumen", "roots": ["packages/lumen-migrations/sql"] },
-      { "id": "pulso", "roots": ["packages/pulso-migrations/sql"] }
+      {
+        "id": "access",
+        "roots": ["packages/access-migrations/sql"]
+      },
+      {
+        "id": "audit",
+        "roots": ["packages/audit-migrations/sql"]
+      },
+      {
+        "id": "nova",
+        "roots": ["packages/nova-migrations/sql"]
+      },
+      {
+        "id": "lumen",
+        "roots": ["packages/lumen-migrations/sql"]
+      },
+      {
+        "id": "pulso",
+        "roots": ["packages/pulso-migrations/sql"]
+      }
     ],
     "excludePathContains": [".test.", ".spec.", "/fixtures/"]
   },
   "pathOwners": [
-    { "prefix": "apps/api-gateway/", "owner": "edge-gateway" },
-    { "prefix": "apps/web-console/", "owner": "web-console" },
-    { "prefix": "apps/coopfuturo-console/", "owner": "nova-experience" },
-    { "prefix": "services/identity-service/", "owner": "access" },
-    { "prefix": "services/tenant-service/", "owner": "access" },
-    { "prefix": "services/agent-service/", "owner": "sofia-automation" },
-    { "prefix": "services/prompt-flow-service/", "owner": "sofia-automation" },
-    { "prefix": "services/knowledge-service/", "owner": "knowledge" },
-    { "prefix": "services/audit-service/", "owner": "audit" },
-    { "prefix": "services/integration-service/", "owner": "integration-adapter" },
-    { "prefix": "services/pulso-iris-service/", "owner": "pulso-core" },
-    { "prefix": "services/whatsapp-channel-service/", "owner": "channel" },
-    { "prefix": "services/lumen-service/", "owner": "lumen" },
-    { "prefix": "services/nova-core-service/", "owner": "nova-core" },
-    { "prefix": "services/voice-channel-service/", "owner": "voice" },
-    { "prefix": "services/liwa-channel-service/", "owner": "liwa" },
-    { "prefix": "services/documents-service/", "owner": "documents" },
-    { "prefix": "packages/nova-contracts/", "owner": "nova-core" },
-    { "prefix": "packages/nova-config/", "owner": "nova-core" },
-    { "prefix": "packages/nova-durable-events/", "owner": "nova-core" },
-    { "prefix": "packages/nova-service-runtime/", "owner": "nova-core" },
-    { "prefix": "packages/audit-migrations/", "owner": "audit" },
-    { "prefix": "packages/access-migrations/", "owner": "access" },
-    { "prefix": "packages/platform-migrations/", "owner": "access" },
-    { "prefix": "packages/nova-migrations/", "owner": "nova-core" },
-    { "prefix": "packages/lumen-migrations/", "owner": "lumen" },
-    { "prefix": "packages/pulso-migrations/", "owner": "pulso-core" },
-    { "prefix": "packages/migrations/", "owner": "migration-control" },
-    { "prefix": "packages/", "owner": "shared-packages" }
+    {
+      "prefix": "apps/api-gateway/",
+      "owner": "edge-gateway"
+    },
+    {
+      "prefix": "apps/web-console/",
+      "owner": "web-console"
+    },
+    {
+      "prefix": "apps/coopfuturo-console/",
+      "owner": "nova-experience"
+    },
+    {
+      "prefix": "services/identity-service/",
+      "owner": "access"
+    },
+    {
+      "prefix": "services/tenant-service/",
+      "owner": "access"
+    },
+    {
+      "prefix": "services/agent-service/",
+      "owner": "sofia-automation"
+    },
+    {
+      "prefix": "services/prompt-flow-service/",
+      "owner": "sofia-automation"
+    },
+    {
+      "prefix": "services/knowledge-service/",
+      "owner": "knowledge"
+    },
+    {
+      "prefix": "services/audit-service/",
+      "owner": "audit"
+    },
+    {
+      "prefix": "services/integration-service/",
+      "owner": "integration-adapter"
+    },
+    {
+      "prefix": "services/pulso-iris-service/",
+      "owner": "pulso-core"
+    },
+    {
+      "prefix": "services/whatsapp-channel-service/",
+      "owner": "channel"
+    },
+    {
+      "prefix": "services/lumen-service/",
+      "owner": "lumen"
+    },
+    {
+      "prefix": "services/nova-core-service/",
+      "owner": "nova-core"
+    },
+    {
+      "prefix": "services/voice-channel-service/",
+      "owner": "voice"
+    },
+    {
+      "prefix": "services/liwa-channel-service/",
+      "owner": "liwa"
+    },
+    {
+      "prefix": "services/documents-service/",
+      "owner": "documents"
+    },
+    {
+      "prefix": "packages/nova-contracts/",
+      "owner": "nova-core"
+    },
+    {
+      "prefix": "packages/nova-config/",
+      "owner": "nova-core"
+    },
+    {
+      "prefix": "packages/nova-durable-events/",
+      "owner": "nova-core"
+    },
+    {
+      "prefix": "packages/nova-service-runtime/",
+      "owner": "nova-core"
+    },
+    {
+      "prefix": "packages/audit-migrations/",
+      "owner": "audit"
+    },
+    {
+      "prefix": "packages/access-migrations/",
+      "owner": "access"
+    },
+    {
+      "prefix": "packages/platform-migrations/",
+      "owner": "access"
+    },
+    {
+      "prefix": "packages/nova-migrations/",
+      "owner": "nova-core"
+    },
+    {
+      "prefix": "packages/lumen-migrations/",
+      "owner": "lumen"
+    },
+    {
+      "prefix": "packages/pulso-migrations/",
+      "owner": "pulso-core"
+    },
+    {
+      "prefix": "packages/migrations/",
+      "owner": "migration-control"
+    },
+    {
+      "prefix": "packages/",
+      "owner": "shared-packages"
+    }
   ],
   "temporaryExceptions": [
     {
@@ -73,69 +176,6 @@
       "justification": "El bootstrap forward-only PULSO valida temporalmente el marker owner-owned de SOFÍA hasta separar su control-plane y cerrar DEBT-027.",
       "owner": "pulso-data",
       "issue": "HYP-DEBT-027",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.resolve_legacy_channel_inbox_position|pulso-core->channel|read|table|channel_runtime.outbox_event_positions",
-      "justification": "Excepción temporal N-1 (038): el adaptador v1 reconstruye posición desde el ledger Channel hasta retirar escritores legacy.",
-      "owner": "pulso-core",
-      "issue": "HYP-DEBT-018",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.resolve_legacy_channel_inbox_position|pulso-core->channel|read|table|channel_runtime.outbox_events",
-      "justification": "Excepción temporal N-1 (038): el adaptador v1 reconstruye posición desde el ledger Channel hasta retirar escritores legacy.",
-      "owner": "pulso-core",
-      "issue": "HYP-DEBT-018",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.prepare_legacy_message_source_position|pulso-core->channel|read|table|channel_runtime.outbox_event_positions",
-      "justification": "Excepción temporal N-1 (038): el adaptador v1 de mensajes PULSO consulta el ledger Channel; se retira con los escritores v1.",
-      "owner": "pulso-core",
-      "issue": "HYP-DEBT-018",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.prepare_legacy_message_source_position|pulso-core->channel|read|table|channel_runtime.outbox_events",
-      "justification": "Excepción temporal N-1 (038): el adaptador v1 de mensajes PULSO consulta el ledger Channel; se retira con los escritores v1.",
-      "owner": "pulso-core",
-      "issue": "HYP-DEBT-018",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|agent_runtime.resolve_legacy_pulso_inbox_position|sofia-automation->pulso-core|read|table|pulso_iris.outbox_event_positions",
-      "justification": "Excepción temporal N-1 (038): el adaptador SOFÍA v1 lee el ledger PULSO; se retira con los escritores v1.",
-      "owner": "pulso-sofia",
-      "issue": "HYP-DEBT-019",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "plpgsql-sql-access|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|agent_runtime.resolve_legacy_pulso_inbox_position|sofia-automation->pulso-core|read|table|pulso_iris.outbox_events",
-      "justification": "Excepción temporal N-1 (038): el adaptador SOFÍA v1 lee el ledger PULSO; se retira con los escritores v1.",
-      "owner": "pulso-sofia",
-      "issue": "HYP-DEBT-019",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "security-definer-cross-owner|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.resolve_legacy_channel_inbox_position",
-      "justification": "SECURITY DEFINER requerido por el adaptador N-1 038; se retira con la excepción PL/pgSQL asociada.",
-      "owner": "pulso-core",
-      "issue": "HYP-DEBT-018",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "security-definer-cross-owner|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|pulso_iris.prepare_legacy_message_source_position",
-      "justification": "SECURITY DEFINER requerido por el adaptador N-1 038; se retira con la excepción PL/pgSQL asociada.",
-      "owner": "pulso-core",
-      "issue": "HYP-DEBT-018",
-      "expiresAt": "2026-10-31"
-    },
-    {
-      "id": "security-definer-cross-owner|packages/migrations/sql/038-n-minus-one-durable-event-compatibility.sql|agent_runtime.resolve_legacy_pulso_inbox_position",
-      "justification": "SECURITY DEFINER requerido por el adaptador N-1 038; se retira con la excepción PL/pgSQL asociada.",
-      "owner": "pulso-sofia",
-      "issue": "HYP-DEBT-019",
       "expiresAt": "2026-10-31"
     }
   ],
@@ -251,6 +291,8 @@
     "agent_runtime.access_projection_inbox": "sofia-automation",
     "integration_runtime.tenant_snapshots": "integration-adapter",
     "integration_runtime.access_projection_inbox": "integration-adapter",
+    "knowledge_runtime.tenant_snapshots": "knowledge",
+    "knowledge_runtime.access_projection_inbox": "knowledge",
     "lumen.service_migrations": "lumen",
     "lumen.schema_version": "lumen",
     "lumen.migration_ledger": "lumen",

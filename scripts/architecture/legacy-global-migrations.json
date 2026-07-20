@@ -1,11 +1,20 @@
 {
   "version": 3,
   "algorithm": "sha256",
-  "policy": "Frozen historical global migrator. Remove entries when migrations move to a cell-owned migrator; never add entries or edit a listed file in place. A detected historical finding is accepted only when this catalog binds its exact occurrence count to exact bytes and to live debt metadata.",
+  "policy": "Frozen historical global migrator through 046. Append-only contract migrations 047+ may be added to clear boundary debt; never edit a listed file in place. A detected historical finding is accepted only when this catalog binds its exact occurrence count to exact bytes and to live debt metadata.",
   "files": [
-    { "name": "001-platform.sql", "sha256": "e67a4c5e0b76ba4ded1c232ac866e7f71750dd8e418664ad9e275a14028fca14" },
-    { "name": "002-pulso-iris.sql", "sha256": "b75fa87ef761a463f9e588b21834d6ddddd0d389c210156d43b9d7225b9e5af5" },
-    { "name": "003-identity-auth.sql", "sha256": "ec667bbe9aa76c9daae4841cac9fdd21f82093c88d3d0f2e529b4a9545b1aaa4" },
+    {
+      "name": "001-platform.sql",
+      "sha256": "e67a4c5e0b76ba4ded1c232ac866e7f71750dd8e418664ad9e275a14028fca14"
+    },
+    {
+      "name": "002-pulso-iris.sql",
+      "sha256": "b75fa87ef761a463f9e588b21834d6ddddd0d389c210156d43b9d7225b9e5af5"
+    },
+    {
+      "name": "003-identity-auth.sql",
+      "sha256": "ec667bbe9aa76c9daae4841cac9fdd21f82093c88d3d0f2e529b4a9545b1aaa4"
+    },
     {
       "name": "004-cedco-catalog.sql",
       "sha256": "b955d100a482a92e0cb4edf483e296e6914e6d52e4ee85989d57a217e0e0ed8d",
@@ -29,7 +38,10 @@
       "name": "006-tenant-isolation.sql",
       "sha256": "d69e08477d1acb95249d3ede9d46c796de8e2300f5c224ceee3a63291dcd39eb"
     },
-    { "name": "007-operator-roles.sql", "sha256": "ffdd95ee52be25c43149a848c202cfbc0056093fff16be861514a385c4783484" },
+    {
+      "name": "007-operator-roles.sql",
+      "sha256": "ffdd95ee52be25c43149a848c202cfbc0056093fff16be861514a385c4783484"
+    },
     {
       "name": "008-agenda-configuration.sql",
       "sha256": "9daab2e9ae80ceecde3ef58c862c0616a64e64006944600b91198770cdee76d3"
@@ -38,7 +50,10 @@
       "name": "009-agenda-slot-engine.sql",
       "sha256": "cb7e04bdf7804ebcd7cff4bd1fe382fe52d09363b210530ebe09f29a752da235"
     },
-    { "name": "010-agenda-rules.sql", "sha256": "e8376e5318c65870cd3d6ca316de3445b0767fcbb4b8027b4544f5e775fe86f1" },
+    {
+      "name": "010-agenda-rules.sql",
+      "sha256": "e8376e5318c65870cd3d6ca316de3445b0767fcbb4b8027b4544f5e775fe86f1"
+    },
     {
       "name": "011-configurable-agenda.sql",
       "sha256": "22d95ed57fc6e464fc96d1abe140cddc4c097cc537e873fbc73465b8aa101620"
@@ -91,7 +106,10 @@
       "name": "022-channel-inbound-outbox-fence.sql",
       "sha256": "f70e0234604a71a9076bd8a8c5210accd20691090fde220952de7eaa737589ca"
     },
-    { "name": "022-lumen-autonomy.sql", "sha256": "58413dbf80b3dfdbd5ee035acaeb88b8f859f73589fd259745e05a67f529c26f" },
+    {
+      "name": "022-lumen-autonomy.sql",
+      "sha256": "58413dbf80b3dfdbd5ee035acaeb88b8f859f73589fd259745e05a67f529c26f"
+    },
     {
       "name": "023-channel-inbound-outbox-backfill.sql",
       "sha256": "56aaed132975cbbd3f12e252b315dc5ee448e6f75d868f75f70eb26ddcd67cfa"
@@ -191,6 +209,30 @@
     {
       "name": "046-pulso-channel-delivery-inbox-contract.sql",
       "sha256": "0bc1df0464dda2dfd9ed1e965b4c6dba152505aca8cd5a33e62e1332d857d656"
+    },
+    {
+      "name": "047-contract-channel-access-tenant-fks.sql",
+      "sha256": "907174b3f77255496a12b19524aecb4da71a3274f16118b0fa594858bb8dce96"
+    },
+    {
+      "name": "048-contract-integration-access-tenant-fks.sql",
+      "sha256": "7818eb86ae545253126b18e41cea96182f93e762615934014486082fcce9e2a4"
+    },
+    {
+      "name": "049-contract-sofia-access-tenant-fks.sql",
+      "sha256": "418088b37e6a6f5b4b2e39591f02dd28a06ebeffe9b174e9e1ab1b27dde9f550"
+    },
+    {
+      "name": "050-contract-iris-access-tenant-fks.sql",
+      "sha256": "12a6730d8313f2758b1b6149625aded2f83de5b7d25e8d344bd5b5de0a38a58b"
+    },
+    {
+      "name": "051-contract-knowledge-access-tenant-fks.sql",
+      "sha256": "89485b99c8e826892b32ac021ca0d93c37c58f9c9cee9a908f174596a72db7ee"
+    },
+    {
+      "name": "052-drop-n-minus-one-legacy-adapters.sql",
+      "sha256": "516cfe15a56c4263665394f6f27d85012b97aee0c9eb7b6778a7194f62e751a8"
     }
   ]
 }

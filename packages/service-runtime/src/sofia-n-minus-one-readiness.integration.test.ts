@@ -16,8 +16,8 @@ const CURRENT_SOFIA_REQUIREMENT = Object.freeze<SchemaVersionRequirement>({
   minimumVersion: 2
 });
 const CURRENT_PULSO_MARKER = Object.freeze({
-  currentVersion: 7,
-  migrationName: "007-access-integration-tenant-projection.sql"
+  currentVersion: 15,
+  migrationName: "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
 });
 const CURRENT_SOFIA_MARKER = Object.freeze({
   currentVersion: 2,

@@ -14,6 +14,24 @@ import {
  */
 export const LEGACY_PRODUCT_POLICY_SNAPSHOT_VERSION = 1 as const;
 
+/** Fail-closed default for the multiproduct facade (DEBT-020 / 023 / 032). */
+export function isLegacyGatewayEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.LEGACY_GATEWAY_ENABLED?.trim().toLowerCase() === "true";
+}
+
+export const legacyGatewayTelemetry = {
+  deprecatedRouteHits: 0,
+  disabledRejects: 0
+};
+
+export function noteLegacyGatewayDeprecatedHit(): void {
+  legacyGatewayTelemetry.deprecatedRouteHits += 1;
+}
+
+export function noteLegacyGatewayDisabledReject(): void {
+  legacyGatewayTelemetry.disabledRejects += 1;
+}
+
 export type LegacyHttpMethod = "GET" | "HEAD" | "POST" | "PATCH" | "PUT";
 export type LegacyCustomerProductId = "NOVA" | "LUMEN" | "PULSO_IRIS";
 

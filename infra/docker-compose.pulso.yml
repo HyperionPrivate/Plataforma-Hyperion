@@ -182,6 +182,7 @@ services:
       SERVICE_VERSION: ${PULSO_KNOWLEDGE_SERVICE_VERSION:-0.1.0}
       DATABASE_URL: *knowledge-database-url
       EXPECTED_DATABASE_ROLE: hyperion_knowledge
+      ACCESS_TO_KNOWLEDGE_TOKEN: ${ACCESS_TO_KNOWLEDGE_TOKEN:-}
       PORT: 8085
     expose: ["8085"]
     healthcheck: *node-readycheck

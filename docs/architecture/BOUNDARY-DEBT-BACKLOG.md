@@ -58,25 +58,26 @@ servicio. El baseline autónomo no contiene el trigger y DEBT-028 quedó retirad
 de PULSO sin credenciales ni migraciones de NOVA/LUMEN. La cadena global 001–046 queda congelada sólo como camino de
 compatibilidad hasta terminar el cutover.
 
-Esto no equivale a una frontera de datos limpia. El detector procesa cada base lógica como un estado efectivo
-independiente y encuentra en `001-pulso-autonomous-baseline.sql` 46 grupos adicionales: 37 FKs hacia las tablas
-locales `platform.tenants`/`platform.products`, seis lecturas PL/pgSQL entre owners y tres funciones
-`SECURITY DEFINER` de compatibilidad N-1. No están en `temporaryExceptions`: DEBT-001–DEBT-005 cubren las aristas de
-FK y DEBT-029–DEBT-031 registran los adaptadores efectivos con owner, issue y vencimiento 2026-10-31.
+### Cortes completados (2026-07-20): proyecciones Access, contracts FK y N-1
 
-1. **FKs históricas a `platform.tenants`**
-   - Sustituir las 37 FKs del baseline autónomo por identificadores/proyecciones locales mediante
-     expand/migrate/contract; no reescribir migraciones aplicadas (checksums).
-2. **Adaptadores N-1 dentro del baseline autónomo**
-   - Retirar las seis lecturas cruzadas y tres funciones `SECURITY DEFINER` de DEBT-029–DEBT-031 al cerrar los
-     escritores v1; las excepciones de la cadena global 038 vencen en la misma fecha, pero son registros distintos.
-3. **Retiro de la pila global PULSO**
-   - Mover los workloads restantes a la base provider-owned, observar telemetría y retirar grants, roles y el camino
-     de migración global conservado por compatibilidad.
-4. **Contract del marker SOFÍA**
-   - Después de publicar una baseline N−1 por digest y completar el rehearsal current↔N−1, revocar a
-     `hyperion_sofia` tanto `USAGE ON SCHEMA pulso_iris` como `SELECT ON pulso_iris.schema_version` mediante una
-     migración append-only. Sólo entonces puede cerrarse esa porción de DEBT-027.
+Tip provider-owned PULSO: `15/015-revoke-sofia-pulso-iris-control-plane-grants.sql`. Channel, Iris, SOFIA,
+Integration y Knowledge tienen expand+migrate+contract (proyecciones locales + DROP append-only de FKs a
+`platform.tenants` en `009`–`013`, espejo global `047`–`051`). Los adaptadores N-1 del baseline autónomo y de
+038 se retiraron en `014`/`052`. Los grants Iris de SOFÍA se revocaron en `015`. DEBT-001–005, 018/019 y
+029–031 salieron del catálogo; el baseline efectivo quedó en una violación residual
+(`service-runtime` → `platform.schema_migrations`, DEBT-010).
+
+Cola residual abierta:
+
+1. **DEBT-027 (parcial)** — `roles.ts` aún lee el marker owner-owned de SOFÍA; grants Iris N−1 ya revocados.
+2. **Retiro de la pila global PULSO (DEBT-022)** — cutover de workloads restantes, telemetría y retiro del camino
+   `001–046`/CEDCO documentado en `docs/operations/GLOBAL-MIGRATOR-CUTOVER.md`.
+3. **DEBT-010** — retirar la API de readiness del ledger legacy en `@hyperion/service-runtime` cuando Audit y
+   demás consumidores dejen de usarla.
+4. **Edge / LUMEN / registry (DEBT-020–026, 032)** — gates fail-closed y evidencia en `docs/evidence/`; cutover
+   operativo y publish registry pendientes de entorno/credenciales.
+5. **Gobernanza CI (Wave F)** — hold local-first: no restaurar `push`/`schedule` hasta haber cupo Actions; rulesets
+   de Organization pendientes (`docs/audits/federation-ci-hardening-20260719.md`).
 
 ## Regla
 

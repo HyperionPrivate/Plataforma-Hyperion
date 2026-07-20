@@ -85,7 +85,7 @@ test("the checked-in real rehearsal receipt has a valid canonical seal", async (
   assert.match(receipt.provenance.source.revision, /^[a-f0-9]{40}$/);
   assert.equal(typeof receipt.provenance.source.workingTreeDirty, "boolean");
   // The checked-in receipt seals the harness used in that Docker rehearsal. Append-only
-  // PULSO tip migrations (Iris 005 / SOFIA 006 / Integration 007) may advance the live harness without replaying acceptance.
+  // PULSO tip migrations (Iris 005 / SOFIA 006 / Integration 007 / Knowledge 008) may advance the live harness without replaying acceptance.
   assert.match(receipt.provenance.source.harnessSha256, /^[a-f0-9]{64}$/);
   assert.match(
     createHash("sha256")
@@ -176,6 +176,7 @@ test("the real boundary rehearsal is opt-in, isolated and preserves exact eviden
   assert.match(source, /005-access-iris-tenant-projection\.sql/);
   assert.match(source, /006-access-sofia-tenant-projection\.sql/);
   assert.match(source, /007-access-integration-tenant-projection\.sql/);
+  assert.match(source, /015-revoke-sofia-pulso-iris-control-plane-grants\.sql/);
   assert.match(source, /container", "rm", "--force", "--volumes"/);
   assert.match(source, /removeExactAcceptanceResources/);
   assert.match(source, /waitForChildExit/);

@@ -162,7 +162,7 @@ test("records exact Docker inventory and rejects any mutation of a preexisting c
   );
 });
 
-test("pins the provider ledger to PULSO migrations 001 through 007 without pinning mutable hashes", () => {
+test("pins the provider ledger to PULSO migrations 001 through 015 without pinning mutable hashes", () => {
   assert.deepEqual(expectedMigrationFiles(), EXPECTED_MIGRATIONS);
   assert.doesNotThrow(() => assertPulsoCatalogEvidence(validCatalogEvidence));
   assert.throws(
@@ -175,7 +175,7 @@ test("pins the provider ledger to PULSO migrations 001 through 007 without pinni
   );
 });
 
-test("requires global version 7, owner-local SOFIA version 2, all provider schemas and exact database ACL", () => {
+test("requires global version 15, owner-local SOFIA version 2, all provider schemas and exact database ACL", () => {
   assert.throws(
     () =>
       assertPulsoCatalogEvidence({
@@ -245,8 +245,8 @@ test("requires successful least-privilege connections for all five runtime roles
     const fields = runtimeStates[role].split("\t");
     assert.equal(
       fields[4],
-      "true",
-      `${role} must read the current global marker; only SOFIA classifies that grant as N-1 compatibility`
+      role === "hyperion_sofia" ? "false" : "true",
+      `${role} global marker SELECT after tip 015 (SOFIA revoked)`
     );
     assert.equal(fields[5], role === "hyperion_sofia" ? "true" : "false", `${role} owner-local marker SELECT`);
   }

@@ -465,8 +465,8 @@ export async function runAccessChannelAcceptance(environment = process.env, opti
 
     const ledgers = await readLedgers(accessFixtureDb, pulsoFixtureDb);
     assert.equal(ledgers.access.at(-1)?.name, "004-access-tenant-lifecycle-integrity.sql");
-    // Channel projection lands at 004; tip also applies Iris 005 and SOFIA 006.
-    assert.equal(ledgers.pulso.at(-1)?.name, "007-access-integration-tenant-projection.sql");
+    // Channel projection lands at 004; tip also applies Iris 005 / SOFIA 006 / Integration 007 / Knowledge 008.
+    assert.equal(ledgers.pulso.at(-1)?.name, "015-revoke-sofia-pulso-iris-control-plane-grants.sql");
     assert.ok(
       ledgers.pulso.some((entry) => entry.name === "004-access-channel-tenant-projection.sql"),
       "Access→Channel projection 004 must remain in the PULSO ledger"
@@ -478,6 +478,10 @@ export async function runAccessChannelAcceptance(environment = process.env, opti
     assert.ok(
       ledgers.pulso.some((entry) => entry.name === "006-access-sofia-tenant-projection.sql"),
       "Access→SOFIA projection 006 must remain in the PULSO ledger"
+    );
+    assert.ok(
+      ledgers.pulso.some((entry) => entry.name === "007-access-integration-tenant-projection.sql"),
+      "Access→Integration projection 007 must remain in the PULSO ledger"
     );
 
     acceptanceResult = {

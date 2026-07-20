@@ -6,17 +6,26 @@ export const PULSO_PROVIDER_SCHEMAS = [
   "pulso_iris",
   "agent_runtime",
   "channel_runtime",
-  "integration_runtime"
+  "integration_runtime",
+  "knowledge_runtime"
 ] as const;
 export const PULSO_LEGACY_SCHEMA_VERSION = 1;
-export const PULSO_CURRENT_SCHEMA_VERSION = 7;
+export const PULSO_CURRENT_SCHEMA_VERSION = 15;
 export const PULSO_BASELINE_MIGRATION = "001-pulso-autonomous-baseline.sql";
 export const PULSO_RUNTIME_ROLES_MIGRATION = "002-pulso-runtime-roles.sql";
 export const SOFIA_READINESS_MIGRATION = "003-sofia-readiness-marker.sql";
 export const PULSO_CHANNEL_PROJECTION_MIGRATION = "004-access-channel-tenant-projection.sql";
 export const PULSO_IRIS_PROJECTION_MIGRATION = "005-access-iris-tenant-projection.sql";
 export const PULSO_SOFIA_PROJECTION_MIGRATION = "006-access-sofia-tenant-projection.sql";
-export const PULSO_CURRENT_MIGRATION = "007-access-integration-tenant-projection.sql";
+export const PULSO_INTEGRATION_PROJECTION_MIGRATION = "007-access-integration-tenant-projection.sql";
+export const PULSO_KNOWLEDGE_PROJECTION_MIGRATION = "008-access-knowledge-tenant-projection.sql";
+export const PULSO_CHANNEL_CONTRACT_MIGRATION = "009-contract-channel-access-tenant-fks.sql";
+export const PULSO_INTEGRATION_CONTRACT_MIGRATION = "010-contract-integration-access-tenant-fks.sql";
+export const PULSO_SOFIA_CONTRACT_MIGRATION = "011-contract-sofia-access-tenant-fks.sql";
+export const PULSO_IRIS_CONTRACT_MIGRATION = "012-contract-iris-access-tenant-fks.sql";
+export const PULSO_KNOWLEDGE_CONTRACT_MIGRATION = "013-contract-knowledge-access-tenant-fks.sql";
+export const PULSO_N_MINUS_ONE_DROP_MIGRATION = "014-drop-n-minus-one-legacy-adapters.sql";
+export const PULSO_CURRENT_MIGRATION = "015-revoke-sofia-pulso-iris-control-plane-grants.sql";
 export const SOFIA_CURRENT_MIGRATION = "006-access-sofia-tenant-projection.sql";
 export const SOFIA_CURRENT_SCHEMA_VERSION = 2;
 export const PULSO_SCHEMA_OWNER_ROLE = PULSO_MIGRATOR_ROLE;
@@ -204,6 +213,11 @@ export const PULSO_INTEGRATION_PROJECTION_TABLES = [
   "integration_runtime.tenant_snapshots"
 ] as const;
 
+export const PULSO_KNOWLEDGE_PROJECTION_TABLES = [
+  "knowledge_runtime.access_projection_inbox",
+  "knowledge_runtime.tenant_snapshots"
+] as const;
+
 export const PULSO_CHANNEL_TABLES = [...PULSO_CHANNEL_BASELINE_TABLES, ...PULSO_CHANNEL_PROJECTION_TABLES] as const;
 
 export const PULSO_CONTROL_TABLES = [
@@ -213,7 +227,8 @@ export const PULSO_CONTROL_TABLES = [
   "pulso_iris.service_migrations"
 ] as const;
 
-export const PULSO_FUNCTIONS = [
+/** Functions present through tip 013 (before N-1 adapter drop). */
+export const PULSO_FUNCTIONS_LEGACY = [
   "agent_runtime.claim_next_job(p_worker_id text)",
   "agent_runtime.prepare_ordered_job()",
   "agent_runtime.reject_unpositioned_job_claim()",
@@ -235,6 +250,26 @@ export const PULSO_FUNCTIONS = [
   "pulso_iris.validate_availability_rule()"
 ] as const;
 
+/** Tip functions after 014 drops the three N-1 legacy adapters. */
+export const PULSO_FUNCTIONS = [
+  "agent_runtime.claim_next_job(p_worker_id text)",
+  "agent_runtime.prepare_ordered_job()",
+  "agent_runtime.reject_unpositioned_job_claim()",
+  "agent_runtime.release_next_ordered_job()",
+  "channel_runtime.claim_next_inbound_event(p_worker_id text)",
+  "channel_runtime.claim_next_outbound_message(p_worker_id text)",
+  "channel_runtime.defer_non_head_outbox_event()",
+  "channel_runtime.mirror_inbound_event_to_outbox()",
+  "channel_runtime.release_next_outbox_event()",
+  "pulso_iris.guard_slot_capacity_claim()",
+  "pulso_iris.prepare_ordered_message_outbox_event()",
+  "pulso_iris.record_appointment_status_transition()",
+  "pulso_iris.reject_unpositioned_message_claim()",
+  "pulso_iris.release_next_message_outbox_event()",
+  "pulso_iris.touch_appointment_status_updated_at()",
+  "pulso_iris.validate_availability_rule()"
+] as const;
+
 const LEGACY_TABLES = [
   ...PULSO_PLATFORM_TABLES,
   ...PULSO_CORE_TABLES,
@@ -245,7 +280,8 @@ const MANAGED_TABLES_003 = [...LEGACY_TABLES, ...PULSO_CONTROL_TABLES];
 const MANAGED_TABLES_004 = [...MANAGED_TABLES_003, ...PULSO_CHANNEL_PROJECTION_TABLES];
 const MANAGED_TABLES_005 = [...MANAGED_TABLES_004, ...PULSO_IRIS_PROJECTION_TABLES];
 const MANAGED_TABLES_006 = [...MANAGED_TABLES_005, ...PULSO_SOFIA_PROJECTION_TABLES];
-const MANAGED_TABLES = [...MANAGED_TABLES_006, ...PULSO_INTEGRATION_PROJECTION_TABLES];
+const MANAGED_TABLES_007 = [...MANAGED_TABLES_006, ...PULSO_INTEGRATION_PROJECTION_TABLES];
+const MANAGED_TABLES = [...MANAGED_TABLES_007, ...PULSO_KNOWLEDGE_PROJECTION_TABLES];
 const LEGACY_UNVALIDATED_CONSTRAINTS = new Set([
   "pulso_iris.appointments.chk_appointments_manual_verification",
   "pulso_iris.appointments.chk_appointments_verified_evidence"
@@ -269,7 +305,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_001: PulsoStructuralManifest = {
   function: {
     count: 19,
     fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
-    identities: PULSO_FUNCTIONS
+    identities: PULSO_FUNCTIONS_LEGACY
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 189, fingerprint: "c6c5a4850bba4125cfe99bb1843ad6ee324a4241b5e6c4040844eb71dd610b9c" },
@@ -293,7 +329,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_002: PulsoStructuralManifest = {
   function: {
     count: 19,
     fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
-    identities: PULSO_FUNCTIONS
+    identities: PULSO_FUNCTIONS_LEGACY
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 189, fingerprint: "c6c5a4850bba4125cfe99bb1843ad6ee324a4241b5e6c4040844eb71dd610b9c" },
@@ -312,7 +348,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_003: PulsoStructuralManifest = {
   function: {
     count: 19,
     fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
-    identities: PULSO_FUNCTIONS
+    identities: PULSO_FUNCTIONS_LEGACY
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 190, fingerprint: "480c44e08359230dd31812f02d2a9de6acefcb26014ca66e07ee218431a5660c" },
@@ -334,7 +370,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_004: PulsoStructuralManifest = {
   function: {
     count: 19,
     fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
-    identities: PULSO_FUNCTIONS
+    identities: PULSO_FUNCTIONS_LEGACY
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 194, fingerprint: "5a16c3563cf9a22fdf8da361d188eaf948133f30b90b70a0f145b883912da80e" },
@@ -354,7 +390,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_005: PulsoStructuralManifest = {
   function: {
     count: 19,
     fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
-    identities: PULSO_FUNCTIONS
+    identities: PULSO_FUNCTIONS_LEGACY
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 198, fingerprint: "91955f89ba44f4bcfe54dffc265601c71c953092f559f010d678e8cc63b82237" },
@@ -374,7 +410,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_006: PulsoStructuralManifest = {
   function: {
     count: 19,
     fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
-    identities: PULSO_FUNCTIONS
+    identities: PULSO_FUNCTIONS_LEGACY
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 202, fingerprint: "c1659be39168856c8fd3ede0c75a0f5894ff0fc1e9f3eaa23d9013ee65de933e" },
@@ -388,17 +424,177 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_007: PulsoStructuralManifest = {
   table: {
     count: 63,
     fingerprint: "14aa410a8e8e7a96275567390a1d57fe9c190c7c006b9f81c9bf4d07470ed1e0",
-    identities: MANAGED_TABLES
+    identities: MANAGED_TABLES_007
   },
   column: { count: 699, fingerprint: "e73cd7c73de0caea644c50e10057448209fb52f9d917774059542bcac19ef178" },
   function: {
     count: 19,
     fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
-    identities: PULSO_FUNCTIONS
+    identities: PULSO_FUNCTIONS_LEGACY
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 206, fingerprint: "d6ab32d8a9414ebebc415f95587a7cc0438aa98642fcbfee1cfb1b1c49487a26" },
   constraint: { count: 371, fingerprint: "5b3a5572230fdf8fac8132ccb38aeab84639ef6be35c0093b9c771758277eafa" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Sealed from PostgreSQL 16 after applying append-only 001–008 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_008: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 65,
+    fingerprint: "752b04928f5871c1aa5cfe85713deb84e3c1720fd3651745620aef6e69c284ff",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 715, fingerprint: "faeeddcd0e217c0676f80d8768b57e2af8a6bcad9e176a0405f1fa3bb9197c77" },
+  function: {
+    count: 19,
+    fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
+    identities: PULSO_FUNCTIONS_LEGACY
+  },
+  trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
+  index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
+  constraint: { count: 379, fingerprint: "3e25a85d8c7e8152aa51bffdf2b2e8907b85723a89e43d8e28ab25ebb4250c98" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Sealed from PostgreSQL 16 after applying append-only 001–009 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_009: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 65,
+    fingerprint: "752b04928f5871c1aa5cfe85713deb84e3c1720fd3651745620aef6e69c284ff",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 715, fingerprint: "faeeddcd0e217c0676f80d8768b57e2af8a6bcad9e176a0405f1fa3bb9197c77" },
+  function: {
+    count: 19,
+    fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
+    identities: PULSO_FUNCTIONS_LEGACY
+  },
+  trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
+  index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
+  constraint: { count: 374, fingerprint: "635bdc8c09e69691d28a8b6a9e4771afe992ff8588c1605506623c39f84dd7ae" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Sealed from PostgreSQL 16 after applying append-only 001–010 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_010: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 65,
+    fingerprint: "752b04928f5871c1aa5cfe85713deb84e3c1720fd3651745620aef6e69c284ff",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 715, fingerprint: "faeeddcd0e217c0676f80d8768b57e2af8a6bcad9e176a0405f1fa3bb9197c77" },
+  function: {
+    count: 19,
+    fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
+    identities: PULSO_FUNCTIONS_LEGACY
+  },
+  trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
+  index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
+  constraint: { count: 373, fingerprint: "ace10adb74b3c1f40bdd0614b0ab1e0250c406e8103b2b0438453bd076e6f651" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Sealed from PostgreSQL 16 after applying append-only 001–011 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_011: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 65,
+    fingerprint: "752b04928f5871c1aa5cfe85713deb84e3c1720fd3651745620aef6e69c284ff",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 715, fingerprint: "faeeddcd0e217c0676f80d8768b57e2af8a6bcad9e176a0405f1fa3bb9197c77" },
+  function: {
+    count: 19,
+    fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
+    identities: PULSO_FUNCTIONS_LEGACY
+  },
+  trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
+  index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
+  constraint: { count: 368, fingerprint: "92468a60f93d8816827599deb0119d82cb00121627bb49d93843fb18c1b83c68" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Sealed from PostgreSQL 16 after applying append-only 001–012 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_012: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 65,
+    fingerprint: "752b04928f5871c1aa5cfe85713deb84e3c1720fd3651745620aef6e69c284ff",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 715, fingerprint: "faeeddcd0e217c0676f80d8768b57e2af8a6bcad9e176a0405f1fa3bb9197c77" },
+  function: {
+    count: 19,
+    fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
+    identities: PULSO_FUNCTIONS_LEGACY
+  },
+  trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
+  index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
+  constraint: { count: 343, fingerprint: "870424b01f8aa70b6723b78df39e6b241b896f7f942e641f9dce9d48d10c04d3" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Sealed from PostgreSQL 16 after applying append-only 001–013 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_013: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 65,
+    fingerprint: "752b04928f5871c1aa5cfe85713deb84e3c1720fd3651745620aef6e69c284ff",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 715, fingerprint: "faeeddcd0e217c0676f80d8768b57e2af8a6bcad9e176a0405f1fa3bb9197c77" },
+  function: {
+    count: 19,
+    fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
+    identities: PULSO_FUNCTIONS_LEGACY
+  },
+  trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
+  index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
+  constraint: { count: 342, fingerprint: "61865cadb7d780a71653976f4aa1dcc470ac2e3f84e01ff2af2c97fbaa80b070" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Sealed from PostgreSQL 16 after applying append-only 001–014 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_014: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 65,
+    fingerprint: "752b04928f5871c1aa5cfe85713deb84e3c1720fd3651745620aef6e69c284ff",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 715, fingerprint: "faeeddcd0e217c0676f80d8768b57e2af8a6bcad9e176a0405f1fa3bb9197c77" },
+  function: {
+    count: 16,
+    fingerprint: "a81075db853601d5c807f596364a639ce7ac0087103c7b58c4a9dfdcf4489281",
+    identities: PULSO_FUNCTIONS
+  },
+  trigger: { count: 14, fingerprint: "84fb33fd187e5c5c79c54e5f50d84a490adec9bf9c263fa47c732f0baf8031bb" },
+  index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
+  constraint: { count: 342, fingerprint: "61865cadb7d780a71653976f4aa1dcc470ac2e3f84e01ff2af2c97fbaa80b070" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Sealed from PostgreSQL 16 after applying append-only 001–015 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_015: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 65,
+    fingerprint: "752b04928f5871c1aa5cfe85713deb84e3c1720fd3651745620aef6e69c284ff",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 715, fingerprint: "faeeddcd0e217c0676f80d8768b57e2af8a6bcad9e176a0405f1fa3bb9197c77" },
+  function: {
+    count: 16,
+    fingerprint: "a81075db853601d5c807f596364a639ce7ac0087103c7b58c4a9dfdcf4489281",
+    identities: PULSO_FUNCTIONS
+  },
+  trigger: { count: 14, fingerprint: "84fb33fd187e5c5c79c54e5f50d84a490adec9bf9c263fa47c732f0baf8031bb" },
+  index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
+  constraint: { count: 342, fingerprint: "61865cadb7d780a71653976f4aa1dcc470ac2e3f84e01ff2af2c97fbaa80b070" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -416,14 +612,14 @@ export const PULSO_SCHEMA_MANIFEST: PulsoSchemaManifestSet = {
     function: {
       count: 19,
       fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
-      identities: PULSO_FUNCTIONS
+      identities: PULSO_FUNCTIONS_LEGACY
     },
     trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
     index: { count: 185, fingerprint: "ca08ce54e341a05462902a1745e315e253d143e6a88c1db0e36aa33ae20498c3" },
     constraint: { count: 326, fingerprint: "c02658530e79823119ad93852812add6c4cd421ff1fc8584a0318697e1d3f60e" },
     other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
   },
-  managed: PULSO_MANAGED_SCHEMA_MANIFEST_007,
+  managed: PULSO_MANAGED_SCHEMA_MANIFEST_015,
   managedByVersion: {
     1: PULSO_MANAGED_SCHEMA_MANIFEST_001,
     2: PULSO_MANAGED_SCHEMA_MANIFEST_002,
@@ -431,7 +627,15 @@ export const PULSO_SCHEMA_MANIFEST: PulsoSchemaManifestSet = {
     4: PULSO_MANAGED_SCHEMA_MANIFEST_004,
     5: PULSO_MANAGED_SCHEMA_MANIFEST_005,
     6: PULSO_MANAGED_SCHEMA_MANIFEST_006,
-    7: PULSO_MANAGED_SCHEMA_MANIFEST_007
+    7: PULSO_MANAGED_SCHEMA_MANIFEST_007,
+    8: PULSO_MANAGED_SCHEMA_MANIFEST_008,
+    9: PULSO_MANAGED_SCHEMA_MANIFEST_009,
+    10: PULSO_MANAGED_SCHEMA_MANIFEST_010,
+    11: PULSO_MANAGED_SCHEMA_MANIFEST_011,
+    12: PULSO_MANAGED_SCHEMA_MANIFEST_012,
+    13: PULSO_MANAGED_SCHEMA_MANIFEST_013,
+    14: PULSO_MANAGED_SCHEMA_MANIFEST_014,
+    15: PULSO_MANAGED_SCHEMA_MANIFEST_015
   }
 };
 
@@ -470,25 +674,27 @@ export const PULSO_RUNTIME_POLICIES: Readonly<Record<PulsoRuntimeRole, PulsoRunt
     functions: functionPolicy([])
   },
   hyperion_sofia: {
-    schemas: ["platform", "pulso_iris", "agent_runtime"],
+    schemas: ["platform", "agent_runtime"],
     tables: tablePolicy(
       Object.fromEntries([
         ["platform.agents", SELECT],
         ["platform.prompt_flows", SELECT],
         ...PULSO_AGENT_TABLES.map((table) => [table, CRUD]),
         ...PULSO_SOFIA_PROJECTION_TABLES.map((table) => [table, SELECT_INSERT_UPDATE]),
-        ["agent_runtime.schema_version", SELECT],
-        ["pulso_iris.schema_version", SELECT]
+        ["agent_runtime.schema_version", SELECT]
       ])
     ),
     functions: functionPolicy(["agent_runtime.claim_next_job(p_worker_id text)"])
   },
   hyperion_knowledge: {
-    schemas: ["platform", "pulso_iris"],
-    tables: tablePolicy({
-      "platform.knowledge_sources": SELECT,
-      "pulso_iris.schema_version": SELECT
-    }),
+    schemas: ["platform", "pulso_iris", "knowledge_runtime"],
+    tables: tablePolicy(
+      Object.fromEntries([
+        ["platform.knowledge_sources", SELECT],
+        ["pulso_iris.schema_version", SELECT],
+        ...PULSO_KNOWLEDGE_PROJECTION_TABLES.map((table) => [table, SELECT_INSERT_UPDATE])
+      ])
+    ),
     functions: functionPolicy([])
   },
   hyperion_integration: {
@@ -524,7 +730,7 @@ with active_role as (
 ), provider_namespaces as (
   select namespace.oid
     from pg_namespace namespace
-   where namespace.nspname in ('platform', 'pulso_iris', 'agent_runtime', 'channel_runtime', 'integration_runtime')
+   where namespace.nspname in ('platform', 'pulso_iris', 'agent_runtime', 'channel_runtime', 'integration_runtime', 'knowledge_runtime')
 ), provider_toast_relations as (
   select relation.reltoastrelid as oid
     from pg_class relation
@@ -613,7 +819,7 @@ with active_role as (
   select role.oid from pg_roles role where role.rolname = current_user
 ), target_namespace as (
   select namespace.* from pg_namespace namespace
-   where namespace.nspname in ('platform', 'pulso_iris', 'agent_runtime', 'channel_runtime', 'integration_runtime')
+   where namespace.nspname in ('platform', 'pulso_iris', 'agent_runtime', 'channel_runtime', 'integration_runtime', 'knowledge_runtime')
 )
 select 'database'::text as category,
        database_catalog.datname as identity,
@@ -680,7 +886,8 @@ with expected_schemas(name) as (
     ('pulso_iris'::text),
     ('agent_runtime'::text),
     ('channel_runtime'::text),
-    ('integration_runtime'::text)
+    ('integration_runtime'::text),
+    ('knowledge_runtime'::text)
 ), target_namespace as (
   select expected.name, namespace.oid, namespace.nspowner
     from expected_schemas expected

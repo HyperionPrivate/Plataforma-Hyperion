@@ -1,127 +1,28 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.9.5",
+  "catalogVersion": "1.10.0",
   "updatedAt": "2026-07-20",
   "baseline": "docs/architecture/boundary-baseline.json",
   "baselineStats": {
-    "findingGroups": 84,
-    "instances": 84,
-    "workstreams": 9
+    "findingGroups": 1,
+    "instances": 1,
+    "workstreams": 1
   },
   "items": [
-    {
-      "id": "DEBT-001",
-      "title": "SOFIA foreign keys hacia Access; migrate lee tenant_snapshots; contract pendiente",
-      "findingType": "cross-owner-fk",
-      "edge": "sofia-automation->access",
-      "owner": "pulso-sofia",
-      "status": "retiring",
-      "evidence": [
-        "packages/pulso-migrations/sql/006-access-sofia-tenant-projection.sql",
-        "services/identity-service/src/access-tenant-projections.ts",
-        "services/agent-service/src/access-tenant-projections.ts",
-        "services/prompt-flow-service/src/access-tenant-gate.ts",
-        "docs/products/PULSO-IRIS.md"
-      ],
-      "issue": "HYP-DEBT-001",
-      "dueDate": "2027-03-31"
-    },
-    {
-      "id": "DEBT-002",
-      "title": "Integration foreign keys hacia Access; migrate lee tenant_snapshots; contract pendiente",
-      "findingType": "cross-owner-fk",
-      "edge": "integration-adapter->access",
-      "owner": "pulso-integrations",
-      "status": "retiring",
-      "evidence": [
-        "packages/pulso-migrations/sql/007-access-integration-tenant-projection.sql",
-        "services/identity-service/src/access-tenant-projections.ts",
-        "services/integration-service/src/access-tenant-projections.ts",
-        "services/integration-service/src/app.ts",
-        "docs/products/PULSO-IRIS.md"
-      ],
-      "issue": "HYP-DEBT-002",
-      "dueDate": "2027-03-31"
-    },
-    {
-      "id": "DEBT-003",
-      "title": "Knowledge foreign keys hacia Access",
-      "findingType": "cross-owner-fk",
-      "edge": "knowledge->access",
-      "owner": "pulso-knowledge",
-      "status": "accepted",
-      "issue": "HYP-DEBT-003",
-      "dueDate": "2027-01-31"
-    },
-    {
-      "id": "DEBT-004",
-      "title": "PULSO foreign keys hacia Access; migrate lee tenant_snapshots; contract pendiente",
-      "findingType": "cross-owner-fk",
-      "edge": "pulso-core->access",
-      "owner": "pulso-core",
-      "status": "retiring",
-      "evidence": [
-        "packages/pulso-migrations/sql/005-access-iris-tenant-projection.sql",
-        "services/identity-service/src/access-tenant-projections.ts",
-        "services/pulso-iris-service/src/access-tenant-projections.ts",
-        "services/pulso-iris-service/src/shared.ts",
-        "docs/products/PULSO-IRIS.md"
-      ],
-      "issue": "HYP-DEBT-004",
-      "dueDate": "2027-03-31"
-    },
-    {
-      "id": "DEBT-005",
-      "title": "Channel foreign keys hacia Access; migrate lee tenant_snapshots; contract pendiente",
-      "findingType": "cross-owner-fk",
-      "edge": "channel->access",
-      "owner": "pulso-channels",
-      "status": "retiring",
-      "evidence": [
-        "packages/access-migrations/sql/003-access-tenant-projection.sql",
-        "packages/access-migrations/sql/004-access-tenant-lifecycle-integrity.sql",
-        "packages/pulso-migrations/sql/004-access-channel-tenant-projection.sql",
-        "services/identity-service/src/access-tenant-projections.ts",
-        "services/whatsapp-channel-service/src/access-tenant-projections.ts",
-        "services/whatsapp-channel-service/src/app.ts",
-        "docs/operations/ACCESS-TENANT-PROJECTION-REPLAY.md",
-        "docs/products/PULSO-IRIS.md"
-      ],
-      "issue": "HYP-DEBT-005",
-      "dueDate": "2027-03-31"
-    },
     {
       "id": "DEBT-010",
       "title": "Service Runtime conserva la API de readiness del ledger legacy global",
       "findingType": "sql-access",
       "edge": "shared-packages->migration-control",
       "owner": "platform-core",
-      "status": "accepted",
-      "evidence": ["packages/service-runtime/src/index.ts", "packages/service-runtime/src/index.test.ts"],
+      "status": "retiring",
+      "evidence": [
+        "packages/service-runtime/src/index.ts",
+        "packages/service-runtime/src/index.test.ts",
+        "docs/evidence/legacy-ledger-readiness-retirement-20260720.md"
+      ],
       "issue": "HYP-DEBT-010",
       "dueDate": "2026-12-31"
-    },
-    {
-      "id": "DEBT-018",
-      "title": "Compatibilidad PULSO v1 con ledger Channel",
-      "source": "temporary-exception",
-      "findingType": "plpgsql-sql-access",
-      "edge": "pulso-core->channel",
-      "owner": "pulso-core",
-      "status": "retiring",
-      "issue": "HYP-DEBT-018",
-      "dueDate": "2026-10-31"
-    },
-    {
-      "id": "DEBT-019",
-      "title": "Compatibilidad SOFIA v1 con ledger PULSO",
-      "source": "temporary-exception",
-      "findingType": "plpgsql-sql-access",
-      "edge": "sofia-automation->pulso-core",
-      "owner": "pulso-sofia",
-      "status": "retiring",
-      "issue": "HYP-DEBT-019",
-      "dueDate": "2026-10-31"
     },
     {
       "id": "DEBT-020",
@@ -130,16 +31,22 @@
       "owner": "platform-edge",
       "status": "retiring",
       "issue": "HYP-DEBT-020",
-      "dueDate": "2026-10-31"
+      "dueDate": "2026-10-31",
+      "evidence": [
+        "apps/api-gateway/src/legacy-product-policy.ts",
+        "apps/api-gateway/src/app.ts",
+        "docs/evidence/legacy-gateway-env-gate-20260720.md"
+      ]
     },
     {
       "id": "DEBT-021",
       "title": "Catálogo cerrado @hyperion/contracts confinado al API Gateway de compatibilidad",
       "source": "transition-inventory",
       "owner": "platform-contracts",
-      "status": "retiring",
+      "status": "transitioning",
       "issue": "HYP-DEBT-021",
-      "dueDate": "2026-12-31"
+      "dueDate": "2026-12-31",
+      "evidence": ["docs/operations/REGISTRY-PUBLISH-PATH.md", "scripts/releases/publish-shared-libraries.mjs"]
     },
     {
       "id": "DEBT-022",
@@ -149,7 +56,10 @@
       "status": "retiring",
       "evidence": [
         "packages/migrations/sql/004-cedco-catalog.sql",
-        "scripts/architecture/legacy-global-migrations.json"
+        "scripts/architecture/legacy-global-migrations.json",
+        "packages/migrations/sql/047-contract-channel-access-tenant-fks.sql",
+        "packages/migrations/sql/052-drop-n-minus-one-legacy-adapters.sql",
+        "docs/operations/GLOBAL-MIGRATOR-CUTOVER.md"
       ],
       "issue": "HYP-DEBT-022",
       "dueDate": "2027-03-31"
@@ -161,7 +71,8 @@
       "owner": "platform-edge",
       "status": "retiring",
       "issue": "HYP-DEBT-023",
-      "dueDate": "2026-11-30"
+      "dueDate": "2026-11-30",
+      "evidence": ["apps/api-gateway/src/app.ts", "docs/evidence/legacy-gateway-env-gate-20260720.md"]
     },
     {
       "id": "DEBT-024",
@@ -170,7 +81,8 @@
       "owner": "platform-release",
       "status": "transitioning",
       "issue": "HYP-DEBT-024",
-      "dueDate": "2027-01-31"
+      "dueDate": "2027-01-31",
+      "evidence": ["docs/operations/REGISTRY-PUBLISH-PATH.md", "package.json"]
     },
     {
       "id": "DEBT-025",
@@ -181,7 +93,8 @@
       "evidence": [
         "packages/migrations/src/lumen-n-minus-one-compatibility.ts",
         "docs/architecture/decisions/ADR-0002-lumen-audio-retention.md",
-        "docs/operations/LUMEN-STANDALONE.md"
+        "docs/operations/LUMEN-STANDALONE.md",
+        "docs/evidence/lumen-n-minus-one-bridge-disabled-20260720.json"
       ],
       "issue": "HYP-DEBT-025",
       "dueDate": "2026-10-31"
@@ -191,18 +104,19 @@
       "title": "HA, edge productivo y recuperación desde offsite de LUMEN no validados",
       "source": "transition-inventory",
       "owner": "lumen-operations",
-      "status": "accepted",
+      "status": "retiring",
       "evidence": [
         "docs/operations/LUMEN-STANDALONE.md",
         "docs/operations/LUMEN-RECOVERY.md",
-        "scripts/ops/run-lumen-postgres-recovery-drill.mjs"
+        "scripts/ops/run-lumen-postgres-recovery-drill.mjs",
+        "docs/evidence/lumen-recovery-validation-checklist-20260720.json"
       ],
       "issue": "HYP-DEBT-026",
       "dueDate": "2026-12-31"
     },
     {
       "id": "DEBT-027",
-      "title": "Grants heredados y control-plane temporal de markers PULSO/SOFÍA pendientes de contract",
+      "title": "Bootstrap PULSO aún lee el marker owner-owned de SOFÍA (roles.ts); grants Iris N-1 ya revocados",
       "findingType": "sql-access",
       "edge": "pulso-core->sofia-automation",
       "pathPrefixes": ["packages/pulso-migrations/src/roles.ts"],
@@ -210,54 +124,12 @@
       "owner": "pulso-data",
       "status": "retiring",
       "evidence": [
+        "packages/pulso-migrations/sql/015-revoke-sofia-pulso-iris-control-plane-grants.sql",
         "docs/architecture/pulso-integration-readiness-policy.v1.json",
-        "packages/pulso-migrations/sql/002-pulso-runtime-roles.sql",
-        "packages/pulso-migrations/sql/003-sofia-readiness-marker.sql",
-        "packages/pulso-migrations/sql/004-access-channel-tenant-projection.sql",
-        "packages/pulso-migrations/src/schema-manifest.ts",
-        "packages/service-runtime/src/sofia-n-minus-one-readiness.integration.test.ts",
-        "services/agent-service/src/index.ts",
-        "services/prompt-flow-service/src/index.ts",
-        "releases/rollback-policies/pulso/1.3.0.json",
-        "scripts/ops/verify-cell-rollback-core.mjs",
-        "docs/operations/PULSO-RECOVERY.md"
+        "packages/pulso-migrations/src/roles.ts",
+        "packages/pulso-migrations/src/schema-manifest.ts"
       ],
       "issue": "HYP-DEBT-027",
-      "dueDate": "2026-10-31"
-    },
-    {
-      "id": "DEBT-029",
-      "title": "Baseline provider-owned de PULSO conserva adaptadores v1 hacia el ledger Channel",
-      "findingType": "plpgsql-sql-access",
-      "edge": "pulso-core->channel",
-      "pathPrefixes": ["packages/pulso-migrations/sql/"],
-      "owner": "pulso-core",
-      "status": "retiring",
-      "evidence": ["packages/pulso-migrations/sql/001-pulso-autonomous-baseline.sql"],
-      "issue": "HYP-DEBT-029",
-      "dueDate": "2026-10-31"
-    },
-    {
-      "id": "DEBT-030",
-      "title": "Baseline provider-owned de PULSO conserva el adaptador SOFÍA v1 hacia el ledger PULSO",
-      "findingType": "plpgsql-sql-access",
-      "edge": "sofia-automation->pulso-core",
-      "pathPrefixes": ["packages/pulso-migrations/sql/"],
-      "owner": "pulso-sofia",
-      "status": "retiring",
-      "evidence": ["packages/pulso-migrations/sql/001-pulso-autonomous-baseline.sql"],
-      "issue": "HYP-DEBT-030",
-      "dueDate": "2026-10-31"
-    },
-    {
-      "id": "DEBT-031",
-      "title": "Baseline provider-owned de PULSO conserva funciones SECURITY DEFINER de compatibilidad N-1",
-      "findingType": "security-definer-cross-owner",
-      "pathPrefixes": ["packages/pulso-migrations/sql/"],
-      "owner": "pulso-data",
-      "status": "retiring",
-      "evidence": ["packages/pulso-migrations/sql/001-pulso-autonomous-baseline.sql"],
-      "issue": "HYP-DEBT-031",
       "dueDate": "2026-10-31"
     },
     {
@@ -269,7 +141,8 @@
       "evidence": [
         "apps/api-gateway/src/legacy-product-policy.ts",
         "apps/api-gateway/src/app.ts",
-        "docs/operations/HOSTNAME-EDGE.md"
+        "docs/operations/HOSTNAME-EDGE.md",
+        "docs/evidence/legacy-gateway-env-gate-20260720.md"
       ],
       "issue": "HYP-FED-004",
       "dueDate": "2026-12-31"

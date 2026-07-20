@@ -35,6 +35,7 @@ const PRIVATE_HTTP_HOSTS = new Set([
   "pulso-iris-service",
   "agent-service",
   "integration-service",
+  "knowledge-service",
   "localhost",
   "127.0.0.1",
   "[::1]"

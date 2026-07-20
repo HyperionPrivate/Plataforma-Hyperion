@@ -12,7 +12,6 @@ import {
   PULSO_CURRENT_MIGRATION,
   PULSO_CURRENT_SCHEMA_VERSION,
   PULSO_PROVIDER_SCHEMAS,
-  PULSO_RUNTIME_ROLES_MIGRATION,
   SOFIA_CURRENT_MIGRATION,
   SOFIA_CURRENT_SCHEMA_VERSION
 } from "./schema-manifest.js";
@@ -87,7 +86,7 @@ const TABLE_PRIVILEGE_MATRIX: Readonly<Record<RuntimeRole, readonly TablePrivile
     { table: "pulso_iris.migration_ledger", privilege: "SELECT", allowed: false }
   ],
   hyperion_sofia: [
-    { table: "pulso_iris.schema_version", privilege: "SELECT", allowed: true },
+    { table: "pulso_iris.schema_version", privilege: "SELECT", allowed: false },
     { table: "agent_runtime.schema_version", privilege: "SELECT", allowed: true },
     { table: "platform.agents", privilege: "SELECT", allowed: true },
     { table: "platform.prompt_flows", privilege: "SELECT", allowed: true },
@@ -111,6 +110,14 @@ const TABLE_PRIVILEGE_MATRIX: Readonly<Record<RuntimeRole, readonly TablePrivile
     { table: "platform.knowledge_sources", privilege: "SELECT", allowed: true },
     { table: "platform.knowledge_sources", privilege: "UPDATE", allowed: false },
     { table: "platform.integrations", privilege: "SELECT", allowed: false },
+    { table: "knowledge_runtime.tenant_snapshots", privilege: "SELECT", allowed: true },
+    { table: "knowledge_runtime.tenant_snapshots", privilege: "INSERT", allowed: true },
+    { table: "knowledge_runtime.tenant_snapshots", privilege: "UPDATE", allowed: true },
+    { table: "knowledge_runtime.tenant_snapshots", privilege: "DELETE", allowed: false },
+    { table: "knowledge_runtime.access_projection_inbox", privilege: "SELECT", allowed: true },
+    { table: "knowledge_runtime.access_projection_inbox", privilege: "INSERT", allowed: true },
+    { table: "knowledge_runtime.access_projection_inbox", privilege: "UPDATE", allowed: true },
+    { table: "knowledge_runtime.access_projection_inbox", privilege: "DELETE", allowed: false },
     { table: "channel_runtime.tenant_snapshots", privilege: "SELECT", allowed: false },
     { table: "pulso_iris.appointments", privilege: "SELECT", allowed: false },
     { table: "pulso_iris.migration_ledger", privilege: "SELECT", allowed: false }
@@ -225,7 +232,15 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       "004-access-channel-tenant-projection.sql",
       "005-access-iris-tenant-projection.sql",
       "006-access-sofia-tenant-projection.sql",
-      "007-access-integration-tenant-projection.sql"
+      "007-access-integration-tenant-projection.sql",
+      "008-access-knowledge-tenant-projection.sql",
+      "009-contract-channel-access-tenant-fks.sql",
+      "010-contract-integration-access-tenant-fks.sql",
+      "011-contract-sofia-access-tenant-fks.sql",
+      "012-contract-iris-access-tenant-fks.sql",
+      "013-contract-knowledge-access-tenant-fks.sql",
+      "014-drop-n-minus-one-legacy-adapters.sql",
+      "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
     ]);
     expect(inspection.ledgerEntries.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum))).toBe(true);
 
@@ -277,9 +292,9 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       [PULSO_PROVIDER_SCHEMAS]
     );
     expect(catalog.rows[0]).toEqual({
-      tables: 63,
-      functions: 19,
-      triggers: 17,
+      tables: 65,
+      functions: 16,
+      triggers: 14,
       invalid_constraints: 0,
       invalid_indexes: 0,
       wrongly_owned_objects: 0
@@ -364,7 +379,7 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
   });
 
   itReadinessMutation(
-    "keeps current SOFIA runtimes ready on the N-1 global marker and fails closed without their local marker",
+    "keeps current SOFIA runtimes ready on the owner-local marker after Iris control-plane revoke",
     async () => {
       const migrator = requiredClient(clients, "hyperion_pulso_migrator");
       await assertExactReadinessMutationDatabase(migrator, "hyperion_pulso_migrator");
@@ -384,20 +399,9 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
 
         await Promise.all([waitForStatus(agent.url, 200, agent), waitForStatus(promptFlow.url, 200, promptFlow)]);
 
-        await migrator.query(
-          `update pulso_iris.schema_version
-            set current_version = 2,
-                migration_name = $1,
-                updated_at = now()
-          where service_name = 'pulso'`,
-          [PULSO_RUNTIME_ROLES_MIGRATION]
-        );
-        await Promise.all([waitForStatus(agent.url, 200, agent), waitForStatus(promptFlow.url, 200, promptFlow)]);
-
-        const nMinusOneMarker = await sofia.query<{ current_version: number }>(
-          "select current_version from pulso_iris.schema_version where service_name = 'pulso'"
-        );
-        expect(nMinusOneMarker.rows).toEqual([{ current_version: 2 }]);
+        await expect(
+          sofia.query("select current_version from pulso_iris.schema_version where service_name = 'pulso'")
+        ).rejects.toThrow(/permission denied/i);
 
         await migrator.query("delete from agent_runtime.schema_version where service_name = 'sofia'");
         await Promise.all([waitForStatus(agent.url, 503, agent), waitForStatus(promptFlow.url, 503, promptFlow)]);

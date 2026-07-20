@@ -26,6 +26,9 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   authorizeLegacyProductRequest,
   isLegacyCustomerProductId,
+  isLegacyGatewayEnabled,
+  noteLegacyGatewayDeprecatedHit,
+  noteLegacyGatewayDisabledReject,
   readLegacyProductRequestScope,
   type LegacyHttpMethod
 } from "./legacy-product-policy.js";
@@ -134,12 +137,26 @@ export function createGatewayRoutes(overrides?: {
 
       request.session = session;
 
+      const productScope = readLegacyProductRequestScope(path);
+      if (productScope && !isLegacyGatewayEnabled()) {
+        noteLegacyGatewayDisabledReject();
+        return reply.code(410).send(
+          envelope(
+            {
+              error: "Legacy multiproduct gateway routes are disabled (LEGACY_GATEWAY_ENABLED=false). Use product BFFs."
+            },
+            request.id
+          )
+        );
+      }
+      if (productScope) {
+        noteLegacyGatewayDeprecatedHit();
+      }
+
       const productDenial = authorizeLegacyProductRequest(request.method as LegacyHttpMethod, path, session);
       if (productDenial) {
         return reply.code(productDenial.statusCode).send(envelope({ error: productDenial.message }, request.id));
       }
-
-      const productScope = readLegacyProductRequestScope(path);
       const denial = productScope?.tenantId
         ? undefined
         : authorizeNeutralPlatformRequest(request.method as LegacyHttpMethod, path, session.operator.role);

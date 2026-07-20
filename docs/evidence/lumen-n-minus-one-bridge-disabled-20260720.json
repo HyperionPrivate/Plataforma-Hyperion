@@ -1,0 +1,7 @@
+{
+  "debtId": "DEBT-025",
+  "module": "packages/migrations/src/lumen-n-minus-one-compatibility.ts",
+  "mode": "fail-closed-unless-LUMEN_N1_COMPAT_ENABLED",
+  "defaultEnabled": false,
+  "capturedAt": "2026-07-20"
+}

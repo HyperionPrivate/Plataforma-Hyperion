@@ -1,7 +1,10 @@
 import { envelope } from "@hyperion/platform-contracts";
 import { readInternalCredential, validateInternalAuthorization, type RouteRegistrar } from "@hyperion/service-runtime";
+import { registerAccessTenantProjectionRoutes } from "./access-tenant-projections.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
+  registerAccessTenantProjectionRoutes(app, context);
+
   app.get("/v1/knowledge-sources", async (request, reply) => {
     const authError = validateInternalAuthorization(request.headers, {
       "api-gateway": readInternalCredential(process.env, "GATEWAY_TO_KNOWLEDGE_TOKEN")

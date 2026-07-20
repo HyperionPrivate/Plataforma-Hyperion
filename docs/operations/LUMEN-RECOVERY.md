@@ -112,6 +112,14 @@ Este gate no inicia Docker. Usa un ejecutable simulado para comprobar namespace,
 SHA-256, confirmación exacta, owner, descriptor ops y SQL de revocación; las pruebas Node validan de forma estática
 el contrato de evidencia del drill. El workflow LUMEN lo ejecuta junto a la integración de base lógica.
 
+## Validation checklist (DEBT-026)
+
+Stub de evidencia versionada: [`docs/evidence/lumen-recovery-validation-checklist-20260720.json`](../evidence/lumen-recovery-validation-checklist-20260720.json).
+
+1. Dry-run del drill (`pnpm ops:lumen:postgres:recovery:test`) aserta markers de esquema esperados.
+2. Documentar restore desde copia offsite cuando exista transporte real.
+3. HA/edge productivo permanece pendiente fuera de este stub.
+
 ## Pendientes para activar el runbook
 
 1. Ejecutar y conservar un drill PostgreSQL real en el entorno objetivo.

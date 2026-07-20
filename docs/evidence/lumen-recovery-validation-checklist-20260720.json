@@ -1,0 +1,10 @@
+{
+  "debtId": "DEBT-026",
+  "checklist": [
+    "dry-run recovery drill script asserts expected schema markers",
+    "offsite restore path documented in LUMEN-RECOVERY.md",
+    "HA/edge productive validation still pending outside this stub"
+  ],
+  "drillScript": "scripts/ops/run-lumen-postgres-recovery-drill.mjs",
+  "capturedAt": "2026-07-20"
+}

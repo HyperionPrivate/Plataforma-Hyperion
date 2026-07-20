@@ -595,6 +595,7 @@ y su conexión administrativa privada:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  -e LUMEN_N1_COMPAT_ENABLED=true \
   -e LUMEN_N1_CLEANUP_SCOPE_ID="$LUMEN_N1_CLEANUP_SCOPE_ID" \
   -e LUMEN_N1_ROLLBACK_EVIDENCE_SHA256="$LUMEN_N1_ROLLBACK_EVIDENCE_SHA256" \
   migrations node packages/migrations/dist/lumen-n-minus-one-compatibility.js open
@@ -614,6 +615,7 @@ cierra la ventana global:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  -e LUMEN_N1_COMPAT_ENABLED=true \
   -e LUMEN_N1_CLEANUP_SCOPE_ID="$LUMEN_N1_CLEANUP_SCOPE_ID" \
   migrations node packages/migrations/dist/lumen-n-minus-one-compatibility.js close
 ```
@@ -632,6 +634,7 @@ hash de la evidencia, su timestamp y un UUID de atestación:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+  -e LUMEN_N1_COMPAT_ENABLED=true \
   -e LUMEN_N1_CLEANUP_SCOPE_ID="$LUMEN_N1_CLEANUP_SCOPE_ID" \
   -e LUMEN_N1_SCOPE_DESTRUCTION_CONFIRMED=true \
   -e LUMEN_N1_SCOPE_DESTROYED_AT="$LUMEN_N1_SCOPE_DESTROYED_AT" \

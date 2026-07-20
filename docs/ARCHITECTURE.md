@@ -5,7 +5,8 @@ de migracion estan en [Microservicios autonomos](architecture/AUTONOMOUS-MICROSE
 [`data-ownership.json`](architecture/data-ownership.json) es la fuente ejecutable usada por CI para controlar
 SQL literal de runtimes (incl. `packages/`), objetos declarados, claves foráneas entre propietarios, cuerpos
 PL/pgSQL, triggers y `SECURITY DEFINER` con acceso cruzado. Las únicas excepciones temporales permitidas son las
-documentadas en `temporaryExceptions` (hoy: adaptadores v1 de la migración 038); deben retirarse con la deuda.
+documentadas en `temporaryExceptions` (hoy: lectura residual del marker SOFÍA en `pulso-migrations`/`roles.ts`);
+los adaptadores N-1 038 ya tienen contract DROP en tip PULSO 014 / global 052.
 
 El repositorio TypeScript actual es una etapa de transición. El destino es una federación con un repositorio y
 un ciclo de entrega por producto, más un plano neutral mínimo de Access/SSO, aprovisionamiento, Audit asíncrono y
@@ -83,10 +84,9 @@ célula. Los servicios no ejecutan DDL en el arranque y verifican identidad y ve
 Identity y Tenant importan `ACCESS_RUNTIME_MIGRATION_REQUIREMENT`, Audit importa
 `AUDIT_RUNTIME_MIGRATION_REQUIREMENT`; Agent y Prompt Flow importan el requisito SOFÍA y consultan
 `agent_runtime.schema_version`, mientras los otros cuatro runtimes PULSO con base de datos validan el requisito
-global en `pulso_iris.schema_version`. El `SELECT` de `hyperion_sofia` sobre este último marcador se conserva sólo
-para que imágenes N−1 sigan arrancando durante la transición registrada en DEBT-027; el runtime current no lo usa.
-Ningún runtime actual necesita
-`platform.schema_migrations` para estar ready.
+global en `pulso_iris.schema_version`. Tip `015` revoca `USAGE`/`SELECT` de `hyperion_sofia` sobre ese marcador;
+DEBT-027 residual cubre sólo la lectura de bootstrap en `roles.ts` del marker owner-owned SOFÍA. Ningún runtime
+actual necesita `platform.schema_migrations` para estar ready.
 
 Las llamadas HTTP internas no comparten una identidad global. Cada arista productor→consumidor recibe una
 credencial distinta y el receptor la vincula con `x-hyperion-caller` y con las rutas autorizadas para ese
@@ -133,6 +133,16 @@ polling original; una base current permanece en v2 y debe completar tráfico dur
 sobre el esquema actualizado. No atribuye inbox/outbox a binarios que nunca los tuvieron ni prueba mensajes
 JetStream pendientes entre versiones.
 
+### Wave F — governance hold (CI)
+
+Checklist vigente (no reactivar `push`/`schedule` hasta que haya cupo de Actions):
+
+1. **Local-first**: `pnpm check` y Compose locales son la fuente de verdad de merge readiness.
+2. **Triggers**: workflows de celda/seguridad permanecen en `pull_request` + `workflow_dispatch` únicamente.
+3. **Push restore blocked**: reactivar `on.push` / `schedule` está bloqueado por cuota de minutos.
+4. **Org rulesets pending**: branch protection / rulesets requieren Organization admin (pendiente externo).
+5. Evidencia: [`docs/audits/federation-ci-hardening-20260719.md`](audits/federation-ci-hardening-20260719.md).
+
 ## Secuencia de separación
 
 NOVA es la primera célula del corte: su consola genérica `nova-console`, la aplicación específica
@@ -147,11 +157,11 @@ Compose propios. El runtime current de SOFÍA dejó de consultar `administrative
 `messages` directamente y usa rutas internas del propietario PULSO; la inicialización de agenda también dejó de
 ser un trigger de Access y se materializa idempotentemente en el primer uso autorizado de PULSO.
 
-PULSO aún no se declara extraído ni operativamente autónomo: el stack global conserva migraciones y grants para
-N/N−1, y su propio baseline provider-owned conserva 46 hallazgos efectivos registrados en DEBT-001–DEBT-005 y
-DEBT-029–DEBT-031. También faltan cutover, backup, restore y rollback con evidencia del ambiente objetivo. Los
-redirects y la fachada de gateway pueden convivir durante ese corte bajo el perfil `legacy-gateway`, pero se
-retiran con telemetría y no reciben lógica de dominio nueva. Este aislamiento de ejecución no resuelve
+PULSO avanzó el contract tip a `015` (FK Access + drop N-1 + revoke grants Iris de SOFÍA); el baseline de ownership
+ya no registra esos hallazgos. También faltan cutover, backup, restore y rollback con evidencia del ambiente
+objetivo. Los redirects y la fachada de gateway pueden convivir durante ese corte bajo el perfil `legacy-gateway`
+con `LEGACY_GATEWAY_ENABLED=false` por defecto, pero se retiran con telemetría y no reciben lógica de dominio nueva.
+Este aislamiento de ejecución no resuelve
 `DEBT-032`: el snapshot y los proxies directos siguen vivos mientras exista compatibilidad bearer N-1.
 
 ## Regla para agregar productos

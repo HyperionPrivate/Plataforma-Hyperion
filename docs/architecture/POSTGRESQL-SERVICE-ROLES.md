@@ -121,10 +121,9 @@ Audit y Access validan sus ledgers provider-owned en `audit_runtime` y `access_r
 `lumen.schema_version`; y los cuatro componentes NOVA consultan
 `nova.schema_version`, `voice.schema_version`, `liwa.schema_version` o `documents.schema_version`. En PULSO, Agent
 y Prompt Flow validan la fila `sofia` de `agent_runtime.schema_version`; Core, Knowledge, Integration y Channel
-validan la fila `pulso` de `pulso_iris.schema_version`. `hyperion_sofia` conserva lectura del marcador global
-exclusivamente para imágenes N−1 y DEBT-027 impide tratar esa ventana como resuelta. Ninguno usa el catálogo
-cerrado `requiredMigrations` ni
-`platform.schema_migrations` como readiness actual.
+validan la fila `pulso` de `pulso_iris.schema_version`. Tip `015` revoca la lectura del marcador global para
+`hyperion_sofia`; DEBT-027 residual cubre la lectura de bootstrap en `roles.ts` del marker owner-owned. Ninguno
+usa el catálogo cerrado `requiredMigrations` ni `platform.schema_migrations` como readiness actual.
 
 Integration obtiene la readiness de agenda por el contrato propietario HTTP de PULSO y la readiness de prompt y
 worker por la API owner-owned de SOFÍA. Su readiness de dominio no ejecuta SQL contra `agenda_settings`,
@@ -132,10 +131,9 @@ worker por la API owner-owned de SOFÍA. Su readiness de dominio no ejecuta SQL 
 a una migración histórica ni consulta por SQL `administrative_patients`, `conversations` o `messages`: el runtime
 current usa rutas internas autenticadas del propietario PULSO.
 
-La matriz provider-owned revoca y verifica los grants de dominio cruzado, pero retiene únicamente el `SELECT` de
-`hyperion_sofia` sobre `pulso_iris.schema_version` para que el binario N−1 valide su marker. La matriz global
-congelada conserva además sus grants históricos y ambos restos deben retirarse en fases de contrato después del
-cutover. Esa distinción está registrada en
+La matriz provider-owned revoca y verifica los grants de dominio cruzado, incluido el contract tip `015` que
+retira `USAGE`/`SELECT` de `hyperion_sofia` sobre `pulso_iris`. La matriz global congelada conserva grants
+históricos hasta cutover. Esa distinción está registrada en
 [`pulso-integration-readiness-policy.v1.json`](pulso-integration-readiness-policy.v1.json): demuestra el límite del
 artefacto nuevo, no un despliegue ni una migración ya ejecutados sobre el ambiente objetivo.
 

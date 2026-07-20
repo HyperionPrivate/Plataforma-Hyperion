@@ -763,6 +763,9 @@ importers:
 
   services/knowledge-service:
     dependencies:
+      '@hyperion/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       '@hyperion/platform-contracts':
         specifier: 1.1.0
         version: link:../../packages/platform-contracts
@@ -772,6 +775,9 @@ importers:
       '@hyperion/service-runtime':
         specifier: workspace:*
         version: link:../../packages/service-runtime
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
 
   services/liwa-channel-service:
     dependencies:

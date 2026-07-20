@@ -67,6 +67,7 @@ export async function openLumenNMinusOneCompatibilityWindow(
   input: LumenNMinusOneWindowInput,
   executionOptions: MigrationExecutionOptions = readMigrationExecutionOptions()
 ): Promise<void> {
+  assertLumenNMinusOneCompatEnabled();
   validateScopeId(input.cleanupScopeId);
   validateSha256(input.rollbackEvidenceSha256, "rollback evidence");
   await withCompatibilitySessionLock(databaseUrl, executionOptions, async (client) => {
@@ -139,6 +140,7 @@ export async function closeLumenNMinusOneCompatibilityWindow(
   cleanupScopeId: string,
   executionOptions: MigrationExecutionOptions = readMigrationExecutionOptions()
 ): Promise<void> {
+  assertLumenNMinusOneCompatEnabled();
   validateScopeId(cleanupScopeId);
   await withCompatibilitySessionLock(databaseUrl, executionOptions, async (client) => {
     await assertCompatibilitySchema(client);
@@ -684,7 +686,15 @@ function parsePastTimestamp(value: string): Date {
   return parsed;
 }
 
+export function assertLumenNMinusOneCompatEnabled(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.LUMEN_N1_COMPAT_ENABLED?.trim().toLowerCase() === "true") return;
+  throw new Error(
+    "LUMEN N-1 compatibility bridge is fail-closed (DEBT-025). Set LUMEN_N1_COMPAT_ENABLED=true only for an attested rehearsal."
+  );
+}
+
 async function main(): Promise<void> {
+  assertLumenNMinusOneCompatEnabled();
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
   const action = process.argv[2]?.trim();

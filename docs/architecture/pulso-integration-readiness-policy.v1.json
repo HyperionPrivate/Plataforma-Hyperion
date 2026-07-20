@@ -1,5 +1,5 @@
 {
-  "policyVersion": "1.8.0",
+  "policyVersion": "1.10.0",
   "owner": "pulso-data",
   "issue": "HYP-DEBT-027",
   "reviewBy": "2026-10-31",
@@ -30,7 +30,7 @@
     ]
   },
   "readinessMarkers": {
-    "phase": "expand",
+    "phase": "contract",
     "sofiaCurrent": {
       "schema": "agent_runtime",
       "serviceName": "sofia",
@@ -42,15 +42,15 @@
     "globalTransition": {
       "schema": "pulso_iris",
       "serviceName": "pulso",
-      "minimumVersion": 7,
-      "migration": "007-access-integration-tenant-projection.sql",
+      "minimumVersion": 15,
+      "migration": "015-revoke-sofia-pulso-iris-control-plane-grants.sql",
       "currentConsumers": [
         "pulso-iris-service",
         "knowledge-service",
         "integration-service",
         "whatsapp-channel-service"
       ],
-      "retainedFor": "current PULSO, Knowledge, Integration and Channel runtimes plus SOFIA N-1 compatibility"
+      "retainedFor": "current PULSO, Knowledge, Integration and Channel runtimes (SOFIA no longer holds Iris control-plane grants)"
     },
     "futureOwnerMarkers": {
       "status": "not-yet-created",
@@ -59,8 +59,8 @@
     }
   },
   "databasePrivilegeRevocation": {
-    "status": "provider-owned-expand-complete-contract-pending",
-    "reason": "The standalone PULSO migrator revokes and verifies cross-owner domain grants. Current PULSO, Knowledge, Integration and Channel runtimes still read the global marker; only hyperion_sofia reads it solely as an N-1 compatibility grant while current SOFIA workloads use the owner-local marker. The frozen global 001-046 path retains its historical grants until cutover.",
+    "status": "sofia-iris-control-plane-revoked-residual-roles-ts",
+    "reason": "Tip 015 revokes hyperion_sofia USAGE/SELECT on pulso_iris.schema_version. Residual DEBT-027 covers pulso-migrations roles.ts reading agent_runtime.schema_version during bootstrap.",
     "evidence": [
       "packages/pulso-migrations/sql/002-pulso-runtime-roles.sql",
       "packages/pulso-migrations/sql/003-sofia-readiness-marker.sql",
@@ -68,21 +68,24 @@
       "packages/pulso-migrations/sql/005-access-iris-tenant-projection.sql",
       "packages/pulso-migrations/sql/006-access-sofia-tenant-projection.sql",
       "packages/pulso-migrations/sql/007-access-integration-tenant-projection.sql",
+      "packages/pulso-migrations/sql/008-access-knowledge-tenant-projection.sql",
       "packages/pulso-migrations/src/schema-manifest.ts",
       "packages/pulso-migrations/src/autonomy.integration.test.ts",
-      "packages/service-runtime/src/sofia-n-minus-one-readiness.integration.test.ts"
+      "packages/service-runtime/src/sofia-n-minus-one-readiness.integration.test.ts",
+      "packages/pulso-migrations/sql/009-contract-channel-access-tenant-fks.sql",
+      "packages/pulso-migrations/sql/015-revoke-sofia-pulso-iris-control-plane-grants.sql"
     ],
     "retainedCompatibilityGrants": [
       {
         "grant": "USAGE ON SCHEMA pulso_iris TO hyperion_sofia",
         "consumer": "SOFIA N-1 images",
-        "status": "retiring-after-n-minus-one-rehearsal"
+        "status": "revoked-in-015"
       },
       {
         "grant": "SELECT ON pulso_iris.schema_version TO hyperion_sofia",
         "consumer": "SOFIA N-1 images",
         "currentRuntimeMarker": "agent_runtime.schema_version/service_name=sofia",
-        "status": "retiring-after-n-minus-one-rehearsal"
+        "status": "revoked-in-015"
       }
     ],
     "requiredRevocations": [

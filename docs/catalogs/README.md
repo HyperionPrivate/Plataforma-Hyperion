@@ -4,8 +4,8 @@ Los archivos de esta carpeta son fuentes de verdad legibles por herramientas dur
 `catalogVersion` sigue SemVer y cada entrada conserva propietario, estado, identificador de seguimiento y fecha
 de revisión o vencimiento.
 
-Estadísticas normativas: `products=4`, `services=32`, `debtItems=20`, `findingGroups=84`, `instances=84`,
-`workstreams=9`, `temporaryExceptions=3` y `transitionInventory=8`.
+Estadísticas normativas: `products=4`, `services=32`, `debtItems=10`, `findingGroups=1`, `instances=1`,
+`workstreams=1`, `temporaryExceptions=1` y `transitionInventory=8`.
 
 - [`products.v1.json`](products.v1.json): productos comerciales y plano neutral de plataforma.
 - [`services.v1.json`](services.v1.json): aplicaciones, servicios y one-shots desplegables actuales, junto con sus
@@ -13,9 +13,8 @@ Estadísticas normativas: `products=4`, `services=32`, `debtItems=20`, `findingG
   figura una sola vez aunque sus comandos se ejecuten mediante dos alias Compose, está marcado `retiring` y no
   acredita autonomía de datos.
 - [`debt.v1.json`](debt.v1.json): agrupación exhaustiva del estado efectivo por tipo y arista. Incluye tanto la
-  cadena global congelada como los migradores provider-owned independientes; las dos excepciones de la migración
-  global 038 y la excepción trazada del control-plane de markers no ocultan los mismos adaptadores cuando siguen
-  presentes en el baseline autónomo de PULSO. `DEBT-022` es además la única excepción del gate de tenant: fija las
+  cadena global congelada como los migradores provider-owned independientes; la excepción trazada del control-plane de markers (lectura residual en `roles.ts`) permanece hasta separar el
+  bootstrap SOFÍA; los adaptadores N-1 038/autónomos ya tienen contract DROP en tip 014 / global 052. `DEBT-022` es además la única excepción del gate de tenant: fija las
   cuatro selecciones CEDCO por slug a bytes, cantidad de ocurrencias, owner, issue y vencimiento exactos.
 
 Mientras el proyecto no esté en una GitHub Organization, los valores `issue` son identificadores locales estables

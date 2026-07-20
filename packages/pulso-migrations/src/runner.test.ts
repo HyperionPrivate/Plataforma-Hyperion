@@ -19,7 +19,15 @@ describe("PULSO provider-owned migration set", () => {
       "004-access-channel-tenant-projection.sql",
       "005-access-iris-tenant-projection.sql",
       "006-access-sofia-tenant-projection.sql",
-      "007-access-integration-tenant-projection.sql"
+      "007-access-integration-tenant-projection.sql",
+      "008-access-knowledge-tenant-projection.sql",
+      "009-contract-channel-access-tenant-fks.sql",
+      "010-contract-integration-access-tenant-fks.sql",
+      "011-contract-sofia-access-tenant-fks.sql",
+      "012-contract-iris-access-tenant-fks.sql",
+      "013-contract-knowledge-access-tenant-fks.sql",
+      "014-drop-n-minus-one-legacy-adapters.sql",
+      "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
     ]);
     expect(baseline.match(/^create schema /gm) ?? []).toHaveLength(4);
     expect(baseline.match(/^create table /gm) ?? []).toHaveLength(53);
@@ -97,6 +105,16 @@ describe("PULSO provider-owned migration set", () => {
     expect(sql).not.toMatch(/grant delete[^;]*(?:tenant_snapshots|access_projection_inbox)/i);
   });
 
+  it("adds a Knowledge-owned tenant projection without a foreign key to Access", async () => {
+    const sql = await readFile(new URL("../sql/008-access-knowledge-tenant-projection.sql", import.meta.url), "utf8");
+    expect(sql).toMatch(/create schema if not exists knowledge_runtime/i);
+    expect(sql).toMatch(/create table knowledge_runtime\.tenant_snapshots/i);
+    expect(sql).toMatch(/create table knowledge_runtime\.access_projection_inbox/i);
+    expect(sql).not.toMatch(/references\s+platform\.tenants/i);
+    expect(sql).toMatch(/grant select, insert, update on table[\s\S]*to hyperion_knowledge/i);
+    expect(sql).not.toMatch(/grant delete[^;]*(?:tenant_snapshots|access_projection_inbox)/i);
+  });
+
   it("rejects missing, renamed, reordered or foreign migration files", () => {
     const exact = [
       "001-pulso-autonomous-baseline.sql",
@@ -105,7 +123,15 @@ describe("PULSO provider-owned migration set", () => {
       "004-access-channel-tenant-projection.sql",
       "005-access-iris-tenant-projection.sql",
       "006-access-sofia-tenant-projection.sql",
-      "007-access-integration-tenant-projection.sql"
+      "007-access-integration-tenant-projection.sql",
+      "008-access-knowledge-tenant-projection.sql",
+      "009-contract-channel-access-tenant-fks.sql",
+      "010-contract-integration-access-tenant-fks.sql",
+      "011-contract-sofia-access-tenant-fks.sql",
+      "012-contract-iris-access-tenant-fks.sql",
+      "013-contract-knowledge-access-tenant-fks.sql",
+      "014-drop-n-minus-one-legacy-adapters.sql",
+      "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
     ];
     expect(() => assertPulsoProviderMigrationNames(exact)).not.toThrow();
     expect(() => assertPulsoProviderMigrationNames(exact.slice(0, 1))).toThrow("migration set mismatch");

@@ -64,3 +64,16 @@ correctamente en el SHA publicado. El full-stack quedó temporalmente restringid
    mientras la Organization no tenga el control de seguridad y una política de remediación aprobada.
 5. Continuar la separación profunda de datos LUMEN/PULSO y retirar el gateway/edge de compatibilidad cuando la
    telemetría demuestre que ya no reciben tráfico.
+
+## Wave F — governance hold (2026-07-20)
+
+Estado: **completo como hold documentado** (no como restauración de CI en push).
+
+| Ítem                                                       | Estado                          |
+| ---------------------------------------------------------- | ------------------------------- |
+| Local-first (`pnpm check` / Compose) como fuente de verdad | vigente                         |
+| Workflows solo `workflow_dispatch` + `pull_request`        | verificado                      |
+| Restaurar `on.push` / `schedule`                           | **bloqueado** por cuota Actions |
+| Org rulesets / branch protection                           | pendiente externo               |
+
+No reactivar triggers de push/schedule en esta ola.

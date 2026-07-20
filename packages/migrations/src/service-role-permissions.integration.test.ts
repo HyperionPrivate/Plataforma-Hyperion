@@ -334,28 +334,46 @@ describeIntegration("PostgreSQL service role isolation", () => {
       expect(publicExecute.rows[0]?.canExecute).toBe(false);
 
       const compatibilityExecute = await admin.query<{
-        pulsoInboxResolver: boolean;
-        pulsoOutboxResolver: boolean;
-        sofiaInboxResolver: boolean;
+        pulsoInboxResolverPresent: boolean;
+        pulsoOutboxResolverPresent: boolean;
+        sofiaInboxResolverPresent: boolean;
+        pulsoInboxResolver: boolean | null;
+        pulsoOutboxResolver: boolean | null;
+        sofiaInboxResolver: boolean | null;
       }>(
         `select
-           has_function_privilege(
-             'hyperion_pulso',
-             'pulso_iris.resolve_legacy_channel_inbox_position()',
-             'EXECUTE'
-           ) as "pulsoInboxResolver",
-           has_function_privilege(
-             'hyperion_pulso',
-             'pulso_iris.prepare_legacy_message_source_position()',
-             'EXECUTE'
-           ) as "pulsoOutboxResolver",
-           has_function_privilege(
-             'hyperion_sofia',
-             'agent_runtime.resolve_legacy_pulso_inbox_position()',
-             'EXECUTE'
-           ) as "sofiaInboxResolver"`
+           to_regprocedure('pulso_iris.resolve_legacy_channel_inbox_position()') is not null as "pulsoInboxResolverPresent",
+           to_regprocedure('pulso_iris.prepare_legacy_message_source_position()') is not null as "pulsoOutboxResolverPresent",
+           to_regprocedure('agent_runtime.resolve_legacy_pulso_inbox_position()') is not null as "sofiaInboxResolverPresent",
+           case
+             when to_regprocedure('pulso_iris.resolve_legacy_channel_inbox_position()') is null then false
+             else has_function_privilege(
+               'hyperion_pulso',
+               'pulso_iris.resolve_legacy_channel_inbox_position()',
+               'EXECUTE'
+             )
+           end as "pulsoInboxResolver",
+           case
+             when to_regprocedure('pulso_iris.prepare_legacy_message_source_position()') is null then false
+             else has_function_privilege(
+               'hyperion_pulso',
+               'pulso_iris.prepare_legacy_message_source_position()',
+               'EXECUTE'
+             )
+           end as "pulsoOutboxResolver",
+           case
+             when to_regprocedure('agent_runtime.resolve_legacy_pulso_inbox_position()') is null then false
+             else has_function_privilege(
+               'hyperion_sofia',
+               'agent_runtime.resolve_legacy_pulso_inbox_position()',
+               'EXECUTE'
+             )
+           end as "sofiaInboxResolver"`
       );
       expect(compatibilityExecute.rows[0]).toEqual({
+        pulsoInboxResolverPresent: false,
+        pulsoOutboxResolverPresent: false,
+        sofiaInboxResolverPresent: false,
         pulsoInboxResolver: false,
         pulsoOutboxResolver: false,
         sofiaInboxResolver: false

@@ -272,6 +272,8 @@
         "packages/pulso-migrations/sql/005-access-iris-tenant-projection.sql",
         "packages/pulso-migrations/sql/006-access-sofia-tenant-projection.sql",
         "packages/pulso-migrations/sql/007-access-integration-tenant-projection.sql",
+        "packages/pulso-migrations/sql/008-access-knowledge-tenant-projection.sql",
+        "packages/pulso-migrations/sql/015-revoke-sofia-pulso-iris-control-plane-grants.sql",
         "packages/pulso-migrations/src/autonomy.integration.test.ts",
         "infra/docker-compose.pulso.yml",
         ".github/workflows/pulso.yml"

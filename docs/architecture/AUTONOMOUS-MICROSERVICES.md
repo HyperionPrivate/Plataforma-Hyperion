@@ -93,10 +93,9 @@ limita a los one-shots de base y roles; cada runner provider-owned migra con su 
 
 PULSO define `hyperion_pulso` como base lógica, `hyperion_pulso_migrator` como owner y cinco roles runtime. Agent y
 Prompt Flow validan el marcador owner-owned `agent_runtime.schema_version`; los otros cuatro servicios con base de
-datos continúan sobre `pulso_iris.schema_version`. El grant de lectura del marcador global para `hyperion_sofia`
-permanece de forma explícita y temporal para imágenes N−1, no como dependencia del runtime current. La matriz
-vigente y la distinción frente al stack de
-compatibilidad están en [`POSTGRESQL-SERVICE-ROLES.md`](POSTGRESQL-SERVICE-ROLES.md).
+datos continúan sobre `pulso_iris.schema_version`. Tip `015` retira el grant de lectura del marcador global para
+`hyperion_sofia`; el runtime current usa sólo `agent_runtime.schema_version`. La matriz vigente y la distinción
+frente al stack de compatibilidad están en [`POSTGRESQL-SERVICE-ROLES.md`](POSTGRESQL-SERVICE-ROLES.md).
 El ledger Audit conserva `tenant_id` como identificador externo sin FK a Access; borrar un tenant no reescribe
 la evidencia historica.
 

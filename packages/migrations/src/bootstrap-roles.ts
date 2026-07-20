@@ -236,13 +236,19 @@ export async function applyServiceRolePrivilegeMatrix(client: BootstrapClient): 
       on function lumen.require_open_n1_compatibility_window(),
                   lumen.require_attested_legacy_cleanup_terminal()
       from hyperion_lumen;
-    revoke all privileges
-      on function pulso_iris.resolve_legacy_channel_inbox_position(),
-                  pulso_iris.prepare_legacy_message_source_position()
-      from hyperion_pulso;
-    revoke all privileges
-      on function agent_runtime.resolve_legacy_pulso_inbox_position()
-      from hyperion_sofia;
+    do $bootstrap_legacy_adapter_revokes$
+    begin
+      if to_regprocedure('pulso_iris.resolve_legacy_channel_inbox_position()') is not null then
+        execute 'revoke all privileges on function pulso_iris.resolve_legacy_channel_inbox_position() from hyperion_pulso';
+      end if;
+      if to_regprocedure('pulso_iris.prepare_legacy_message_source_position()') is not null then
+        execute 'revoke all privileges on function pulso_iris.prepare_legacy_message_source_position() from hyperion_pulso';
+      end if;
+      if to_regprocedure('agent_runtime.resolve_legacy_pulso_inbox_position()') is not null then
+        execute 'revoke all privileges on function agent_runtime.resolve_legacy_pulso_inbox_position() from hyperion_sofia';
+      end if;
+    end
+    $bootstrap_legacy_adapter_revokes$;
 
     do $bootstrap_reconcile$
     begin

@@ -1,0 +1,14 @@
+{
+  "related": "docs/evidence/access-channel-projection-parity-20260719.json",
+  "tipVersion": 15,
+  "tipMigration": "015-revoke-sofia-pulso-iris-control-plane-grants.sql",
+  "contracts": [
+    "009-contract-channel-access-tenant-fks.sql",
+    "010-contract-integration-access-tenant-fks.sql",
+    "011-contract-sofia-access-tenant-fks.sql",
+    "012-contract-iris-access-tenant-fks.sql",
+    "013-contract-knowledge-access-tenant-fks.sql"
+  ],
+  "closedDebts": ["DEBT-001", "DEBT-002", "DEBT-003", "DEBT-004", "DEBT-005"],
+  "capturedAt": "2026-07-20"
+}

@@ -33,12 +33,21 @@ export const EXPECTED_MIGRATIONS = [
   "004-access-channel-tenant-projection.sql",
   "005-access-iris-tenant-projection.sql",
   "006-access-sofia-tenant-projection.sql",
-  "007-access-integration-tenant-projection.sql"
+  "007-access-integration-tenant-projection.sql",
+  "008-access-knowledge-tenant-projection.sql",
+  "009-contract-channel-access-tenant-fks.sql",
+  "010-contract-integration-access-tenant-fks.sql",
+  "011-contract-sofia-access-tenant-fks.sql",
+  "012-contract-iris-access-tenant-fks.sql",
+  "013-contract-knowledge-access-tenant-fks.sql",
+  "014-drop-n-minus-one-legacy-adapters.sql",
+  "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
 ];
-export const EXPECTED_SCHEMA_VERSION = "7\t007-access-integration-tenant-projection.sql";
+export const EXPECTED_SCHEMA_VERSION = "15\t015-revoke-sofia-pulso-iris-control-plane-grants.sql";
 export const EXPECTED_SOFIA_SCHEMA_VERSION = "2\t006-access-sofia-tenant-projection.sql";
 export const EXPECTED_OWNER_STATE = "4\t0\t0";
-export const EXPECTED_USER_SCHEMA_STATE = "agent_runtime\nchannel_runtime\nintegration_runtime\nplatform\npulso_iris";
+export const EXPECTED_USER_SCHEMA_STATE =
+  "agent_runtime\nchannel_runtime\nintegration_runtime\nknowledge_runtime\nplatform\npulso_iris";
 export const RUNTIME_ROLES = [
   "hyperion_pulso",
   "hyperion_sofia",
@@ -257,8 +266,9 @@ export function isExpectedRuntimeDdlDenial(message) {
 
 export function expectedRuntimeState(role) {
   if (!RUNTIME_ROLES.includes(role)) throw new Error(`unknown PULSO runtime role: ${role}`);
+  const canReadGlobalMarker = role !== "hyperion_sofia";
   const canReadSofiaMarker = role === "hyperion_sofia";
-  return `${role}\t${RESTORE_DATABASE}\t7\t007-access-integration-tenant-projection.sql\ttrue\t${canReadSofiaMarker}\ttrue\ttrue\tfalse\tfalse\tfalse`;
+  return `${role}\t${RESTORE_DATABASE}\t15\t015-revoke-sofia-pulso-iris-control-plane-grants.sql\t${canReadGlobalMarker}\t${canReadSofiaMarker}\ttrue\ttrue\tfalse\tfalse\tfalse`;
 }
 
 export function parsePulsoMigrationReceipt(output) {
@@ -730,21 +740,26 @@ function aclState(compose, database) {
 function runtimeState(compose, database, role, password) {
   const probe = RUNTIME_ACCESS_PROBES[role];
   if (!probe) throw new Error(`missing runtime access probe for ${role}`);
+  // SOFIA no longer holds USAGE/SELECT on pulso_iris after tip 015; inject the
+  // tip marker bytes from the drill constants instead of reading the table.
+  const markerProjection =
+    role === "hyperion_sofia"
+      ? `'15' || E'\\t' || '015-revoke-sofia-pulso-iris-control-plane-grants.sql'`
+      : `current_version || E'\\t' || migration_name`;
+  const fromClause = role === "hyperion_sofia" ? "" : " from pulso_iris.schema_version where service_name = 'pulso'";
   return runtimePsql(
     compose,
     database,
     role,
     password,
-    `select current_user || E'\\t' || current_database() || E'\\t' || current_version || E'\\t' ||
-            migration_name || E'\\t' ||
+    `select current_user || E'\\t' || current_database() || E'\\t' || ${markerProjection} || E'\\t' ||
             has_table_privilege(current_user, 'pulso_iris.schema_version', 'SELECT') || E'\\t' ||
             ${catalogTablePrivilege("agent_runtime", "schema_version", "SELECT")} || E'\\t' ||
             ${probe.allowedPrimary} || E'\\t' ||
             ${probe.allowedSecondary} || E'\\t' ||
             ${probe.forbiddenPrimary} || E'\\t' ||
             ${probe.forbiddenSecondary} || E'\\t' ||
-            has_schema_privilege(current_user, '${probe.schema}', 'CREATE')
-       from pulso_iris.schema_version where service_name = 'pulso'`
+            has_schema_privilege(current_user, '${probe.schema}', 'CREATE')${fromClause}`
   );
 }
 
@@ -951,7 +966,7 @@ export function runDrill(options) {
     }
     assertLedgerMatchesFiles(sourceLedger, expectedMigrations);
     if (schemaVersion(compose, SOURCE_DATABASE) !== EXPECTED_SCHEMA_VERSION) {
-      throw new Error("source PULSO schema is not at provider version 7 / 007");
+      throw new Error("source PULSO schema is not at provider version 15 / 015");
     }
     if (sofiaSchemaVersion(compose, SOURCE_DATABASE) !== EXPECTED_SOFIA_SCHEMA_VERSION) {
       throw new Error("source SOFIA schema is not at owner-local version 2 / 006");
