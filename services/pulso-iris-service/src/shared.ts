@@ -2,6 +2,7 @@ import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
+import { requireIrisTenantAccess, type IrisTenantAccessMode } from "./access-tenant-projections.js";
 
 type Database = NonNullable<ServiceContext["db"]>;
 
@@ -32,14 +33,16 @@ export function readUuidParam(params: unknown, key: string): string | undefined 
 }
 
 /**
- * Valida tenant + base de datos y responde 400/503 si falta algo.
- * Devuelve undefined cuando ya se envio una respuesta de error.
+ * Valida tenant + base de datos y la proyección Access local.
+ * GET/HEAD exigen snapshot existente; mutaciones exigen status active.
+ * Devuelve undefined cuando ya se envió una respuesta de error.
  */
-export function requireTenantDb(
+export async function requireTenantDb(
   context: ServiceContext,
   request: FastifyRequest,
-  reply: FastifyReply
-): { tenantId: string; db: NonNullable<ServiceContext["db"]> } | undefined {
+  reply: FastifyReply,
+  mode?: IrisTenantAccessMode
+): Promise<{ tenantId: string; db: NonNullable<ServiceContext["db"]> } | undefined> {
   const tenantId = readTenantId(request.params);
   if (!tenantId) {
     void reply.code(400).send(envelope({ error: "tenantId must be a UUID" }, request.id));
@@ -50,6 +53,10 @@ export function requireTenantDb(
     void reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
     return undefined;
   }
+
+  const accessMode = mode ?? (request.method === "GET" || request.method === "HEAD" ? "exists" : "active");
+  const snapshot = await requireIrisTenantAccess(context.db, tenantId, reply, request.id, accessMode);
+  if (!snapshot) return undefined;
 
   return { tenantId, db: context.db };
 }

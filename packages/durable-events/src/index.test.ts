@@ -93,6 +93,31 @@ describe("HttpOutboxDispatcher", () => {
     expect(fail).not.toHaveBeenCalled();
   });
 
+  it("fans out to every destination before completing once", async () => {
+    const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => {
+      return new Response(null, { status: 202 });
+    });
+    const complete = vi.fn(async () => undefined);
+    const fail = vi.fn(async () => undefined);
+    const destinations = [
+      "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots",
+      "http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots"
+    ] as const;
+    const dispatcher = createDispatcher({
+      fetch,
+      complete,
+      fail,
+      claim: async () => [{ ...EVENT, destination: destinations }]
+    });
+
+    await expect(dispatcher.drainOnce()).resolves.toMatchObject({ completed: 1, failed: 0 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[0]![0]).toBe(destinations[0]);
+    expect(fetch.mock.calls[1]![0]).toBe(destinations[1]);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(fail).not.toHaveBeenCalled();
+  });
+
   it("treats HTTP 300 as a failed delivery boundary", async () => {
     const fail = vi.fn(async () => undefined);
     const dispatcher = createDispatcher({

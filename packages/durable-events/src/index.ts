@@ -26,7 +26,8 @@ export interface ClaimedOutboxEvent<TPayload = JsonValue> {
   readonly streamId?: string;
   readonly streamSequence?: number;
   readonly payload: TPayload;
-  readonly destination: string;
+  /** One HTTP URL, or several for fan-out (complete only if every destination accepts). */
+  readonly destination: string | readonly string[];
 }
 
 export interface OutboxEventEnvelope<TPayload = JsonValue> {
@@ -256,7 +257,8 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
       return this.#failedDispatch(event.id, invalidEventCode);
     }
 
-    if (!isHttpDestination(event.destination)) {
+    const destinations = normalizeDestinations(event.destination);
+    if (destinations === undefined) {
       return this.#failedDispatch(event.id, "invalid_destination");
     }
 
@@ -280,16 +282,22 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
       return this.#failedDispatch(event.id, "serialization_error");
     }
 
-    const outcome = await this.#request(event, body);
-    if (outcome.kind === "timeout") {
-      return this.#failedDispatch(event.id, "timeout");
-    }
-    if (outcome.kind === "network_error") {
-      return this.#failedDispatch(event.id, "network_error");
-    }
+    for (const destination of destinations) {
+      const outcome = await this.#request(event, destination, body);
+      if (outcome.kind === "timeout") {
+        return this.#failedDispatch(event.id, "timeout");
+      }
+      if (outcome.kind === "network_error") {
+        return this.#failedDispatch(event.id, "network_error");
+      }
 
-    if (!Number.isInteger(outcome.response.status) || outcome.response.status < 200 || outcome.response.status >= 300) {
-      return this.#failedDispatch(event.id, sanitizeHttpStatus(outcome.response.status));
+      if (
+        !Number.isInteger(outcome.response.status) ||
+        outcome.response.status < 200 ||
+        outcome.response.status >= 300
+      ) {
+        return this.#failedDispatch(event.id, sanitizeHttpStatus(outcome.response.status));
+      }
     }
 
     try {
@@ -301,13 +309,17 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
     }
   }
 
-  async #request(event: ClaimedOutboxEvent<TPayload>, body: string): Promise<RequestOutcome | TimeoutOutcome> {
+  async #request(
+    event: ClaimedOutboxEvent<TPayload>,
+    destination: string,
+    body: string
+  ): Promise<RequestOutcome | TimeoutOutcome> {
     const controller = new AbortController();
     this.#activeRequestController = controller;
     if (this.#stopping) controller.abort();
     const request: Promise<RequestOutcome> = Promise.resolve()
       .then(() =>
-        this.#fetch(event.destination, {
+        this.#fetch(destination, {
           method: "POST",
           headers: {
             authorization: `Bearer ${this.#internalToken}`,
@@ -466,6 +478,23 @@ function isHttpDestination(destination: unknown): destination is string {
   } catch {
     return false;
   }
+}
+
+function normalizeDestinations(destination: unknown): readonly string[] | undefined {
+  if (typeof destination === "string") {
+    return isHttpDestination(destination) ? [destination] : undefined;
+  }
+  if (!Array.isArray(destination) || destination.length === 0) {
+    return undefined;
+  }
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of destination) {
+    if (!isHttpDestination(entry) || seen.has(entry)) return undefined;
+    seen.add(entry);
+    urls.push(entry);
+  }
+  return urls;
 }
 
 function sanitizeHttpStatus(status: number): HttpOutboxFailureCode {

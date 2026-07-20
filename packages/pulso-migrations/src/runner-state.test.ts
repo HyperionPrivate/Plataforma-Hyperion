@@ -25,6 +25,7 @@ const baselineName = "001-pulso-autonomous-baseline.sql";
 const rolesName = "002-pulso-runtime-roles.sql";
 const sofiaMarkerName = "003-sofia-readiness-marker.sql";
 const channelProjectionName = "004-access-channel-tenant-projection.sql";
+const irisProjectionName = "005-access-iris-tenant-projection.sql";
 
 describe("PULSO migration state recovery", () => {
   beforeEach(() => {
@@ -36,16 +37,16 @@ describe("PULSO migration state recovery", () => {
     hooks.inspections.push(
       inspection("legacy", undefined, undefined, []),
       inspection("legacy", undefined, undefined, []),
-      inspection("managed", 4, channelProjectionName, ledger(checksums))
+      inspection("managed", 5, irisProjectionName, ledger(checksums))
     );
     const client = new RecordingClient();
 
     await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
-      applied: [rolesName, sofiaMarkerName, channelProjectionName],
+      applied: [rolesName, sofiaMarkerName, channelProjectionName, irisProjectionName],
       adopted: [baselineName],
       skipped: [baselineName]
     });
-    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(4);
+    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(5);
     expect(client.sql.some((sql) => sql.includes("insert into pulso_iris.migration_ledger"))).toBe(true);
   });
 
@@ -53,48 +54,48 @@ describe("PULSO migration state recovery", () => {
     const checksums = await migrationChecksums();
     hooks.inspections.push(
       inspection("managed", 1, baselineName, [{ name: baselineName, checksum: checksums.get(baselineName)! }]),
-      inspection("managed", 4, channelProjectionName, ledger(checksums))
+      inspection("managed", 5, irisProjectionName, ledger(checksums))
     );
     const client = new RecordingClient();
 
     await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
-      applied: [rolesName, sofiaMarkerName, channelProjectionName],
+      applied: [rolesName, sofiaMarkerName, channelProjectionName, irisProjectionName],
       adopted: [],
       skipped: [baselineName]
+    });
+    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(4);
+  });
+
+  it("accepts a structurally valid managed 002 database and applies 003 then 004 then 005", async () => {
+    const checksums = await migrationChecksums();
+    hooks.inspections.push(
+      inspection("managed", 2, rolesName, ledger(checksums, [baselineName, rolesName])),
+      inspection("managed", 5, irisProjectionName, ledger(checksums))
+    );
+    const client = new RecordingClient();
+
+    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
+      applied: [sofiaMarkerName, channelProjectionName, irisProjectionName],
+      adopted: [],
+      skipped: [baselineName, rolesName]
     });
     expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(3);
   });
 
-  it("accepts a structurally valid managed 002 database and applies 003 then 004", async () => {
-    const checksums = await migrationChecksums();
-    hooks.inspections.push(
-      inspection("managed", 2, rolesName, ledger(checksums, [baselineName, rolesName])),
-      inspection("managed", 4, channelProjectionName, ledger(checksums))
-    );
-    const client = new RecordingClient();
-
-    await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
-      applied: [sofiaMarkerName, channelProjectionName],
-      adopted: [],
-      skipped: [baselineName, rolesName]
-    });
-    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(2);
-  });
-
-  it("upgrades an exact managed 003 database only with the Channel projection", async () => {
+  it("upgrades an exact managed 003 database with Channel then Iris projections", async () => {
     const checksums = await migrationChecksums();
     hooks.inspections.push(
       inspection("managed", 3, sofiaMarkerName, ledger(checksums, [baselineName, rolesName, sofiaMarkerName])),
-      inspection("managed", 4, channelProjectionName, ledger(checksums))
+      inspection("managed", 5, irisProjectionName, ledger(checksums))
     );
     const client = new RecordingClient();
 
     await expect(runPulsoMigrationsWithClient(client, sqlDirectory, emptyManifests())).resolves.toEqual({
-      applied: [channelProjectionName],
+      applied: [channelProjectionName, irisProjectionName],
       adopted: [],
       skipped: [baselineName, rolesName, sofiaMarkerName]
     });
-    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(1);
+    expect(client.sql.filter((sql) => sql === "begin")).toHaveLength(2);
   });
 });
 
@@ -109,7 +110,7 @@ class RecordingClient implements PulsoMigrationClient {
 async function migrationChecksums(): Promise<Map<string, string>> {
   return new Map(
     await Promise.all(
-      [baselineName, rolesName, sofiaMarkerName, channelProjectionName].map(
+      [baselineName, rolesName, sofiaMarkerName, channelProjectionName, irisProjectionName].map(
         async (name) =>
           [
             name,
@@ -122,7 +123,7 @@ async function migrationChecksums(): Promise<Map<string, string>> {
 
 function ledger(
   checksums: Map<string, string>,
-  names: readonly string[] = [baselineName, rolesName, sofiaMarkerName, channelProjectionName]
+  names: readonly string[] = [baselineName, rolesName, sofiaMarkerName, channelProjectionName, irisProjectionName]
 ) {
   return names.map((name) => ({ name, checksum: checksums.get(name)! }));
 }
@@ -155,5 +156,5 @@ function emptyManifests() {
     constraint: { count: 0, fingerprint: "" },
     other_relation: { count: 0, fingerprint: "" }
   };
-  return { legacy: empty, managed: empty, managedByVersion: { 2: empty, 3: empty, 4: empty } };
+  return { legacy: empty, managed: empty, managedByVersion: { 2: empty, 3: empty, 4: empty, 5: empty } };
 }

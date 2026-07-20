@@ -227,6 +227,8 @@
     "pulso_iris.service_migrations": "pulso-core",
     "pulso_iris.schema_version": "pulso-core",
     "pulso_iris.migration_ledger": "pulso-core",
+    "pulso_iris.tenant_snapshots": "pulso-core",
+    "pulso_iris.access_projection_inbox": "pulso-core",
     "channel_runtime.connections": "channel",
     "channel_runtime.thread_bindings": "channel",
     "channel_runtime.inbound_events": "channel",

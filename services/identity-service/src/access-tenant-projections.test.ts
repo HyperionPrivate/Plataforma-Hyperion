@@ -222,6 +222,25 @@ describe("Access tenant snapshot delivery configuration", () => {
     ).toThrow("between 1 and 1000");
   });
 
+  it("parses comma-separated HTTP destinations for Channel and Iris fan-out", () => {
+    expect(
+      readAccessTenantProjectionConfiguration({
+        ACCESS_TENANT_SNAPSHOT_TRANSPORT: "http",
+        ACCESS_TENANT_SNAPSHOT_HTTP_URL:
+          "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots,http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots",
+        ACCESS_TENANT_SNAPSHOT_HTTP_TOKEN: HTTP_TOKEN,
+        ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP: "true",
+        HYPERION_ENVIRONMENT: "ci"
+      })
+    ).toMatchObject({
+      transport: "http",
+      destinations: [
+        "http://whatsapp-channel-service:8089/internal/v1/events/access-tenant-snapshots",
+        "http://pulso-iris-service:8088/internal/v1/events/access-tenant-snapshots"
+      ]
+    });
+  });
+
   it("allows plaintext only for an explicitly enabled private local or CI destination", () => {
     expect(
       readAccessTenantProjectionConfiguration({

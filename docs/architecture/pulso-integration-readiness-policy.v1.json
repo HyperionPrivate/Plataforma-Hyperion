@@ -42,8 +42,8 @@
     "globalTransition": {
       "schema": "pulso_iris",
       "serviceName": "pulso",
-      "minimumVersion": 4,
-      "migration": "004-access-channel-tenant-projection.sql",
+      "minimumVersion": 5,
+      "migration": "005-access-iris-tenant-projection.sql",
       "currentConsumers": [
         "pulso-iris-service",
         "knowledge-service",
@@ -65,6 +65,7 @@
       "packages/pulso-migrations/sql/002-pulso-runtime-roles.sql",
       "packages/pulso-migrations/sql/003-sofia-readiness-marker.sql",
       "packages/pulso-migrations/sql/004-access-channel-tenant-projection.sql",
+      "packages/pulso-migrations/sql/005-access-iris-tenant-projection.sql",
       "packages/pulso-migrations/src/schema-manifest.ts",
       "packages/pulso-migrations/src/autonomy.integration.test.ts",
       "packages/service-runtime/src/sofia-n-minus-one-readiness.integration.test.ts"

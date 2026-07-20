@@ -44,7 +44,7 @@ function createClient(
     if (sql.includes("from pulso_iris.schema_version")) {
       const marker =
         options.globalMarker === undefined
-          ? { current_version: 4, migration_name: "004-access-channel-tenant-projection.sql" }
+          ? { current_version: 5, migration_name: "005-access-iris-tenant-projection.sql" }
           : options.globalMarker;
       return { rows: marker ? [marker] : [] };
     }
@@ -110,7 +110,7 @@ describe("PULSO runtime role bootstrap", () => {
 
   it("keeps the SOFIA marker pinned to 003 when the global terminal advances", async () => {
     const { client } = createClient({
-      globalMarker: { current_version: 4, migration_name: "004-access-channel-tenant-projection.sql" },
+      globalMarker: { current_version: 5, migration_name: "005-access-iris-tenant-projection.sql" },
       sofiaMarker: { current_version: 1, migration_name: "003-sofia-readiness-marker.sql" }
     });
     await expect(applyPulsoRolePasswords(client, "hyperion_pulso", PASSWORDS)).resolves.toBeUndefined();

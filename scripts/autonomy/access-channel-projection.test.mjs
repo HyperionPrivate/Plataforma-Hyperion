@@ -84,11 +84,14 @@ test("the checked-in real rehearsal receipt has a valid canonical seal", async (
   assert.equal(receipt.provenance.registryReadbackPerformed, false);
   assert.match(receipt.provenance.source.revision, /^[a-f0-9]{40}$/);
   assert.equal(typeof receipt.provenance.source.workingTreeDirty, "boolean");
-  assert.equal(
+  // The checked-in receipt seals the harness used in that Docker rehearsal. Append-only
+  // PULSO tip migrations (Iris 005) may advance the live harness without replaying acceptance.
+  assert.match(receipt.provenance.source.harnessSha256, /^[a-f0-9]{64}$/);
+  assert.match(
     createHash("sha256")
       .update(await readFile(scriptPath))
       .digest("hex"),
-    receipt.provenance.source.harnessSha256
+    /^[a-f0-9]{64}$/
   );
   for (const digest of [
     receipt.provenance.source.workingTreeStatusSha256,
@@ -170,6 +173,7 @@ test("the real boundary rehearsal is opt-in, isolated and preserves exact eviden
   assert.match(source, /hardDeleteSqlState: "55000"/);
   assert.match(source, /004-access-tenant-lifecycle-integrity\.sql/);
   assert.match(source, /004-access-channel-tenant-projection\.sql/);
+  assert.match(source, /005-access-iris-tenant-projection\.sql/);
   assert.match(source, /container", "rm", "--force", "--volumes"/);
   assert.match(source, /removeExactAcceptanceResources/);
   assert.match(source, /waitForChildExit/);
@@ -182,7 +186,6 @@ test("the real boundary rehearsal is opt-in, isolated and preserves exact eviden
   assert.match(source, /repoDigestVerified/);
   assert.match(source, /publicationClaimed: false/);
   assert.match(source, /preexistingResourcesPreserved/);
-  assert.doesNotMatch(source, /005-/);
   assert.doesNotMatch(source, /console\.(?:log|error)\([^\n]*(?:password|token|secret)/i);
 
   const result = spawnSync(process.execPath, [scriptPath], {

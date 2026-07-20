@@ -10,7 +10,7 @@ export const registerAvailabilityRoutes: RouteRegistrar = (app, context) => {
   const base = "/v1/tenants/:tenantId/pulso-iris";
 
   app.get(`${base}/availability/slots`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const parsed = pulsoIrisAvailabilitySlotQuerySchema.safeParse(request.query ?? {});

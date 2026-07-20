@@ -17,7 +17,7 @@ const CURRENT_SOFIA_REQUIREMENT = Object.freeze<SchemaVersionRequirement>({
 });
 const CURRENT_PULSO_MARKER = Object.freeze({
   currentVersion: 4,
-  migrationName: "004-access-channel-tenant-projection.sql"
+  migrationName: "005-access-iris-tenant-projection.sql"
 });
 const CURRENT_SOFIA_MARKER = Object.freeze({
   currentVersion: 1,

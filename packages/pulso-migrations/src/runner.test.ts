@@ -16,7 +16,8 @@ describe("PULSO provider-owned migration set", () => {
       "001-pulso-autonomous-baseline.sql",
       "002-pulso-runtime-roles.sql",
       "003-sofia-readiness-marker.sql",
-      "004-access-channel-tenant-projection.sql"
+      "004-access-channel-tenant-projection.sql",
+      "005-access-iris-tenant-projection.sql"
     ]);
     expect(baseline.match(/^create schema /gm) ?? []).toHaveLength(4);
     expect(baseline.match(/^create table /gm) ?? []).toHaveLength(53);
@@ -66,12 +67,22 @@ describe("PULSO provider-owned migration set", () => {
     expect(sql).not.toMatch(/grant delete[^;]*(?:tenant_snapshots|access_projection_inbox)/i);
   });
 
+  it("adds an Iris-owned tenant projection without a foreign key to Access", async () => {
+    const sql = await readFile(new URL("../sql/005-access-iris-tenant-projection.sql", import.meta.url), "utf8");
+    expect(sql).toMatch(/create table pulso_iris\.tenant_snapshots/i);
+    expect(sql).toMatch(/create table pulso_iris\.access_projection_inbox/i);
+    expect(sql).not.toMatch(/references\s+platform\.tenants/i);
+    expect(sql).toMatch(/grant select, insert, update on table[\s\S]*to hyperion_pulso/i);
+    expect(sql).not.toMatch(/grant delete[^;]*(?:tenant_snapshots|access_projection_inbox)/i);
+  });
+
   it("rejects missing, renamed, reordered or foreign migration files", () => {
     const exact = [
       "001-pulso-autonomous-baseline.sql",
       "002-pulso-runtime-roles.sql",
       "003-sofia-readiness-marker.sql",
-      "004-access-channel-tenant-projection.sql"
+      "004-access-channel-tenant-projection.sql",
+      "005-access-iris-tenant-projection.sql"
     ];
     expect(() => assertPulsoProviderMigrationNames(exact)).not.toThrow();
     expect(() => assertPulsoProviderMigrationNames(exact.slice(0, 1))).toThrow("migration set mismatch");

@@ -30,7 +30,13 @@ const MAX_RECONCILE_INTERVAL_MS = 3_600_000;
 const MAX_REENTRANT_PASSES = 10;
 const DEFAULT_BATCH_SIZE = 20;
 const HYPERION_EVENTS_STREAM = "HYPERION_EVENTS";
-const PRIVATE_HTTP_HOSTS = new Set(["whatsapp-channel-service", "localhost", "127.0.0.1", "[::1]"]);
+const PRIVATE_HTTP_HOSTS = new Set([
+  "whatsapp-channel-service",
+  "pulso-iris-service",
+  "localhost",
+  "127.0.0.1",
+  "[::1]"
+]);
 
 interface TenantSourceRow {
   readonly tenantId: string;
@@ -77,7 +83,7 @@ export type AccessTenantProjectionConfiguration =
   | (ReconcileConfiguration & { readonly transport: "disabled" })
   | (ReconcileConfiguration & {
       readonly transport: "http";
-      readonly destination: string;
+      readonly destinations: readonly string[];
       readonly internalToken: string;
       readonly deliveryEnabled: boolean;
       readonly allowPrivateHttp: boolean;
@@ -96,7 +102,7 @@ export interface AccessTenantOutboxDelivery {
   readonly version: 1;
   readonly occurredAt: string;
   readonly payload: AccessTenantSnapshotPayload;
-  readonly destination: string;
+  readonly destination: readonly string[];
 }
 
 export interface AccessTenantDeadLetterSelection {
@@ -351,17 +357,17 @@ export class AccessTenantProjectionReconciler {
 }
 
 export class PostgresAccessTenantProjectionOutbox {
-  readonly #destination: string;
+  readonly #destinations: readonly string[];
 
   constructor(
     private readonly db: DatabaseClient,
     private readonly workerId: string,
-    httpDestination?: string,
+    httpDestinations?: string | readonly string[],
     allowPrivateHttp = false
   ) {
-    this.#destination = httpDestination
-      ? normalizeHttpDestination(httpDestination, allowPrivateHttp)
-      : "nats://hyperion-events";
+    this.#destinations = httpDestinations
+      ? normalizeHttpDestinations(httpDestinations, allowPrivateHttp)
+      : ["nats://hyperion-events"];
   }
 
   async claim(limit: number): Promise<AccessTenantOutboxDelivery[]> {
@@ -408,7 +414,7 @@ export class PostgresAccessTenantProjectionOutbox {
       if (event.payload.sourceVersion !== Number(row.sourceVersion)) {
         throw new Error("Access tenant outbox source version drifted");
       }
-      return { ...event, destination: this.#destination };
+      return { ...event, destination: this.#destinations };
     });
   }
 
@@ -618,7 +624,7 @@ export function readAccessTenantProjectionConfiguration(env: NodeJS.ProcessEnv):
   const allowPrivateHttp = readPrivateHttpOptIn(env);
   return {
     transport,
-    destination: normalizeHttpDestination(env.ACCESS_TENANT_SNAPSHOT_HTTP_URL ?? "", allowPrivateHttp),
+    destinations: normalizeHttpDestinations(env.ACCESS_TENANT_SNAPSHOT_HTTP_URL ?? "", allowPrivateHttp),
     internalToken,
     deliveryEnabled: env.DURABLE_OUTBOX_ENABLED !== "false" && env.DURABLE_HTTP_OUTBOX_ENABLED !== "false",
     allowPrivateHttp,
@@ -725,6 +731,30 @@ function readPrivateHttpOptIn(env: NodeJS.ProcessEnv): boolean {
     throw new Error("ACCESS_TENANT_SNAPSHOT_ALLOW_PRIVATE_HTTP is forbidden in staging and production");
   }
   return enabled;
+}
+
+function normalizeHttpDestinations(value: string | readonly string[], allowPrivateHttp: boolean): readonly string[] {
+  const rawEntries =
+    typeof value === "string"
+      ? value
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      : value.map((entry) => entry.trim()).filter(Boolean);
+  if (rawEntries.length === 0) {
+    throw new Error("ACCESS_TENANT_SNAPSHOT_HTTP_URL must list one or more HTTP(S) endpoints");
+  }
+  const destinations: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of rawEntries) {
+    const normalized = normalizeHttpDestination(entry, allowPrivateHttp);
+    if (seen.has(normalized)) {
+      throw new Error("ACCESS_TENANT_SNAPSHOT_HTTP_URL must not list duplicate destinations");
+    }
+    seen.add(normalized);
+    destinations.push(normalized);
+  }
+  return destinations;
 }
 
 function normalizeHttpDestination(value: string, allowPrivateHttp: boolean): string {

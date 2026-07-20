@@ -30,9 +30,10 @@ export const EXPECTED_MIGRATIONS = [
   "001-pulso-autonomous-baseline.sql",
   "002-pulso-runtime-roles.sql",
   "003-sofia-readiness-marker.sql",
-  "004-access-channel-tenant-projection.sql"
+  "004-access-channel-tenant-projection.sql",
+  "005-access-iris-tenant-projection.sql"
 ];
-export const EXPECTED_SCHEMA_VERSION = "4\t004-access-channel-tenant-projection.sql";
+export const EXPECTED_SCHEMA_VERSION = "5\t005-access-iris-tenant-projection.sql";
 export const EXPECTED_SOFIA_SCHEMA_VERSION = "1\t003-sofia-readiness-marker.sql";
 export const EXPECTED_OWNER_STATE = "4\t0\t0";
 export const EXPECTED_USER_SCHEMA_STATE = "agent_runtime\nchannel_runtime\nplatform\npulso_iris";
@@ -255,7 +256,7 @@ export function isExpectedRuntimeDdlDenial(message) {
 export function expectedRuntimeState(role) {
   if (!RUNTIME_ROLES.includes(role)) throw new Error(`unknown PULSO runtime role: ${role}`);
   const canReadSofiaMarker = role === "hyperion_sofia";
-  return `${role}\t${RESTORE_DATABASE}\t4\t004-access-channel-tenant-projection.sql\ttrue\t${canReadSofiaMarker}\ttrue\ttrue\tfalse\tfalse\tfalse`;
+  return `${role}\t${RESTORE_DATABASE}\t5\t005-access-iris-tenant-projection.sql\ttrue\t${canReadSofiaMarker}\ttrue\ttrue\tfalse\tfalse\tfalse`;
 }
 
 export function parsePulsoMigrationReceipt(output) {

@@ -118,7 +118,7 @@ export async function registerAppointmentRoutes(
   const base = "/v1/tenants/:tenantId/pulso-iris";
 
   app.get(`${base}/appointment-holds`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const operatorId = readOperatorId(request.headers as Record<string, unknown>);
     const role = readOperatorRole(request.headers as Record<string, unknown>);
@@ -135,7 +135,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.post(`${base}/appointment-holds`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisAppointmentHoldInputSchema, request, reply);
     if (!input) return;
@@ -175,7 +175,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.post(`${base}/appointment-holds/:holdId/cancel`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const holdId = readUuidParam(request.params, "holdId");
     if (!holdId) return reply.code(400).send(envelope({ error: "holdId must be a UUID" }, request.id));
@@ -206,7 +206,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.post(`${base}/appointments`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisAppointmentInputSchema, request, reply);
     if (!input) return;
@@ -347,7 +347,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.get(`${base}/appointments/queue`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const query = request.query as { siteId?: unknown };
     const parsedSiteId = query.siteId === undefined ? undefined : tenantIdSchema.safeParse(query.siteId);
@@ -413,7 +413,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.get(`${base}/appointments/:appointmentId/history`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const appointmentId = readUuidParam(request.params, "appointmentId");
     if (!appointmentId) return reply.code(400).send(envelope({ error: "appointmentId must be a UUID" }, request.id));
@@ -448,7 +448,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.post(`${base}/appointments/:appointmentId/manual-verify`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const operatorId = requireCoordinator(request, reply);
     if (!operatorId) return;
@@ -507,7 +507,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.post(`${base}/appointments/:appointmentId/reject`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const operatorId = requireCoordinator(request, reply);
     if (!operatorId) return;
@@ -544,7 +544,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.post(`${base}/appointments/:appointmentId/cancel`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const operatorId = requireCoordinator(request, reply);
     if (!operatorId) return;
@@ -577,7 +577,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.post(`${base}/appointments/:appointmentId/reschedule`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const operatorId = requireCoordinator(request, reply);
     if (!operatorId) return;
@@ -782,7 +782,7 @@ export async function registerAppointmentRoutes(
   });
 
   app.patch(`${base}/appointments/:appointmentId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const operatorId = requireCoordinator(request, reply);
     if (!operatorId) return;

@@ -112,7 +112,7 @@ export async function registerOperationsRoutes(
   // ----- Pacientes administrativos (sinteticos / de prueba) -----
 
   app.post(`${base}/patients`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisPatientInputSchema, request, reply);
     if (!input) return;
@@ -138,7 +138,7 @@ export async function registerOperationsRoutes(
   // ----- Conversaciones y mensajes -----
 
   app.post(`${base}/conversations`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisConversationInputSchema, request, reply);
     if (!input) return;
@@ -169,7 +169,7 @@ export async function registerOperationsRoutes(
   });
 
   app.patch(`${base}/conversations/:conversationId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const conversationId = readUuidParam(request.params, "conversationId");
     if (!conversationId) {
@@ -208,7 +208,7 @@ export async function registerOperationsRoutes(
   });
 
   app.post(`${base}/conversations/:conversationId/messages`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const conversationId = readUuidParam(request.params, "conversationId");
     if (!conversationId) {
@@ -240,7 +240,7 @@ export async function registerOperationsRoutes(
     if (isRestrictedDeploymentEnvironment(process.env)) {
       return reply.code(404).send(envelope({ error: "Simulation routes are disabled" }, request.id));
     }
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisAppointmentInputSchema, request, reply);
     if (!input) return;
@@ -388,7 +388,7 @@ export async function registerOperationsRoutes(
     if (isRestrictedDeploymentEnvironment(process.env)) {
       return reply.code(404).send(envelope({ error: "Simulation routes are disabled" }, request.id));
     }
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const appointmentId = readUuidParam(request.params, "appointmentId");
     if (!appointmentId) {
@@ -611,7 +611,7 @@ export async function registerOperationsRoutes(
   // ----- Handoffs -----
 
   app.post(`${base}/handoffs`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisHandoffInputSchema, request, reply);
     if (!input) return;
@@ -649,7 +649,7 @@ export async function registerOperationsRoutes(
   });
 
   app.patch(`${base}/handoffs/:handoffId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const handoffId = readUuidParam(request.params, "handoffId");
     if (!handoffId) {
@@ -696,7 +696,7 @@ export async function registerOperationsRoutes(
   // ----- Acciones RPA simuladas -----
 
   app.post(`${base}/rpa/actions`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisRpaActionInputSchema, request, reply);
     if (!input) return;
@@ -725,7 +725,7 @@ export async function registerOperationsRoutes(
   });
 
   app.patch(`${base}/rpa/actions/:actionId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const actionId = readUuidParam(request.params, "actionId");
     if (!actionId) {
@@ -767,7 +767,7 @@ export async function registerOperationsRoutes(
   // ----- Campanas -----
 
   app.post(`${base}/campaigns`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisCampaignInputSchema, request, reply);
     if (!input) return;
@@ -794,7 +794,7 @@ export async function registerOperationsRoutes(
   });
 
   app.patch(`${base}/campaigns/:campaignId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const campaignId = readUuidParam(request.params, "campaignId");
     if (!campaignId) {
@@ -840,7 +840,7 @@ export async function registerOperationsRoutes(
   // ----- Lista de espera -----
 
   app.post(`${base}/waitlist`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisWaitlistInputSchema, request, reply);
     if (!input) return;

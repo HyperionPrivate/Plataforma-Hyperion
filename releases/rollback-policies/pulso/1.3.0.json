@@ -36,6 +36,10 @@
       {
         "path": "sql/004-access-channel-tenant-projection.sql",
         "sha256": "cffde8ed7621c40ae9ba4e80969928b705654e530019edf49dacf81730d57c77"
+      },
+      {
+        "path": "sql/005-access-iris-tenant-projection.sql",
+        "sha256": "bfa7462090f4626f34096deabcb16f2745539a12a888ed904e79f042ea26959d"
       }
     ]
   }

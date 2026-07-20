@@ -171,11 +171,11 @@ los entrypoints de [Agent](../../services/agent-service/src/index.ts) y
 [`rutas internas del propietario`](../../services/pulso-iris-service/src/sofia-owner-routes.ts). Los seis runtimes
 PULSO con base de datos usan requisitos provider-owned: Agent y Prompt Flow validan el marker SOFÍA
 `agent_runtime.schema_version`/`sofia` versión 1, mientras Core, Knowledge, Integration y Channel conservan
-temporalmente el marker global `pulso_iris.schema_version` versión 4. La migración 004 añade la proyección local
-Access→Channel sin retirar todavía las cinco FKs históricas: el corte contract requiere primero un recibo de paridad.
-WhatsApp Channel ya aplica la fase migrate de lectura en runtime: las rutas tenant-scoped consultan
-`channel_runtime.tenant_snapshots` (existencia para lecturas; `active` para mutaciones) y no unen
-`platform.tenants`. DEBT-005 permanece `retiring` hasta dropear esas FKs.
+temporalmente el marker global `pulso_iris.schema_version` versión 5. La migración 004 añade la proyección local
+Access→Channel y la 005 añade Access→Iris (`pulso_iris.tenant_snapshots`) sin retirar todavía las FKs históricas:
+el corte contract requiere recibo de paridad y cutover. WhatsApp Channel e Iris aplican la fase migrate de lectura
+en runtime (existencia para lecturas; `active` para mutaciones) sin unir `platform.tenants`. DEBT-004 y DEBT-005
+permanecen `retiring` hasta dropear esas FKs. Identity puede fan-out HTTP del snapshot a ambos consumidores.
 El catálogo `1.3.0` y el borrador `0.4.0-dev.0` registran esta transición, pero el borrador mantiene
 `imagesVerified: false`; esta evidencia describe
 el código y la topología versionados, no declara que el cutover, el restore, la publicación de imágenes o la

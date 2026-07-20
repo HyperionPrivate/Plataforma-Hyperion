@@ -36,16 +36,22 @@ describe("conversation analytics projections", () => {
   });
 
   it("uses only the latest appointment projection so a reschedule cannot duplicate the inbox row", async () => {
-    query.mockResolvedValueOnce({
-      rows: [
-        {
-          id: conversationId,
-          channel: "whatsapp",
-          status: "active",
-          startedAt: "2026-07-09T12:00:00.000Z",
-          updatedAt: "2026-07-09T12:00:00.000Z"
-        }
-      ]
+    query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("pulso_iris.tenant_snapshots")) {
+        return { rows: [{ status: "active", sourceVersion: "1" }] };
+      }
+      return {
+        rows: [
+          {
+            id: conversationId,
+            channel: "whatsapp",
+            status: "active",
+            startedAt: "2026-07-09T12:00:00.000Z",
+            updatedAt: "2026-07-09T12:00:00.000Z"
+          }
+        ]
+      };
     });
 
     const response = await app.inject({
@@ -55,7 +61,7 @@ describe("conversation analytics projections", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().data).toHaveLength(1);
-    const sql = String(query.mock.calls[0]?.[0]);
+    const sql = String(query.mock.calls.find((call) => String(call[0]).includes("left join lateral"))?.[0]);
     expect(sql).toContain("left join lateral");
     expect(sql).toContain("order by appointment.created_at desc");
     expect(sql).toContain("limit 1");
@@ -64,6 +70,9 @@ describe("conversation analytics projections", () => {
   it("projects the masked WhatsApp identity without selecting the full phone", async () => {
     query.mockImplementation(async (sqlValue: unknown) => {
       const sql = String(sqlValue);
+      if (sql.includes("pulso_iris.tenant_snapshots")) {
+        return { rows: [{ status: "active", sourceVersion: "1" }] };
+      }
       if (sql.includes("from pulso_iris.conversations c") && sql.includes("c.id = $2")) {
         return { rows: [{ id: conversationId, patientId, channel: "whatsapp", status: "active" }] };
       }

@@ -162,11 +162,17 @@ async function createApp(options: {
   emitAudit: AuditEmitter;
 }): Promise<ReturnType<typeof Fastify>> {
   const app = Fastify({ logger: false });
+  const query = vi.fn(async (sql: string, params?: unknown[]) => {
+    if (String(sql).includes("pulso_iris.tenant_snapshots")) {
+      return { rows: [{ status: "active", sourceVersion: "1" }], rowCount: 1 };
+    }
+    return options.directQuery(sql, params);
+  });
   await registerOperationsRoutes(
     app,
     {
       db: {
-        query: options.directQuery,
+        query,
         transaction: options.transaction,
         close: vi.fn()
       },

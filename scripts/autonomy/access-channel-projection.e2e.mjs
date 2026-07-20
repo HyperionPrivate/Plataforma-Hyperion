@@ -351,7 +351,7 @@ export async function runAccessChannelAcceptance(environment = process.env, opti
     }
 
     // The legacy local tenant is still required by five Channel business FKs.
-    // It is deliberately separate from the new projection and remains until 005.
+    // It is deliberately separate from the new projection and remains until the Channel contract cut.
     for (const [index, tenant] of tenantFixtures.entries()) {
       await pulsoFixtureDb.query(
         `insert into platform.tenants (id, slug, display_name, status, metadata)
@@ -465,7 +465,12 @@ export async function runAccessChannelAcceptance(environment = process.env, opti
 
     const ledgers = await readLedgers(accessFixtureDb, pulsoFixtureDb);
     assert.equal(ledgers.access.at(-1)?.name, "004-access-tenant-lifecycle-integrity.sql");
-    assert.equal(ledgers.pulso.at(-1)?.name, "004-access-channel-tenant-projection.sql");
+    // Channel projection lands at 004; the current PULSO tip also applies Iris projection 005.
+    assert.equal(ledgers.pulso.at(-1)?.name, "005-access-iris-tenant-projection.sql");
+    assert.ok(
+      ledgers.pulso.some((entry) => entry.name === "004-access-channel-tenant-projection.sql"),
+      "Access→Channel projection 004 must remain in the PULSO ledger"
+    );
 
     acceptanceResult = {
       schemaVersion: 2,

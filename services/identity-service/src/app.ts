@@ -187,7 +187,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       const tenantOutbox = new PostgresAccessTenantProjectionOutbox(
         context.db,
         workerId,
-        tenantProjectionConfiguration.transport === "http" ? tenantProjectionConfiguration.destination : undefined,
+        tenantProjectionConfiguration.transport === "http" ? tenantProjectionConfiguration.destinations : undefined,
         tenantProjectionConfiguration.transport === "http" && tenantProjectionConfiguration.allowPrivateHttp
       );
       if (tenantProjectionConfiguration.transport === "http") {

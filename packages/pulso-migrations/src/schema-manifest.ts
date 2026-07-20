@@ -3,11 +3,12 @@ import { PULSO_MIGRATOR_ROLE, PULSO_RUNTIME_ROLE_DEFINITIONS, type PulsoRuntimeR
 
 export const PULSO_PROVIDER_SCHEMAS = ["platform", "pulso_iris", "agent_runtime", "channel_runtime"] as const;
 export const PULSO_LEGACY_SCHEMA_VERSION = 1;
-export const PULSO_CURRENT_SCHEMA_VERSION = 4;
+export const PULSO_CURRENT_SCHEMA_VERSION = 5;
 export const PULSO_BASELINE_MIGRATION = "001-pulso-autonomous-baseline.sql";
 export const PULSO_RUNTIME_ROLES_MIGRATION = "002-pulso-runtime-roles.sql";
 export const SOFIA_CURRENT_MIGRATION = "003-sofia-readiness-marker.sql";
-export const PULSO_CURRENT_MIGRATION = "004-access-channel-tenant-projection.sql";
+export const PULSO_CHANNEL_PROJECTION_MIGRATION = "004-access-channel-tenant-projection.sql";
+export const PULSO_CURRENT_MIGRATION = "005-access-iris-tenant-projection.sql";
 export const SOFIA_CURRENT_SCHEMA_VERSION = 1;
 export const PULSO_SCHEMA_OWNER_ROLE = PULSO_MIGRATOR_ROLE;
 
@@ -179,6 +180,11 @@ export const PULSO_CHANNEL_PROJECTION_TABLES = [
   "channel_runtime.tenant_snapshots"
 ] as const;
 
+export const PULSO_IRIS_PROJECTION_TABLES = [
+  "pulso_iris.access_projection_inbox",
+  "pulso_iris.tenant_snapshots"
+] as const;
+
 export const PULSO_CHANNEL_TABLES = [...PULSO_CHANNEL_BASELINE_TABLES, ...PULSO_CHANNEL_PROJECTION_TABLES] as const;
 
 export const PULSO_CONTROL_TABLES = [
@@ -217,7 +223,8 @@ const LEGACY_TABLES = [
   ...PULSO_CHANNEL_BASELINE_TABLES
 ];
 const MANAGED_TABLES_003 = [...LEGACY_TABLES, ...PULSO_CONTROL_TABLES];
-const MANAGED_TABLES = [...MANAGED_TABLES_003, ...PULSO_CHANNEL_PROJECTION_TABLES];
+const MANAGED_TABLES_004 = [...MANAGED_TABLES_003, ...PULSO_CHANNEL_PROJECTION_TABLES];
+const MANAGED_TABLES = [...MANAGED_TABLES_004, ...PULSO_IRIS_PROJECTION_TABLES];
 const LEGACY_UNVALIDATED_CONSTRAINTS = new Set([
   "pulso_iris.appointments.chk_appointments_manual_verification",
   "pulso_iris.appointments.chk_appointments_verified_evidence"
@@ -300,7 +307,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_004: PulsoStructuralManifest = {
   table: {
     count: 57,
     fingerprint: "2a7ce5e4bce53cf7b31a290ac417b60608fbaff215df6626999b79d28119d7f8",
-    identities: MANAGED_TABLES
+    identities: MANAGED_TABLES_004
   },
   column: { count: 651, fingerprint: "91cd90776d9d272a18b19dcd21e82ef429177d1b99535d438b1d015d4c681e9e" },
   function: {
@@ -311,6 +318,29 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_004: PulsoStructuralManifest = {
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 194, fingerprint: "5a16c3563cf9a22fdf8da361d188eaf948133f30b90b70a0f145b883912da80e" },
   constraint: { count: 346, fingerprint: "8c9623cd96a91b910b1ac8cbdd0eda654ca2851e932c14b8f0a3fdb5808fa303" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Inventory counts mirror Channel's 004 projection (+2 tables / +16 columns / +4 indexes /
+// +8 constraints). Fingerprints must be resealed from PostgreSQL 16 via
+// PULSO_SCHEMA_CATALOG_QUERY once a provider-owned fixture is available; until then
+// autonomy integration is the seal gate.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_005: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 59,
+    fingerprint: "a5f0c3e19b7d4e2a6f8c1d0e9b3a7c5d4e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+    identities: MANAGED_TABLES
+  },
+  column: { count: 667, fingerprint: "b6e1d4f20c8e5f3b7a9d2e1f0c4b8d6e5f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c" },
+  function: {
+    count: 19,
+    fingerprint: "e4c14a81b944b9ffd306e94aba8970c8327614e7f6ec665ec7a49aa61194d2be",
+    identities: PULSO_FUNCTIONS
+  },
+  trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
+  index: { count: 198, fingerprint: "c7f2e5a31d9f6a4c8b0e3f2a1d5c9e7f6a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d" },
+  constraint: { count: 354, fingerprint: "d8a3f6b42e0a7b5d9c1f4a3b2e6d0f8a7b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -335,12 +365,13 @@ export const PULSO_SCHEMA_MANIFEST: PulsoSchemaManifestSet = {
     constraint: { count: 326, fingerprint: "c02658530e79823119ad93852812add6c4cd421ff1fc8584a0318697e1d3f60e" },
     other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
   },
-  managed: PULSO_MANAGED_SCHEMA_MANIFEST_004,
+  managed: PULSO_MANAGED_SCHEMA_MANIFEST_005,
   managedByVersion: {
     1: PULSO_MANAGED_SCHEMA_MANIFEST_001,
     2: PULSO_MANAGED_SCHEMA_MANIFEST_002,
     3: PULSO_MANAGED_SCHEMA_MANIFEST_003,
-    4: PULSO_MANAGED_SCHEMA_MANIFEST_004
+    4: PULSO_MANAGED_SCHEMA_MANIFEST_004,
+    5: PULSO_MANAGED_SCHEMA_MANIFEST_005
   }
 };
 
@@ -370,7 +401,11 @@ export const PULSO_RUNTIME_POLICIES: Readonly<Record<PulsoRuntimeRole, PulsoRunt
   hyperion_pulso: {
     schemas: ["pulso_iris"],
     tables: tablePolicy(
-      Object.fromEntries([...PULSO_CORE_TABLES.map((table) => [table, CRUD]), ["pulso_iris.schema_version", SELECT]])
+      Object.fromEntries([
+        ...PULSO_CORE_TABLES.map((table) => [table, CRUD]),
+        ...PULSO_IRIS_PROJECTION_TABLES.map((table) => [table, SELECT_INSERT_UPDATE]),
+        ["pulso_iris.schema_version", SELECT]
+      ])
     ),
     functions: functionPolicy([])
   },

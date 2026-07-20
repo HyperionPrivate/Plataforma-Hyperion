@@ -1,4 +1,4 @@
-﻿import { envelope } from "@hyperion/platform-contracts";
+import { envelope } from "@hyperion/platform-contracts";
 import { pulsoIrisWorkerListSchema } from "@hyperion/pulso-contracts";
 import type { RouteRegistrar } from "@hyperion/service-runtime";
 import { readUuidParam, requireTenantDb } from "./shared.js";
@@ -16,7 +16,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
   // ----- Dashboard de operacion en vivo -----
 
   app.get(`${base}/dashboard/live`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const [kpis, hourly, resolution, handoffQueue, siteActivity, rpaHealth] = await Promise.all([
@@ -124,7 +124,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
   // ----- Agenda semanal -----
 
   app.get(`${base}/agenda/week`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const query = request.query as { siteId?: string; start?: string };
@@ -192,7 +192,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
   // ----- Timeline de conversacion con ficha -----
 
   app.get(`${base}/conversations/:conversationId/timeline`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const conversationId = readUuidParam(request.params, "conversationId");
     if (!conversationId) {
@@ -279,7 +279,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
   // ----- Bandeja de conversaciones enriquecida -----
 
   app.get(`${base}/conversations/inbox`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -315,7 +315,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
   // ----- Estado RPA -----
 
   app.get(`${base}/rpa/status`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const [workers, kpis, queue, telemetry, events] = await Promise.all([
@@ -384,7 +384,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
   // ----- Campanas -----
 
   app.get(`${base}/campaigns`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -403,7 +403,7 @@ export const registerAnalyticsRoutes: RouteRegistrar = (app, context) => {
   // ----- BI mensual -----
 
   app.get(`${base}/bi/monthly`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const query = request.query as { month?: string };

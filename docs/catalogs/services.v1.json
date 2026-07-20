@@ -269,6 +269,7 @@
         "packages/pulso-migrations/sql/002-pulso-runtime-roles.sql",
         "packages/pulso-migrations/sql/003-sofia-readiness-marker.sql",
         "packages/pulso-migrations/sql/004-access-channel-tenant-projection.sql",
+        "packages/pulso-migrations/sql/005-access-iris-tenant-projection.sql",
         "packages/pulso-migrations/src/autonomy.integration.test.ts",
         "infra/docker-compose.pulso.yml",
         ".github/workflows/pulso.yml"

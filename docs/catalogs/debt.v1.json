@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.9.2",
+  "catalogVersion": "1.9.3",
   "updatedAt": "2026-07-19",
   "baseline": "docs/architecture/boundary-baseline.json",
   "baselineStats": {
@@ -41,11 +41,18 @@
     },
     {
       "id": "DEBT-004",
-      "title": "PULSO foreign keys hacia Access",
+      "title": "PULSO foreign keys hacia Access; migrate lee tenant_snapshots; contract pendiente",
       "findingType": "cross-owner-fk",
       "edge": "pulso-core->access",
       "owner": "pulso-core",
-      "status": "accepted",
+      "status": "retiring",
+      "evidence": [
+        "packages/pulso-migrations/sql/005-access-iris-tenant-projection.sql",
+        "services/identity-service/src/access-tenant-projections.ts",
+        "services/pulso-iris-service/src/access-tenant-projections.ts",
+        "services/pulso-iris-service/src/shared.ts",
+        "docs/products/PULSO-IRIS.md"
+      ],
       "issue": "HYP-DEBT-004",
       "dueDate": "2027-03-31"
     },

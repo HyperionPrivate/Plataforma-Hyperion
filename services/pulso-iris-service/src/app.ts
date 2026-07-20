@@ -55,6 +55,7 @@ import { PostgresPulsoOutbox } from "./pulso-outbox.js";
 import { registerChannelDeliveryRoutes } from "./channel-delivery-routes.js";
 import { registerSofiaOwnerRoutes } from "./sofia-owner-routes.js";
 import { registerSofiaToolRoutes } from "./sofia-tools-routes.js";
+import { registerAccessTenantProjectionRoutes, requireIrisTenantAccess } from "./access-tenant-projections.js";
 import { readTenantId } from "./shared.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
@@ -71,6 +72,7 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   const channelToPulsoToken = readInternalCredential(process.env, "CHANNEL_TO_PULSO_TOKEN");
   const integrationToPulsoToken = readInternalCredential(process.env, "INTEGRATION_TO_PULSO_TOKEN");
   const pulsoToChannelToken = readInternalCredential(process.env, "PULSO_TO_CHANNEL_TOKEN");
+  const accessToPulsoToken = readInternalCredential(process.env, "ACCESS_TO_PULSO_TOKEN");
   const auditToken = readInternalCredential(process.env, "PULSO_TO_AUDIT_TOKEN");
   const allowLegacyChannelInboundV1 = readChannelInboundV1Compatibility(process.env);
   const channelServiceUrl = process.env.WHATSAPP_CHANNEL_SERVICE_URL ?? "http://localhost:8089";
@@ -123,11 +125,16 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       return reply.code(assertionError.statusCode).send(envelope({ error: assertionError.message }, request.id));
     }
     const validTenantId = readTenantId(request.params);
-    if (context.db && validTenantId) {
+    if (!validTenantId) return;
+    const accessMode = request.method === "GET" || request.method === "HEAD" ? "exists" : "active";
+    const snapshot = await requireIrisTenantAccess(context.db, validTenantId, reply, request.id, accessMode);
+    if (!snapshot) return;
+    if (context.db) {
       await ensureAgendaSettingsExist(context.db, validTenantId);
     }
   });
 
+  registerAccessTenantProjectionRoutes(app, context, accessToPulsoToken);
   await registerConfigRoutes(app, context, emitAudit);
   await registerAppointmentRoutes(app, context, emitAudit, readAuditHistory);
   await registerOperationsRoutes(app, context, emitAudit);

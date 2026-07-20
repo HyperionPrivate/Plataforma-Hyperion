@@ -227,7 +227,7 @@ export async function registerConfigRoutes(
   // ----- Configuracion general de agenda -----
 
   app.get(`${base}/agenda-settings`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const settings = await ensureAgendaSettings(scope.db, scope.tenantId);
@@ -235,7 +235,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/agenda-settings`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisAgendaSettingsPatchSchema, request, reply);
     if (!input) return;
@@ -322,7 +322,7 @@ export async function registerConfigRoutes(
   // ----- Relaciones profesional-sede y profesional-tipo de cita -----
 
   app.get(`${base}/professional-sites`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const result = await scope.db.query(
       `select ${PROFESSIONAL_SITE_COLUMNS}
@@ -335,7 +335,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/professional-sites`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisProfessionalSiteInputSchema, request, reply);
     if (!input) return;
@@ -367,7 +367,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/professional-sites/:relationId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const relationId = readUuidParam(request.params, "relationId");
     if (!relationId) return reply.code(400).send(envelope({ error: "relationId must be a UUID" }, request.id));
@@ -394,7 +394,7 @@ export async function registerConfigRoutes(
   });
 
   app.get(`${base}/professional-appointment-types`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const result = await scope.db.query(
       `select ${PROFESSIONAL_APPOINTMENT_TYPE_COLUMNS}
@@ -407,7 +407,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/professional-appointment-types`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisProfessionalAppointmentTypeInputSchema, request, reply);
     if (!input) return;
@@ -442,7 +442,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/professional-appointment-types/:relationId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const relationId = readUuidParam(request.params, "relationId");
     if (!relationId) return reply.code(400).send(envelope({ error: "relationId must be a UUID" }, request.id));
@@ -471,7 +471,7 @@ export async function registerConfigRoutes(
   // ----- Importacion y exportacion CSV -----
 
   app.get(`${base}/import/:resource/template`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const resource = readImportResource(request.params);
     if (!resource) return reply.code(404).send(envelope({ error: "Unsupported import resource" }, request.id));
@@ -479,7 +479,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/import/:resource/preview`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const resource = readImportResource(request.params);
     if (!resource) return reply.code(404).send(envelope({ error: "Unsupported import resource" }, request.id));
@@ -495,7 +495,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/import/:resource/apply`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const resource = readImportResource(request.params);
     if (!resource) return reply.code(404).send(envelope({ error: "Unsupported import resource" }, request.id));
@@ -542,7 +542,7 @@ export async function registerConfigRoutes(
   });
 
   app.get(`${base}/export/:resource`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const resource = readImportResource(request.params);
     if (!resource) return reply.code(404).send(envelope({ error: "Unsupported export resource" }, request.id));
@@ -552,7 +552,7 @@ export async function registerConfigRoutes(
   // ----- Sedes -----
 
   app.get(`${base}/sites`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -563,7 +563,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/sites`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisSiteInputSchema, request, reply);
     if (!input) return;
@@ -593,7 +593,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/sites/:siteId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const siteId = readUuidParam(request.params, "siteId");
     if (!siteId) {
@@ -638,7 +638,7 @@ export async function registerConfigRoutes(
   // ----- Profesionales -----
 
   app.get(`${base}/professionals`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -649,7 +649,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/professionals`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisProfessionalInputSchema, request, reply);
     if (!input) return;
@@ -683,7 +683,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/professionals/:professionalId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const professionalId = readUuidParam(request.params, "professionalId");
     if (!professionalId) {
@@ -732,7 +732,7 @@ export async function registerConfigRoutes(
   // ----- Convenios -----
 
   app.get(`${base}/payers`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -743,7 +743,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/payers`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisPayerInputSchema, request, reply);
     if (!input) return;
@@ -766,7 +766,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/payers/:payerId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const payerId = readUuidParam(request.params, "payerId");
     if (!payerId) {
@@ -809,7 +809,7 @@ export async function registerConfigRoutes(
   // ----- Tipos de cita -----
 
   app.get(`${base}/appointment-types`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -823,7 +823,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/appointment-types`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisAppointmentTypeInputSchema, request, reply);
     if (!input) return;
@@ -856,7 +856,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/appointment-types/:appointmentTypeId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const appointmentTypeId = readUuidParam(request.params, "appointmentTypeId");
     if (!appointmentTypeId) {
@@ -922,7 +922,7 @@ export async function registerConfigRoutes(
   // ----- Disponibilidad y capacidad -----
 
   app.get(`${base}/availability-rules`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -936,7 +936,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/availability-rules`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisAvailabilityRuleInputSchema, request, reply);
     if (!input) return;
@@ -1018,7 +1018,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/availability-rules/:ruleId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const ruleId = readUuidParam(request.params, "ruleId");
     if (!ruleId) {
@@ -1127,7 +1127,7 @@ export async function registerConfigRoutes(
   // ----- Bloqueos y excepciones de agenda -----
 
   app.get(`${base}/agenda-blocks`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -1142,7 +1142,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/agenda-blocks`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisAgendaBlockInputSchema, request, reply);
     if (!input) return;
@@ -1193,7 +1193,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/agenda-blocks/:blockId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const blockId = readUuidParam(request.params, "blockId");
     if (!blockId) {
@@ -1274,7 +1274,7 @@ export async function registerConfigRoutes(
   // ----- Festivos -----
 
   app.get(`${base}/holidays`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -1288,7 +1288,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/holidays`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisHolidayInputSchema, request, reply);
     if (!input) return;
@@ -1315,7 +1315,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/holidays/:holidayId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const holidayId = readUuidParam(request.params, "holidayId");
     if (!holidayId) {
@@ -1354,7 +1354,7 @@ export async function registerConfigRoutes(
   // ----- Exclusiones profesional x convenio -----
 
   app.get(`${base}/payer-exclusions`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
 
     const result = await scope.db.query(
@@ -1368,7 +1368,7 @@ export async function registerConfigRoutes(
   });
 
   app.post(`${base}/payer-exclusions`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const input = parseBody(pulsoIrisPayerExclusionInputSchema, request, reply);
     if (!input) return;
@@ -1404,7 +1404,7 @@ export async function registerConfigRoutes(
   });
 
   app.patch(`${base}/payer-exclusions/:exclusionId`, async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
+    const scope = await requireTenantDb(context, request, reply);
     if (!scope) return;
     const exclusionId = readUuidParam(request.params, "exclusionId");
     if (!exclusionId) {

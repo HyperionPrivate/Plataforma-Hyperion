@@ -78,6 +78,8 @@ const TABLE_PRIVILEGE_MATRIX: Readonly<Record<RuntimeRole, readonly TablePrivile
     { table: "pulso_iris.schema_version", privilege: "SELECT", allowed: true },
     { table: "agent_runtime.schema_version", privilege: "SELECT", allowed: false },
     { table: "pulso_iris.appointments", privilege: "INSERT", allowed: true },
+    { table: "pulso_iris.tenant_snapshots", privilege: "SELECT", allowed: true },
+    { table: "pulso_iris.tenant_snapshots", privilege: "INSERT", allowed: true },
     { table: "platform.agents", privilege: "SELECT", allowed: false },
     { table: "agent_runtime.jobs", privilege: "SELECT", allowed: false },
     { table: "channel_runtime.connections", privilege: "SELECT", allowed: false },
@@ -204,7 +206,8 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       "001-pulso-autonomous-baseline.sql",
       "002-pulso-runtime-roles.sql",
       "003-sofia-readiness-marker.sql",
-      "004-access-channel-tenant-projection.sql"
+      "004-access-channel-tenant-projection.sql",
+      "005-access-iris-tenant-projection.sql"
     ]);
     expect(inspection.ledgerEntries.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum))).toBe(true);
 
@@ -256,7 +259,7 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       [PULSO_PROVIDER_SCHEMAS]
     );
     expect(catalog.rows[0]).toEqual({
-      tables: 57,
+      tables: 59,
       functions: 19,
       triggers: 17,
       invalid_constraints: 0,
