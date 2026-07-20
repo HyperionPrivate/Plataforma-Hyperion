@@ -11,6 +11,10 @@ const workflowRoot = path.join(root, ".github", "workflows");
 test("each cell has an affected-aware, cancellable and required workflow", async () => {
   for (const cell of CELL_NAMES) {
     const workflow = await readFile(path.join(workflowRoot, `${cell}.yml`), "utf8");
+    const triggerBlock = workflow.slice(0, workflow.indexOf("permissions:"));
+    assert.match(triggerBlock, /^\s+pull_request:/m);
+    assert.match(triggerBlock, /^\s+push:/m);
+    assert.match(triggerBlock, /^\s+workflow_dispatch:/m);
     assert.match(workflow, /cancel-in-progress:\s*true/);
     assert.match(workflow, new RegExp(`resolve-cell-impact\\.mjs --cell ${cell}`));
     assert.match(workflow, /uses:\s*\.\/\.github\/workflows\/_cell-ci\.yml/);
@@ -321,9 +325,7 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   }
   assert.match(job, /autonomy\.integration\.test\.ts/);
   const autonomyStart = job.indexOf("Verify autonomous PULSO catalog and five runtime privilege fences");
-  const fixtureStart = job.indexOf(
-    "Assert frozen SOFIA 002 readiness is revoked by the current contract"
-  );
+  const fixtureStart = job.indexOf("Assert frozen SOFIA 002 readiness is revoked by the current contract");
   const runtimeStart = job.indexOf("Run all 93 PULSO runtime PostgreSQL integrations with fenced roles");
   assert.ok(autonomyStart >= 0 && fixtureStart > autonomyStart && runtimeStart > fixtureStart);
   const autonomyStep = job.slice(autonomyStart, fixtureStart);
@@ -359,17 +361,17 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   assert.match(required, /test "\$DATABASE_RESULT" = "success"/);
 });
 
-// Temporary policy (Actions minutes exhausted): full-stack is manual-only.
-// Restore push-to-main + schedule when the Free-plan quota resets or a paid /
-// self-hosted runner path is chosen. Local `pnpm check` remains the gate.
-test("the complete stack is restricted to manual workflow_dispatch", async () => {
+// Public-repository policy: keep manual recovery while validating every main
+// merge and the nightly full-stack path.
+test("the complete stack runs on main, schedule and manual dispatch", async () => {
   const workflow = await readFile(path.join(workflowRoot, "check.yml"), "utf8");
   const packageManifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const triggerBlock = workflow.slice(0, workflow.indexOf("permissions:"));
   assert.match(triggerBlock, /^\s+workflow_dispatch:/m);
   assert.doesNotMatch(triggerBlock, /^\s+pull_request:/m);
-  assert.doesNotMatch(triggerBlock, /^\s+schedule:/m);
-  assert.doesNotMatch(triggerBlock, /^\s+push:/m);
+  assert.match(triggerBlock, /^\s+push:/m);
+  assert.match(triggerBlock, /^\s+schedule:/m);
+  assert.match(triggerBlock, /cron:\s*["']17 3 \* \* \*["']/);
   assert.match(workflow, /cancel-in-progress:\s*true/);
   assert.match(workflow, /run:\s*pnpm federation:test\s*$/m);
   assert.doesNotMatch(workflow, /federation:test:cell/);
@@ -499,16 +501,16 @@ test("mutating release workflows serialize without cancellation while CI workflo
   assert.deepEqual(invalidConcurrency, []);
 });
 
-// Temporary policy (Actions minutes exhausted): security workflows keep
-// pull_request + workflow_dispatch, but drop push/schedule so merges to main
-// do not burn minutes. Manual dispatch still scans the full history.
-test("security workflows remain eligible as required checks and scan the intended history", async () => {
+// Public-repository policy: security workflows cover PRs, main, schedules and
+// manual recovery. Manual Gitleaks dispatch still scans the full history.
+test("security workflows cover pull requests, main, schedules and manual dispatch", async () => {
   const containerScan = await readFile(path.join(workflowRoot, "container-scan.yml"), "utf8");
   const triggerBlock = containerScan.slice(0, containerScan.indexOf("permissions:"));
   assert.match(triggerBlock, /^\s+pull_request:/m);
   assert.match(triggerBlock, /^\s+workflow_dispatch:/m);
-  assert.doesNotMatch(triggerBlock, /^\s+push:/m);
-  assert.doesNotMatch(triggerBlock, /^\s+schedule:/m);
+  assert.match(triggerBlock, /^\s+push:/m);
+  assert.match(triggerBlock, /^\s+schedule:/m);
+  assert.match(triggerBlock, /cron:\s*["']11 9 \* \* 3["']/);
   assert.doesNotMatch(triggerBlock, /^\s+paths:/m);
   assert.match(containerScan, /name: container images \/ required/);
   assert.match(containerScan, /needs: \[impact, scan\]/);
@@ -519,10 +521,19 @@ test("security workflows remain eligible as required checks and scan the intende
   const gitleaksTriggers = gitleaks.slice(0, gitleaks.indexOf("permissions:"));
   assert.match(gitleaksTriggers, /^\s+pull_request:/m);
   assert.match(gitleaksTriggers, /^\s+workflow_dispatch:/m);
-  assert.doesNotMatch(gitleaksTriggers, /^\s+push:/m);
-  assert.doesNotMatch(gitleaksTriggers, /^\s+schedule:/m);
+  assert.match(gitleaksTriggers, /^\s+push:/m);
+  assert.match(gitleaksTriggers, /^\s+schedule:/m);
+  assert.match(gitleaksTriggers, /cron:\s*["']43 8 \* \* 2["']/);
   assert.match(gitleaks, /EVENT_NAME" == "schedule" \|\| "\$EVENT_NAME" == "workflow_dispatch"/);
   assert.match(gitleaks, /range="--all"/);
+
+  const codeql = await readFile(path.join(workflowRoot, "codeql.yml"), "utf8");
+  const codeqlTriggers = codeql.slice(0, codeql.indexOf("permissions:"));
+  assert.match(codeqlTriggers, /^\s+pull_request:/m);
+  assert.match(codeqlTriggers, /^\s+workflow_dispatch:/m);
+  assert.match(codeqlTriggers, /^\s+push:/m);
+  assert.match(codeqlTriggers, /^\s+schedule:/m);
+  assert.match(codeqlTriggers, /cron:\s*["']17 8 \* \* 2["']/);
 });
 
 test("Dependabot covers every directory that owns a Docker manifest", async () => {

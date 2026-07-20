@@ -1,8 +1,9 @@
 name: access-channel-projection-boundary
 
-# Temporary: no push triggers while Actions minutes are exhausted. PR + manual only.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

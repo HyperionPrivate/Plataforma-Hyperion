@@ -1,9 +1,11 @@
 name: full-stack
 
-# Temporary: Actions minutes exhausted. Full-stack runs only via manual dispatch
-# until the Free-plan quota resets or a paid/self-hosted path is chosen. Local
-# validation (`pnpm check` + Compose smokes) is the source of truth meanwhile.
 on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
