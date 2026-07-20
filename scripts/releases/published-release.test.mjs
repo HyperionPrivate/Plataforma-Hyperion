@@ -16,7 +16,7 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const sourceRevision = "a".repeat(40);
 const generatedAt = "2026-07-17T23:00:00.000Z";
 const sourceRepository = "AdministracionHyperion/Plataforma-Hyperion";
-const catalogVersion = "2.2.0";
+const catalogVersion = "2.3.0";
 
 function canonicalSha256(value) {
   const normalize = (entry) => {

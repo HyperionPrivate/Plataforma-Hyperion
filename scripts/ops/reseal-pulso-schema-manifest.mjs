@@ -48,7 +48,7 @@ create table if not exists pulso_iris.service_migrations (
   applied_at timestamptz not null default now()
 );
 create table if not exists pulso_iris.migration_ledger (
-  name text primary key check (length(btrim(name)) between 3 and 160),
+  name text primary key,
   checksum text not null check (checksum ~ '^[a-f0-9]{64}$'),
   applied_at timestamptz not null default now()
 );
@@ -80,6 +80,17 @@ try {
       throw error;
     }
     console.error(`applied ${name}`);
+    if (process.env.PULSO_RESEAL_EACH?.trim() === "1") {
+      const stepInspection = await inspectPulsoSchema(client, "migrator");
+      const stepManifest = createPulsoStructuralManifest(stepInspection.catalog);
+      console.log(
+        JSON.stringify({
+          version: index + 1,
+          migrationName: name,
+          constraint: stepManifest.constraint
+        })
+      );
+    }
   }
 
   const inspection = await inspectPulsoSchema(client, "migrator");

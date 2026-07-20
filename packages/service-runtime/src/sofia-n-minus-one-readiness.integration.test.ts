@@ -3,8 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createService, type SchemaVersionRequirement, type ServiceHandle } from "./index.js";
 
 // This is a frozen contract fixture, not proof that a previously published OCI
-// image was executed. It keeps the former 002 readiness behavior executable
-// until an immutable N-1 image and digest are available for a real rehearsal.
+// image was executed. It proves the former 002 readiness behavior is rejected
+// once the current contract revokes SOFIA access to the global PULSO marker.
 const FROZEN_002_SOFIA_REQUIREMENT = Object.freeze<SchemaVersionRequirement>({
   schema: "pulso_iris",
   serviceName: "pulso",
@@ -16,8 +16,8 @@ const CURRENT_SOFIA_REQUIREMENT = Object.freeze<SchemaVersionRequirement>({
   minimumVersion: 2
 });
 const CURRENT_PULSO_MARKER = Object.freeze({
-  currentVersion: 15,
-  migrationName: "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
+  currentVersion: 16,
+  migrationName: "016-attest-access-fk-contract.sql"
 });
 const CURRENT_SOFIA_MARKER = Object.freeze({
   currentVersion: 2,
@@ -118,18 +118,28 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
     const runtimeBoundary = await sofia.query<{
       can_read_global: boolean;
       can_read_local: boolean;
+      can_use_global_schema: boolean;
       current_user: string;
       session_user: string;
     }>(`
       select current_user,
              session_user,
-             has_table_privilege(current_user, 'pulso_iris.schema_version', 'SELECT') as can_read_global,
+             has_schema_privilege(current_user, 'pulso_iris', 'USAGE') as can_use_global_schema,
+             has_table_privilege(
+               current_user,
+               (select c.oid
+                  from pg_catalog.pg_class c
+                  join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+                 where n.nspname = 'pulso_iris' and c.relname = 'schema_version'),
+               'SELECT'
+             ) as can_read_global,
              has_table_privilege(current_user, 'agent_runtime.schema_version', 'SELECT') as can_read_local
     `);
     expect(runtimeBoundary.rows).toEqual([
       {
-        can_read_global: true,
+        can_read_global: false,
         can_read_local: true,
+        can_use_global_schema: false,
         current_user: "hyperion_sofia",
         session_user: "hyperion_sofia"
       }
@@ -187,9 +197,9 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
     }
   });
 
-  it("keeps the frozen 002 and current markers independent through the 004 expansion", async () => {
+  it("rejects frozen 002 readiness while keeping the current local marker independent", async () => {
     const frozenInitial = await injectReadiness(requiredHandle(frozen002Service, "frozen 002"));
-    expectReadiness(frozenInitial, 200, "ok", "pulso_iris.schema_version", "ok", "schema version >= 2");
+    expectRevokedFrozenReadiness(frozenInitial);
 
     const currentInitial = await injectReadiness(requiredHandle(currentService, "current"));
     expectReadiness(currentInitial, 200, "ok", "agent_runtime.schema_version", "ok", "schema version >= 2");
@@ -203,14 +213,7 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
     );
     try {
       const frozenWithStaleGlobal = await injectReadiness(requiredHandle(frozen002Service, "frozen 002"));
-      expectReadiness(
-        frozenWithStaleGlobal,
-        503,
-        "down",
-        "pulso_iris.schema_version",
-        "down",
-        "schema version 1 is below required 2"
-      );
+      expectRevokedFrozenReadiness(frozenWithStaleGlobal);
 
       const currentWithStaleGlobal = await injectReadiness(requiredHandle(currentService, "current"));
       expectReadiness(currentWithStaleGlobal, 200, "ok", "agent_runtime.schema_version", "ok", "schema version >= 2");
@@ -240,7 +243,7 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
       );
 
       const frozenWithCurrentGlobal = await injectReadiness(requiredHandle(frozen002Service, "frozen 002"));
-      expectReadiness(frozenWithCurrentGlobal, 200, "ok", "pulso_iris.schema_version", "ok", "schema version >= 2");
+      expectRevokedFrozenReadiness(frozenWithCurrentGlobal);
     } finally {
       await writeLocalMarker(
         requiredDatabase(migrator, "migrator"),
@@ -258,6 +261,33 @@ describeIntegration("SOFIA N-1 readiness contract fixture (not an old-image rehe
 async function injectReadiness(handle: ServiceHandle): Promise<{ body: ReadinessBody; statusCode: number }> {
   const response = await handle.app.inject({ method: "GET", url: "/ready" });
   return { body: response.json<ReadinessBody>(), statusCode: response.statusCode };
+}
+
+function expectRevokedFrozenReadiness(response: { body: ReadinessBody; statusCode: number }): void {
+  expect(response.statusCode).toBe(503);
+  expect(response.body.status).toBe("down");
+  expect(response.body.dependencies).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ name: "postgres", status: "ok" }),
+      expect.objectContaining({
+        name: "postgres_role",
+        status: "ok",
+        detail: "connected as hyperion_sofia"
+      }),
+      expect.objectContaining({
+        name: "pulso_iris.schema_version",
+        status: "down",
+        detail: "schema version is unavailable; require >= 2"
+      })
+    ])
+  );
+  expect(response.body.dependencies.filter(({ name }) => name.endsWith(".schema_version"))).toEqual([
+    expect.objectContaining({
+      name: "pulso_iris.schema_version",
+      status: "down",
+      detail: "schema version is unavailable; require >= 2"
+    })
+  ]);
 }
 
 function expectReadiness(

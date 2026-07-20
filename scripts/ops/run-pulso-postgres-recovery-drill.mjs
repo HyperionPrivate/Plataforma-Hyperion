@@ -41,9 +41,10 @@ export const EXPECTED_MIGRATIONS = [
   "012-contract-iris-access-tenant-fks.sql",
   "013-contract-knowledge-access-tenant-fks.sql",
   "014-drop-n-minus-one-legacy-adapters.sql",
-  "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
+  "015-revoke-sofia-pulso-iris-control-plane-grants.sql",
+  "016-attest-access-fk-contract.sql"
 ];
-export const EXPECTED_SCHEMA_VERSION = "15\t015-revoke-sofia-pulso-iris-control-plane-grants.sql";
+export const EXPECTED_SCHEMA_VERSION = "16\t016-attest-access-fk-contract.sql";
 export const EXPECTED_SOFIA_SCHEMA_VERSION = "2\t006-access-sofia-tenant-projection.sql";
 export const EXPECTED_OWNER_STATE = "4\t0\t0";
 export const EXPECTED_USER_SCHEMA_STATE =
@@ -966,7 +967,7 @@ export function runDrill(options) {
     }
     assertLedgerMatchesFiles(sourceLedger, expectedMigrations);
     if (schemaVersion(compose, SOURCE_DATABASE) !== EXPECTED_SCHEMA_VERSION) {
-      throw new Error("source PULSO schema is not at provider version 15 / 015");
+      throw new Error("source PULSO schema is not at provider version 16 / 016");
     }
     if (sofiaSchemaVersion(compose, SOURCE_DATABASE) !== EXPECTED_SOFIA_SCHEMA_VERSION) {
       throw new Error("source SOFIA schema is not at owner-local version 2 / 006");

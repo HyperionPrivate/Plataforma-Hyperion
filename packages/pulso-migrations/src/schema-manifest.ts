@@ -10,7 +10,8 @@ export const PULSO_PROVIDER_SCHEMAS = [
   "knowledge_runtime"
 ] as const;
 export const PULSO_LEGACY_SCHEMA_VERSION = 1;
-export const PULSO_CURRENT_SCHEMA_VERSION = 15;
+export const PULSO_EXPAND_SCHEMA_VERSION = 8;
+export const PULSO_CURRENT_SCHEMA_VERSION = 16;
 export const PULSO_BASELINE_MIGRATION = "001-pulso-autonomous-baseline.sql";
 export const PULSO_RUNTIME_ROLES_MIGRATION = "002-pulso-runtime-roles.sql";
 export const SOFIA_READINESS_MIGRATION = "003-sofia-readiness-marker.sql";
@@ -25,7 +26,19 @@ export const PULSO_SOFIA_CONTRACT_MIGRATION = "011-contract-sofia-access-tenant-
 export const PULSO_IRIS_CONTRACT_MIGRATION = "012-contract-iris-access-tenant-fks.sql";
 export const PULSO_KNOWLEDGE_CONTRACT_MIGRATION = "013-contract-knowledge-access-tenant-fks.sql";
 export const PULSO_N_MINUS_ONE_DROP_MIGRATION = "014-drop-n-minus-one-legacy-adapters.sql";
-export const PULSO_CURRENT_MIGRATION = "015-revoke-sofia-pulso-iris-control-plane-grants.sql";
+export const PULSO_CONTROL_PLANE_REVOKE_MIGRATION = "015-revoke-sofia-pulso-iris-control-plane-grants.sql";
+export const PULSO_CURRENT_MIGRATION = "016-attest-access-fk-contract.sql";
+export const PULSO_RUNTIME_MIGRATION_BY_VERSION: Readonly<Record<number, string>> = Object.freeze({
+  8: PULSO_KNOWLEDGE_PROJECTION_MIGRATION,
+  9: PULSO_CHANNEL_CONTRACT_MIGRATION,
+  10: PULSO_INTEGRATION_CONTRACT_MIGRATION,
+  11: PULSO_SOFIA_CONTRACT_MIGRATION,
+  12: PULSO_IRIS_CONTRACT_MIGRATION,
+  13: PULSO_KNOWLEDGE_CONTRACT_MIGRATION,
+  14: PULSO_N_MINUS_ONE_DROP_MIGRATION,
+  15: PULSO_CONTROL_PLANE_REVOKE_MIGRATION,
+  16: PULSO_CURRENT_MIGRATION
+});
 export const SOFIA_CURRENT_MIGRATION = "006-access-sofia-tenant-projection.sql";
 export const SOFIA_CURRENT_SCHEMA_VERSION = 2;
 export const PULSO_SCHEMA_OWNER_ROLE = PULSO_MIGRATOR_ROLE;
@@ -34,7 +47,8 @@ export const PULSO_RUNTIME_SCHEMA_REQUIREMENTS = {
   pulso: {
     schema: "pulso_iris",
     serviceName: "pulso",
-    minimumVersion: PULSO_CURRENT_SCHEMA_VERSION,
+    minimumVersion: PULSO_EXPAND_SCHEMA_VERSION,
+    maximumVersion: PULSO_CURRENT_SCHEMA_VERSION,
     migrationName: PULSO_CURRENT_MIGRATION
   },
   sofia: {
@@ -282,6 +296,7 @@ const MANAGED_TABLES_005 = [...MANAGED_TABLES_004, ...PULSO_IRIS_PROJECTION_TABL
 const MANAGED_TABLES_006 = [...MANAGED_TABLES_005, ...PULSO_SOFIA_PROJECTION_TABLES];
 const MANAGED_TABLES_007 = [...MANAGED_TABLES_006, ...PULSO_INTEGRATION_PROJECTION_TABLES];
 const MANAGED_TABLES = [...MANAGED_TABLES_007, ...PULSO_KNOWLEDGE_PROJECTION_TABLES];
+const MANAGED_TABLES_016 = [...MANAGED_TABLES, "pulso_iris.access_fk_contract_attestations"];
 const LEGACY_UNVALIDATED_CONSTRAINTS = new Set([
   "pulso_iris.appointments.chk_appointments_manual_verification",
   "pulso_iris.appointments.chk_appointments_verified_evidence"
@@ -394,7 +409,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_005: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 198, fingerprint: "91955f89ba44f4bcfe54dffc265601c71c953092f559f010d678e8cc63b82237" },
-  constraint: { count: 355, fingerprint: "e40fa5807c36a21d802760197293f45cf22e466e12a9c331f29f947861b9fab9" },
+  constraint: { count: 354, fingerprint: "728e0195a78ad946e724420dfd86a01fc12c2888d892047bed0a2acec39fafd6" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -414,7 +429,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_006: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 202, fingerprint: "c1659be39168856c8fd3ede0c75a0f5894ff0fc1e9f3eaa23d9013ee65de933e" },
-  constraint: { count: 363, fingerprint: "2082c8578ebd69628b1ffae3e99b090d8d8a527753a5fc1b73cfb924a44b7e5d" },
+  constraint: { count: 362, fingerprint: "4d01c482f532074fc532d8db0e2c550df6d9ec8bde04339239bfca0b2bcbccdb" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -434,7 +449,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_007: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 206, fingerprint: "d6ab32d8a9414ebebc415f95587a7cc0438aa98642fcbfee1cfb1b1c49487a26" },
-  constraint: { count: 371, fingerprint: "5b3a5572230fdf8fac8132ccb38aeab84639ef6be35c0093b9c771758277eafa" },
+  constraint: { count: 370, fingerprint: "a294622d0a64c2b16844b4a47152b2e85730ca474bcae69ace8b6adc35c11803" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -454,7 +469,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_008: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
-  constraint: { count: 379, fingerprint: "3e25a85d8c7e8152aa51bffdf2b2e8907b85723a89e43d8e28ab25ebb4250c98" },
+  constraint: { count: 378, fingerprint: "be5132743394ca8fb2780aa8d18339f86152c8fc53c693eb1913c8188e4cd460" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -474,7 +489,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_009: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
-  constraint: { count: 374, fingerprint: "635bdc8c09e69691d28a8b6a9e4771afe992ff8588c1605506623c39f84dd7ae" },
+  constraint: { count: 373, fingerprint: "9789a47335ca70fda1cd59a52907a3a155be5f1b3f69209cde210104c8a5d473" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -494,7 +509,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_010: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
-  constraint: { count: 373, fingerprint: "ace10adb74b3c1f40bdd0614b0ab1e0250c406e8103b2b0438453bd076e6f651" },
+  constraint: { count: 372, fingerprint: "222093d452045af9e582ad83c9a5299c5ee8b3c100eb69369265ac44c6c53a89" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -514,7 +529,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_011: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
-  constraint: { count: 368, fingerprint: "92468a60f93d8816827599deb0119d82cb00121627bb49d93843fb18c1b83c68" },
+  constraint: { count: 367, fingerprint: "589e1b53ec8059e9312c74accd9c501a22282a5defe4bb9e19b86d69468a9b41" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -534,7 +549,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_012: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
-  constraint: { count: 343, fingerprint: "870424b01f8aa70b6723b78df39e6b241b896f7f942e641f9dce9d48d10c04d3" },
+  constraint: { count: 342, fingerprint: "67ed1b591ada377f7a60d5e4d693cca6533b85f8a71cd47a73effcb78b5210e0" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -554,7 +569,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_013: PulsoStructuralManifest = {
   },
   trigger: { count: 17, fingerprint: "2d8854328465c20a723dd3afd739749fbef7519277b26dcc261264c8ccb0f524" },
   index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
-  constraint: { count: 342, fingerprint: "61865cadb7d780a71653976f4aa1dcc470ac2e3f84e01ff2af2c97fbaa80b070" },
+  constraint: { count: 341, fingerprint: "bb30d5040979c765db8b9a89cc39541b6386ef10c37501985b29f0713cf43696" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -574,7 +589,7 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_014: PulsoStructuralManifest = {
   },
   trigger: { count: 14, fingerprint: "84fb33fd187e5c5c79c54e5f50d84a490adec9bf9c263fa47c732f0baf8031bb" },
   index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
-  constraint: { count: 342, fingerprint: "61865cadb7d780a71653976f4aa1dcc470ac2e3f84e01ff2af2c97fbaa80b070" },
+  constraint: { count: 341, fingerprint: "bb30d5040979c765db8b9a89cc39541b6386ef10c37501985b29f0713cf43696" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -594,7 +609,27 @@ export const PULSO_MANAGED_SCHEMA_MANIFEST_015: PulsoStructuralManifest = {
   },
   trigger: { count: 14, fingerprint: "84fb33fd187e5c5c79c54e5f50d84a490adec9bf9c263fa47c732f0baf8031bb" },
   index: { count: 210, fingerprint: "ed8e1e52ba9149081cc6524b1e9feecf9b84b7aa82f4beb918ce3d286d6a1486" },
-  constraint: { count: 342, fingerprint: "61865cadb7d780a71653976f4aa1dcc470ac2e3f84e01ff2af2c97fbaa80b070" },
+  constraint: { count: 341, fingerprint: "bb30d5040979c765db8b9a89cc39541b6386ef10c37501985b29f0713cf43696" },
+  other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
+};
+
+// Resealed from PostgreSQL 16 after applying append-only 001–016 on a disposable fixture.
+export const PULSO_MANAGED_SCHEMA_MANIFEST_016: PulsoStructuralManifest = {
+  extension: { count: 1, fingerprint: "fa91076c4b879c2f864dbfbf3f6b6dc1e1dcc8386f48a519d25dfd1f5c6db9e2" },
+  table: {
+    count: 66,
+    fingerprint: "03d5b7343d763ca6f7eb5b6507e228b234c9a04ba9ed24e9e9a05b54966bcc7e",
+    identities: MANAGED_TABLES_016
+  },
+  column: { count: 730, fingerprint: "2a09a87fd28dd7762676b27d991e6ffdb6f4c0726556a016bcd9f127a52a3a0d" },
+  function: {
+    count: 16,
+    fingerprint: "a81075db853601d5c807f596364a639ce7ac0087103c7b58c4a9dfdcf4489281",
+    identities: PULSO_FUNCTIONS
+  },
+  trigger: { count: 14, fingerprint: "84fb33fd187e5c5c79c54e5f50d84a490adec9bf9c263fa47c732f0baf8031bb" },
+  index: { count: 211, fingerprint: "32e573836de424a08fbefe78ec9d5dddec2024e1ba4a6acf85182a417ce0e109" },
+  constraint: { count: 353, fingerprint: "a294c8cbd66f9c25e02d198fb66d56528dbbc7dbca4b0d80f394e91b5fa1190b" },
   other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
 };
 
@@ -619,7 +654,7 @@ export const PULSO_SCHEMA_MANIFEST: PulsoSchemaManifestSet = {
     constraint: { count: 326, fingerprint: "c02658530e79823119ad93852812add6c4cd421ff1fc8584a0318697e1d3f60e" },
     other_relation: { count: 0, fingerprint: EMPTY_FINGERPRINT }
   },
-  managed: PULSO_MANAGED_SCHEMA_MANIFEST_015,
+  managed: PULSO_MANAGED_SCHEMA_MANIFEST_016,
   managedByVersion: {
     1: PULSO_MANAGED_SCHEMA_MANIFEST_001,
     2: PULSO_MANAGED_SCHEMA_MANIFEST_002,
@@ -635,7 +670,8 @@ export const PULSO_SCHEMA_MANIFEST: PulsoSchemaManifestSet = {
     12: PULSO_MANAGED_SCHEMA_MANIFEST_012,
     13: PULSO_MANAGED_SCHEMA_MANIFEST_013,
     14: PULSO_MANAGED_SCHEMA_MANIFEST_014,
-    15: PULSO_MANAGED_SCHEMA_MANIFEST_015
+    15: PULSO_MANAGED_SCHEMA_MANIFEST_015,
+    16: PULSO_MANAGED_SCHEMA_MANIFEST_016
   }
 };
 
@@ -651,9 +687,10 @@ const SELECT_INSERT_UPDATE = ["INSERT", "SELECT", "UPDATE"] as const;
 const EXECUTE = ["EXECUTE"] as const;
 
 function tablePolicy(
-  overrides: Readonly<Record<string, readonly string[]>>
+  overrides: Readonly<Record<string, readonly string[]>>,
+  identities: readonly string[] = MANAGED_TABLES_016
 ): Readonly<Record<string, readonly string[]>> {
-  return Object.fromEntries(MANAGED_TABLES.map((table) => [table, overrides[table] ?? []]));
+  return Object.fromEntries(identities.map((table) => [table, overrides[table] ?? []]));
 }
 
 function functionPolicy(executable: readonly string[]): Readonly<Record<string, readonly string[]>> {
@@ -723,6 +760,27 @@ export const PULSO_RUNTIME_POLICIES: Readonly<Record<PulsoRuntimeRole, PulsoRunt
     ])
   }
 };
+
+export const PULSO_EXPAND_RUNTIME_POLICIES: Readonly<Record<PulsoRuntimeRole, PulsoRuntimePolicy>> = Object.fromEntries(
+  PULSO_RUNTIME_ROLE_DEFINITIONS.map(({ role }) => {
+    const contractPolicy = PULSO_RUNTIME_POLICIES[role];
+    return [
+      role,
+      {
+        schemas: role === "hyperion_sofia" ? [...contractPolicy.schemas, "pulso_iris"] : contractPolicy.schemas,
+        tables: Object.fromEntries(
+          Object.entries(contractPolicy.tables)
+            .filter(([table]) => table !== "pulso_iris.access_fk_contract_attestations")
+            .map(([table, privileges]) => [
+              table,
+              role === "hyperion_sofia" && table === "pulso_iris.schema_version" ? SELECT : privileges
+            ])
+        ),
+        functions: Object.fromEntries(PULSO_FUNCTIONS_LEGACY.map((fn) => [fn, contractPolicy.functions[fn] ?? []]))
+      }
+    ];
+  })
+) as Record<PulsoRuntimeRole, PulsoRuntimePolicy>;
 
 export const PULSO_ROLE_SECURITY_QUERY = `
 with active_role as (
@@ -1010,16 +1068,20 @@ export async function assertPulsoMigratorDatabaseSecurity(client: PulsoSchemaCli
   return role;
 }
 
-export async function inspectPulsoRuntimeSecurity(client: PulsoSchemaClient): Promise<PulsoRuntimeSecurityInspection> {
+export async function inspectPulsoRuntimeSecurity(
+  client: PulsoSchemaClient,
+  policies: Readonly<Record<PulsoRuntimeRole, PulsoRuntimePolicy>> = PULSO_RUNTIME_POLICIES
+): Promise<PulsoRuntimeSecurityInspection> {
   const role = await inspectPulsoRoleSecurity(client);
   const acl = await client.query<PulsoAclRow>(PULSO_RUNTIME_ACL_QUERY);
-  return { role, acl: acl.rows, issues: evaluatePulsoRuntimeSecurity(role, acl.rows) };
+  return { role, acl: acl.rows, issues: evaluatePulsoRuntimeSecurity(role, acl.rows, policies) };
 }
 
 export async function assertPulsoRuntimeDatabaseSecurity(
-  client: PulsoSchemaClient
+  client: PulsoSchemaClient,
+  policies: Readonly<Record<PulsoRuntimeRole, PulsoRuntimePolicy>> = PULSO_RUNTIME_POLICIES
 ): Promise<PulsoRuntimeSecurityInspection> {
-  const inspection = await inspectPulsoRuntimeSecurity(client);
+  const inspection = await inspectPulsoRuntimeSecurity(client, policies);
   if (inspection.issues.length > 0)
     throw new Error(`PULSO runtime security assertion failed: ${inspection.issues.join("; ")}`);
   return inspection;
@@ -1036,9 +1098,13 @@ export async function assertPulsoRuntimeDatabaseBoundary(client: PulsoSchemaClie
   return { schema, security };
 }
 
-export function evaluatePulsoRuntimeSecurity(role: PulsoRoleSecurityRow, acl: PulsoAclRow[]): string[] {
+export function evaluatePulsoRuntimeSecurity(
+  role: PulsoRoleSecurityRow,
+  acl: PulsoAclRow[],
+  policies: Readonly<Record<PulsoRuntimeRole, PulsoRuntimePolicy>> = PULSO_RUNTIME_POLICIES
+): string[] {
   const issues: string[] = [];
-  const policy = PULSO_RUNTIME_POLICIES[role.current_user as PulsoRuntimeRole];
+  const policy = policies[role.current_user as PulsoRuntimeRole];
   if (!policy || !PULSO_RUNTIME_ROLE_DEFINITIONS.some((definition) => definition.role === role.current_user)) {
     issues.push(`unexpected PULSO runtime role ${role.current_user}`);
     return issues;
@@ -1194,11 +1260,15 @@ export function evaluatePulsoSchemaSnapshot(
       if (baselineEntries.length !== 1)
         issues.push(`pulso_iris.migration_ledger must contain exactly one ${PULSO_BASELINE_MIGRATION} row`);
     } else {
-      if (!version || Number(version.current_version) !== PULSO_CURRENT_SCHEMA_VERSION) {
-        issues.push(`runtime requires PULSO schema version ${PULSO_CURRENT_SCHEMA_VERSION}`);
-      }
-      if (version?.migration_name !== PULSO_CURRENT_MIGRATION) {
-        issues.push(`runtime requires PULSO migration ${PULSO_CURRENT_MIGRATION}`);
+      const runtimeVersion = version ? Number(version.current_version) : undefined;
+      const expectedRuntimeMigration =
+        runtimeVersion === undefined ? undefined : PULSO_RUNTIME_MIGRATION_BY_VERSION[runtimeVersion];
+      if (expectedRuntimeMigration === undefined) {
+        issues.push(
+          `runtime requires a supported PULSO schema version ${PULSO_EXPAND_SCHEMA_VERSION}..${PULSO_CURRENT_SCHEMA_VERSION}`
+        );
+      } else if (version?.migration_name !== expectedRuntimeMigration) {
+        issues.push(`runtime requires PULSO migration ${expectedRuntimeMigration} at version ${runtimeVersion}`);
       }
     }
     return {

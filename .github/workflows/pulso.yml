@@ -107,12 +107,14 @@ jobs:
         run: |
           pulso_migrator_url="postgres://hyperion_pulso_migrator:${PULSO_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"
           env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            PULSO_MIGRATION_PHASE=contract \
             PULSO_MIGRATOR_DATABASE_URL="$pulso_migrator_url" \
             pnpm --filter @hyperion/pulso-migrations migrate
       - name: Activate only the five PULSO runtime roles
         shell: bash
         run: >-
           env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          PULSO_MIGRATION_PHASE=contract
           PULSO_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
           PULSO_POSTGRES_DB=hyperion_pulso_n1_fixture_ci
           PULSO_DATABASE_PASSWORD="$PULSO_DATABASE_PASSWORD"
@@ -140,7 +142,7 @@ jobs:
             TEST_INTEGRATION_DATABASE_URL="$integration_runtime_url" \
             TEST_CHANNEL_DATABASE_URL="$channel_runtime_url" \
             pnpm --filter @hyperion/pulso-migrations exec vitest run src/autonomy.integration.test.ts
-      - name: Exercise the frozen SOFIA 002 readiness contract fixture against 003
+      - name: Assert frozen SOFIA 002 readiness is revoked by the current contract
         shell: bash
         run: |
           pulso_migrator_url="postgres://hyperion_pulso_migrator:${PULSO_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"

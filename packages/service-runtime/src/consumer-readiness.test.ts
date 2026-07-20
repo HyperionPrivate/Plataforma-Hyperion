@@ -82,13 +82,12 @@ describe("service-runtime production consumers", () => {
     }
   });
 
-  it("keeps the remaining PULSO runtimes on the global transition marker", async () => {
+  it("keeps the remaining PULSO runtimes on the shared 8..16 compatibility window", async () => {
     for (const entry of await serviceEntrypoints()) {
       if (!PULSO_RUNTIME_SERVICES.has(entry.name)) continue;
       expect(entry.source, entry.name).toContain('from "@hyperion/pulso-migrations/schema-manifest"');
-      expect(entry.source, entry.name).toContain('schema: "pulso_iris"');
-      expect(entry.source, entry.name).toContain('serviceName: "pulso"');
-      expect(entry.source, entry.name).toContain("minimumVersion: PULSO_CURRENT_SCHEMA_VERSION");
+      expect(entry.source, entry.name).toContain("requiredSchemaVersion: PULSO_RUNTIME_SCHEMA_REQUIREMENTS.pulso");
+      expect(entry.source, entry.name).not.toContain("PULSO_CURRENT_SCHEMA_VERSION");
     }
   });
 

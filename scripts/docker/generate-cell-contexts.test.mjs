@@ -424,7 +424,7 @@ test("Compose PULSO expone la versión exacta de cada runtime del catálogo vige
   const [compose, environment, catalogSource] = await Promise.all([
     readFile(path.join(repositoryRoot, "infra/docker-compose.pulso.yml"), "utf8"),
     readFile(path.join(repositoryRoot, "infra/pulso.env.example"), "utf8"),
-    readFile(path.join(repositoryRoot, "releases/catalogs/pulso/1.3.0.json"), "utf8")
+    readFile(path.join(repositoryRoot, "releases/catalogs/pulso/1.4.0.json"), "utf8")
   ]);
   const catalog = JSON.parse(catalogSource);
   const versionVariableByService = {

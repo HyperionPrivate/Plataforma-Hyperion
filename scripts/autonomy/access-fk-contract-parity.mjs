@@ -16,8 +16,12 @@
  */
 
 import { createHash } from "node:crypto";
+import { link, open, readFile, unlink } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+const TARGET_MIGRATION = "016-attest-access-fk-contract.sql";
+const TARGET_VERSION = 16;
 
 export const ACCESS_FK_CONTRACT_MIGRATIONS = Object.freeze([
   "009-contract-channel-access-tenant-fks.sql",
@@ -48,10 +52,30 @@ export const ACCESS_FK_CONTRACT_CONSUMERS = Object.freeze([
     inboxTable: "pulso_iris.access_projection_inbox",
     operationalTables: [
       "pulso_iris.administrative_patients",
+      "pulso_iris.agenda_blocks",
+      "pulso_iris.agenda_settings",
+      "pulso_iris.appointment_holds",
+      "pulso_iris.appointment_status_history",
+      "pulso_iris.appointment_types",
       "pulso_iris.appointments",
+      "pulso_iris.availability_rules",
+      "pulso_iris.campaign_contacts",
+      "pulso_iris.campaigns",
+      "pulso_iris.configuration_imports",
       "pulso_iris.conversations",
+      "pulso_iris.handoffs",
+      "pulso_iris.holidays",
+      "pulso_iris.operational_kpi_snapshots",
+      "pulso_iris.payers",
+      "pulso_iris.professional_appointment_types",
+      "pulso_iris.professional_payer_exclusions",
+      "pulso_iris.professional_sites",
+      "pulso_iris.professionals",
+      "pulso_iris.rpa_actions",
+      "pulso_iris.rpa_events",
+      "pulso_iris.rpa_workers",
       "pulso_iris.sites",
-      "pulso_iris.professionals"
+      "pulso_iris.waitlist"
     ],
     serviceHost: "pulso-iris-service",
     tokenEnv: "ACCESS_TO_PULSO_TOKEN"
@@ -60,12 +84,7 @@ export const ACCESS_FK_CONTRACT_CONSUMERS = Object.freeze([
     id: "sofia",
     snapshotSchema: "agent_runtime",
     inboxTable: "agent_runtime.access_projection_inbox",
-    operationalTables: [
-      "agent_runtime.executions",
-      "agent_runtime.jobs",
-      "agent_runtime.inbox_events",
-      "agent_runtime.outbox_events"
-    ],
+    operationalTables: ["platform.agents", "platform.prompt_flows", "agent_runtime.executions", "agent_runtime.jobs"],
     serviceHost: "agent-service",
     tokenEnv: "ACCESS_TO_SOFIA_TOKEN"
   },
@@ -73,7 +92,7 @@ export const ACCESS_FK_CONTRACT_CONSUMERS = Object.freeze([
     id: "integration",
     snapshotSchema: "integration_runtime",
     inboxTable: "integration_runtime.access_projection_inbox",
-    operationalTables: [],
+    operationalTables: ["platform.integrations"],
     serviceHost: "integration-service",
     tokenEnv: "ACCESS_TO_INTEGRATION_TOKEN"
   },
@@ -81,7 +100,7 @@ export const ACCESS_FK_CONTRACT_CONSUMERS = Object.freeze([
     id: "knowledge",
     snapshotSchema: "knowledge_runtime",
     inboxTable: "knowledge_runtime.access_projection_inbox",
-    operationalTables: [],
+    operationalTables: ["platform.knowledge_sources"],
     serviceHost: "knowledge-service",
     tokenEnv: "ACCESS_TO_KNOWLEDGE_TOKEN"
   }
@@ -149,7 +168,6 @@ export async function measureConsumerParity(accessDb, consumerDb, consumer) {
   const accessIds = new Set(access.rows.map((row) => row.tenantId));
   const extraTenants = destination.rows.filter((row) => !accessIds.has(row.tenantId)).map((row) => row.tenantId);
 
-  let referencedTenantIds = 0;
   let referencedTenantIdsMissingSnapshot = 0;
   if (consumer.operationalTables.length > 0) {
     const unionSql = consumer.operationalTables.map((table) => `select tenant_id from ${table}`).join("\n union\n ");
@@ -162,7 +180,6 @@ export async function measureConsumerParity(accessDb, consumerDb, consumer) {
          from referenced
          left join ${consumer.snapshotSchema}.tenant_snapshots snapshot using (tenant_id)`
     );
-    referencedTenantIds = references.rows[0].referencedTenantIds;
     referencedTenantIdsMissingSnapshot = references.rows[0].missing;
   }
 
@@ -185,7 +202,6 @@ export async function measureConsumerParity(accessDb, consumerDb, consumer) {
     statusMismatches,
     sourceVersionMismatches,
     currentEventIdMismatches,
-    referencedTenantIds,
     referencedTenantIdsMissingSnapshot,
     pendingOrDeadLetterEvents: pending.rows[0].count,
     sourceVersionConflicts: conflicts.rows[0].count
@@ -222,15 +238,55 @@ export function assertConsumerParityComplete(consumerId, parity) {
 export function buildAccessFkContractReceipt(consumersParity, options = {}) {
   return sealAccessFkContractReceipt({
     kind: "access-fk-contract-parity",
-    schemaVersion: 1,
-    tipVersion: 15,
-    tipMigration: "015-revoke-sofia-pulso-iris-control-plane-grants.sql",
+    schemaVersion: 2,
+    status: "verified",
+    capturedAt: options.capturedAt,
+    deploymentId: options.deploymentId,
+    environment: options.environment,
+    pulsoDatabase: options.pulsoDatabase,
+    accessDatabase: options.accessDatabase,
+    sourceRevision: options.sourceRevision,
+    migrationSetSha256: options.migrationSetSha256,
+    observedSchemaVersion: options.observedSchemaVersion,
+    observedMigration: options.observedMigration,
+    targetVersion: TARGET_VERSION,
+    targetMigration: TARGET_MIGRATION,
     contracts: [...ACCESS_FK_CONTRACT_MIGRATIONS],
-    consumers: consumersParity,
-    status: options.status ?? "verified",
-    capturedAt: options.capturedAt ?? new Date().toISOString(),
-    related: "docs/evidence/access-channel-projection-parity-20260719.json"
+    consumers: consumersParity
   });
+}
+
+export async function computeAccessFkMigrationSetSha256(repositoryRoot) {
+  const entries = await Promise.all(
+    ACCESS_FK_CONTRACT_MIGRATIONS.map(async (name) => {
+      const source = await readFile(path.join(repositoryRoot, "packages/pulso-migrations/sql", name), "utf8");
+      const checksum = createHash("sha256").update(source.replaceAll("\r\n", "\n")).digest("hex");
+      return { name, checksum };
+    })
+  );
+  return createHash("sha256").update(canonicalJson(entries)).digest("hex");
+}
+
+async function writeReceiptOnce(receiptPath, receipt) {
+  const temporaryPath = `${receiptPath}.${process.pid}.${Date.now()}.tmp`;
+  const handle = await open(temporaryPath, "wx", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await link(temporaryPath, receiptPath);
+  } finally {
+    await unlink(temporaryPath).catch(() => undefined);
+  }
+}
+
+function requiredEnv(name, pattern) {
+  const value = process.env[name]?.trim();
+  if (!value || (pattern && !pattern.test(value))) throw new Error(`${name} is required and invalid`);
+  return value;
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -241,10 +297,6 @@ async function main(argv = process.argv.slice(2)) {
     );
   }
 
-  // Full Docker orchestration reuses the Channel acceptance stack pattern.
-  // Operators should extend access-channel-projection.e2e.mjs fan-out to all five
-  // consumers, call measureConsumerParity per consumer, then seal via
-  // buildAccessFkContractReceipt. This entrypoint refuses silent success.
   const receiptIndex = argv.indexOf("--receipt");
   const receiptPath =
     receiptIndex >= 0
@@ -254,10 +306,57 @@ async function main(argv = process.argv.slice(2)) {
           "../../docs/evidence/access-fk-contract-parity-live.json"
         );
 
-  throw new Error(
-    `Multi-consumer Docker acceptance is wired for measure/seal helpers but must be driven from an extended Channel harness. ` +
-      `Helpers are ready (measureConsumerParity / buildAccessFkContractReceipt). Target receipt path: ${receiptPath}`
-  );
+  const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+  const accessDatabaseUrl = requiredEnv("ACCESS_FK_PARITY_ACCESS_DATABASE_URL");
+  const pulsoDatabaseUrl = requiredEnv("ACCESS_FK_PARITY_PULSO_DATABASE_URL");
+  const deploymentId = requiredEnv("PULSO_ACCESS_FK_CONTRACT_DEPLOYMENT_ID", /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/);
+  const sourceRevision = requiredEnv("PULSO_RELEASE_SOURCE_REVISION", /^[a-f0-9]{40}$/);
+  if (/^0+$/.test(sourceRevision)) throw new Error("PULSO_RELEASE_SOURCE_REVISION must be nonzero");
+  const environment = requiredEnv("HYPERION_ENVIRONMENT", /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/).toLowerCase();
+  const require = createRequire(new URL("../../packages/pulso-migrations/package.json", import.meta.url));
+  const pg = require("pg");
+  const accessDb = new pg.Client({ connectionString: accessDatabaseUrl });
+  const pulsoDb = new pg.Client({ connectionString: pulsoDatabaseUrl });
+  await Promise.all([accessDb.connect(), pulsoDb.connect()]);
+  try {
+    const [accessIdentity, pulsoIdentity, migrationSetSha256] = await Promise.all([
+      accessDb.query("select current_database() as name"),
+      pulsoDb.query(
+        `select current_database() as name, clock_timestamp() as "capturedAt",
+                current_version as "observedSchemaVersion", migration_name as "observedMigration"
+           from pulso_iris.schema_version where service_name = 'pulso'`
+      ),
+      computeAccessFkMigrationSetSha256(repositoryRoot)
+    ]);
+    const accessDatabase = accessIdentity.rows[0]?.name;
+    const marker = pulsoIdentity.rows[0];
+    if (!accessDatabase || !marker || pulsoIdentity.rows.length !== 1) {
+      throw new Error("Could not resolve exact Access/PULSO database identities and schema marker");
+    }
+    const consumers = {};
+    for (const consumer of ACCESS_FK_CONTRACT_CONSUMERS) {
+      const parity = await measureConsumerParity(accessDb, pulsoDb, consumer);
+      assertConsumerParityComplete(consumer.id, parity);
+      consumers[consumer.id] = parity;
+    }
+    const receipt = buildAccessFkContractReceipt(consumers, {
+      capturedAt: new Date(marker.capturedAt).toISOString(),
+      deploymentId,
+      environment,
+      pulsoDatabase: marker.name,
+      accessDatabase,
+      sourceRevision,
+      migrationSetSha256,
+      observedSchemaVersion: Number(marker.observedSchemaVersion),
+      observedMigration: marker.observedMigration
+    });
+    await writeReceiptOnce(receiptPath, receipt);
+    process.stdout.write(
+      `${JSON.stringify({ event: "access_fk_contract_receipt_written", receiptPath, receiptSha256: receipt.receiptSha256 })}\n`
+    );
+  } finally {
+    await Promise.allSettled([accessDb.end(), pulsoDb.end()]);
+  }
 }
 
 const invokedAsCli =

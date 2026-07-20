@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   ACCESS_FK_CONTRACT_CONSUMERS,
   ACCESS_FK_CONTRACT_MIGRATIONS,
+  buildAccessFkContractReceipt,
+  computeAccessFkMigrationSetSha256,
   sealAccessFkContractReceipt
 } from "./access-fk-contract-parity.mjs";
 
@@ -53,6 +55,47 @@ test("multi-consumer harness catalogs five distinct edges", () => {
   );
   const tokens = new Set(ACCESS_FK_CONTRACT_CONSUMERS.map((consumer) => consumer.tokenEnv));
   assert.equal(tokens.size, 5);
+  assert.equal(ACCESS_FK_CONTRACT_CONSUMERS.flatMap((consumer) => consumer.operationalTables).length, 36);
+});
+
+test("builds a v2 receipt bound to deployment, databases, revision and migration set", async () => {
+  const migrationSetSha256 = await computeAccessFkMigrationSetSha256(repositoryRoot);
+  const parity = Object.fromEntries(
+    ACCESS_FK_CONTRACT_CONSUMERS.map((consumer) => [
+      consumer.id,
+      {
+        expectedTenants: 1,
+        destinationTenants: 1,
+        matchedTenants: 1,
+        coverageBasisPoints: 10_000,
+        missingTenants: 0,
+        extraTenants: 0,
+        statusMismatches: 0,
+        sourceVersionMismatches: 0,
+        currentEventIdMismatches: 0,
+        referencedTenantIdsMissingSnapshot: 0,
+        pendingOrDeadLetterEvents: 0,
+        sourceVersionConflicts: 0
+      }
+    ])
+  );
+  const receipt = buildAccessFkContractReceipt(parity, {
+    capturedAt: "2026-07-20T12:00:00.000Z",
+    deploymentId: "pulso-staging-20260720",
+    environment: "staging",
+    pulsoDatabase: "hyperion_pulso",
+    accessDatabase: "hyperion_access",
+    sourceRevision: "a".repeat(40),
+    migrationSetSha256,
+    observedSchemaVersion: 15,
+    observedMigration: "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
+  });
+  assert.equal(receipt.schemaVersion, 2);
+  assert.equal(receipt.status, "verified");
+  assert.equal(receipt.targetVersion, 16);
+  assert.equal(receipt.targetMigration, "016-attest-access-fk-contract.sql");
+  assert.equal(receipt.migrationSetSha256, migrationSetSha256);
+  assert.match(receipt.receiptSha256, /^[a-f0-9]{64}$/);
 });
 
 /**

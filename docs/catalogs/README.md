@@ -15,8 +15,9 @@ Estadísticas normativas: `products=4`, `services=32`, `debtItems=5`, `findingGr
 - [`debt.v1.json`](debt.v1.json): agrupación exhaustiva del estado efectivo por tipo y arista. Incluye tanto la
   cadena global congelada como los migradores provider-owned independientes. DEBT-010/020/021/025/027/032
   cerrados (baseline vacío; edge legacy y bridge LUMEN N-1 retirados en código; gateway sin `@hyperion/contracts`).
-  Reabiertos: `DEBT-005` (contratos FK 009–013 en tip antes de paridad multi-consumer atestada; gate en
-  pulso-migrations) y `DEBT-023` (redirects retirados en código; ops debe confirmar ausencia en access logs).
+  Reabiertos: `DEBT-005` (flujo 008→016 y recibo v2 implementados/ensayados localmente; falta paridad
+  multi-consumer y cutover de producción) y `DEBT-023` (redirects retirados en código; ops debe confirmar ausencia
+  en access logs).
   Quedan además `DEBT-022` (cutover ops + CEDCO), `DEBT-024` (registry SemVer) y `DEBT-026` (HA/offsite en
   entorno objetivo). `DEBT-022` es la única excepción del gate de tenant: fija las cuatro selecciones CEDCO por
   slug a bytes, cantidad, owner, issue y vencimiento.

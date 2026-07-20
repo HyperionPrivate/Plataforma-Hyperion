@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   assertPulsoMigratorDatabaseSecurity,
   assertPulsoRuntimeDatabaseBoundary,
+  assertPulsoRuntimeDatabaseSecurity,
   assertPulsoSchemaCompatible,
   inspectPulsoSchema,
   PULSO_CURRENT_MIGRATION,
@@ -206,7 +207,7 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
     await Promise.all([...clients.values()].map(async (client) => client.end()));
   });
 
-  it("materializes exactly the provider-owned fresh v4 catalog, ledgers and owner-local SOFIA marker", async () => {
+  it("materializes exactly the provider-owned current catalog, ledgers and owner-local SOFIA marker", async () => {
     const migrator = requiredClient(clients, "hyperion_pulso_migrator");
     const security = await assertPulsoMigratorDatabaseSecurity(migrator);
     expect(security).toMatchObject({
@@ -240,7 +241,8 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       "012-contract-iris-access-tenant-fks.sql",
       "013-contract-knowledge-access-tenant-fks.sql",
       "014-drop-n-minus-one-legacy-adapters.sql",
-      "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
+      "015-revoke-sofia-pulso-iris-control-plane-grants.sql",
+      "016-attest-access-fk-contract.sql"
     ]);
     expect(inspection.ledgerEntries.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum))).toBe(true);
 
@@ -292,7 +294,7 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       [PULSO_PROVIDER_SCHEMAS]
     );
     expect(catalog.rows[0]).toEqual({
-      tables: 65,
+      tables: 66,
       functions: 16,
       triggers: 14,
       invalid_constraints: 0,
@@ -320,28 +322,24 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
     expect(siblingObjects.rows).toEqual([]);
   });
 
-  itReadinessMutation("upgrades an exact managed 003 closure to 004 and rolls the rehearsal back", async () => {
+  itReadinessMutation("upgrades an exact managed 015 closure to 016 and rolls the rehearsal back", async () => {
     const migrator = requiredClient(clients, "hyperion_pulso_migrator");
     await assertExactReadinessMutationDatabase(migrator, "hyperion_pulso_migrator");
-    const migrationSql = await readFile(
-      new URL("../sql/004-access-channel-tenant-projection.sql", import.meta.url),
-      "utf8"
-    );
+    const migrationSql = await readFile(new URL("../sql/016-attest-access-fk-contract.sql", import.meta.url), "utf8");
     const checksum = computePulsoMigrationChecksum(migrationSql);
 
     await migrator.query("begin");
     try {
       await migrator.query("delete from pulso_iris.migration_ledger where name = $1", [PULSO_CURRENT_MIGRATION]);
-      await migrator.query("drop table channel_runtime.access_projection_inbox");
-      await migrator.query("drop table channel_runtime.tenant_snapshots");
-      await migrator.query("delete from pulso_iris.service_migrations where version = 4");
+      await migrator.query("drop table pulso_iris.access_fk_contract_attestations");
+      await migrator.query("delete from pulso_iris.service_migrations where version = 16");
       await migrator.query(
         `update pulso_iris.schema_version
-            set current_version = 3,
+            set current_version = 15,
                 migration_name = $1,
                 updated_at = now()
           where service_name = 'pulso'`,
-        [SOFIA_CURRENT_MIGRATION]
+        ["015-revoke-sofia-pulso-iris-control-plane-grants.sql"]
       );
 
       const beforeUpgrade = await inspectPulsoSchema(migrator, "migrator");
@@ -349,8 +347,8 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
       expect(beforeUpgrade).toMatchObject({
         state: "managed",
         issues: [],
-        currentVersion: 3,
-        migrationName: SOFIA_CURRENT_MIGRATION
+        currentVersion: 15,
+        migrationName: "015-revoke-sofia-pulso-iris-control-plane-grants.sql"
       });
 
       await migrator.query(migrationSql);
@@ -420,13 +418,25 @@ describeIntegration("PULSO autonomous PostgreSQL closure", () => {
   )) {
     it(`enforces the exact non-owning ACL and DDL boundary for ${role}`, async () => {
       const client = requiredClient(clients, role);
-      const boundary = await assertPulsoRuntimeDatabaseBoundary(client);
-      expect(boundary.schema).toMatchObject({
-        state: "managed",
-        issues: [],
-        currentVersion: PULSO_CURRENT_SCHEMA_VERSION,
-        migrationName: PULSO_CURRENT_MIGRATION
-      });
+      const boundary =
+        role === "hyperion_sofia"
+          ? { schema: null, security: await assertPulsoRuntimeDatabaseSecurity(client) }
+          : await assertPulsoRuntimeDatabaseBoundary(client);
+      if (boundary.schema) {
+        expect(boundary.schema).toMatchObject({
+          state: "managed",
+          issues: [],
+          currentVersion: PULSO_CURRENT_SCHEMA_VERSION,
+          migrationName: PULSO_CURRENT_MIGRATION
+        });
+      } else {
+        const ownerMarker = await client.query<{ current_version: number; migration_name: string }>(
+          "select current_version, migration_name from agent_runtime.schema_version where service_name = 'sofia'"
+        );
+        expect(ownerMarker.rows).toEqual([
+          { current_version: SOFIA_CURRENT_SCHEMA_VERSION, migration_name: SOFIA_CURRENT_MIGRATION }
+        ]);
+      }
       expect(boundary.security).toMatchObject({
         role: {
           current_user: role,

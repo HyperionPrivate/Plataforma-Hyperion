@@ -97,6 +97,8 @@ export interface SchemaVersionRequirement {
   /** Logical service key stored in schema_version.service_name. */
   serviceName: string;
   minimumVersion: number;
+  /** Highest schema version understood by this runtime. */
+  maximumVersion?: number;
 }
 
 export interface MigrationLedgerRequirement {
@@ -326,7 +328,10 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
         dependencies.push({
           name: dependencyName,
           status: "ok",
-          detail: `schema version >= ${requiredSchemaVersion.minimumVersion}`
+          detail:
+            requiredSchemaVersion.maximumVersion === undefined
+              ? `schema version >= ${requiredSchemaVersion.minimumVersion}`
+              : `schema version ${requiredSchemaVersion.minimumVersion}..${requiredSchemaVersion.maximumVersion}`
         });
       }
 
@@ -547,6 +552,9 @@ async function findSchemaVersionProblem(
     if (currentVersion < requirement.minimumVersion) {
       return `schema version ${currentVersion} is below required ${requirement.minimumVersion}`;
     }
+    if (requirement.maximumVersion !== undefined && currentVersion > requirement.maximumVersion) {
+      return `schema version ${currentVersion} is above supported ${requirement.maximumVersion}`;
+    }
     return undefined;
   } catch {
     return `schema version is unavailable; require >= ${requirement.minimumVersion}`;
@@ -564,6 +572,12 @@ function normalizeSchemaVersionRequirement(
     value.minimumVersion < 1
   ) {
     throw new TypeError("requiredSchemaVersion must contain safe identifiers and a positive integer version");
+  }
+  if (
+    value.maximumVersion !== undefined &&
+    (!Number.isSafeInteger(value.maximumVersion) || value.maximumVersion < value.minimumVersion)
+  ) {
+    throw new TypeError("requiredSchemaVersion.maximumVersion must be a safe integer >= minimumVersion");
   }
   return { ...value };
 }

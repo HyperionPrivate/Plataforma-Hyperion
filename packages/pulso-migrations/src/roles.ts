@@ -5,7 +5,14 @@ import {
   type PulsoRuntimePasswords,
   type PulsoRuntimeRole
 } from "./config.js";
-import { assertPulsoRuntimeDatabaseSecurity, PULSO_RUNTIME_SCHEMA_REQUIREMENTS } from "./schema-manifest.js";
+import {
+  assertPulsoRuntimeDatabaseSecurity,
+  PULSO_CURRENT_MIGRATION,
+  PULSO_CURRENT_SCHEMA_VERSION,
+  PULSO_EXPAND_RUNTIME_POLICIES,
+  PULSO_EXPAND_SCHEMA_VERSION,
+  PULSO_KNOWLEDGE_PROJECTION_MIGRATION
+} from "./schema-manifest.js";
 
 const { Client } = pg;
 const ROLE_LOCK = "pulso:database-role-bootstrap";
@@ -26,7 +33,7 @@ export async function bootstrapPulsoDatabaseRoles(
   const client = new Client({ connectionString: targetUrl.toString() });
   await client.connect();
   try {
-    await applyPulsoRolePasswords(client, databaseName, passwords);
+    await applyPulsoRolePasswords(client, databaseName, passwords, readRoleBootstrapPhase(process.env));
   } finally {
     await client.end();
   }
@@ -35,7 +42,8 @@ export async function bootstrapPulsoDatabaseRoles(
 export async function applyPulsoRolePasswords(
   client: PulsoRoleBootstrapClient,
   databaseName: string,
-  passwords: PulsoRuntimePasswords
+  passwords: PulsoRuntimePasswords,
+  phase: "expand" | "contract" = "contract"
 ): Promise<void> {
   if (!/^[a-z][a-z0-9_]{0,62}$/.test(databaseName)) throw new Error("Unsafe PULSO database name");
   for (const definition of PULSO_RUNTIME_ROLE_DEFINITIONS) {
@@ -59,14 +67,17 @@ export async function applyPulsoRolePasswords(
 
     await client.query("begin");
     try {
-      await assertRolePrerequisites(client, databaseName);
+      await assertRolePrerequisites(client, databaseName, phase);
       for (const definition of PULSO_RUNTIME_ROLE_DEFINITIONS) {
         await activateRole(client, definition.role, passwords.get(definition.role)!);
       }
       for (const definition of PULSO_RUNTIME_ROLE_DEFINITIONS) {
         await setLocalRole(client, definition.role);
         try {
-          await assertPulsoRuntimeDatabaseSecurity(client);
+          await assertPulsoRuntimeDatabaseSecurity(
+            client,
+            phase === "expand" ? PULSO_EXPAND_RUNTIME_POLICIES : undefined
+          );
         } finally {
           await client.query("reset role");
         }
@@ -81,7 +92,11 @@ export async function applyPulsoRolePasswords(
   }
 }
 
-async function assertRolePrerequisites(client: PulsoRoleBootstrapClient, databaseName: string): Promise<void> {
+async function assertRolePrerequisites(
+  client: PulsoRoleBootstrapClient,
+  databaseName: string,
+  phase: "expand" | "contract"
+): Promise<void> {
   const database = await client.query<{ owner: string }>(
     "select pg_get_userbyid(datdba) as owner from pg_database where datname = $1",
     [databaseName]
@@ -148,7 +163,13 @@ async function assertRolePrerequisites(client: PulsoRoleBootstrapClient, databas
     `select current_version::int, migration_name
        from pulso_iris.schema_version
       where service_name = $1`,
-    PULSO_RUNTIME_SCHEMA_REQUIREMENTS.pulso
+    phase === "expand"
+      ? {
+          serviceName: "pulso",
+          version: PULSO_EXPAND_SCHEMA_VERSION,
+          migrationName: PULSO_KNOWLEDGE_PROJECTION_MIGRATION
+        }
+      : { serviceName: "pulso", version: PULSO_CURRENT_SCHEMA_VERSION, migrationName: PULSO_CURRENT_MIGRATION }
   );
 }
 
@@ -158,7 +179,7 @@ async function assertReadinessMarker(
   sql: string,
   requirement: {
     serviceName: string;
-    minimumVersion: number;
+    version: number;
     migrationName: string;
   }
 ): Promise<void> {
@@ -167,11 +188,17 @@ async function assertReadinessMarker(
   ]);
   if (
     version.rows.length !== 1 ||
-    version.rows[0]?.current_version !== requirement.minimumVersion ||
+    version.rows[0]?.current_version !== requirement.version ||
     version.rows[0]?.migration_name !== requirement.migrationName
   ) {
     throw new Error(`${owner} role bootstrap requires its terminal provider-owned schema version`);
   }
+}
+
+function readRoleBootstrapPhase(env: NodeJS.ProcessEnv): "expand" | "contract" {
+  const value = env.PULSO_MIGRATION_PHASE?.trim().toLowerCase();
+  if (value === "expand" || value === "contract") return value;
+  throw new Error("PULSO_MIGRATION_PHASE must be set before bootstrapping PULSO runtime roles");
 }
 
 async function activateRole(client: PulsoRoleBootstrapClient, role: PulsoRuntimeRole, password: string): Promise<void> {

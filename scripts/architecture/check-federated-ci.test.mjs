@@ -286,6 +286,7 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   assert.match(job, /bootstrap:database/);
   assert.match(job, /PULSO_MIGRATOR_DATABASE_URL/);
   assert.match(job, /bootstrap:roles/);
+  assert.equal(job.match(/PULSO_MIGRATION_PHASE=contract/g)?.length, 2);
   assert.match(job, /PULSO_POSTGRES_DB=hyperion_pulso_n1_fixture_ci/);
   assert.match(job, /const names=\['PULSO_MIGRATOR','PULSO','SOFIA','KNOWLEDGE','INTEGRATION','CHANNEL'\]/);
   for (const secret of [
@@ -320,7 +321,9 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   }
   assert.match(job, /autonomy\.integration\.test\.ts/);
   const autonomyStart = job.indexOf("Verify autonomous PULSO catalog and five runtime privilege fences");
-  const fixtureStart = job.indexOf("Exercise the frozen SOFIA 002 readiness contract fixture against 003");
+  const fixtureStart = job.indexOf(
+    "Assert frozen SOFIA 002 readiness is revoked by the current contract"
+  );
   const runtimeStart = job.indexOf("Run all 93 PULSO runtime PostgreSQL integrations with fenced roles");
   assert.ok(autonomyStart >= 0 && fixtureStart > autonomyStart && runtimeStart > fixtureStart);
   const autonomyStep = job.slice(autonomyStart, fixtureStart);

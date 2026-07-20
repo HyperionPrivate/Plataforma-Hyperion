@@ -1,5 +1,6 @@
 import { createDatabase } from "@hyperion/database";
 import { createService, type ServiceHandle } from "@hyperion/service-runtime";
+import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { EmitAuditEventInput } from "./audit-client.js";
@@ -657,6 +658,12 @@ describeIntegration("pulso-iris tenant isolation", () => {
 });
 
 async function resetTenantFixtures(): Promise<void> {
+  await fixtureClient.query(
+    `delete from pulso_iris.tenant_snapshots
+      where tenant_id in (
+        select id from platform.tenants where slug in ('isolation-a', 'isolation-b')
+      )`
+  );
   await fixtureClient.query("delete from platform.tenants where slug in ('isolation-a', 'isolation-b')");
 }
 
@@ -665,7 +672,14 @@ async function createTenant(slug: string): Promise<string> {
     "insert into platform.tenants (slug, display_name) values ($1, $2) returning id",
     [slug, slug]
   );
-  return result.rows[0]!.id;
+  const tenantId = result.rows[0]!.id;
+  await fixtureClient.query(
+    `insert into pulso_iris.tenant_snapshots (
+       tenant_id, status, source_event_id, source_version, source_updated_at, payload_hash
+     ) values ($1, 'active', $2, 1, now(), repeat('0', 64))`,
+    [tenantId, randomUUID()]
+  );
+  return tenantId;
 }
 
 async function createCoreCatalog(

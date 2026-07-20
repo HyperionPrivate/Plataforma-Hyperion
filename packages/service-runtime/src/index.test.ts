@@ -524,6 +524,28 @@ describe("service runtime", () => {
     );
   });
 
+  it("fails readiness when the schema is newer than the runtime supports", async () => {
+    process.env.DATABASE_URL = "postgres://runtime-test";
+    const db = createFakeDatabase([], { pulso_iris: 17 });
+    ({ app } = await createService({
+      serviceName: "pulso-iris-service",
+      databaseRequired: true,
+      requiredSchemaVersion: {
+        schema: "pulso_iris",
+        serviceName: "pulso",
+        minimumVersion: 8,
+        maximumVersion: 16
+      },
+      createDatabase: () => db
+    }));
+
+    const response = await app.inject({ method: "GET", url: "/ready" });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().dependencies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ detail: "schema version 17 is above supported 16" })])
+    );
+  });
+
   it("fails SOFIA readiness closed when its local marker is absent or zero despite a current global marker", async () => {
     for (const localVersion of [undefined, 0] as const) {
       process.env.DATABASE_URL = "postgres://runtime-test";
@@ -602,6 +624,21 @@ describe("service runtime", () => {
         requiredSchemaVersion: { schema: 'lumen";drop schema lumen;--', serviceName: "lumen", minimumVersion: 22 }
       })
     ).rejects.toThrow(/safe identifiers/);
+  });
+
+  it("rejects an inverted schema compatibility window", async () => {
+    await expect(
+      createService({
+        serviceName: "pulso-iris-service",
+        databaseRequired: true,
+        requiredSchemaVersion: {
+          schema: "pulso_iris",
+          serviceName: "pulso",
+          minimumVersion: 16,
+          maximumVersion: 8
+        }
+      })
+    ).rejects.toThrow(/maximumVersion/);
   });
 
   it("honors and echoes an incoming x-request-id header", async () => {

@@ -18,6 +18,7 @@ import {
   PULSO_MANAGED_SCHEMA_MANIFEST_007,
   PULSO_MANAGED_SCHEMA_MANIFEST_008,
   PULSO_MANAGED_SCHEMA_MANIFEST_015,
+  PULSO_MANAGED_SCHEMA_MANIFEST_016,
   PULSO_FUNCTIONS_LEGACY,
   PULSO_PROVIDER_SCHEMAS,
   PULSO_RUNTIME_POLICIES,
@@ -100,7 +101,7 @@ describe("PULSO structural manifest", () => {
   it("has no LUMEN clinical inventory in the production manifest identities", () => {
     const serialized = JSON.stringify(PULSO_SCHEMA_MANIFEST);
     expect(serialized).not.toMatch(/clinical_records|dictations|encounters|audio_cleanup|lumen/i);
-    expect(PULSO_CURRENT_SCHEMA_VERSION).toBe(15);
+    expect(PULSO_CURRENT_SCHEMA_VERSION).toBe(16);
     expect(PULSO_FUNCTIONS).toHaveLength(16);
     expect(PULSO_FUNCTIONS_LEGACY).toHaveLength(19);
   });
@@ -358,9 +359,9 @@ describe("PULSO managed manifest transitions", () => {
       ).state
     ).toBe("managed");
     expect(PULSO_SCHEMA_MANIFEST.managedByVersion?.[PULSO_CURRENT_SCHEMA_VERSION]).toBe(
-      PULSO_MANAGED_SCHEMA_MANIFEST_015
+      PULSO_MANAGED_SCHEMA_MANIFEST_016
     );
-    expect(PULSO_CURRENT_MIGRATION).toBe("015-revoke-sofia-pulso-iris-control-plane-grants.sql");
+    expect(PULSO_CURRENT_MIGRATION).toBe("016-attest-access-fk-contract.sql");
 
     const unknown = evaluatePulsoSchemaSnapshot(
       managedCatalogV8,
