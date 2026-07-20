@@ -1,8 +1,8 @@
 {
-  "policyVersion": "1.10.0",
+  "policyVersion": "1.11.0",
   "owner": "pulso-data",
-  "issue": "HYP-DEBT-027",
-  "reviewBy": "2026-10-31",
+  "issue": "HYP-DEBT-022",
+  "reviewBy": "2027-03-31",
   "provider": {
     "service": "pulso-iris-service",
     "contract": "pulsoAgendaReadinessSchema",
@@ -59,8 +59,8 @@
     }
   },
   "databasePrivilegeRevocation": {
-    "status": "sofia-iris-control-plane-revoked-residual-roles-ts",
-    "reason": "Tip 015 revokes hyperion_sofia USAGE/SELECT on pulso_iris.schema_version. Residual DEBT-027 covers pulso-migrations roles.ts reading agent_runtime.schema_version during bootstrap.",
+    "status": "sofia-iris-control-plane-revoked-roles-ts-closed",
+    "reason": "Tip 015 revokes hyperion_sofia USAGE/SELECT on pulso_iris.schema_version. PULSO role bootstrap no longer reads agent_runtime.schema_version (DEBT-027 closed).",
     "evidence": [
       "packages/pulso-migrations/sql/002-pulso-runtime-roles.sql",
       "packages/pulso-migrations/sql/003-sofia-readiness-marker.sql",

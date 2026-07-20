@@ -231,8 +231,9 @@ del historial global para arrancar o quedar listo.
 
 La única excepción heredada es el
 [comando administrativo del puente N-1](../../packages/migrations/src/lumen-n-minus-one-compatibility.ts). No forma
-parte de la imagen ni del runtime autónomo y está trazado para retiro como `DEBT-025` en el
-[catálogo de deuda](../catalogs/debt.v1.json); no autoriza nuevas migraciones LUMEN en el paquete global.
+parte de la imagen ni del runtime autónomo; el bridge queda fail-closed salvo
+`LUMEN_N1_COMPAT_ENABLED=true` en un ensayo atestado (`DEBT-025`). No autoriza nuevas migraciones LUMEN en el
+paquete global.
 
 ## 9. Consola funcional
 

@@ -9,11 +9,15 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 export function buildReleaseCheckPlan(cell = null) {
   const selectedCell = cell === null ? null : assertReleaseCell(cell);
   const scopeArguments = selectedCell === null ? [] : ["--cell", selectedCell];
-  return [
+  const plan = [
     { script: "scripts/releases/validate-release-manifests.mjs", arguments: scopeArguments },
     { script: "scripts/releases/check-provider-artifact-catalog.mjs", arguments: scopeArguments },
     { script: "scripts/releases/check-provider-contract-compatibility.mjs", arguments: scopeArguments }
   ];
+  if (selectedCell === null) {
+    plan.push({ script: "scripts/releases/verify-registry-publish-path.mjs", arguments: [] });
+  }
+  return plan;
 }
 
 export function runReleaseChecks(options, execute = executeNode) {

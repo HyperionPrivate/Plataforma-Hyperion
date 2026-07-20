@@ -5,8 +5,8 @@ de migracion estan en [Microservicios autonomos](architecture/AUTONOMOUS-MICROSE
 [`data-ownership.json`](architecture/data-ownership.json) es la fuente ejecutable usada por CI para controlar
 SQL literal de runtimes (incl. `packages/`), objetos declarados, claves foráneas entre propietarios, cuerpos
 PL/pgSQL, triggers y `SECURITY DEFINER` con acceso cruzado. Las únicas excepciones temporales permitidas son las
-documentadas en `temporaryExceptions` (hoy: lectura residual del marker SOFÍA en `pulso-migrations`/`roles.ts`);
-los adaptadores N-1 038 ya tienen contract DROP en tip PULSO 014 / global 052.
+documentadas en `temporaryExceptions` (hoy: ninguna); los adaptadores N-1 038 ya tienen contract DROP en tip
+PULSO 014 / global 052 y el bootstrap PULSO ya no lee markers SOFÍA.
 
 El repositorio TypeScript actual es una etapa de transición. El destino es una federación con un repositorio y
 un ciclo de entrega por producto, más un plano neutral mínimo de Access/SSO, aprovisionamiento, Audit asíncrono y
@@ -85,8 +85,8 @@ Identity y Tenant importan `ACCESS_RUNTIME_MIGRATION_REQUIREMENT`, Audit importa
 `AUDIT_RUNTIME_MIGRATION_REQUIREMENT`; Agent y Prompt Flow importan el requisito SOFÍA y consultan
 `agent_runtime.schema_version`, mientras los otros cuatro runtimes PULSO con base de datos validan el requisito
 global en `pulso_iris.schema_version`. Tip `015` revoca `USAGE`/`SELECT` de `hyperion_sofia` sobre ese marcador;
-DEBT-027 residual cubre sólo la lectura de bootstrap en `roles.ts` del marker owner-owned SOFÍA. Ningún runtime
-actual necesita `platform.schema_migrations` para estar ready.
+el bootstrap PULSO ya no consulta `agent_runtime.schema_version`. Ningún runtime actual necesita
+`platform.schema_migrations` para estar ready (DEBT-010 cerrado).
 
 Las llamadas HTTP internas no comparten una identidad global. Cada arista productor→consumidor recibe una
 credencial distinta y el receptor la vincula con `x-hyperion-caller` y con las rutas autorizadas para ese

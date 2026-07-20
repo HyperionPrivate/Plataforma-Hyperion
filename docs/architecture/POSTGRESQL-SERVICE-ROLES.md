@@ -122,8 +122,8 @@ Audit y Access validan sus ledgers provider-owned en `audit_runtime` y `access_r
 `nova.schema_version`, `voice.schema_version`, `liwa.schema_version` o `documents.schema_version`. En PULSO, Agent
 y Prompt Flow validan la fila `sofia` de `agent_runtime.schema_version`; Core, Knowledge, Integration y Channel
 validan la fila `pulso` de `pulso_iris.schema_version`. Tip `015` revoca la lectura del marcador global para
-`hyperion_sofia`; DEBT-027 residual cubre la lectura de bootstrap en `roles.ts` del marker owner-owned. Ninguno
-usa el catálogo cerrado `requiredMigrations` ni `platform.schema_migrations` como readiness actual.
+`hyperion_sofia`; el bootstrap PULSO ya no lee el marker owner-owned SOFÍA. Ninguno usa el catálogo cerrado
+`requiredMigrations` ni `platform.schema_migrations` como readiness actual.
 
 Integration obtiene la readiness de agenda por el contrato propietario HTTP de PULSO y la readiness de prompt y
 worker por la API owner-owned de SOFÍA. Su readiness de dominio no ejecuta SQL contra `agenda_settings`,

@@ -1,5 +1,7 @@
-# Legacy ledger readiness API (DEBT-010)
+# Legacy ledger readiness API (DEBT-010) — closed
 
-`packages/service-runtime` still exposes `requiredLegacyMigrationNames` for transitional Audit consumers that read `platform.schema_migrations`.
+`requiredLegacyMigrationNames` and all `platform.schema_migrations` readiness queries were removed from
+`packages/service-runtime/src/index.ts` on 2026-07-20.
 
-Removal is gated on those consumers migrating to provider-owned ledgers. Until then the boundary finding remains sole baseline workstream.
+Audit already pins `requiredMigrationLedger: AUDIT_RUNTIME_MIGRATION_REQUIREMENT`. Boundary baseline is empty
+for this finding; DEBT-010 was removed from `docs/catalogs/debt.v1.json`.

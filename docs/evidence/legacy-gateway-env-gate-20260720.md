@@ -1,7 +1,12 @@
-# Legacy gateway env gate (DEBT-020 / 023 / 032)
+# Legacy multiproduct gateway gate (DEBT-020 / 023 / 032)
 
-Default: `LEGACY_GATEWAY_ENABLED=false` (fail-closed for new multiproduct facade paths).
+Default: `LEGACY_GATEWAY_ENABLED` unset/false → product-scoped routes return `410` and increment
+`legacyGatewayTelemetry.disabledRejects`.
 
-When false, the API Gateway refuses legacy multiproduct proxy/snapshot activation and emits deprecation telemetry counters instead of serving transitional routes.
+When explicitly enabled (`true`), deprecated route hits increment `legacyGatewayTelemetry.deprecatedRouteHits`
+for drain observation before proxy/snapshot retirement.
 
-Restore of push/schedule CI triggers remains blocked on Actions quota (see Wave F audit).
+## Residual ops
+
+1. Export/observe counters in the deployment environment until hits ≈ 0.
+2. Delete legacy proxies + N-1 snapshot in `apps/api-gateway` and close DEBT-020/023/032.

@@ -170,15 +170,7 @@
       "owner": "shared-packages"
     }
   ],
-  "temporaryExceptions": [
-    {
-      "id": "sql-access|packages/pulso-migrations/src/roles.ts|pulso-core->sofia-automation|read|table|agent_runtime.schema_version",
-      "justification": "El bootstrap forward-only PULSO valida temporalmente el marker owner-owned de SOFÍA hasta separar su control-plane y cerrar DEBT-027.",
-      "owner": "pulso-data",
-      "issue": "HYP-DEBT-027",
-      "expiresAt": "2026-10-31"
-    }
-  ],
+  "temporaryExceptions": [],
   "routines": {
     "access_runtime.enforce_tenant_lifecycle_v1": "access",
     "access_runtime.valid_grant_values": "access",

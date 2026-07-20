@@ -46,7 +46,12 @@ test("builds an exact cell-scoped check plan for manifests, catalogs, rollback a
       { script: "scripts/releases/check-provider-contract-compatibility.mjs", arguments: ["--cell", cell] }
     ]);
   }
-  assert.ok(buildReleaseCheckPlan().every((step) => step.arguments.length === 0));
+  assert.deepEqual(buildReleaseCheckPlan(), [
+    { script: "scripts/releases/validate-release-manifests.mjs", arguments: [] },
+    { script: "scripts/releases/check-provider-artifact-catalog.mjs", arguments: [] },
+    { script: "scripts/releases/check-provider-contract-compatibility.mjs", arguments: [] },
+    { script: "scripts/releases/verify-registry-publish-path.mjs", arguments: [] }
+  ]);
 });
 
 test("keeps global tests global and limits cell test plans to focused release ownership tests", () => {

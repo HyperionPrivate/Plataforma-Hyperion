@@ -140,6 +140,8 @@ async function assertRolePrerequisites(client: PulsoRoleBootstrapClient, databas
     throw new Error("PULSO role bootstrap requires all runtime sessions to be drained");
   }
 
+  // SOFÍA owns agent_runtime.schema_version; PULSO role bootstrap must not
+  // cross that boundary (DEBT-027 closed). Agent/Prompt Flow validate locally.
   await assertReadinessMarker(
     client,
     "PULSO",
@@ -147,14 +149,6 @@ async function assertRolePrerequisites(client: PulsoRoleBootstrapClient, databas
        from pulso_iris.schema_version
       where service_name = $1`,
     PULSO_RUNTIME_SCHEMA_REQUIREMENTS.pulso
-  );
-  await assertReadinessMarker(
-    client,
-    "SOFIA",
-    `select current_version::int, migration_name
-       from agent_runtime.schema_version
-      where service_name = $1`,
-    PULSO_RUNTIME_SCHEMA_REQUIREMENTS.sofia
   );
 }
 

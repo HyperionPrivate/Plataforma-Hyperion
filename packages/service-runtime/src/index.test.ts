@@ -247,53 +247,6 @@ describe("service runtime", () => {
     ).rejects.toThrow("provider-owned ledger");
   });
 
-  it("limits the transitional global ledger gate to Audit", async () => {
-    await expect(
-      createService({
-        serviceName: "identity-service",
-        requiredLegacyMigrationNames: ["001-platform.sql"]
-      })
-    ).rejects.toThrow("restricted to audit-service");
-
-    process.env.DATABASE_URL = "postgres://runtime-test";
-    const db = createFakeDatabase(["025-audit-ledger-autonomy.sql"]);
-    ({ app } = await createService({
-      serviceName: "audit-service",
-      databaseRequired: true,
-      requiredLegacyMigrationNames: ["025-audit-ledger-autonomy.sql"],
-      createDatabase: () => db
-    }));
-
-    const response = await app.inject({ method: "GET", url: "/ready" });
-    expect(response.statusCode).toBe(200);
-    expect(response.json().dependencies).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: "legacy.platform.schema_migrations", status: "ok" })])
-    );
-  });
-
-  it("keeps Audit down when its transitional migration gate is incomplete", async () => {
-    process.env.DATABASE_URL = "postgres://runtime-test";
-    const db = createFakeDatabase(["025-audit-ledger-autonomy.sql"]);
-    ({ app } = await createService({
-      serviceName: "audit-service",
-      databaseRequired: true,
-      requiredLegacyMigrationNames: ["025-audit-ledger-autonomy.sql", "026-audit-source-provenance.sql"],
-      createDatabase: () => db
-    }));
-
-    const response = await app.inject({ method: "GET", url: "/ready" });
-    expect(response.statusCode).toBe(503);
-    expect(response.json().dependencies).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "legacy.platform.schema_migrations",
-          status: "down",
-          detail: "missing legacy migration: 026-audit-source-provenance.sql"
-        })
-      ])
-    );
-  });
-
   it("rejects ambiguous database schema readiness requirements", async () => {
     await expect(
       createService({

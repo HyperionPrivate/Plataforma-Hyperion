@@ -1,32 +1,33 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.10.0",
+  "catalogVersion": "1.11.0",
   "updatedAt": "2026-07-20",
   "baseline": "docs/architecture/boundary-baseline.json",
   "baselineStats": {
-    "findingGroups": 1,
-    "instances": 1,
-    "workstreams": 1
+    "findingGroups": 0,
+    "instances": 0,
+    "workstreams": 0
   },
   "items": [
     {
-      "id": "DEBT-010",
-      "title": "Service Runtime conserva la API de readiness del ledger legacy global",
-      "findingType": "sql-access",
-      "edge": "shared-packages->migration-control",
-      "owner": "platform-core",
+      "id": "DEBT-025",
+      "title": "Puente administrativo N-1 de LUMEN fail-closed; retiro definitivo tras cierre de ventana",
+      "source": "transition-inventory",
+      "owner": "lumen-data",
       "status": "retiring",
       "evidence": [
-        "packages/service-runtime/src/index.ts",
-        "packages/service-runtime/src/index.test.ts",
-        "docs/evidence/legacy-ledger-readiness-retirement-20260720.md"
+        "packages/migrations/src/lumen-n-minus-one-compatibility.ts",
+        "packages/migrations/src/lumen-n-minus-one-compatibility.test.ts",
+        "docs/architecture/decisions/ADR-0002-lumen-audio-retention.md",
+        "docs/operations/LUMEN-STANDALONE.md",
+        "docs/evidence/lumen-n-minus-one-bridge-disabled-20260720.json"
       ],
-      "issue": "HYP-DEBT-010",
-      "dueDate": "2026-12-31"
+      "issue": "HYP-DEBT-025",
+      "dueDate": "2026-10-31"
     },
     {
       "id": "DEBT-020",
-      "title": "API Gateway multiproducto permanece como fachada legacy",
+      "title": "API Gateway multiproducto permanece como fachada legacy (gate fail-closed; drenaje pendiente)",
       "source": "transition-inventory",
       "owner": "platform-edge",
       "status": "retiring",
@@ -46,11 +47,15 @@
       "status": "transitioning",
       "issue": "HYP-DEBT-021",
       "dueDate": "2026-12-31",
-      "evidence": ["docs/operations/REGISTRY-PUBLISH-PATH.md", "scripts/releases/publish-shared-libraries.mjs"]
+      "evidence": [
+        "docs/operations/REGISTRY-PUBLISH-PATH.md",
+        ".github/workflows/publish-shared-libraries.yml",
+        "scripts/releases/verify-registry-publish-path.mjs"
+      ]
     },
     {
       "id": "DEBT-022",
-      "title": "Migrador global conserva migraciones históricas 001–046 y el seed CEDCO por slug",
+      "title": "Migrador global conserva migraciones históricas 001–046 y el seed CEDCO por slug; code freeze hecho, cutover ops pendiente",
       "source": "transition-inventory",
       "owner": "platform-data",
       "status": "retiring",
@@ -66,7 +71,7 @@
     },
     {
       "id": "DEBT-023",
-      "title": "Edge de redirects legacy pendiente de telemetría y retiro",
+      "title": "Edge de redirects legacy pendiente de telemetría productiva y retiro",
       "source": "transition-inventory",
       "owner": "platform-edge",
       "status": "retiring",
@@ -82,26 +87,16 @@
       "status": "transitioning",
       "issue": "HYP-DEBT-024",
       "dueDate": "2027-01-31",
-      "evidence": ["docs/operations/REGISTRY-PUBLISH-PATH.md", "package.json"]
-    },
-    {
-      "id": "DEBT-025",
-      "title": "Puente administrativo N-1 de LUMEN permanece en el migrador global",
-      "source": "transition-inventory",
-      "owner": "lumen-data",
-      "status": "retiring",
       "evidence": [
-        "packages/migrations/src/lumen-n-minus-one-compatibility.ts",
-        "docs/architecture/decisions/ADR-0002-lumen-audio-retention.md",
-        "docs/operations/LUMEN-STANDALONE.md",
-        "docs/evidence/lumen-n-minus-one-bridge-disabled-20260720.json"
-      ],
-      "issue": "HYP-DEBT-025",
-      "dueDate": "2026-10-31"
+        "docs/operations/REGISTRY-PUBLISH-PATH.md",
+        ".github/workflows/publish-shared-libraries.yml",
+        "scripts/releases/verify-registry-publish-path.mjs",
+        "package.json"
+      ]
     },
     {
       "id": "DEBT-026",
-      "title": "HA, edge productivo y recuperación desde offsite de LUMEN no validados",
+      "title": "HA, edge productivo y recuperación desde offsite de LUMEN no validados en entorno objetivo",
       "source": "transition-inventory",
       "owner": "lumen-operations",
       "status": "retiring",
@@ -113,24 +108,6 @@
       ],
       "issue": "HYP-DEBT-026",
       "dueDate": "2026-12-31"
-    },
-    {
-      "id": "DEBT-027",
-      "title": "Bootstrap PULSO aún lee el marker owner-owned de SOFÍA (roles.ts); grants Iris N-1 ya revocados",
-      "findingType": "sql-access",
-      "edge": "pulso-core->sofia-automation",
-      "pathPrefixes": ["packages/pulso-migrations/src/roles.ts"],
-      "source": "temporary-exception",
-      "owner": "pulso-data",
-      "status": "retiring",
-      "evidence": [
-        "packages/pulso-migrations/sql/015-revoke-sofia-pulso-iris-control-plane-grants.sql",
-        "docs/architecture/pulso-integration-readiness-policy.v1.json",
-        "packages/pulso-migrations/src/roles.ts",
-        "packages/pulso-migrations/src/schema-manifest.ts"
-      ],
-      "issue": "HYP-DEBT-027",
-      "dueDate": "2026-10-31"
     },
     {
       "id": "DEBT-032",

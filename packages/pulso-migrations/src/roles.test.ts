@@ -30,7 +30,6 @@ function createClient(
     globalMarker?: SchemaMarker | null;
     roles?: typeof CLEAN_ROLES;
     sessions?: number;
-    sofiaMarker?: SchemaMarker | null;
   } = {}
 ) {
   const statements: string[] = [];
@@ -41,18 +40,14 @@ function createClient(
     }
     if (sql.includes("from pg_roles role")) return { rows: options.roles ?? CLEAN_ROLES };
     if (sql.includes("from pg_stat_activity")) return { rows: [{ count: options.sessions ?? 0 }] };
+    if (sql.includes("from agent_runtime.schema_version")) {
+      throw new Error("PULSO role bootstrap must not read SOFÍA markers");
+    }
     if (sql.includes("from pulso_iris.schema_version")) {
       const marker =
         options.globalMarker === undefined
           ? { current_version: 15, migration_name: "015-revoke-sofia-pulso-iris-control-plane-grants.sql" }
           : options.globalMarker;
-      return { rows: marker ? [marker] : [] };
-    }
-    if (sql.includes("from agent_runtime.schema_version")) {
-      const marker =
-        options.sofiaMarker === undefined
-          ? { current_version: 2, migration_name: "006-access-sofia-tenant-projection.sql" }
-          : options.sofiaMarker;
       return { rows: marker ? [marker] : [] };
     }
     if (sql.startsWith("select format('alter role")) {
@@ -108,25 +103,12 @@ describe("PULSO runtime role bootstrap", () => {
     expect(statements.some((statement) => statement.includes("with login password"))).toBe(false);
   });
 
-  it("keeps SOFIA and global markers on the Access?SOFIA projection tip", async () => {
-    const { client } = createClient({
-      globalMarker: { current_version: 15, migration_name: "015-revoke-sofia-pulso-iris-control-plane-grants.sql" },
-      sofiaMarker: { current_version: 2, migration_name: "006-access-sofia-tenant-projection.sql" }
+  it("activates on the PULSO tip marker without reading SOFÍA schema_version", async () => {
+    const { client, statements } = createClient({
+      globalMarker: { current_version: 15, migration_name: "015-revoke-sofia-pulso-iris-control-plane-grants.sql" }
     });
     await expect(applyPulsoRolePasswords(client, "hyperion_pulso", PASSWORDS)).resolves.toBeUndefined();
-  });
-
-  it.each([
-    ["missing", null],
-    ["stale", { current_version: 1, migration_name: "002-pulso-runtime-roles.sql" }]
-  ] as const)("refuses activation when the SOFIA owner-local marker is %s", async (_case, sofiaMarker) => {
-    const { client, statements } = createClient({ sofiaMarker });
-    await expect(applyPulsoRolePasswords(client, "hyperion_pulso", PASSWORDS)).rejects.toThrow(
-      "SOFIA role bootstrap requires its terminal provider-owned schema version"
-    );
-    expect(statements.filter((statement) => statement.endsWith("with nologin"))).toHaveLength(5);
-    expect(statements).toContain("rollback");
-    expect(statements.some((statement) => statement.includes("with login password"))).toBe(false);
+    expect(statements.some((statement) => statement.includes("agent_runtime.schema_version"))).toBe(false);
   });
 
   it("requires all runtime passwords before acquiring the bootstrap lock", async () => {

@@ -76,11 +76,6 @@ export interface RuntimeOptions {
   databaseRequired?: boolean;
   /** Provider-owned migration ledger. The global platform ledger is forbidden. */
   requiredMigrationLedger?: MigrationLedgerRequirement;
-  /**
-   * Transitional exception for Audit while its migrator is still extracted.
-   * The runtime rejects this option for every other service.
-   */
-  requiredLegacyMigrationNames?: readonly string[];
   requiredSchemaVersion?: SchemaVersionRequirement;
   /**
    * Marks the service as the public HTTP surface: enables security headers
@@ -116,12 +111,7 @@ export interface MigrationLedgerRequirement {
 }
 
 const ACCESS_LOG_EXCLUDED_PATHS = new Set(["/health", "/ready"]);
-const RESERVED_READINESS_NAMES = new Set([
-  "postgres",
-  "postgres_role",
-  "schema_migrations",
-  "legacy.platform.schema_migrations"
-]);
+const RESERVED_READINESS_NAMES = new Set(["postgres", "postgres_role"]);
 const READINESS_NAME_PATTERN = /^[a-z][a-z0-9_.-]{0,127}$/;
 const DATABASE_ROLE_BY_SERVICE: Partial<Record<ServiceName, string>> = {
   "identity-service": "hyperion_identity",
@@ -145,14 +135,8 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
   assertJetStreamProductionGate(process.env);
   const requiredSchemaVersion = normalizeSchemaVersionRequirement(options.requiredSchemaVersion);
   const requiredMigrationLedger = normalizeMigrationLedgerRequirement(options.requiredMigrationLedger);
-  const requiredLegacyMigrationNames = normalizeLegacyMigrationNames(
-    options.serviceName,
-    options.requiredLegacyMigrationNames
-  );
   const databaseReadinessRequirementCount =
-    Number(requiredSchemaVersion !== undefined) +
-    Number(requiredMigrationLedger !== undefined) +
-    Number(requiredLegacyMigrationNames.length > 0);
+    Number(requiredSchemaVersion !== undefined) + Number(requiredMigrationLedger !== undefined);
   if (databaseReadinessRequirementCount > 1) {
     throw new TypeError("configure exactly one database schema readiness requirement");
   }
@@ -321,28 +305,6 @@ export async function createService(options: RuntimeOptions): Promise<ServiceHan
           name: dependencyName,
           status: "ok",
           detail: "required provider migrations applied"
-        });
-      }
-
-      if (requiredLegacyMigrationNames.length > 0) {
-        const missingMigration = await findMissingLegacyMigration(db, requiredLegacyMigrationNames);
-        if (missingMigration) {
-          dependencies.push({
-            name: "legacy.platform.schema_migrations",
-            status: "down",
-            detail: `missing legacy migration: ${missingMigration}`
-          });
-
-          return sendReadiness(
-            reply,
-            buildReadinessHealth(options.serviceName, config.serviceVersion, "down", dependencies, readinessChecks)
-          );
-        }
-
-        dependencies.push({
-          name: "legacy.platform.schema_migrations",
-          status: "ok",
-          detail: "transitional Audit migrations applied"
         });
       }
 
@@ -569,22 +531,6 @@ async function findMissingMigration(
   }
 }
 
-async function findMissingLegacyMigration(
-  db: DatabaseClient,
-  requiredMigrationNames: readonly string[]
-): Promise<string | undefined> {
-  try {
-    const result = await db.query<{ name: string }>(
-      "select name from platform.schema_migrations where name = any($1::text[])",
-      [requiredMigrationNames]
-    );
-    const applied = new Set(result.rows.map((row) => row.name));
-    return requiredMigrationNames.find((name) => !applied.has(name));
-  } catch {
-    return requiredMigrationNames[0];
-  }
-}
-
 async function findSchemaVersionProblem(
   db: DatabaseClient,
   requirement: SchemaVersionRequirement
@@ -663,26 +609,6 @@ function normalizeMigrationLedgerRequirement(
       : {}),
     ...(compatibleSets.length > 0 ? { compatibleMigrationNameSets: compatibleSets.map((names) => [...names]) } : {})
   };
-}
-
-function normalizeLegacyMigrationNames(
-  serviceName: ServiceName,
-  value: readonly string[] | undefined
-): readonly string[] {
-  if (value === undefined) return [];
-  if (serviceName !== "audit-service") {
-    throw new TypeError("requiredLegacyMigrationNames is restricted to audit-service");
-  }
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.length > 256 ||
-    value.some((name) => typeof name !== "string" || !/^[0-9]{3}-[a-z0-9][a-z0-9-]*\.sql$/.test(name)) ||
-    new Set(value).size !== value.length
-  ) {
-    throw new TypeError("requiredLegacyMigrationNames must contain unique safe migration names");
-  }
-  return [...value];
 }
 
 function normalizeExpectedDatabaseRole(value: string | undefined): string | undefined {

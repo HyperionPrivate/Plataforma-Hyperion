@@ -76,4 +76,11 @@ Estado: **completo como hold documentado** (no como restauración de CI en push)
 | Restaurar `on.push` / `schedule`                           | **bloqueado** por cuota Actions |
 | Org rulesets / branch protection                           | pendiente externo               |
 
-No reactivar triggers de push/schedule en esta ola.
+### Criterios de desbloqueo (externos)
+
+1. Cupo GitHub Actions recuperado (org billing / minutes).
+2. Transferencia a Organization con rulesets en `main` (require status checks, block force-push).
+3. Sólo entonces reintroducir `push`/`schedule` en `check.yml` y cells, empezando por `workflow_dispatch`+`push` en
+   un único cell workflow de canario.
+
+No reactivar triggers de push/schedule mientras el hold esté vigente.

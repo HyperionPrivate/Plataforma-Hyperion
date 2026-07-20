@@ -2,10 +2,5 @@
   "version": 1,
   "capturedAtCommit": "replace-with-reviewed-commit",
   "policy": "Deuda preexistente solamente. No aumentar conteos; eliminar la entrada en el mismo cambio que elimina la violacion.",
-  "violations": [
-    {
-      "id": "sql-access|packages/service-runtime/src/index.ts|shared-packages->migration-control|read|table|platform.schema_migrations",
-      "count": 1
-    }
-  ]
+  "violations": []
 }

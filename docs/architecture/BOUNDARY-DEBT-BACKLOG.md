@@ -63,19 +63,19 @@ compatibilidad hasta terminar el cutover.
 Tip provider-owned PULSO: `15/015-revoke-sofia-pulso-iris-control-plane-grants.sql`. Channel, Iris, SOFIA,
 Integration y Knowledge tienen expand+migrate+contract (proyecciones locales + DROP append-only de FKs a
 `platform.tenants` en `009`–`013`, espejo global `047`–`051`). Los adaptadores N-1 del baseline autónomo y de
-038 se retiraron en `014`/`052`. Los grants Iris de SOFÍA se revocaron en `015`. DEBT-001–005, 018/019 y
-029–031 salieron del catálogo; el baseline efectivo quedó en una violación residual
-(`service-runtime` → `platform.schema_migrations`, DEBT-010).
+038 se retiraron en `014`/`052`. Los grants Iris de SOFÍA se revocaron en `015`. DEBT-001–005, 010, 018/019,
+027 y 029–031 salieron del catálogo; el baseline efectivo quedó **vacío**.
 
-Cola residual abierta:
+Cola residual abierta (transición / ops):
 
-1. **DEBT-027 (parcial)** — `roles.ts` aún lee el marker owner-owned de SOFÍA; grants Iris N−1 ya revocados.
-2. **Retiro de la pila global PULSO (DEBT-022)** — cutover de workloads restantes, telemetría y retiro del camino
-   `001–046`/CEDCO documentado en `docs/operations/GLOBAL-MIGRATOR-CUTOVER.md`.
-3. **DEBT-010** — retirar la API de readiness del ledger legacy en `@hyperion/service-runtime` cuando Audit y
-   demás consumidores dejen de usarla.
-4. **Edge / LUMEN / registry (DEBT-020–026, 032)** — gates fail-closed y evidencia en `docs/evidence/`; cutover
-   operativo y publish registry pendientes de entorno/credenciales.
+1. **DEBT-022** — code freeze del migrador global hecho; cutover operativo + retiro CEDCO slug seed pendientes
+   (`docs/operations/GLOBAL-MIGRATOR-CUTOVER.md`).
+2. **Edge (DEBT-020 / 023 / 032)** — fachada legacy fail-closed por defecto; falta drenar telemetría productiva y
+   retirar proxies/snapshot N-1.
+3. **LUMEN (DEBT-025 / 026)** — bridge N-1 fail-closed salvo ensayo atestado; HA / edge / offsite en entorno
+   objetivo pendientes.
+4. **Registry (DEBT-021 / 024)** — dry-run path verificado (`verify-registry-publish-path.mjs`); publish real
+   bloqueado a credenciales de Organization.
 5. **Gobernanza CI (Wave F)** — hold local-first: no restaurar `push`/`schedule` hasta haber cupo Actions; rulesets
    de Organization pendientes (`docs/audits/federation-ci-hardening-20260719.md`).
 

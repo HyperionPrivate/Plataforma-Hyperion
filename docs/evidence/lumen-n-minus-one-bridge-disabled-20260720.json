@@ -3,5 +3,6 @@
   "module": "packages/migrations/src/lumen-n-minus-one-compatibility.ts",
   "mode": "fail-closed-unless-LUMEN_N1_COMPAT_ENABLED",
   "defaultEnabled": false,
-  "capturedAt": "2026-07-20"
+  "capturedAt": "2026-07-20",
+  "note": "Default deny. Attested N-1 rehearsals may set LUMEN_N1_COMPAT_ENABLED=true; DEBT-025 remains retiring until the window is fully closed in ops."
 }

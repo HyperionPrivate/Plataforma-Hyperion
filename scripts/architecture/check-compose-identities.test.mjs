@@ -551,7 +551,7 @@ test("Integration consume readiness mediante la API y el contrato propietarios d
   assert.match(providerSource, /"integration-service": integrationCredential/);
   assert.match(contractSource, /export const pulsoAgendaReadinessSchema/);
   assert.equal(policy.consumer.failureMode, "fail-closed-502");
-  assert.equal(policy.databasePrivilegeRevocation.status, "sofia-iris-control-plane-revoked-residual-roles-ts");
+  assert.equal(policy.databasePrivilegeRevocation.status, "sofia-iris-control-plane-revoked-roles-ts-closed");
   assert.ok(
     policy.databasePrivilegeRevocation.evidence.includes("packages/pulso-migrations/src/autonomy.integration.test.ts")
   );

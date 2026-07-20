@@ -89,6 +89,7 @@
     "release:check": "node scripts/releases/run-release-checks.mjs",
     "release:generate": "node scripts/releases/generate-release-manifest.mjs",
     "release:test": "node scripts/releases/run-release-tests.mjs",
+    "release:verify-registry-path": "node scripts/releases/verify-registry-publish-path.mjs",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"
   },
