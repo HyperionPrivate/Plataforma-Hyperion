@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertDialerBaseUrlAllowed, HttpDialerAdapter } from "./dialer-adapter.js";
+import { assertDialerBaseUrlAllowed, createDialerAdapter, HttpDialerAdapter } from "./dialer-adapter.js";
 
 describe("assertDialerBaseUrlAllowed", () => {
   const env = {
@@ -17,6 +17,15 @@ describe("assertDialerBaseUrlAllowed", () => {
 
   it("rejects non-http schemes", () => {
     expect(() => assertDialerBaseUrlAllowed("file:///etc/passwd", env)).toThrow(/HTTP/i);
+  });
+
+  it("requires HTTPS in restricted environments", () => {
+    expect(() =>
+      assertDialerBaseUrlAllowed("http://dialer.internal", {
+        DIALER_BASE_URL: "http://dialer.internal",
+        HYPERION_ENVIRONMENT: "production"
+      })
+    ).toThrow(/HTTPS/);
   });
 });
 
@@ -37,5 +46,9 @@ describe("HttpDialerAdapter", () => {
       if (previous === undefined) delete process.env.DIALER_BASE_URL;
       else process.env.DIALER_BASE_URL = previous;
     }
+  });
+
+  it("fails startup when provider credentials are incomplete in production", () => {
+    expect(() => createDialerAdapter({ HYPERION_ENVIRONMENT: "production" })).toThrow(/required for voice-channel/);
   });
 });

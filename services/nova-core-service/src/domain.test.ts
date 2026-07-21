@@ -25,9 +25,32 @@ describe("decideEligibility", () => {
     );
   });
 
+  it("suppresses voice after the contact engages on WhatsApp", () => {
+    expect(
+      decideEligibility({
+        optedOut: false,
+        voiceSuppressed: true,
+        at: new Date("2026-07-16T15:00:00.000Z")
+      })
+    ).toEqual({ eligibility: "blocked_policy", reason: "whatsapp_engaged" });
+  });
+
   it("blocks outside Bogota contact window", () => {
     // 02:00 UTC ≈ 21:00 Bogota (UTC-5) in July
     expect(decideEligibility({ optedOut: false, at: new Date("2026-07-16T02:00:00.000Z") }).eligibility).toBe(
+      "blocked_window"
+    );
+  });
+
+  it("blocks Sundays under the default Monday-Saturday policy", () => {
+    expect(decideEligibility({ optedOut: false, at: new Date("2026-07-19T15:00:00.000Z") })).toEqual({
+      eligibility: "blocked_window",
+      reason: "weekday_not_allowed"
+    });
+  });
+
+  it("blocks at the exclusive 19:00 local boundary", () => {
+    expect(decideEligibility({ optedOut: false, at: new Date("2026-07-20T00:00:00.000Z") }).eligibility).toBe(
       "blocked_window"
     );
   });
@@ -67,6 +90,38 @@ describe("decideEligibility", () => {
       settings: { ...DEFAULT_COMPLIANCE, maxAttemptsPerContact: 3 }
     });
     expect(result).toEqual({ eligibility: "blocked_frequency", reason: "max_attempts_reached" });
+  });
+
+  it("blocks when the local daily attempt limit is reached", () => {
+    expect(
+      decideEligibility({
+        optedOut: false,
+        at: new Date("2026-07-16T15:00:00.000Z"),
+        attemptsToday: 2,
+        settings: DEFAULT_COMPLIANCE
+      })
+    ).toEqual({ eligibility: "blocked_frequency", reason: "max_daily_attempts_reached" });
+  });
+
+  it("blocks when tenant call concurrency is exhausted", () => {
+    expect(
+      decideEligibility({
+        optedOut: false,
+        at: new Date("2026-07-16T15:00:00.000Z"),
+        activeVoiceCalls: DEFAULT_COMPLIANCE.maxConcurrentCalls,
+        settings: DEFAULT_COMPLIANCE
+      })
+    ).toEqual({ eligibility: "blocked_frequency", reason: "max_concurrent_calls" });
+  });
+
+  it("fails closed when a tenant timezone is invalid", () => {
+    expect(
+      decideEligibility({
+        optedOut: false,
+        at: new Date("2026-07-16T15:00:00.000Z"),
+        settings: { ...DEFAULT_COMPLIANCE, timeZone: "invalid/timezone" }
+      })
+    ).toEqual({ eligibility: "blocked_policy", reason: "invalid_time_zone" });
   });
 
   it("blocks when min hours between attempts not met", () => {

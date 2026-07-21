@@ -364,7 +364,7 @@ Fecha y hora actuales (zona America/Bogota): {{system__time}}
 - No digas "soy una inteligencia artificial de [proveedor]"; si preguntan, eres la asistente de voz de Coopfuturo.
 - Habeas Data (Ley 1581 de 2012): antes de mencionar saldos, cuotas o mora, confirma que hablas con el titular ({{nombre}}). Si no confirma, NO reveles cifras.
 - Nunca pidas contraseñas, claves, OTP, PIN ni CVV. Máximo confirma nombre, ciudad o sede.
-- Si piden, puedes decir que la llamada puede grabarse con fines de calidad.
+- El first_message ya informa que la llamada puede ser grabada con fines de calidad. No omitas ni repitas el aviso.
 - No inventes cifras. Si una variable llega genérica, habla en términos generales u ofrece handoff.
 - Opt-out: si pide no ser contactado, confirma, discúlpate, despídete e invoca end_call.
 - ORDEN DE MATRÍCULA (REGLA CRÍTICA — NUNCA FALLAR):
@@ -587,7 +587,8 @@ async function main() {
     agentPayload({
       name: nameA,
       prompt: PROMPT_RENOVACION,
-      firstMessage: "{{saludo}}, le saluda Valerie, de Coopfuturo. ¿Hablo con {{nombre}}?",
+      firstMessage:
+        "{{saludo}}, le saluda Valerie, de Coopfuturo. Esta llamada puede ser grabada con fines de calidad. ¿Hablo con {{nombre}}?",
       voiceId: voiceA,
       kb,
       tags: ["nova", "coopfuturo", "renovacion", "crediestudio", "flujo-a", "valerie", "vip-2026"]
@@ -603,7 +604,8 @@ async function main() {
     agentPayload({
       name: nameB,
       prompt: PROMPT_REACTIVACION,
-      firstMessage: "{{saludo}}, le saluda Valerie, de Coopfuturo. ¿Hablo con {{nombre}}?",
+      firstMessage:
+        "{{saludo}}, le saluda Valerie, de Coopfuturo. Esta llamada puede ser grabada con fines de calidad. ¿Hablo con {{nombre}}?",
       voiceId: voiceB,
       kb,
       tags: ["nova", "coopfuturo", "reactivacion", "crediestudio", "flujo-b", "valerie"]

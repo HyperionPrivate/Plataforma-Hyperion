@@ -12,14 +12,12 @@ import { randomUUID } from "node:crypto";
  *   NOVA_SMOKE_EMAIL (operador NOVA admin/supervisor)
  *   NOVA_SMOKE_PASSWORD
  *   NOVA_SMOKE_TENANT_ID (UUID)
- *   NOVA_SMOKE_REQUIRE_VOICE=1  (falla si placeCall al dialer no está disponible)
  */
 
 const baseUrl = (process.env.NOVA_SMOKE_BASE_URL ?? "http://localhost:8080").replace(/\/$/, "");
 const email = process.env.NOVA_SMOKE_EMAIL;
 const password = process.env.NOVA_SMOKE_PASSWORD;
 const tenantId = process.env.NOVA_SMOKE_TENANT_ID;
-const requireVoice = process.env.NOVA_SMOKE_REQUIRE_VOICE === "1";
 
 if (!email || !password || !tenantId) {
   console.error("NOVA_SMOKE_EMAIL, NOVA_SMOKE_PASSWORD and NOVA_SMOKE_TENANT_ID are required");
@@ -110,7 +108,7 @@ console.log("3) eligibility + score");
 await call("POST", `/v1/tenants/${tenantId}/nova/contacts/${contactId}/eligibility`, {});
 await call("POST", `/v1/tenants/${tenantId}/nova/contacts/${contactId}/score`, { auto: true });
 
-console.log("4) campaign enroll + start (emits voice.call.requested with contact_id)");
+console.log("4) campaign enroll + start (emits voice.call.requested.v2 with contact_id)");
 const campaign = await call("POST", `/v1/tenants/${tenantId}/nova/campaigns`, {
   name: `smoke-${Date.now()}`,
   channel: "voice",
@@ -121,16 +119,14 @@ await call("POST", `/v1/tenants/${tenantId}/nova/campaigns/${campaign.data.campa
 });
 await call("POST", `/v1/tenants/${tenantId}/nova/campaigns/${campaign.data.campaign_id}/start`, {});
 
-console.log("5) individual voice call with contact_id correlation");
+console.log("5) individual call authorization through NOVA Core");
 const voiceCall = await call(
   "POST",
-  `/v1/tenants/${tenantId}/voice/calls`,
+  `/v1/tenants/${tenantId}/nova/contacts/${contactId}/calls`,
   {
-    phone_e164: phone,
-    contact_id: contactId,
-    campaign_id: campaign.data.campaign_id
+    product_flow: "renovacion"
   },
-  { allowStatuses: requireVoice ? [] : [502, 503] }
+  { allowStatuses: [409] }
 );
 
 let correlatedContactId = null;
@@ -142,10 +138,8 @@ if (voiceCall.status < 400) {
     throw new Error(`voice call missing contact correlation: expected ${contactId}, got ${correlatedContactId}`);
   }
   if (!callId) throw new Error("voice call did not return call_id");
-} else if (requireVoice) {
-  throw new Error(`voice required but dialer unavailable: ${voiceCall.status}`);
 } else {
-  console.log("   (dialer unavailable — skipped placeCall; campaign start still correlated via outbox)");
+  console.log("   (manual authorization blocked by the current compliance/frequency policy)");
 }
 
 console.log("6) reviews + analytics + dashboard");

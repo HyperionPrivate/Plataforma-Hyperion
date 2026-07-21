@@ -217,25 +217,21 @@ export function NovaPage() {
     await refresh();
   }
 
-  async function placeCall(phone: string) {
+  async function placeCall(contactId: string) {
     if (!canWriteOps) return;
-    await api.post(voicePath(tenant.id, "calls"), { phone_e164: phone });
-    setNotice("Llamada individual solicitada (VOICE_MODE=mock por defecto).");
+    await api.post(novaPath(tenant.id, `contacts/${contactId}/calls`), {});
+    setNotice("Llamada individual autorizada y puesta en cola por NOVA Core.");
     await refresh();
   }
 
   async function claimHandoff(handoffId: string) {
-    await api.post(novaPath(tenant.id, `handoffs/${handoffId}/claim`), {
-      operator_id: session.operator.id
-    });
+    await api.post(novaPath(tenant.id, `handoffs/${handoffId}/claim`), {});
     setNotice("Handoff reclamado.");
     await refresh();
   }
 
   async function claimConversation(conversationId: string) {
-    await api.post(novaPath(tenant.id, `conversations/${conversationId}/claim`), {
-      operator_id: session.operator.id
-    });
+    await api.post(novaPath(tenant.id, `conversations/${conversationId}/claim`), {});
     setNotice("Conversación reclamada.");
     await refresh();
   }

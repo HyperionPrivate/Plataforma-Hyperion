@@ -8,7 +8,6 @@ import {
   contactImportedPayloadSchema,
   contactScoredPayloadSchema,
   contactEligibilityDecidedPayloadSchema,
-  voiceCallRequestedPayloadSchema,
   handoffRequestedPayloadSchema,
   leadQualifiedPayloadSchema,
   coreOutcomeRecordedPayloadSchema,
@@ -28,13 +27,7 @@ import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import type { ServiceContext } from "@hyperion/nova-service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import {
-  decideEligibility,
-  DEFAULT_COMPLIANCE,
-  normalizeE164,
-  scoreContact,
-  type ComplianceSettings
-} from "./domain.js";
+import { DEFAULT_COMPLIANCE, normalizeE164, scoreContact } from "./domain.js";
 import { extractMultipartFile, isCsvFilename, parseContactsCsv, type ContactImportRow } from "./contact-import-file.js";
 import { createCoreAdapter, type CoreAdapter } from "./core-adapter.js";
 import {
@@ -45,6 +38,8 @@ import {
 } from "./outbox.js";
 import { canTransitionCrm, inferIntentFromPayload, stageFromPostCallIntent, type CrmStage } from "./post-call.js";
 import { resolveLiwaFlowId, resolveProductFlowForContact } from "./resolve-liwa-flow.js";
+import { authorizeVoiceCall, evaluateVoiceEligibility } from "./voice-authorization.js";
+import { dispatchCampaignBatch } from "./campaign-orchestrator.js";
 
 const productLineSchema = novaFlowIdSchema;
 
@@ -116,12 +111,22 @@ const leadPatchSchema = z.object({
 const complianceSettingsSchema = z.object({
   window_start_hour: z.number().int().min(0).max(23),
   window_end_hour: z.number().int().min(1).max(24),
+  time_zone: z.string().trim().min(1).max(80),
+  allowed_weekdays: z.array(z.number().int().min(1).max(7)).min(1).max(7),
   voice_enabled: z.boolean(),
   whatsapp_enabled: z.boolean(),
+  max_attempts_per_day: z.number().int().min(1).max(20),
   max_attempts_per_contact: z.number().int().min(1).max(20),
+  rolling_window_days: z.number().int().min(1).max(90),
+  max_concurrent_calls: z.number().int().min(1).max(500),
   min_hours_between_attempts: z.number().int().min(0).max(720),
   respect_holidays: z.boolean(),
   meta_contactos_hoy: z.number().int().min(0).max(1_000_000).optional().default(0)
+});
+
+const manualVoiceCallSchema = z.object({
+  campaign_id: z.string().uuid().optional(),
+  product_flow: novaFlowIdSchema.optional()
 });
 
 const labLiwaEventSchema = z.object({
@@ -161,7 +166,7 @@ const reviewDecisionSchema = z.object({
 });
 
 const claimSchema = z.object({
-  operator_id: z.string().uuid()
+  operator_id: z.string().uuid().optional()
 });
 
 const replySchema = z.object({
@@ -185,6 +190,20 @@ const bootstrapSchema = z.object({
         city: z.string().min(2).max(120),
         advisor_group: z.string().min(1).max(80),
         routing_tag: z.string().min(1).max(80).optional()
+      })
+    )
+    .max(500)
+    .default([]),
+  operator_grants: z
+    .array(
+      z.object({
+        operator_id: z.string().uuid(),
+        role: z.enum(["admin", "supervisor", "asesor"]),
+        agency_codes: z
+          .array(z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,39}$/))
+          .max(500)
+          .default([]),
+        is_active: z.boolean().default(true)
       })
     )
     .max(500)
@@ -259,8 +278,16 @@ export async function registerNovaRoutes(
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
 
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+
     const q = readQueryString(request.query, "q");
     const agencyCode = readQueryString(request.query, "agency_code");
+    if (agencyCode && !operator.unrestricted && !operator.agencyCodes.includes(agencyCode)) {
+      return reply.code(403).send(envelope({ error: "Agency is outside the operator grant" }, request.id));
+    }
+    const agencyCodes = agencyCode ? [agencyCode] : operator.agencyCodes;
+    const unrestrictedAgencyRead = operator.unrestricted && !agencyCode;
     const segment = readQueryString(request.query, "segment");
     const limitRaw = Number(readQueryString(request.query, "limit") ?? 50);
     const offsetRaw = Number(readQueryString(request.query, "offset") ?? 0);
@@ -272,30 +299,30 @@ export async function registerNovaRoutes(
               propensity, urgency, wave, universidad, ciudad, created_at, updated_at
          from nova.contacts
         where tenant_id = $1
-          and ($2::text is null or agency_code = $2)
-          and ($3::text is null or segment = $3)
+          and ($2::boolean or agency_code = any($3::text[]))
+          and ($4::text is null or segment = $4)
           and (
-            $4::text is null
-            or phone_e164 ilike '%' || $4 || '%'
-            or coalesce(full_name, '') ilike '%' || $4 || '%'
-            or contact_id::text = $4
+            $5::text is null
+            or phone_e164 ilike '%' || $5 || '%'
+            or coalesce(full_name, '') ilike '%' || $5 || '%'
+            or contact_id::text = $5
           )
         order by updated_at desc
-        limit $5 offset $6`,
-      [scope.tenantId, agencyCode ?? null, segment ?? null, q ?? null, limit, offset]
+        limit $6 offset $7`,
+      [scope.tenantId, unrestrictedAgencyRead, agencyCodes, segment ?? null, q ?? null, limit, offset]
     );
     const count = await scope.db.query<{ total: string }>(
       `select count(*)::text as total from nova.contacts
         where tenant_id = $1
-          and ($2::text is null or agency_code = $2)
-          and ($3::text is null or segment = $3)
+          and ($2::boolean or agency_code = any($3::text[]))
+          and ($4::text is null or segment = $4)
           and (
-            $4::text is null
-            or phone_e164 ilike '%' || $4 || '%'
-            or coalesce(full_name, '') ilike '%' || $4 || '%'
-            or contact_id::text = $4
+            $5::text is null
+            or phone_e164 ilike '%' || $5 || '%'
+            or coalesce(full_name, '') ilike '%' || $5 || '%'
+            or contact_id::text = $5
           )`,
-      [scope.tenantId, agencyCode ?? null, segment ?? null, q ?? null]
+      [scope.tenantId, unrestrictedAgencyRead, agencyCodes, segment ?? null, q ?? null]
     );
 
     return envelope(
@@ -459,17 +486,26 @@ export async function registerNovaRoutes(
     const result = await scope.db.query<{
       window_start_hour: number;
       window_end_hour: number;
+      time_zone: string;
+      allowed_weekdays: number[];
       voice_enabled: boolean;
       whatsapp_enabled: boolean;
+      max_attempts_per_day: number;
       max_attempts_per_contact: number;
+      rolling_window_days: number;
+      max_concurrent_calls: number;
       min_hours_between_attempts: number;
       respect_holidays: boolean;
       meta_contactos_hoy: number;
+      policy_revision: string;
       updated_at: Date;
     }>(
-      `select window_start_hour, window_end_hour, voice_enabled, whatsapp_enabled,
-              max_attempts_per_contact, min_hours_between_attempts, respect_holidays,
-              coalesce(meta_contactos_hoy, 0) as meta_contactos_hoy, updated_at
+      `select window_start_hour, window_end_hour, time_zone, allowed_weekdays,
+              voice_enabled, whatsapp_enabled, max_attempts_per_day,
+              max_attempts_per_contact, rolling_window_days, max_concurrent_calls,
+              min_hours_between_attempts, respect_holidays,
+              coalesce(meta_contactos_hoy, 0) as meta_contactos_hoy,
+              policy_revision::text as policy_revision, updated_at
          from nova.compliance_settings where tenant_id = $1`,
       [scope.tenantId]
     );
@@ -479,12 +515,18 @@ export async function registerNovaRoutes(
         {
           window_start_hour: DEFAULT_COMPLIANCE.windowStartHour,
           window_end_hour: DEFAULT_COMPLIANCE.windowEndHour,
+          time_zone: DEFAULT_COMPLIANCE.timeZone,
+          allowed_weekdays: DEFAULT_COMPLIANCE.allowedWeekdays,
           voice_enabled: DEFAULT_COMPLIANCE.voiceEnabled,
           whatsapp_enabled: DEFAULT_COMPLIANCE.whatsappEnabled,
+          max_attempts_per_day: DEFAULT_COMPLIANCE.maxAttemptsPerDay,
           max_attempts_per_contact: DEFAULT_COMPLIANCE.maxAttemptsPerContact,
+          rolling_window_days: DEFAULT_COMPLIANCE.rollingWindowDays,
+          max_concurrent_calls: DEFAULT_COMPLIANCE.maxConcurrentCalls,
           min_hours_between_attempts: DEFAULT_COMPLIANCE.minHoursBetweenAttempts,
           respect_holidays: DEFAULT_COMPLIANCE.respectHolidays,
           meta_contactos_hoy: 0,
+          policy_revision: null,
           source: "defaults"
         },
         request.id
@@ -508,36 +550,57 @@ export async function registerNovaRoutes(
     if (parsed.data.window_start_hour >= parsed.data.window_end_hour) {
       return reply.code(400).send(envelope({ error: "window_start_hour must be < window_end_hour" }, request.id));
     }
+    if (new Set(parsed.data.allowed_weekdays).size !== parsed.data.allowed_weekdays.length) {
+      return reply.code(400).send(envelope({ error: "allowed_weekdays must not contain duplicates" }, request.id));
+    }
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: parsed.data.time_zone }).format(new Date(0));
+    } catch {
+      return reply.code(400).send(envelope({ error: "time_zone must be an IANA timezone" }, request.id));
+    }
 
-    await scope.db.query(
+    const saved = await scope.db.query<{ policyRevision: string }>(
       `insert into nova.compliance_settings (
-         tenant_id, window_start_hour, window_end_hour, voice_enabled, whatsapp_enabled,
-         max_attempts_per_contact, min_hours_between_attempts, respect_holidays, meta_contactos_hoy, updated_at
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+         tenant_id, window_start_hour, window_end_hour, time_zone, allowed_weekdays,
+         voice_enabled, whatsapp_enabled, max_attempts_per_day, max_attempts_per_contact,
+         rolling_window_days, max_concurrent_calls, min_hours_between_attempts,
+         respect_holidays, meta_contactos_hoy, updated_at
+       ) values ($1, $2, $3, $4, $5::smallint[], $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
        on conflict (tenant_id) do update set
          window_start_hour = excluded.window_start_hour,
          window_end_hour = excluded.window_end_hour,
+         time_zone = excluded.time_zone,
+         allowed_weekdays = excluded.allowed_weekdays,
          voice_enabled = excluded.voice_enabled,
          whatsapp_enabled = excluded.whatsapp_enabled,
+         max_attempts_per_day = excluded.max_attempts_per_day,
          max_attempts_per_contact = excluded.max_attempts_per_contact,
+         rolling_window_days = excluded.rolling_window_days,
+         max_concurrent_calls = excluded.max_concurrent_calls,
          min_hours_between_attempts = excluded.min_hours_between_attempts,
          respect_holidays = excluded.respect_holidays,
          meta_contactos_hoy = excluded.meta_contactos_hoy,
-         updated_at = now()`,
+         updated_at = now()
+       returning policy_revision::text as "policyRevision"`,
       [
         scope.tenantId,
         parsed.data.window_start_hour,
         parsed.data.window_end_hour,
+        parsed.data.time_zone,
+        parsed.data.allowed_weekdays,
         parsed.data.voice_enabled,
         parsed.data.whatsapp_enabled,
+        parsed.data.max_attempts_per_day,
         parsed.data.max_attempts_per_contact,
+        parsed.data.rolling_window_days,
+        parsed.data.max_concurrent_calls,
         parsed.data.min_hours_between_attempts,
         parsed.data.respect_holidays,
         parsed.data.meta_contactos_hoy ?? 0
       ]
     );
 
-    return envelope(parsed.data, request.id);
+    return envelope({ ...parsed.data, policy_revision: saved.rows[0]!.policyRevision }, request.id);
   });
 
   app.get("/v1/tenants/:tenantId/nova/agent-configs", async (request, reply) => {
@@ -695,67 +758,16 @@ export async function registerNovaRoutes(
     const contactId = readUuid(request.params, "contactId");
     if (!contactId) return reply.code(400).send(envelope({ error: "contactId must be a UUID" }, request.id));
 
-    const contact = await scope.db.query<{ optedOut: boolean; phone: string }>(
-      `select opted_out as "optedOut", phone_e164 as phone
-         from nova.contacts where tenant_id = $1 and contact_id = $2`,
-      [scope.tenantId, contactId]
-    );
-    if (contact.rowCount === 0) {
-      return reply.code(404).send(envelope({ error: "Contact not found" }, request.id));
-    }
-
-    const settingsRow = await scope.db.query<{
-      windowStartHour: number;
-      windowEndHour: number;
-      voiceEnabled: boolean;
-      whatsappEnabled: boolean;
-      maxAttemptsPerContact: number;
-      minHoursBetweenAttempts: number;
-      respectHolidays: boolean;
-    }>(
-      `select window_start_hour as "windowStartHour", window_end_hour as "windowEndHour",
-              voice_enabled as "voiceEnabled", whatsapp_enabled as "whatsappEnabled",
-              max_attempts_per_contact as "maxAttemptsPerContact",
-              min_hours_between_attempts as "minHoursBetweenAttempts",
-              respect_holidays as "respectHolidays"
-         from nova.compliance_settings where tenant_id = $1`,
-      [scope.tenantId]
-    );
-    const settings: ComplianceSettings = settingsRow.rows[0] ?? DEFAULT_COMPLIANCE;
-
-    const optOut = await scope.db.query(`select 1 from nova.opt_outs where tenant_id = $1 and phone_e164 = $2`, [
-      scope.tenantId,
-      contact.rows[0]!.phone
-    ]);
-    const holiday = await scope.db.query(
-      `select 1 from nova.holidays where holiday_date = (timezone('America/Bogota', now()))::date`
-    );
-    const attempts = await scope.db.query<{ count: string; hours: string | null }>(
-      `select count(*)::text as count,
-              extract(epoch from (now() - max(created_at)))/3600 as hours
-         from nova.contact_attempts
-        where tenant_id = $1 and contact_id = $2`,
-      [scope.tenantId, contactId]
-    );
-
-    const decision = decideEligibility({
-      optedOut: contact.rows[0]!.optedOut || (optOut.rowCount ?? 0) > 0,
-      settings,
-      isHoliday: (holiday.rowCount ?? 0) > 0,
-      attemptCount: Number(attempts.rows[0]?.count ?? 0),
-      hoursSinceLastAttempt: attempts.rows[0]?.hours === null ? null : Number(attempts.rows[0]?.hours)
-    });
-    const correlationId = randomUUID();
-
-    await scope.db.transaction(async (tx) => {
+    const decision = await scope.db.transaction(async (tx) => {
+      const snapshot = await evaluateVoiceEligibility(tx, scope.tenantId, contactId);
+      if (!snapshot) return null;
       await tx.query(
         `update nova.contacts set eligibility = $3, updated_at = now() where tenant_id = $1 and contact_id = $2`,
-        [scope.tenantId, contactId, decision.eligibility]
+        [scope.tenantId, contactId, snapshot.decision.eligibility]
       );
       const payload = contactEligibilityDecidedPayloadSchema.parse({
         contact_id: contactId,
-        eligibility: decision.eligibility,
-        reason: decision.reason
+        ...snapshot.decision
       });
       await insertNovaAuditOutboxEvent(tx, {
         eventId: randomUUID(),
@@ -763,14 +775,62 @@ export async function registerNovaRoutes(
         entityType: "contact",
         entityId: contactId,
         tenantId: scope.tenantId,
-        correlationId,
-        businessIdempotencyKey: `eligibility:${scope.tenantId}:${contactId}`,
+        correlationId: randomUUID(),
+        businessIdempotencyKey: `eligibility:${scope.tenantId}:${contactId}:${randomUUID()}`,
         payload,
         destination: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
       });
+      return snapshot.decision;
     });
 
+    if (!decision) return reply.code(404).send(envelope({ error: "Contact not found" }, request.id));
+
     return envelope({ contact_id: contactId, ...decision }, request.id);
+  });
+
+  app.post("/v1/tenants/:tenantId/nova/contacts/:contactId/calls", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+
+    const contactId = readUuid(request.params, "contactId");
+    if (!contactId) return reply.code(400).send(envelope({ error: "contactId must be a UUID" }, request.id));
+    const parsed = manualVoiceCallSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send(envelope({ error: "Invalid call authorization payload" }, request.id));
+    }
+
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+    const visibleContact = await scope.db.query(
+      `select 1 from nova.contacts
+        where tenant_id = $1 and contact_id = $2
+          and ($3::boolean or agency_code = any($4::text[]))`,
+      [scope.tenantId, contactId, operator.unrestricted, operator.agencyCodes]
+    );
+    if (visibleContact.rowCount === 0) {
+      return reply.code(404).send(envelope({ error: "Contact not found" }, request.id));
+    }
+
+    const result = await scope.db.transaction((tx) =>
+      authorizeVoiceCall(tx, {
+        tenantId: scope.tenantId,
+        contactId,
+        campaignId: parsed.data.campaign_id,
+        productFlow: parsed.data.product_flow,
+        voiceDestination: `${serviceUrls.voiceChannel.replace(/\/$/, "")}/v1/voice/internal/events`,
+        auditDestination: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
+      })
+    );
+    if (result.status === "contact_not_found") {
+      return reply.code(404).send(envelope({ error: "Contact not found" }, request.id));
+    }
+    if (result.status === "blocked") {
+      return reply.code(409).send(envelope({ contact_id: contactId, ...result.snapshot.decision }, request.id));
+    }
+    return reply
+      .code(201)
+      .send(envelope({ contact_id: contactId, call_id: result.callId, status: "queued" }, request.id));
   });
 
   app.post("/v1/tenants/:tenantId/nova/campaigns", async (request, reply) => {
@@ -782,6 +842,8 @@ export async function registerNovaRoutes(
     if (!parsed.success) {
       return reply.code(400).send(envelope({ error: "Invalid campaign payload" }, request.id));
     }
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
 
     const campaignId = randomUUID();
     await scope.db.query(
@@ -797,17 +859,27 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
 
     const result = await scope.db.query(
       `select c.campaign_id, c.name, c.channel, c.product_flow, c.status, c.created_at, c.updated_at,
               coalesce(e.total, 0)::int as total,
               coalesce(e.reached, 0)::int as reached,
-              coalesce(e.converted, 0)::int as converted
+              coalesce(e.converted, 0)::int as converted,
+              coalesce(e.in_flight, 0)::int as in_flight,
+              coalesce(e.failed, 0)::int as failed,
+              coalesce(e.deferred, 0)::int as deferred
          from nova.campaigns c
          left join lateral (
            select count(*)::int as total,
-                  count(*) filter (where status in ('reached', 'converted', 'attempted'))::int as reached,
-                  count(*) filter (where status = 'converted')::int as converted
+                  count(*) filter (where status in ('reached', 'converted'))::int as reached,
+                  count(*) filter (where status = 'converted')::int as converted,
+                  count(*) filter (where status = 'attempted')::int as in_flight,
+                  count(*) filter (where status = 'failed')::int as failed,
+                  count(*) filter (
+                    where status in ('enrolled', 'failed') and next_attempt_at > now()
+                  )::int as deferred
              from nova.campaign_enrollments
             where tenant_id = c.tenant_id and campaign_id = c.campaign_id
          ) e on true
@@ -830,16 +902,51 @@ export async function registerNovaRoutes(
     if (!parsed.success) {
       return reply.code(400).send(envelope({ error: "Invalid enroll payload" }, request.id));
     }
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
 
-    let enrolled = 0;
-    for (const contactId of parsed.data.contact_ids) {
-      const result = await scope.db.query(
-        `insert into nova.campaign_enrollments (tenant_id, campaign_id, contact_id, status)
-         values ($1, $2, $3, 'enrolled')
+    const enrolled = await scope.db
+      .transaction(async (tx) => {
+        const campaign = await tx.query(
+          `select 1 from nova.campaigns
+          where tenant_id = $1 and campaign_id = $2 and status in ('draft', 'ready', 'paused')
+          for update`,
+          [scope.tenantId, campaignId]
+        );
+        if (campaign.rowCount === 0) throw new Error("campaign_not_enrollable");
+
+        const visible = await tx.query<{ count: string }>(
+          `select count(distinct c.contact_id)::text as count
+           from nova.contacts c
+          where c.tenant_id = $1 and c.contact_id = any($2::uuid[])
+            and ($3::boolean or c.agency_code = any($4::text[]))`,
+          [scope.tenantId, parsed.data.contact_ids, operator.unrestricted, operator.agencyCodes]
+        );
+        if (Number(visible.rows[0]?.count ?? 0) !== new Set(parsed.data.contact_ids).size) {
+          throw new Error("contact_outside_operator_grant");
+        }
+
+        const result = await tx.query(
+          `insert into nova.campaign_enrollments (tenant_id, campaign_id, contact_id, status)
+         select $1, $2, contact_id, 'enrolled'
+           from unnest($3::uuid[]) as input(contact_id)
          on conflict (tenant_id, campaign_id, contact_id) do nothing`,
-        [scope.tenantId, campaignId, contactId]
-      );
-      enrolled += result.rowCount ?? 0;
+          [scope.tenantId, campaignId, parsed.data.contact_ids]
+        );
+        return result.rowCount ?? 0;
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === "campaign_not_enrollable" || message === "contact_outside_operator_grant") return message;
+        throw error;
+      });
+    if (enrolled === "campaign_not_enrollable") {
+      return reply.code(409).send(envelope({ error: "Campaign not found or not enrollable" }, request.id));
+    }
+    if (enrolled === "contact_outside_operator_grant") {
+      return reply
+        .code(403)
+        .send(envelope({ error: "One or more contacts are outside the operator grant" }, request.id));
     }
 
     return envelope({ campaign_id: campaignId, enrolled }, request.id);
@@ -852,60 +959,47 @@ export async function registerNovaRoutes(
 
     const campaignId = readUuid(request.params, "id");
     if (!campaignId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
 
-    const voiceDestination = `${serviceUrls.voiceChannel.replace(/\/$/, "")}/v1/voice/internal/events`;
-    let queued = 0;
+    const outsideGrant = await campaignHasContactsOutsideGrant(scope.db, scope.tenantId, campaignId, operator);
+    if (outsideGrant) {
+      return reply
+        .code(403)
+        .send(envelope({ error: "Campaign contains contacts outside the operator grant" }, request.id));
+    }
 
-    await scope.db.transaction(async (tx) => {
-      await tx.query(
-        `update nova.campaigns set status = 'running', updated_at = now()
-         where tenant_id = $1 and campaign_id = $2 and status in ('draft', 'ready', 'paused')`,
-        [scope.tenantId, campaignId]
-      );
+    const started = await scope.db.query(
+      `update nova.campaigns set status = 'running', updated_at = now()
+        where tenant_id = $1 and campaign_id = $2
+          and channel in ('voice', 'mixed')
+          and status in ('draft', 'ready', 'paused', 'running')
+        returning campaign_id`,
+      [scope.tenantId, campaignId]
+    );
+    if ((started.rowCount ?? 0) === 0) {
+      return reply.code(409).send(envelope({ error: "Campaign not found or not startable" }, request.id));
+    }
 
-      const eligible = await tx.query<{ contactId: string; phoneE164: string }>(
-        `select c.contact_id as "contactId", c.phone_e164 as "phoneE164"
-         from nova.campaign_enrollments e
-         join nova.contacts c on c.tenant_id = e.tenant_id and c.contact_id = e.contact_id
-         where e.tenant_id = $1 and e.campaign_id = $2
-           and e.status = 'enrolled' and c.eligibility = 'eligible' and c.opted_out = false`,
-        [scope.tenantId, campaignId]
-      );
-
-      for (const row of eligible.rows) {
-        const callId = randomUUID();
-        const correlationId = randomUUID();
-        const payload = voiceCallRequestedPayloadSchema.parse({
-          call_id: callId,
-          contact_id: row.contactId,
-          phone_e164: row.phoneE164,
-          campaign_id: campaignId
-        });
-        await insertNovaOutboxEvent(tx, {
-          eventId: randomUUID(),
-          eventType: "voice.call.requested",
-          tenantId: scope.tenantId,
-          correlationId,
-          businessIdempotencyKey: `voice-request:${scope.tenantId}:${campaignId}:${row.contactId}`,
-          payload,
-          destination: voiceDestination
-        });
-        await tx.query(
-          `insert into nova.contact_attempts (tenant_id, attempt_id, contact_id, channel, campaign_id, call_id, status)
-           values ($1, $2, $3, 'voice', $4, $5, 'queued')`,
-          [scope.tenantId, randomUUID(), row.contactId, campaignId, callId]
-        );
-        await tx.query(
-          `update nova.campaign_enrollments
-              set status = 'attempted', updated_at = now()
-            where tenant_id = $1 and campaign_id = $2 and contact_id = $3 and status = 'enrolled'`,
-          [scope.tenantId, campaignId, row.contactId]
-        );
-        queued += 1;
-      }
-    });
-
-    return envelope({ campaign_id: campaignId, status: "running", voice_calls_queued: queued }, request.id);
+    const batch = await dispatchCampaignBatch(
+      scope.db,
+      scope.tenantId,
+      campaignId,
+      {
+        voice: `${serviceUrls.voiceChannel.replace(/\/$/, "")}/v1/voice/internal/events`,
+        audit: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
+      },
+      100
+    );
+    return envelope(
+      {
+        campaign_id: campaignId,
+        status: "running",
+        voice_calls_queued: batch.queued,
+        voice_calls_blocked: batch.blocked
+      },
+      request.id
+    );
   });
 
   for (const action of ["pause", "cancel"] as const) {
@@ -916,11 +1010,21 @@ export async function registerNovaRoutes(
 
       const campaignId = readUuid(request.params, "id");
       if (!campaignId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+      const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+      if (!operator) return;
+      if (await campaignHasContactsOutsideGrant(scope.db, scope.tenantId, campaignId, operator)) {
+        return reply
+          .code(403)
+          .send(envelope({ error: "Campaign contains contacts outside the operator grant" }, request.id));
+      }
 
       const status = action === "pause" ? "paused" : "cancelled";
       const result = await scope.db.query(
         `update nova.campaigns set status = $3, updated_at = now()
-         where tenant_id = $1 and campaign_id = $2 returning campaign_id`,
+         where tenant_id = $1 and campaign_id = $2
+           and ($3 = 'paused' and status = 'running'
+                or $3 = 'cancelled' and status not in ('completed', 'cancelled'))
+         returning campaign_id`,
         [scope.tenantId, campaignId, status]
       );
       if (result.rowCount === 0) {
@@ -935,18 +1039,18 @@ export async function registerNovaRoutes(
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
 
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
     const productLine = readQueryString(request.query, "product_line");
-    const result = productLine
-      ? await scope.db.query(
-          `select lead_id, contact_id, stage, tipification, agency_code, product_line, owner_operator_id, created_at, updated_at
-             from nova.leads where tenant_id = $1 and product_line = $2 order by updated_at desc`,
-          [scope.tenantId, productLine]
-        )
-      : await scope.db.query(
-          `select lead_id, contact_id, stage, tipification, agency_code, product_line, owner_operator_id, created_at, updated_at
-             from nova.leads where tenant_id = $1 order by updated_at desc`,
-          [scope.tenantId]
-        );
+    const result = await scope.db.query(
+      `select lead_id, contact_id, stage, tipification, agency_code, product_line, owner_operator_id, created_at, updated_at
+         from nova.leads
+        where tenant_id = $1
+          and ($2::boolean or agency_code = any($3::text[]))
+          and ($4::text is null or product_line = $4)
+        order by updated_at desc`,
+      [scope.tenantId, operator.unrestricted, operator.agencyCodes, productLine ?? null]
+    );
     return envelope(result.rows, request.id);
   });
 
@@ -966,14 +1070,19 @@ export async function registerNovaRoutes(
       return reply.code(400).send(envelope({ error: "stage, tipification or product_line required" }, request.id));
     }
 
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+
     const existing = await scope.db.query<{
       stage: string;
       tipification: string | null;
       product_line: string | null;
-    }>(`select stage, tipification, product_line from nova.leads where tenant_id = $1 and lead_id = $2`, [
-      scope.tenantId,
-      leadId
-    ]);
+    }>(
+      `select stage, tipification, product_line from nova.leads
+        where tenant_id = $1 and lead_id = $2
+          and ($3::boolean or agency_code = any($4::text[]))`,
+      [scope.tenantId, leadId, operator.unrestricted, operator.agencyCodes]
+    );
     if (existing.rowCount === 0) {
       return reply.code(404).send(envelope({ error: "Lead not found" }, request.id));
     }
@@ -1002,13 +1111,16 @@ export async function registerNovaRoutes(
                product_line = coalesce($5, product_line),
                updated_at = now()
            where tenant_id = $1 and lead_id = $2
+             and ($6::boolean or agency_code = any($7::text[]))
            returning contact_id as "contactId", stage, tipification`,
           [
             scope.tenantId,
             leadId,
             parsed.data.stage ?? null,
             parsed.data.tipification ?? null,
-            parsed.data.product_line ?? null
+            parsed.data.product_line ?? null,
+            operator.unrestricted,
+            operator.agencyCodes
           ]
         );
         if (result.rowCount === 0) throw new Error("lead_not_found");
@@ -1043,18 +1155,27 @@ export async function registerNovaRoutes(
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
 
-    const agencyCode = readQueryString(request.query, "agency_code");
-    const result = agencyCode
-      ? await scope.db.query(
-          `select handoff_id, contact_id, agency_code, status, claimed_by, reason, created_at
-           from nova.handoffs where tenant_id = $1 and agency_code = $2 order by created_at desc`,
-          [scope.tenantId, agencyCode]
-        )
-      : await scope.db.query(
-          `select handoff_id, contact_id, agency_code, status, claimed_by, reason, created_at
-           from nova.handoffs where tenant_id = $1 order by created_at desc`,
-          [scope.tenantId]
-        );
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+    const requestedAgency = readQueryString(request.query, "agency_code");
+    if (requestedAgency && !operator.unrestricted && !operator.agencyCodes.includes(requestedAgency)) {
+      return reply.code(403).send(envelope({ error: "Agency is outside the operator grant" }, request.id));
+    }
+    const agencyCodes = requestedAgency ? [requestedAgency] : operator.agencyCodes;
+    const result =
+      operator.unrestricted && !requestedAgency
+        ? await scope.db.query(
+            `select handoff_id, contact_id, agency_code, status, claimed_by, reason, created_at
+             from nova.handoffs where tenant_id = $1 order by created_at desc`,
+            [scope.tenantId]
+          )
+        : await scope.db.query(
+            `select handoff_id, contact_id, agency_code, status, claimed_by, reason, created_at
+             from nova.handoffs
+            where tenant_id = $1 and agency_code = any($2::text[])
+            order by created_at desc`,
+            [scope.tenantId, agencyCodes]
+          );
 
     return envelope(result.rows, request.id);
   });
@@ -1069,20 +1190,26 @@ export async function registerNovaRoutes(
 
     const parsed = claimSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send(envelope({ error: "operator_id required" }, request.id));
+      return reply.code(400).send(envelope({ error: "Invalid claim payload" }, request.id));
+    }
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+    if (!bodyOperatorMatches(parsed.data.operator_id, operator)) {
+      return reply.code(403).send(envelope({ error: "operator_id does not match the verified identity" }, request.id));
     }
 
     const result = await scope.db.query(
       `update nova.handoffs
        set status = 'claimed', claimed_by = $3, claimed_at = now(), updated_at = now()
        where tenant_id = $1 and handoff_id = $2 and status = 'queued'
+         and ($4::boolean or agency_code = any($5::text[]))
        returning handoff_id`,
-      [scope.tenantId, handoffId, parsed.data.operator_id]
+      [scope.tenantId, handoffId, operator.operatorId, operator.unrestricted, operator.agencyCodes]
     );
     if (result.rowCount === 0) {
       return reply.code(409).send(envelope({ error: "Handoff unavailable" }, request.id));
     }
-    return envelope({ handoff_id: handoffId, status: "claimed", operator_id: parsed.data.operator_id }, request.id);
+    return envelope({ handoff_id: handoffId, status: "claimed", operator_id: operator.operatorId }, request.id);
   });
 
   app.get("/v1/tenants/:tenantId/nova/conversations", async (request, reply) => {
@@ -1090,9 +1217,15 @@ export async function registerNovaRoutes(
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
 
-    const agencyCodes = readAgencyCodesQuery(request.query);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+    const requestedCodes = readAgencyCodesQuery(request.query);
+    if (requestedCodes.some((code) => !operator.unrestricted && !operator.agencyCodes.includes(code))) {
+      return reply.code(403).send(envelope({ error: "Agency is outside the operator grant" }, request.id));
+    }
+    const agencyCodes = requestedCodes.length > 0 ? requestedCodes : operator.agencyCodes;
     const result =
-      agencyCodes.length > 0
+      !operator.unrestricted || agencyCodes.length > 0
         ? await scope.db.query(
             `select conversation_id, contact_id, channel, agency_code, status, claimed_by, last_message_at
              from nova.conversations
@@ -1116,10 +1249,14 @@ export async function registerNovaRoutes(
 
     const conversationId = readUuid(request.params, "id");
     if (!conversationId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
 
     const exists = await scope.db.query(
-      `select 1 from nova.conversations where tenant_id = $1 and conversation_id = $2`,
-      [scope.tenantId, conversationId]
+      `select 1 from nova.conversations
+        where tenant_id = $1 and conversation_id = $2
+          and ($3::boolean or agency_code = any($4::text[]))`,
+      [scope.tenantId, conversationId, operator.unrestricted, operator.agencyCodes]
     );
     if (exists.rowCount === 0) {
       return reply.code(404).send(envelope({ error: "Conversation not found" }, request.id));
@@ -1146,21 +1283,27 @@ export async function registerNovaRoutes(
 
     const parsed = claimSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send(envelope({ error: "operator_id required" }, request.id));
+      return reply.code(400).send(envelope({ error: "Invalid claim payload" }, request.id));
+    }
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+    if (!bodyOperatorMatches(parsed.data.operator_id, operator)) {
+      return reply.code(403).send(envelope({ error: "operator_id does not match the verified identity" }, request.id));
     }
 
     const result = await scope.db.query(
       `update nova.conversations
        set status = 'claimed', claimed_by = $3, updated_at = now()
        where tenant_id = $1 and conversation_id = $2 and status = 'open'
+         and ($4::boolean or agency_code = any($5::text[]))
        returning conversation_id`,
-      [scope.tenantId, conversationId, parsed.data.operator_id]
+      [scope.tenantId, conversationId, operator.operatorId, operator.unrestricted, operator.agencyCodes]
     );
     if (result.rowCount === 0) {
       return reply.code(409).send(envelope({ error: "Conversation unavailable" }, request.id));
     }
     return envelope(
-      { conversation_id: conversationId, status: "claimed", operator_id: parsed.data.operator_id },
+      { conversation_id: conversationId, status: "claimed", operator_id: operator.operatorId },
       request.id
     );
   });
@@ -1172,13 +1315,17 @@ export async function registerNovaRoutes(
 
     const conversationId = readUuid(request.params, "id");
     if (!conversationId) return reply.code(400).send(envelope({ error: "id must be a UUID" }, request.id));
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
 
     const result = await scope.db.query(
       `update nova.conversations
           set status = 'open', claimed_by = null, updated_at = now()
         where tenant_id = $1 and conversation_id = $2 and status = 'claimed'
+          and ($4::boolean or claimed_by = $3)
+          and ($4::boolean or agency_code = any($5::text[]))
         returning conversation_id`,
-      [scope.tenantId, conversationId]
+      [scope.tenantId, conversationId, operator.operatorId, operator.unrestricted, operator.agencyCodes]
     );
     if (result.rowCount === 0) {
       return reply.code(409).send(envelope({ error: "Conversation not claimed or not found" }, request.id));
@@ -1198,6 +1345,8 @@ export async function registerNovaRoutes(
     if (!parsed.success) {
       return reply.code(400).send(envelope({ error: "text required" }, request.id));
     }
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
 
     const messageId = randomUUID();
     const correlationId = randomUUID();
@@ -1210,8 +1359,10 @@ export async function registerNovaRoutes(
              from nova.contacts ct
             where c.tenant_id = $1 and c.conversation_id = $2
               and ct.tenant_id = c.tenant_id and ct.contact_id = c.contact_id
+              and ($3::boolean or c.agency_code = any($4::text[]))
+              and ($3::boolean or c.claimed_by = $5)
             returning c.contact_id as "contactId", ct.phone_e164 as phone`,
-          [scope.tenantId, conversationId]
+          [scope.tenantId, conversationId, operator.unrestricted, operator.agencyCodes, operator.operatorId]
         );
         if (convo.rowCount === 0) throw new Error("conversation_not_found");
 
@@ -1401,6 +1552,9 @@ export async function registerNovaRoutes(
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
 
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+
     const conversationId = readUuid(request.params, "conversationId");
     if (!conversationId) {
       return reply.code(400).send(envelope({ error: "conversationId must be a UUID" }, request.id));
@@ -1416,8 +1570,9 @@ export async function registerNovaRoutes(
     }>(
       `select conversation_id, contact_id, agency_code, status, channel, claimed_by
          from nova.conversations
-        where tenant_id = $1 and conversation_id = $2`,
-      [scope.tenantId, conversationId]
+        where tenant_id = $1 and conversation_id = $2
+          and ($3::boolean or agency_code = any($4::text[]))`,
+      [scope.tenantId, conversationId, operator.unrestricted, operator.agencyCodes]
     );
     if (conv.rowCount === 0) {
       return reply.code(404).send(envelope({ error: "Conversation not found" }, request.id));
@@ -1519,6 +1674,35 @@ export async function registerNovaRoutes(
           ]
         );
       }
+
+      for (const grant of parsed.data.operator_grants) {
+        const grantHash = createHash("sha256").update(JSON.stringify(grant)).digest("hex");
+        await tx.query(
+          `insert into nova.operator_grants (
+             operator_id, tenant_id, role, is_active, agency_codes,
+             source_event_id, source_version, source_updated_at, payload_hash
+           ) values ($1, $2, $3, $4, $5::text[], $6, 1, $7, $8)
+           on conflict (operator_id, tenant_id) do update set
+             role = excluded.role,
+             is_active = excluded.is_active,
+             agency_codes = excluded.agency_codes,
+             source_event_id = excluded.source_event_id,
+             source_version = nova.operator_grants.source_version + 1,
+             source_updated_at = excluded.source_updated_at,
+             payload_hash = excluded.payload_hash,
+             updated_at = now()`,
+          [
+            grant.operator_id,
+            parsed.data.tenant_id,
+            grant.role,
+            grant.is_active,
+            grant.agency_codes,
+            randomUUID(),
+            now,
+            grantHash
+          ]
+        );
+      }
     });
 
     return reply.code(201).send(
@@ -1526,7 +1710,8 @@ export async function registerNovaRoutes(
         {
           tenant_id: parsed.data.tenant_id,
           display_name: parsed.data.display_name,
-          agencies: parsed.data.agencies.length
+          agencies: parsed.data.agencies.length,
+          operator_grants: parsed.data.operator_grants.length
         },
         request.id
       )
@@ -1614,6 +1799,11 @@ export async function registerNovaRoutes(
     if (!reviewId) return reply.code(400).send(envelope({ error: "reviewId must be a UUID" }, request.id));
     const parsed = reviewDecisionSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(envelope({ error: "Invalid review decision" }, request.id));
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+    if (!bodyOperatorMatches(parsed.data.operator_id, operator)) {
+      return reply.code(403).send(envelope({ error: "operator_id does not match the verified identity" }, request.id));
+    }
 
     const liwaDestination = `${serviceUrls.liwaChannel.replace(/\/$/, "")}/v1/liwa/internal/events`;
 
@@ -1641,7 +1831,7 @@ export async function registerNovaRoutes(
             `update nova.whatsapp_reviews
                 set status = 'skipped', decided_by = $3, decided_at = now(), updated_at = now()
               where tenant_id = $1 and review_id = $2`,
-            [scope.tenantId, reviewId, parsed.data.operator_id ?? null]
+            [scope.tenantId, reviewId, operator.operatorId]
           );
           return;
         }
@@ -1674,7 +1864,7 @@ export async function registerNovaRoutes(
           `update nova.whatsapp_reviews
               set status = 'approved', flow_id = $3, decided_by = $4, decided_at = now(), updated_at = now()
             where tenant_id = $1 and review_id = $2`,
-          [scope.tenantId, reviewId, autoFlow, parsed.data.operator_id ?? null]
+          [scope.tenantId, reviewId, autoFlow, operator.operatorId]
         );
       });
     } catch (error) {
@@ -1753,6 +1943,95 @@ export async function registerNovaRoutes(
           failed_at: row.failedAt.toISOString(),
           redriven_at: row.redrivenAt?.toISOString() ?? null
         }))
+      },
+      request.id
+    );
+  });
+
+  app.get("/v1/tenants/:tenantId/nova/operations/readiness", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply);
+    if (!operator) return;
+    if (operator.role !== "admin") {
+      return reply.code(403).send(envelope({ error: "NOVA admin grant required" }, request.id));
+    }
+
+    const result = await scope.db.query<{
+      pendingAged: string;
+      failed: string;
+      unresolvedDlq: string;
+      runningCampaigns: string;
+      eligibleEnrollments: string;
+      currentPolicyApproval: boolean;
+      currentExclusionRegistry: boolean;
+      cutoverReceiptCount: string;
+    }>(
+      `select
+         (select count(*)::text from nova.outbox_events
+           where tenant_id = $1 and status = 'pending' and available_at < now() - interval '5 minutes') as "pendingAged",
+         (select count(*)::text from nova.outbox_events
+           where tenant_id = $1 and status = 'failed') as failed,
+         (select count(*)::text from nova.outbox_dlq
+           where tenant_id = $1 and redriven_at is null) as "unresolvedDlq",
+         (select count(*)::text from nova.campaigns
+           where tenant_id = $1 and status = 'running') as "runningCampaigns",
+         (select count(*)::text from nova.campaign_enrollments e
+           join nova.campaigns c on c.tenant_id = e.tenant_id and c.campaign_id = e.campaign_id
+          where e.tenant_id = $1 and c.status = 'running'
+            and e.status in ('enrolled', 'failed')
+            and (e.next_attempt_at is null or e.next_attempt_at <= now())) as "eligibleEnrollments",
+         exists (
+           select 1 from nova.compliance_settings settings
+           join nova.voice_policy_approvals approval
+             on approval.tenant_id = settings.tenant_id
+            and approval.policy_revision = settings.policy_revision
+            and approval.status = 'approved'
+            and (approval.expires_at is null or approval.expires_at > now())
+          where settings.tenant_id = $1
+         ) as "currentPolicyApproval",
+         exists (
+           select 1 from nova.exclusion_registry_runs
+            where tenant_id = $1 and status = 'ready' and valid_until > now()
+         ) as "currentExclusionRegistry",
+         coalesce((select max(receipt_count)::text
+           from (
+             select count(distinct gate_name) as receipt_count
+               from nova.voice_cutover_receipts
+              where tenant_id = $1 and status = 'current' and expires_at > now()
+              group by scope_sha256
+           ) scoped_receipts), '0') as "cutoverReceiptCount"`,
+      [scope.tenantId]
+    );
+    const row = result.rows[0]!;
+    const metrics = {
+      outbox_pending_aged: Number(row.pendingAged),
+      outbox_failed: Number(row.failed),
+      outbox_dlq_unresolved: Number(row.unresolvedDlq),
+      campaigns_running: Number(row.runningCampaigns),
+      enrollments_eligible: Number(row.eligibleEnrollments),
+      voice_policy_approved: row.currentPolicyApproval ? 1 : 0,
+      exclusion_registry_current: row.currentExclusionRegistry ? 1 : 0,
+      cutover_receipts_current: Number(row.cutoverReceiptCount)
+    };
+    const blockers = [
+      ...(metrics.voice_policy_approved === 0 ? ["voice_policy_unapproved"] : []),
+      ...(metrics.exclusion_registry_current === 0 ? ["exclusion_registry_not_current"] : []),
+      ...(metrics.cutover_receipts_current < 6 ? ["cutover_receipts_incomplete"] : [])
+    ];
+    const degraded =
+      metrics.outbox_pending_aged > 0 ||
+      metrics.outbox_failed > 0 ||
+      metrics.outbox_dlq_unresolved > 0 ||
+      blockers.length > 0;
+    return envelope(
+      {
+        status: degraded ? "degraded" : "ok",
+        measured_at: new Date().toISOString(),
+        thresholds: { outbox_pending_age_seconds: 300, failed_or_dlq: 0 },
+        metrics,
+        blockers
       },
       request.id
     );
@@ -1859,13 +2138,38 @@ async function processInboundEvent(
   serviceUrls: ReturnType<typeof readServiceUrls>
 ): Promise<void> {
   if (eventType === "voice.call.dispatched") {
-    voiceCallDispatchedPayloadSchema.parse(payload);
+    const parsed = voiceCallDispatchedPayloadSchema.parse(payload);
+    await db.query(
+      `update nova.contact_attempts
+          set status = 'dispatched'
+        where tenant_id = $1 and call_id = $2 and status = 'queued'`,
+      [tenantId, parsed.call_id]
+    );
     await bumpAnalytics(db, tenantId, { calls_requested: 1 });
     return;
   }
 
   if (eventType === "voice.call.completed") {
     const parsed = voiceCallCompletedPayloadSchema.parse(payload);
+    await db.query(
+      `update nova.contact_attempts
+          set status = $3
+        where tenant_id = $1 and call_id = $2 and status in ('queued', 'dispatched')`,
+      [tenantId, parsed.call_id, parsed.status === "failed" ? "failed" : "completed"]
+    );
+    if (parsed.status === "failed") {
+      await bumpAnalytics(db, tenantId, { calls_failed: 1 });
+      if (parsed.campaign_id) {
+        await db.query(
+          `update nova.campaign_enrollments
+              set status = 'failed', next_attempt_at = null, updated_at = now()
+            where tenant_id = $1 and campaign_id = $2 and contact_id = $3
+              and status in ('enrolled', 'attempted', 'failed')`,
+          [tenantId, parsed.campaign_id, parsed.contact_id]
+        );
+      }
+      return;
+    }
     const intent = inferIntentFromPayload({
       intent: parsed.intent,
       disposition: parsed.disposition,
@@ -1893,16 +2197,15 @@ async function processInboundEvent(
     );
 
     await bumpAnalytics(db, tenantId, {
-      calls_completed: parsed.status === "completed" ? 1 : 0,
-      calls_failed: parsed.status === "failed" ? 1 : 0,
+      calls_completed: 1,
+      calls_failed: 0,
       leads_contacted: 1,
       leads_interested: stageInfo.stage === "interesado" ? 1 : 0,
       leads_lost: stageInfo.stage === "no_interes" ? 1 : 0
     });
 
     if (parsed.campaign_id) {
-      const enrollmentStatus =
-        parsed.status === "failed" ? "failed" : stageInfo.stage === "renovado" ? "converted" : "reached";
+      const enrollmentStatus = stageInfo.stage === "renovado" ? "converted" : "reached";
       await db.query(
         `update nova.campaign_enrollments
             set status = $4, updated_at = now()
@@ -2026,6 +2329,21 @@ async function processInboundEvent(
       kind: parsed.kind ?? "text",
       externalId: parsed.external_id
     });
+    await db.query(
+      `update nova.contacts
+          set voice_suppressed_at = coalesce(voice_suppressed_at, now()),
+              voice_suppression_reason = 'whatsapp_engaged',
+              eligibility = 'blocked_policy',
+              updated_at = now()
+        where tenant_id = $1 and contact_id = $2`,
+      [tenantId, contactId]
+    );
+    await db.query(
+      `update nova.campaign_enrollments
+          set status = 'reached', last_block_reason = 'whatsapp_engaged', updated_at = now()
+        where tenant_id = $1 and contact_id = $2 and status in ('enrolled', 'failed')`,
+      [tenantId, contactId]
+    );
     return;
   }
 
@@ -2285,7 +2603,14 @@ async function bumpAnalytics(
   tenantId: string,
   deltas: Partial<Record<string, number>>
 ): Promise<void> {
-  const day = new Date().toISOString().slice(0, 10);
+  const localDay = await db.query<{ day: string }>(
+    `select timezone(
+              coalesce((select time_zone from nova.compliance_settings where tenant_id = $1), 'America/Bogota'),
+              now()
+            )::date::text as day`,
+    [tenantId]
+  );
+  const day = localDay.rows[0]?.day ?? new Date().toISOString().slice(0, 10);
   await db.query(
     `insert into nova.analytics_daily (
        tenant_id, day, channel, contacts_imported, calls_requested, calls_completed, calls_failed,
@@ -2473,9 +2798,15 @@ async function ensureTenantSnapshot(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<boolean> {
-  const result = await db.query(`select tenant_id from nova.tenant_snapshots where tenant_id = $1`, [tenantId]);
+  const result = await db.query<{ status: string }>(`select status from nova.tenant_snapshots where tenant_id = $1`, [
+    tenantId
+  ]);
   if (result.rowCount === 0) {
     void reply.code(404).send(envelope({ error: "Tenant snapshot not found; bootstrap required" }, request.id));
+    return false;
+  }
+  if (result.rows[0]?.status !== "active") {
+    void reply.code(409).send(envelope({ error: "Tenant is not active" }, request.id));
     return false;
   }
   return true;
@@ -2501,6 +2832,74 @@ function readAgencyCodesQuery(query: unknown): string[] {
     .split(",")
     .map((code) => code.trim())
     .filter(Boolean);
+}
+
+interface OperatorScope {
+  operatorId: string;
+  role: "admin" | "supervisor" | "asesor";
+  agencyCodes: string[];
+  unrestricted: boolean;
+}
+
+async function requireOperatorScope(
+  db: DatabaseExecutor,
+  tenantId: string,
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<OperatorScope | undefined> {
+  const operatorId = readHeaderString(request.headers["x-operator-id"]);
+  const parsedId = tenantIdSchema.safeParse(operatorId);
+  if (!parsedId.success) {
+    void reply.code(403).send(envelope({ error: "Verified operator identity required" }, request.id));
+    return undefined;
+  }
+  const grant = await db.query<{ role: OperatorScope["role"]; agencyCodes: string[] }>(
+    `select role, agency_codes as "agencyCodes"
+       from nova.operator_grants
+      where tenant_id = $1 and operator_id = $2 and is_active = true`,
+    [tenantId, parsedId.data]
+  );
+  const row = grant.rows[0];
+  if (!row) {
+    void reply.code(403).send(envelope({ error: "Active NOVA operator grant required" }, request.id));
+    return undefined;
+  }
+  return {
+    operatorId: parsedId.data,
+    role: row.role,
+    agencyCodes: row.agencyCodes,
+    unrestricted: row.role === "admin"
+  };
+}
+
+async function campaignHasContactsOutsideGrant(
+  db: DatabaseExecutor,
+  tenantId: string,
+  campaignId: string,
+  operator: OperatorScope
+): Promise<boolean> {
+  if (operator.unrestricted) return false;
+  const result = await db.query(
+    `select 1
+       from nova.campaign_enrollments e
+       join nova.contacts c
+         on c.tenant_id = e.tenant_id and c.contact_id = e.contact_id
+      where e.tenant_id = $1 and e.campaign_id = $2
+        and not (c.agency_code = any($3::text[]))
+      limit 1`,
+    [tenantId, campaignId, operator.agencyCodes]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+function readHeaderString(value: string | string[] | undefined): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value) && value.length === 1 && value[0]?.trim()) return value[0].trim();
+  return undefined;
+}
+
+function bodyOperatorMatches(bodyOperatorId: string | undefined, scope: OperatorScope): boolean {
+  return bodyOperatorId === undefined || bodyOperatorId === scope.operatorId;
 }
 
 function maskName(name: string): string {

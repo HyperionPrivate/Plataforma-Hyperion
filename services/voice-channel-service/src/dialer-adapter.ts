@@ -73,6 +73,9 @@ export function assertDialerBaseUrlAllowed(baseUrl: string, env: NodeJS.ProcessE
   if (candidate.protocol !== "http:" && candidate.protocol !== "https:") {
     throw new Error("Dialer request URL must use HTTP or HTTPS");
   }
+  if (isRestrictedDeploymentEnvironment(env) && candidate.protocol !== "https:") {
+    throw new Error("Dialer base URL must use HTTPS in restricted environments");
+  }
   if (allowed.host !== candidate.host) {
     throw new Error("Dialer request host is not allowed");
   }
@@ -122,7 +125,8 @@ export class HttpDialerAdapter implements DialerAdapter {
         authorization: `Bearer ${token}`,
         "Idempotency-Key": randomUUID()
       },
-      body: form
+      body: form,
+      signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) {
       throw new Error(`Dialer contact upload failed with status ${response.status}`);
@@ -161,7 +165,8 @@ export class HttpDialerAdapter implements DialerAdapter {
         phone: input.phoneE164,
         caller_acknowledged: true,
         dynamic_vars: input.dynamicVars ?? {}
-      })
+      }),
+      signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) {
       if (response.status === 429) {
@@ -172,8 +177,12 @@ export class HttpDialerAdapter implements DialerAdapter {
       throw new Error(`Dialer demo call failed with status ${response.status}`);
     }
     const body = (await response.json()) as Record<string, unknown>;
+    const callRef = body.call_id ?? body.id;
+    if (typeof callRef !== "string" || !callRef.trim()) {
+      throw new Error("Dialer demo call response did not contain a valid call id");
+    }
     return {
-      callRef: String(body.call_id ?? body.id),
+      callRef: callRef.trim(),
       conversationId: body.conversation_id ? String(body.conversation_id) : undefined,
       status: String(body.status ?? "initiated")
     };
@@ -225,7 +234,8 @@ export class HttpDialerAdapter implements DialerAdapter {
       body: JSON.stringify({
         username: this.credentials.username,
         password: this.credentials.password
-      })
+      }),
+      signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) {
       throw new Error(`Dialer login failed with status ${response.status}`);
@@ -256,7 +266,8 @@ export class HttpDialerAdapter implements DialerAdapter {
     const response = await this.fetchImpl(url, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) {
       throw new Error(`Dialer request ${method} ${path} failed with status ${response.status}`);

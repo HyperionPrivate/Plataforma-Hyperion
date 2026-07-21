@@ -15,6 +15,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { PostgresNovaOutbox } from "./outbox.js";
 import { registerNovaRoutes } from "./routes.js";
+import { CampaignOrchestrator } from "./campaign-orchestrator.js";
 
 export const registerRoutes: RouteRegistrar = async (app, context) => {
   const gatewayToken = readInternalCredential(process.env, "GATEWAY_TO_NOVA_TOKEN");
@@ -92,6 +93,20 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
   });
 
   await registerNovaRoutes(app, context);
+
+  if (context.db) {
+    const serviceUrls = readServiceUrls();
+    const orchestrator = new CampaignOrchestrator(
+      context.db,
+      {
+        voice: `${serviceUrls.voiceChannel.replace(/\/$/, "")}/v1/voice/internal/events`,
+        audit: `${serviceUrls.audit.replace(/\/$/, "")}/internal/v1/events`
+      },
+      (error) => context.logger.error("NOVA campaign orchestrator tick failed", { error })
+    );
+    app.addHook("onClose", async () => orchestrator.stop());
+    orchestrator.start();
+  }
 
   if (context.db && (novaToVoiceToken || novaToLiwaToken || novaToAuditToken)) {
     const workerId = `nova-outbox-${randomUUID()}`;

@@ -27,8 +27,8 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 test("validates every historical catalog and release manifest across all cells", async () => {
   const result = await validateRepositoryReleases(repositoryRoot);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.catalogCount, 13);
-  assert.equal(result.manifestCount, 13);
+  assert.equal(result.catalogCount, 14);
+  assert.equal(result.manifestCount, 14);
   assert.equal(result.rollbackPolicyCount, 3);
   assert.deepEqual(result.cells, ["platform", "nova", "lumen", "pulso"]);
 });
@@ -40,6 +40,19 @@ test("keeps every sealed historical PULSO release artifact byte-immutable", asyn
     ["releases/catalogs/pulso/1.1.0.json", "962dbbc362f0e8ee5312788228f78e60cf90cdde4119555e802a8692af4cfc69"],
     ["releases/rollback-policies/pulso/1.1.0.json", "1d2678bc86b1dc342391af7539f3cc2661e9400173a00c5f035668433681d0fe"],
     ["releases/manifests/pulso/0.2.0-dev.0.json", "5aecbc8587347df9dbe569370a26fd520c77df73279581bf2c08aa19e1e076d9"]
+  ]);
+
+  for (const [relativePath, expectedSha256] of historicalArtifacts) {
+    const bytes = await readFile(path.join(repositoryRoot, relativePath));
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), expectedSha256, relativePath);
+  }
+});
+
+test("keeps the sealed NOVA 1.0.0 release evidence byte-immutable", async () => {
+  const historicalArtifacts = new Map([
+    ["releases/catalogs/nova/1.0.0.json", "a597c8eeb7a762d1e537313e3f84e353cd87e95d9f23bd7ad9dc55f37bbbea68"],
+    ["releases/manifests/nova/0.1.0-dev.0.json", "fa13d9807ca564e43a012934dbf81b44e4149f846814e8d714df8fa1d479ce48"],
+    ["releases/rollback-policies/nova/1.0.0.json", "6b04f5a6bccd4069df10b6ff43bcc866811c0d9b6661958e3af5080048c1ab52"]
   ]);
 
   for (const [relativePath, expectedSha256] of historicalArtifacts) {
@@ -436,10 +449,10 @@ test("generator and validator CLIs expose deterministic automation entrypoints",
     encoding: "utf8"
   });
   assert.equal(validated.status, 0, validated.stderr);
-  assert.match(validated.stdout, /Validated 13 catalog\(s\) and 13 manifest\(s\)/);
+  assert.match(validated.stdout, /Validated 14 catalog\(s\) and 14 manifest\(s\)/);
 });
 
 async function readCatalog(cell) {
-  const version = cell === "platform" ? "2.3.0" : cell === "pulso" ? "1.4.0" : cell === "lumen" ? "1.1.0" : "1.0.0";
+  const version = cell === "platform" ? "2.3.0" : cell === "pulso" ? "1.4.0" : "1.1.0";
   return JSON.parse(await readFile(path.join(repositoryRoot, "releases", "catalogs", cell, `${version}.json`), "utf8"));
 }

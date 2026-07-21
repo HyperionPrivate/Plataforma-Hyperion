@@ -1,0 +1,113 @@
+---
+documentType: runbook
+status: engineering-baseline
+owner: nova-voice
+reviewDue: 2026-09-30
+---
+
+# NOVA Calls operational readiness
+
+This runbook covers NOVA Core orchestration and Voice transport. WhatsApp delivery is outside this operational
+scope; only the durable boundary events described in `VOICE-ORCHESTRATOR-SCOPE.md` apply.
+
+## Alertable tenant checks
+
+An authenticated NOVA admin can poll these BFF routes without reading call audio, transcripts, phone numbers or
+other contact PII:
+
+- `GET /v1/tenants/:tenantId/nova/operations/readiness`
+- `GET /v1/tenants/:tenantId/voice/operations/readiness`
+
+Both return `status: ok|degraded`, a measurement timestamp, explicit thresholds and integer metrics. Alert when
+either response is unavailable or reports `degraded` twice consecutively. The initial engineering thresholds are:
+
+NOVA Core también reporta `voice_policy_approved`, `exclusion_registry_current` y la cantidad de recibos de
+cutover vigentes. Cualquiera de esos gates incompleto mantiene el estado en `degraded`; los defaults de la UI no
+autorizan despacho.
+
+| Signal                          |      Threshold |
+| ------------------------------- | -------------: |
+| Pending outbox event age        |      5 minutes |
+| Failed outbox or unresolved DLQ | greater than 0 |
+| Voice reconciliation age        |     15 minutes |
+| Non-terminal call age           |     30 minutes |
+
+These are initial engineering thresholds, not measured SLOs. Production owners must approve them after a load
+test and record the monitoring destination, escalation rotation and dashboard link.
+
+## Triage order
+
+1. Pause the affected campaign in NOVA Core. This prevents new call authorizations; it does not cancel calls
+   already accepted by the provider.
+2. Inspect Core and Voice readiness metrics and correlate by durable event/call identifiers.
+3. Resolve `needs_reconciliation` before redriving related events. An ambiguous provider response must never be
+   treated as permission to redial.
+4. Inspect the tenant-scoped DLQ through the admin endpoints. Redrive only after the destination is healthy and
+   the event identity is understood.
+5. Resume the campaign and confirm that the eligible enrollment backlog decreases without violating tenant
+   concurrency or frequency policy.
+
+## Retention decision required
+
+No automatic deletion policy is enabled by this remediation. Retention for call records, provider identifiers,
+outbox payloads and DLQ payloads may affect audit, consumer-protection and privacy duties. Before production,
+Coopfuturo and the platform privacy/legal owner must approve durations and a deletion/hold procedure. Until that
+decision exists, NOVA Calls is not approved for production retention even when the software checks are green.
+
+Cuando exista una decisión firmada, selle el documento y el alcance mediante el gate `retention_policy` descrito
+abajo. Este recibo acredita la decisión; **no activa borrado automático**. La ejecución de borrado/hold continúa
+dependiendo del procedimiento que legal y privacidad hayan aprobado.
+
+## Secuencia administrativa fail-closed
+
+Las tablas de aprobaciones y recibos son de solo lectura para `hyperion_nova`. Los siguientes comandos deben usar
+exclusivamente `hyperion_nova_migrator`; primero se ejecutan con `--dry-run` para obtener la confirmación exacta y
+luego se repiten con `--confirm`:
+
+```bash
+pnpm --filter @hyperion/nova-core-service build
+
+NOVA_MIGRATOR_DATABASE_URL=... pnpm --filter @hyperion/nova-core-service governance:voice -- \
+  approve-policy --tenant <uuid> --approved-by <responsable> --receipt <recibo-json> \
+  --signature <firma-ed25519> --public-key <clave-publica-pem> --dry-run
+
+NOVA_MIGRATOR_DATABASE_URL=... pnpm --filter @hyperion/nova-core-service governance:voice -- \
+  import-exclusions --tenant <uuid> --imported-by <responsable> --source <fuente> \
+  --input <lista-json-e164> --valid-until <ISO-8601> --receipt <recibo-json> \
+  --signature <firma-ed25519> --public-key <clave-publica-pem> --dry-run
+
+NOVA_MIGRATOR_DATABASE_URL=... pnpm --filter @hyperion/nova-core-service governance:voice -- \
+  attest-cutover --tenant <uuid> --gate retention_policy --subject <version-politica> \
+  --scope <alcance-no-secreto> --receipt <recibo-json> --signature <firma-ed25519> \
+  --public-key <clave-publica-pem> --attested-by <responsable> --dry-run
+```
+
+La lista de exclusión es un snapshot completo JSON: cada elemento es un E.164 o un objeto
+`{"phone_e164":"+...","reason":"..."}`. Si el snapshot falta o vence, todas las llamadas quedan bloqueadas.
+Los recibos usan `version: nova.governance-receipt.v1`, incluyen `kind`, `tenant_id`, `actor`, `issued_at` y
+`expires_at`, y deben estar firmados con Ed25519. Cada comando exige además las claims exactas de su política,
+snapshot o gate; no basta con entregar bytes arbitrarios. `issued_at` debe ser de las últimas 24 horas. Los gates
+de cutover y los snapshots vencen como máximo en 30 días; una aprobación de política, en 366 días.
+
+## Evidence required for cutover
+
+Capture the exact release digest, tenant policy revision, operator-grant projection receipt, readiness responses,
+one consented test call correlation chain, terminal outcome and the absence of unresolved DLQ/reconciliation.
+Evidence must exclude secrets, raw phone numbers, transcripts and customer documents.
+
+El gate final se ejecuta con:
+
+```bash
+NOVA_MIGRATOR_DATABASE_URL=... pnpm --filter @hyperion/nova-core-service governance:voice -- \
+  verify-cutover --tenant <uuid> --scope <alcance-no-secreto> --public-key <clave-publica-pem>
+```
+
+Solo retorna `status: ready` cuando la política coincide exactamente con su hash aprobado, el snapshot de
+exclusiones está vigente, existen los seis recibos sellados (`retention_policy`, `monitoring_on_call`,
+`coordinated_recovery`, `release_artifact`, `provider_connectivity`, `consented_test_call`), la llamada consentida
+referenciada regresó a NOVA como `voice.call.completed` procesado con resultado exitoso, y no hay DLQ ni outbox
+fallido en NOVA. El recibo firmado `monitoring_on_call` debe contener la lectura provider-owned que acredita cero
+DLQ/outbox fallido/reconciliación pendiente en Voice; NOVA no cruza esa frontera mediante SQL. Un recibo de imagen
+debe referenciar un digest `sha256:` real; el manifiesto draft no satisface ese gate.
+Los seis recibos deben compartir el mismo hash de `--scope` y la clave firmante vigente. El runtime aplica esta
+misma barrera antes de encolar cualquier llamada.

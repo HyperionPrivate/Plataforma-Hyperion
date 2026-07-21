@@ -157,7 +157,9 @@ services:
       LIWA_CHANNEL_SERVICE_URL: http://liwa-channel-service:8093
       DOCUMENTS_SERVICE_URL: http://documents-service:8094
       LIWA_ACCOUNT_ID: ${NOVA_LIWA_ACCOUNT_ID:-}
-      CORE_MODE: contract
+      CORE_MODE: ${NOVA_CORE_MODE:-disabled}
+      CORE_BASE_URL: ${NOVA_CORE_BASE_URL:-}
+      CORE_API_TOKEN: ${NOVA_CORE_API_TOKEN:-}
       PORT: 8091
     expose:
       - "8091"

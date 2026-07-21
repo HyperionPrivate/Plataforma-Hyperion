@@ -22,7 +22,7 @@ const requestedCell = process.env.HYPERION_RELEASE_TEST_CELL
 const cells = requestedCell ? [requestedCell] : [...RELEASE_CELLS];
 const expectedCounts = Object.freeze({
   platform: { catalogs: 5, manifests: 5, rollback: 0 },
-  nova: { catalogs: 1, manifests: 1, rollback: 1 },
+  nova: { catalogs: 2, manifests: 2, rollback: 1 },
   lumen: { catalogs: 2, manifests: 2, rollback: 1 },
   pulso: { catalogs: 5, manifests: 5, rollback: 1 }
 });

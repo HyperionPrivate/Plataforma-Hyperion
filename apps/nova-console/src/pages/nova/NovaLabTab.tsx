@@ -25,7 +25,7 @@ export function NovaLabTab({
   calls: CallRow[];
   canWriteOps: boolean;
   canViewReconciliation: boolean;
-  onPlaceCall: (phone: string) => Promise<void>;
+  onPlaceCall: (contactId: string) => Promise<void>;
   onEligibility: (contactId: string) => Promise<unknown>;
   onScore: (contactId: string) => Promise<unknown>;
   onLookupAssociate: (documentId: string) => Promise<unknown>;
@@ -37,7 +37,7 @@ export function NovaLabTab({
     tipificacion?: string;
   }) => Promise<unknown>;
 }) {
-  const [callPhone, setCallPhone] = useState("+573001112233");
+  const [callContactId, setCallContactId] = useState("");
   const [contactId, setContactId] = useState("");
   const [documentId, setDocumentId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,14 +67,19 @@ export function NovaLabTab({
         <Card>
           <CardHead title="Llamada individual" />
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-            <input className="input" value={callPhone} onChange={(e) => setCallPhone(e.target.value)} />
+            <input
+              className="input"
+              placeholder="contact_id UUID"
+              value={callContactId}
+              onChange={(e) => setCallContactId(e.target.value)}
+            />
             <button
               className="btn btn-primary"
               type="button"
-              disabled={!canWriteOps || busy}
-              onClick={() => void run(() => onPlaceCall(callPhone))}
+              disabled={!canWriteOps || busy || !callContactId.trim()}
+              onClick={() => void run(() => onPlaceCall(callContactId.trim()))}
             >
-              Llamar (mock/dialer)
+              Autorizar llamada
             </button>
           </div>
         </Card>

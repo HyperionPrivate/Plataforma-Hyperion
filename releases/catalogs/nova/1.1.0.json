@@ -2,11 +2,11 @@
   "$schema": "../../schemas/release-catalog.schema.json",
   "schemaVersion": 1,
   "cell": "nova",
-  "catalogVersion": "1.0.0",
+  "catalogVersion": "1.1.0",
   "owner": "@AdministracionHyperion",
-  "createdAt": "2026-07-17T00:00:00Z",
-  "rollbackPolicy": "releases/rollback-policies/nova/1.0.0.json",
-  "rollbackPolicySha256": "6b04f5a6bccd4069df10b6ff43bcc866811c0d9b6661958e3af5080048c1ab52",
+  "createdAt": "2026-07-20T00:00:00Z",
+  "rollbackPolicy": "releases/rollback-policies/nova/1.1.0.json",
+  "rollbackPolicySha256": "7b4d4b69ed0780a1335e5f6b968f2b36c1fcb00a1b5cb8e69580e66fa9f75db8",
   "components": [
     {
       "id": "nova-core-service",
@@ -14,7 +14,7 @@
       "distribution": "oci",
       "sourcePath": "services/nova-core-service",
       "versionSource": "services/nova-core-service/package.json",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "imageRepository": "ghcr.io/administracionhyperion/nova-core-service"
     },
     {
@@ -77,7 +77,7 @@
       "distribution": "oci",
       "sourcePath": "packages/nova-migrations",
       "versionSource": "packages/nova-migrations/package.json",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "imageRepository": "ghcr.io/administracionhyperion/nova-migrations"
     },
     {

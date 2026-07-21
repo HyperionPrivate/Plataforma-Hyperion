@@ -19,6 +19,7 @@ export interface ClaimedOutboxEvent<TPayload = JsonValue> {
   readonly version: number;
   readonly occurredAt: string;
   readonly tenantId: string | null;
+  readonly correlationId?: string;
   /**
    * Optional for event contracts that do not promise aggregate ordering. Ordered
    * contracts must provide both values and consumers must require them.
@@ -35,6 +36,7 @@ export interface OutboxEventEnvelope<TPayload = JsonValue> {
   readonly version: number;
   readonly occurredAt: string;
   readonly tenantId: string | null;
+  readonly correlationId?: string;
   readonly streamId?: string;
   readonly streamSequence?: number;
   readonly payload: TPayload;
@@ -279,6 +281,7 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
         version: event.version,
         occurredAt: event.occurredAt,
         tenantId: event.tenantId,
+        ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
         ...(event.streamId === undefined ? {} : { streamId: event.streamId, streamSequence: event.streamSequence }),
         payload: event.payload
       };

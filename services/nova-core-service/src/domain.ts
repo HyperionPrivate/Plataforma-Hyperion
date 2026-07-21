@@ -12,20 +12,30 @@ export interface EligibilityResult {
 export interface ComplianceSettings {
   windowStartHour: number;
   windowEndHour: number;
+  timeZone: string;
+  allowedWeekdays: readonly number[];
   voiceEnabled: boolean;
   whatsappEnabled: boolean;
+  maxAttemptsPerDay: number;
   maxAttemptsPerContact: number;
+  rollingWindowDays: number;
+  maxConcurrentCalls: number;
   minHoursBetweenAttempts: number;
   respectHolidays: boolean;
 }
 
 export const DEFAULT_COMPLIANCE: ComplianceSettings = {
   windowStartHour: 8,
-  windowEndHour: 20,
+  windowEndHour: 19,
+  timeZone: BOGOTA_TIMEZONE,
+  allowedWeekdays: [1, 2, 3, 4, 5, 6],
   voiceEnabled: true,
   whatsappEnabled: true,
-  maxAttemptsPerContact: 3,
-  minHoursBetweenAttempts: 24,
+  maxAttemptsPerDay: 2,
+  maxAttemptsPerContact: 4,
+  rollingWindowDays: 7,
+  maxConcurrentCalls: 10,
+  minHoursBetweenAttempts: 4,
   respectHolidays: true
 };
 
@@ -57,9 +67,12 @@ export function decideEligibility(input: {
   channel?: "voice" | "whatsapp";
   settings?: ComplianceSettings;
   isHoliday?: boolean;
+  attemptsToday?: number;
   attemptCount?: number;
+  activeVoiceCalls?: number;
   hoursSinceLastAttempt?: number | null;
   rneBlocked?: boolean;
+  voiceSuppressed?: boolean;
 }): EligibilityResult {
   const settings = input.settings ?? DEFAULT_COMPLIANCE;
   const channel = input.channel ?? "voice";
@@ -69,6 +82,9 @@ export function decideEligibility(input: {
   }
   if (input.rneBlocked) {
     return { eligibility: "blocked_policy", reason: "rne_excluded" };
+  }
+  if (channel === "voice" && input.voiceSuppressed) {
+    return { eligibility: "blocked_policy", reason: "whatsapp_engaged" };
   }
   if (channel === "voice" && !settings.voiceEnabled) {
     return { eligibility: "blocked_policy", reason: "channel_disabled_voz" };
@@ -80,12 +96,28 @@ export function decideEligibility(input: {
     return { eligibility: "blocked_window", reason: "holiday" };
   }
 
-  const hour = hourInTimeZone(input.at ?? new Date(), BOGOTA_TIMEZONE);
+  const local = localTimeParts(input.at ?? new Date(), settings.timeZone);
+  if (!local) {
+    return { eligibility: "blocked_policy", reason: "invalid_time_zone" };
+  }
+  if (!settings.allowedWeekdays.includes(local.weekday)) {
+    return { eligibility: "blocked_window", reason: "weekday_not_allowed" };
+  }
+
+  const hour = local.hour;
   if (hour < settings.windowStartHour || hour >= settings.windowEndHour) {
     return {
       eligibility: "blocked_window",
       reason: `outside_contact_window_${settings.windowStartHour}_${settings.windowEndHour}`
     };
+  }
+
+  if (typeof input.attemptsToday === "number" && input.attemptsToday >= settings.maxAttemptsPerDay) {
+    return { eligibility: "blocked_frequency", reason: "max_daily_attempts_reached" };
+  }
+
+  if (typeof input.activeVoiceCalls === "number" && input.activeVoiceCalls >= settings.maxConcurrentCalls) {
+    return { eligibility: "blocked_frequency", reason: "max_concurrent_calls" };
   }
 
   if (typeof input.attemptCount === "number" && input.attemptCount >= settings.maxAttemptsPerContact) {
@@ -147,13 +179,19 @@ export function normalizeSegment(raw?: string | null): string {
   return (raw ?? "").trim();
 }
 
-function hourInTimeZone(at: Date, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour: "numeric",
-    hour12: false
-  }).formatToParts(at);
-  const hourPart = parts.find((part) => part.type === "hour")?.value;
-  const hour = Number(hourPart);
-  return Number.isFinite(hour) ? hour : 0;
+function localTimeParts(at: Date, timeZone: string): { hour: number; weekday: number } | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "numeric",
+      hour12: false,
+      weekday: "short"
+    }).formatToParts(at);
+    const hour = Number(parts.find((part) => part.type === "hour")?.value);
+    const weekdayName = parts.find((part) => part.type === "weekday")?.value;
+    const weekday = weekdayName ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(weekdayName) + 1 : 0;
+    return Number.isFinite(hour) && weekday > 0 ? { hour, weekday } : null;
+  } catch {
+    return null;
+  }
 }
