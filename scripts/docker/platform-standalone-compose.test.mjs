@@ -180,6 +180,7 @@ test("Identity and Tenant images receive Access runtime evidence but never migra
 
 test("Full-stack Identity and Tenant images include the complete Access runtime module closure", async () => {
   const dockerfile = await readFile(legacyDockerfilePath, "utf8");
+  const sharedRuntime = dockerStage(dockerfile, "service-runtime-base");
   const identityImage = dockerStage(dockerfile, "identity-service");
   const tenantImage = dockerStage(dockerfile, "tenant-service");
   for (const runtime of [identityImage, tenantImage]) {
@@ -190,6 +191,8 @@ test("Full-stack Identity and Tenant images include the complete Access runtime 
     assert.doesNotMatch(runtime, /access-migrations\/dist\/(?:bootstrap[^/]*|runner|index)\.js/);
   }
   assert.match(dockerfile, /FROM durable-service-runtime-base AS identity-service/);
+  assert.match(sharedRuntime, /packages\/platform-contracts\/package\.json/);
+  assert.match(sharedRuntime, /packages\/platform-contracts\/dist/);
   assert.match(dockerStage(dockerfile, "durable-service-runtime-base"), /packages\/durable-events\/dist/);
 });
 

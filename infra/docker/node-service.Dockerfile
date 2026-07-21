@@ -63,6 +63,7 @@ COPY packages/config/package.json packages/config/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/logger/package.json packages/logger/package.json
+COPY packages/platform-contracts/package.json packages/platform-contracts/package.json
 COPY packages/service-runtime/package.json packages/service-runtime/package.json
 
 # contracts remains only for api-gateway / legacy migrations; other services may
@@ -71,6 +72,7 @@ COPY --from=build /app/packages/config/dist packages/config/dist
 COPY --from=build /app/packages/contracts/dist packages/contracts/dist
 COPY --from=build /app/packages/database/dist packages/database/dist
 COPY --from=build /app/packages/logger/dist packages/logger/dist
+COPY --from=build /app/packages/platform-contracts/dist packages/platform-contracts/dist
 COPY --from=build /app/packages/service-runtime/dist packages/service-runtime/dist
 
 # Services that dispatch durable events additionally receive the event package

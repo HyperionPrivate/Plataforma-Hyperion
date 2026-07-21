@@ -1,0 +1,96 @@
+diff --git a/adapters/primary/api/routes/demo.py b/adapters/primary/api/routes/demo.py
+--- a/adapters/primary/api/routes/demo.py
++++ b/adapters/primary/api/routes/demo.py
+@@ -145,6 +145,21 @@ def _sha256_hex(s: str) -> str:
+     return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
++def _select_demo_ddi(pool: list[str], rotation_mode: str) -> str:
++    """Honor static rotation for one-shot demo calls.
++
++    The demo endpoint owns its A/B pools and therefore cannot delegate this
++    choice to the campaign rotation adapter. Static mode must always select
++    the configured primary (first) DDI; non-static modes retain pool rotation.
++    """
++
++    if not pool:
++        return ""
++    if str(rotation_mode or "").strip().lower() == "static":
++        return pool[0]
++    return secrets.choice(pool) if len(pool) > 1 else pool[0]
++
++
+ def _client_ip(request: Request) -> str:
+     """Return a direct peer or gateway-authenticated forwarded address."""
+     return resolve_trusted_client_ip(request)
+@@ -453,7 +468,7 @@ async def demo_call(
+     else:
+         agent_id = agent_id_a
+         pool = ddi_pool_a or [ddi_id_a]
+-    ddi_id = secrets.choice(pool) if len(pool) > 1 else pool[0]
++    ddi_id = _select_demo_ddi(pool, str(cfg.get("NUMBER_ROTATION_MODE", "static") or "static"))
+
+     # ------------------------------------------------------------------
+     # 1. Auth — constant-time compare to avoid timing leaks.
+diff --git a/tests/unit/test_demo_ddi_selection.py b/tests/unit/test_demo_ddi_selection.py
+new file mode 100644
+--- /dev/null
++++ b/tests/unit/test_demo_ddi_selection.py
+@@ -0,0 +1,17 @@
++from adapters.primary.api.routes.demo import _select_demo_ddi
++
++
++def test_static_mode_always_selects_primary_ddi() -> None:
++    pool = ["phnum_primary", "phnum_secondary", "phnum_tertiary"]
++
++    assert {_select_demo_ddi(pool, "static") for _ in range(20)} == {"phnum_primary"}
++
++
++def test_non_static_mode_returns_a_configured_pool_member() -> None:
++    pool = ["phnum_primary", "phnum_secondary"]
++
++    assert _select_demo_ddi(pool, "asr") in pool
++
++
++def test_empty_pool_is_fail_closed() -> None:
++    assert _select_demo_ddi([], "static") == ""
+diff --git a/adapters/secondary/postgres/call_repository.py b/adapters/secondary/postgres/call_repository.py
+--- a/adapters/secondary/postgres/call_repository.py
++++ b/adapters/secondary/postgres/call_repository.py
+@@ -802,8 +802,11 @@ class CallRepository(ICallRepository):
+                           retain_until=COALESCE(
+                               job.completed_at, job.updated_at,
+                               job.created_at, NOW()
+                           ) + (
+-                              CASE WHEN job.status='dead' THEN $3 ELSE $2 END
++                              CASE
++                                  WHEN job.status='dead' THEN $3::integer
++                                  ELSE $2::integer
++                              END
+                               * INTERVAL '1 second'
+                           ),
+                           lease_until=NULL, claim_token=NULL, updated_at=NOW()
+diff --git a/tests/unit/test_webhook_job_repository.py b/tests/unit/test_webhook_job_repository.py
+--- a/tests/unit/test_webhook_job_repository.py
++++ b/tests/unit/test_webhook_job_repository.py
+@@ -174,10 +174,12 @@ class _PurgeConnection:
+         self.rows = [{"event_key": str(index)} for index in range(count)]
+         self.query = ""
+         self.args: tuple[Any, ...] = ()
++        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+     async def fetch(self, query: str, *args: Any) -> list[dict[str, str]]:
+         self.query = " ".join(query.split())
+         self.args = args
++        self.calls.append((self.query, args))
+         return self.rows
+
+
+@@ -194,3 +196,7 @@ async def test_expired_job_purge_is_terminal_and_bounded() -> None:
+     assert "retain_until <= NOW()" in connection.query
+     assert "FOR UPDATE SKIP LOCKED" in connection.query
+     assert connection.args == (4_997,)
++    normalization_query, normalization_args = connection.calls[0]
++    assert "$3::integer" in normalization_query
++    assert "$2::integer" in normalization_query
++    assert normalization_args == (5_000, 86_400, 604_800)

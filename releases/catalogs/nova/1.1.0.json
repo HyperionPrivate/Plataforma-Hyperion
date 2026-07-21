@@ -6,7 +6,7 @@
   "owner": "@AdministracionHyperion",
   "createdAt": "2026-07-20T00:00:00Z",
   "rollbackPolicy": "releases/rollback-policies/nova/1.1.0.json",
-  "rollbackPolicySha256": "7b4d4b69ed0780a1335e5f6b968f2b36c1fcb00a1b5cb8e69580e66fa9f75db8",
+  "rollbackPolicySha256": "8ce452c346bc24cfab9273d1b235d1956e11fa5326cf1ff86d27f9e0c3f93134",
   "components": [
     {
       "id": "nova-core-service",

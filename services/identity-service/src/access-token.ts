@@ -205,8 +205,8 @@ export async function loadAccessTokenServices(
   environment: NodeJS.ProcessEnv = process.env,
   dependencies: AccessTokenEnvironmentDependencies = {}
 ): Promise<ReadonlyMap<string, AccessTokenService>> {
-  const privateKeyFile = environment.ACCESS_TOKEN_PRIVATE_KEY_FILE?.trim();
-  const privateKeyPem = environment.ACCESS_TOKEN_PRIVATE_KEY_PEM?.trim();
+  const privateKeyFile = environment.ACCESS_TOKEN_PRIVATE_KEY_FILE?.trim() || undefined;
+  const privateKeyPem = environment.ACCESS_TOKEN_PRIVATE_KEY_PEM?.trim() || undefined;
   const required = signingKeysRequired(environment);
   if (privateKeyFile && privateKeyPem) {
     throw new Error("Configure only one of ACCESS_TOKEN_PRIVATE_KEY_FILE or ACCESS_TOKEN_PRIVATE_KEY_PEM");

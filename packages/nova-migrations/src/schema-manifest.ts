@@ -34,6 +34,10 @@ export const NOVA_PROVIDER_LEDGER = Object.freeze([
   {
     name: "055-nova-voice-policy-approval-and-exclusions.sql",
     checksum: "ca766a45f7d99f56a3514f3c3118276c0bf19b1fe49ad6ad4a3ce388acd46104"
+  },
+  {
+    name: "056-nova-legacy-audit-outbox-envelope.sql",
+    checksum: "fc6ce5cf0e629bfb155e9b183ba11caf60a4c0cbc11bee393af1819fd3aae107"
   }
 ] as const);
 

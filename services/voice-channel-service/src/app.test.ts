@@ -6,6 +6,7 @@ import {
 } from "@hyperion/nova-service-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerRoutes } from "./app.js";
+import { registerVoiceRoutes } from "./routes.js";
 
 const TENANT_ID = "22222222-2222-4222-8222-222222222222";
 const GATEWAY_TOKEN = "gateway-to-voice-test-token-0001";
@@ -139,6 +140,84 @@ describe("voice product operator assertion", () => {
       expect(response.json().data.error).toBe("ElevenLabs webhook secret required");
     }
   );
+});
+
+describe("legacy call reconciliation", () => {
+  it("marks a missing provider record abandoned without asking the current Dialer to mutate it", async () => {
+    const app = Fastify();
+    const dialer = { reconcileCall: vi.fn() };
+    const transactionQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+    const transaction = vi.fn(async (callback: (client: { query: typeof transactionQuery }) => unknown) =>
+      callback({ query: transactionQuery })
+    );
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [
+        {
+          contactId: "11111111-1111-4111-8111-111111111111",
+          campaignId: null,
+          enrollmentId: null,
+          dialerCallRef: "33333333-3333-4333-8333-333333333333",
+          correlationId: "44444444-4444-4444-8444-444444444444"
+        }
+      ]
+    });
+
+    await registerVoiceRoutes(
+      app,
+      {
+        config: {},
+        db: { query, transaction, close: vi.fn() },
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+      } as never,
+      { dialer: dialer as never }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${TENANT_ID}/voice/calls/55555555-5555-4555-8555-555555555555/reconcile`,
+      payload: {
+        result_code: "legacy_provider_state_unavailable_after_cutover",
+        disposition: "not_redialed",
+        resolution: "abandoned",
+        provider_record_absent: true
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.status).toBe("failed");
+    expect(dialer.reconcileCall).not.toHaveBeenCalled();
+    expect(transaction).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it("rejects claiming an absent provider record for a successful resolution", async () => {
+    const app = Fastify();
+    const query = vi.fn();
+    await registerVoiceRoutes(
+      app,
+      {
+        config: {},
+        db: { query, transaction: vi.fn(), close: vi.fn() },
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+      } as never,
+      { dialer: { reconcileCall: vi.fn() } as never }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/tenants/${TENANT_ID}/voice/calls/55555555-5555-4555-8555-555555555555/reconcile`,
+      payload: {
+        result_code: "unsafe-success",
+        resolution: "confirmed_initiated",
+        provider_record_absent: true
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+    await app.close();
+  });
 });
 
 function context() {

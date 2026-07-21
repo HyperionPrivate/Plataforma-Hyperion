@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { platformControlTenantId } from "@hyperion/platform-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AccessTokenService,
   AccessTokenSizeError,
@@ -89,6 +89,27 @@ describe("Access RS256 tokens", () => {
 
     expect([...services.keys()]).toEqual(["nova-bff", "lumen-bff", "pulso-bff", "platform-admin-bff"]);
     expect(decodePart(services.get("lumen-bff")!.issue(principal()).token, 1)).toMatchObject({ aud: "lumen-bff" });
+  });
+
+  it("uses the key file when Compose supplies an empty PEM alias", async () => {
+    const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const privateKey = pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+    const readTextFile = vi.fn(async () => privateKey);
+
+    const services = await loadAccessTokenServices(
+      {
+        HYPERION_ENVIRONMENT: "local",
+        ACCESS_TOKEN_PRIVATE_KEY_FILE: "/run/secrets/access-token-rs256.pem",
+        ACCESS_TOKEN_PRIVATE_KEY_PEM: "",
+        ACCESS_TOKEN_ISSUER: "https://access.example.test",
+        ACCESS_TOKEN_AUDIENCES: "nova-bff",
+        ACCESS_TOKEN_KEY_ID: "access-current"
+      },
+      { readTextFile }
+    );
+
+    expect(readTextFile).toHaveBeenCalledWith("/run/secrets/access-token-rs256.pem");
+    expect(services.get("nova-bff")?.issue(principal()).token).toBeTruthy();
   });
 
   it("emits only the caller product grants and reserves PLATFORM for the control tenant", () => {
