@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { NOVA_CELL_DATABASE_ROLES, NOVA_MIGRATOR_ROLE, type NovaCellDatabaseRole } from "./config.js";
 import { assertNovaRuntimeDatabaseBoundary } from "./runtime-boundary.js";
-import { NOVA_PROVIDER_LEDGER, NOVA_PROVIDER_TABLES } from "./schema-manifest.js";
+import {
+  NOVA_PROVIDER_LEDGER,
+  NOVA_PROVIDER_ROUTINES,
+  NOVA_PROVIDER_TABLES,
+  NOVA_RUNTIME_NO_DELETE_TABLES,
+  NOVA_RUNTIME_READ_ONLY_TABLES
+} from "./schema-manifest.js";
 
 const ROLE_SCHEMA = new Map<NovaCellDatabaseRole, string>([
   ["hyperion_nova", "nova"],
@@ -29,20 +35,28 @@ function boundaryClient(mutate?: (sql: string, rows: Record<string, unknown>[], 
           }))
         );
       } else if (sql.includes("as object_count")) rows = [{ object_count: "0" }];
-      else if (sql.includes("from pg_catalog.pg_class relation")) {
+      else if (sql.includes("from pg_catalog.pg_proc routine")) {
+        rows = NOVA_PROVIDER_ROUTINES.map((routine) => ({
+          routine,
+          owner: NOVA_MIGRATOR_ROLE,
+          security_definer: false
+        }));
+      } else if (sql.includes("from pg_catalog.pg_class relation")) {
         const role = String(values?.[1]) as NovaCellDatabaseRole;
         const ownedSchema = ROLE_SCHEMA.get(role);
         rows = NOVA_PROVIDER_TABLES.map((relation) => {
           const schema_name = relation.split(".")[0]!;
           const ownsSchema = schema_name === ownedSchema;
+          const readOnly = (NOVA_RUNTIME_READ_ONLY_TABLES as readonly string[]).includes(relation);
+          const noDelete = (NOVA_RUNTIME_NO_DELETE_TABLES as readonly string[]).includes(relation);
           return {
             relation,
             schema_name,
             owner: NOVA_MIGRATOR_ROLE,
             can_select: ownsSchema,
-            can_insert: ownsSchema,
-            can_update: ownsSchema,
-            can_delete: ownsSchema,
+            can_insert: ownsSchema && !readOnly,
+            can_update: ownsSchema && !readOnly,
+            can_delete: ownsSchema && !readOnly && !noDelete,
             can_truncate: false,
             can_references: false,
             can_trigger: false
@@ -92,7 +106,7 @@ describe("NOVA runtime database boundary", () => {
       if (sql.includes("as can_connect")) rows[0]!.can_temporary = true;
     });
     await expect(assertNovaRuntimeDatabaseBoundary(drifted as never)).rejects.toThrow(
-      "provider schemas contain unmanaged routines or sequences"
+      "provider schemas contain unmanaged sequences or composite types"
     );
   });
 });

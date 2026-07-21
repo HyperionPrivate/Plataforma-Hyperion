@@ -30,6 +30,10 @@ export const NOVA_PROVIDER_LEDGER = Object.freeze([
   {
     name: "054-nova-voice-orchestration-policy.sql",
     checksum: "1e1b6643cdb4b50a7a91f6455cb4eda9273b9fd5ef30e1ca1968be4a54b2dc8c"
+  },
+  {
+    name: "055-nova-voice-policy-approval-and-exclusions.sql",
+    checksum: "ca766a45f7d99f56a3514f3c3118276c0bf19b1fe49ad6ad4a3ce388acd46104"
   }
 ] as const);
 
@@ -60,6 +64,8 @@ export const NOVA_PROVIDER_TABLES = Object.freeze([
   "nova.conversation_messages",
   "nova.conversations",
   "nova.csat_scores",
+  "nova.exclusion_registry_entries",
+  "nova.exclusion_registry_runs",
   "nova.handoffs",
   "nova.holidays",
   "nova.inbox_events",
@@ -74,6 +80,8 @@ export const NOVA_PROVIDER_TABLES = Object.freeze([
   "nova.service_migrations",
   "nova.tenant_snapshots",
   "nova.tenant_holidays",
+  "nova.voice_cutover_receipts",
+  "nova.voice_policy_approvals",
   "nova.whatsapp_reviews",
   "voice.calls",
   "voice.campaigns",
@@ -84,3 +92,14 @@ export const NOVA_PROVIDER_TABLES = Object.freeze([
   "voice.service_migrations",
   "voice.webhook_receipts"
 ] as const);
+
+export const NOVA_RUNTIME_READ_ONLY_TABLES = Object.freeze([
+  "nova.exclusion_registry_entries",
+  "nova.exclusion_registry_runs",
+  "nova.voice_cutover_receipts",
+  "nova.voice_policy_approvals"
+] as const);
+
+export const NOVA_RUNTIME_NO_DELETE_TABLES = Object.freeze(["nova.tenant_snapshots"] as const);
+
+export const NOVA_PROVIDER_ROUTINES = Object.freeze(["nova.bump_compliance_policy_revision"] as const);

@@ -203,7 +203,8 @@
     "lumen.guard_dictation_real_audio_lineage": "lumen",
     "lumen.guard_processing_attempt_transition": "lumen",
     "lumen.require_open_n1_compatibility_window": "lumen",
-    "lumen.require_attested_legacy_cleanup_terminal": "lumen"
+    "lumen.require_attested_legacy_cleanup_terminal": "lumen",
+    "nova.bump_compliance_policy_revision": "nova-core"
   },
   "tables": {
     "platform.schema_migrations": "migration-control",
@@ -328,6 +329,10 @@
     "nova.analytics_daily": "nova-core",
     "nova.csat_scores": "nova-core",
     "nova.outbox_dlq": "nova-core",
+    "nova.voice_policy_approvals": "nova-core",
+    "nova.exclusion_registry_runs": "nova-core",
+    "nova.exclusion_registry_entries": "nova-core",
+    "nova.voice_cutover_receipts": "nova-core",
     "voice.service_migrations": "voice",
     "voice.schema_version": "voice",
     "voice.calls": "voice",

@@ -90,6 +90,47 @@ integration("NOVA autonomous logical database", () => {
     }
   });
 
+  it("keeps policy approvals and exclusion snapshots read-only for the NOVA runtime", async () => {
+    const runtime = runtimes.get("hyperion_nova")!;
+    const privileges = await runtime.query<{
+      relation: string;
+      canSelect: boolean;
+      canInsert: boolean;
+      canUpdate: boolean;
+      canDelete: boolean;
+    }>(
+      `select relation,
+              has_table_privilege(current_user, relation, 'select') as "canSelect",
+              has_table_privilege(current_user, relation, 'insert') as "canInsert",
+              has_table_privilege(current_user, relation, 'update') as "canUpdate",
+              has_table_privilege(current_user, relation, 'delete') as "canDelete"
+         from unnest($1::text[]) relation
+        order by relation`,
+      [
+        [
+          "nova.exclusion_registry_entries",
+          "nova.exclusion_registry_runs",
+          "nova.voice_cutover_receipts",
+          "nova.voice_policy_approvals"
+        ]
+      ]
+    );
+    expect(privileges.rows).toHaveLength(4);
+    expect(privileges.rows.every((row) => row.canSelect && !row.canInsert && !row.canUpdate && !row.canDelete)).toBe(
+      true
+    );
+    const routine = await runtime.query<{ canExecute: boolean }>(
+      `select has_function_privilege(
+         current_user, 'nova.bump_compliance_policy_revision()', 'execute'
+       ) as "canExecute"`
+    );
+    expect(routine.rows).toEqual([{ canExecute: false }]);
+    const tenantDelete = await runtime.query<{ canDelete: boolean }>(
+      `select has_table_privilege(current_user, 'nova.tenant_snapshots', 'delete') as "canDelete"`
+    );
+    expect(tenantDelete.rows).toEqual([{ canDelete: false }]);
+  });
+
   it("applies every provider-owned migration without sibling product schemas", async () => {
     const expectedMigrations = readdirSync(fileURLToPath(new URL("../sql/", import.meta.url)))
       .filter((name) => name.endsWith(".sql"))

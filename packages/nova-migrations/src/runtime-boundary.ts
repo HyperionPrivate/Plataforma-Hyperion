@@ -1,5 +1,11 @@
 import { NOVA_CELL_DATABASE_ROLES, NOVA_MIGRATOR_ROLE, type NovaCellDatabaseRole } from "./config.js";
-import { NOVA_PROVIDER_LEDGER, NOVA_PROVIDER_TABLES } from "./schema-manifest.js";
+import {
+  NOVA_PROVIDER_LEDGER,
+  NOVA_PROVIDER_ROUTINES,
+  NOVA_PROVIDER_TABLES,
+  NOVA_RUNTIME_NO_DELETE_TABLES,
+  NOVA_RUNTIME_READ_ONLY_TABLES
+} from "./schema-manifest.js";
 
 const PROVIDER_SCHEMAS = ["documents", "liwa", "nova", "voice"] as const;
 const TABLE_PRIVILEGES = ["select", "insert", "update", "delete", "truncate", "references", "trigger"] as const;
@@ -107,6 +113,8 @@ export async function assertNovaRuntimeDatabaseBoundary(client: NovaBoundaryClie
   }
 
   const expectedTables = new Set<string>(NOVA_PROVIDER_TABLES);
+  const readOnlyTables = new Set<string>(NOVA_RUNTIME_READ_ONLY_TABLES);
+  const noDeleteTables = new Set<string>(NOVA_RUNTIME_NO_DELETE_TABLES);
   for (const [role, tables] of tablesByRole) {
     if (tables.length !== expectedTables.size || tables.some(({ relation }) => !expectedTables.has(relation))) {
       issues.push(`${role} sees an unexpected provider relation inventory`);
@@ -116,7 +124,12 @@ export async function assertNovaRuntimeDatabaseBoundary(client: NovaBoundaryClie
       if (table.owner !== NOVA_MIGRATOR_ROLE) issues.push(`${table.relation} has a foreign owner`);
       const ownsRuntimeSchema = table.schema_name === ownedSchema;
       for (const privilege of TABLE_PRIVILEGES) {
-        const expected = ownsRuntimeSchema && ["select", "insert", "update", "delete"].includes(privilege);
+        const expected =
+          ownsRuntimeSchema &&
+          (privilege === "select" ||
+            (!readOnlyTables.has(table.relation) &&
+              ["insert", "update", "delete"].includes(privilege) &&
+              !(privilege === "delete" && noDeleteTables.has(table.relation))));
         if (table[`can_${privilege}`] !== expected) {
           issues.push(`${role} ${table.relation} ${privilege} privilege drifted`);
         }
@@ -125,19 +138,34 @@ export async function assertNovaRuntimeDatabaseBoundary(client: NovaBoundaryClie
   }
 
   const extraObjects = await client.query<{ object_count: string }>(
-    `select (
-       (select count(*) from pg_catalog.pg_class relation
-         join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
-        where namespace.nspname = any($1::text[]) and relation.relkind in ('S', 'c'))
-       +
-       (select count(*) from pg_catalog.pg_proc routine
-         join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
-        where namespace.nspname = any($1::text[]))
-     )::text as object_count`,
+    `select count(*)::text as object_count
+       from pg_catalog.pg_class relation
+       join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+      where namespace.nspname = any($1::text[]) and relation.relkind in ('S', 'c')`,
     [PROVIDER_SCHEMAS]
   );
   if (extraObjects.rows[0]?.object_count !== "0")
-    issues.push("provider schemas contain unmanaged routines or sequences");
+    issues.push("provider schemas contain unmanaged sequences or composite types");
+
+  const routines = await client.query<{ routine: string; owner: string; security_definer: boolean }>(
+    `select namespace.nspname || '.' || routine.proname as routine,
+            pg_catalog.pg_get_userbyid(routine.proowner) as owner,
+            routine.prosecdef as security_definer
+       from pg_catalog.pg_proc routine
+       join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+      where namespace.nspname = any($1::text[])
+      order by routine`,
+    [PROVIDER_SCHEMAS]
+  );
+  if (
+    routines.rows.length !== NOVA_PROVIDER_ROUTINES.length ||
+    routines.rows.some(
+      (row, index) =>
+        row.routine !== NOVA_PROVIDER_ROUTINES[index] || row.owner !== NOVA_MIGRATOR_ROLE || row.security_definer
+    )
+  ) {
+    issues.push("provider routine inventory or ownership drifted");
+  }
 
   const databasePrivileges = await client.query<{
     can_connect: boolean;

@@ -7,7 +7,7 @@ await startService({
   requiredSchemaVersion: {
     schema: "nova",
     serviceName: "nova",
-    minimumVersion: 6
+    minimumVersion: 8
   },
   registerRoutes
 });

@@ -497,13 +497,15 @@ export async function registerNovaRoutes(
       min_hours_between_attempts: number;
       respect_holidays: boolean;
       meta_contactos_hoy: number;
+      policy_revision: string;
       updated_at: Date;
     }>(
       `select window_start_hour, window_end_hour, time_zone, allowed_weekdays,
               voice_enabled, whatsapp_enabled, max_attempts_per_day,
               max_attempts_per_contact, rolling_window_days, max_concurrent_calls,
               min_hours_between_attempts, respect_holidays,
-              coalesce(meta_contactos_hoy, 0) as meta_contactos_hoy, updated_at
+              coalesce(meta_contactos_hoy, 0) as meta_contactos_hoy,
+              policy_revision::text as policy_revision, updated_at
          from nova.compliance_settings where tenant_id = $1`,
       [scope.tenantId]
     );
@@ -524,6 +526,7 @@ export async function registerNovaRoutes(
           min_hours_between_attempts: DEFAULT_COMPLIANCE.minHoursBetweenAttempts,
           respect_holidays: DEFAULT_COMPLIANCE.respectHolidays,
           meta_contactos_hoy: 0,
+          policy_revision: null,
           source: "defaults"
         },
         request.id
@@ -556,7 +559,7 @@ export async function registerNovaRoutes(
       return reply.code(400).send(envelope({ error: "time_zone must be an IANA timezone" }, request.id));
     }
 
-    await scope.db.query(
+    const saved = await scope.db.query<{ policyRevision: string }>(
       `insert into nova.compliance_settings (
          tenant_id, window_start_hour, window_end_hour, time_zone, allowed_weekdays,
          voice_enabled, whatsapp_enabled, max_attempts_per_day, max_attempts_per_contact,
@@ -577,7 +580,8 @@ export async function registerNovaRoutes(
          min_hours_between_attempts = excluded.min_hours_between_attempts,
          respect_holidays = excluded.respect_holidays,
          meta_contactos_hoy = excluded.meta_contactos_hoy,
-         updated_at = now()`,
+         updated_at = now()
+       returning policy_revision::text as "policyRevision"`,
       [
         scope.tenantId,
         parsed.data.window_start_hour,
@@ -596,7 +600,7 @@ export async function registerNovaRoutes(
       ]
     );
 
-    return envelope(parsed.data, request.id);
+    return envelope({ ...parsed.data, policy_revision: saved.rows[0]!.policyRevision }, request.id);
   });
 
   app.get("/v1/tenants/:tenantId/nova/agent-configs", async (request, reply) => {
@@ -1960,6 +1964,9 @@ export async function registerNovaRoutes(
       unresolvedDlq: string;
       runningCampaigns: string;
       eligibleEnrollments: string;
+      currentPolicyApproval: boolean;
+      currentExclusionRegistry: boolean;
+      cutoverReceiptCount: string;
     }>(
       `select
          (select count(*)::text from nova.outbox_events
@@ -1973,7 +1980,28 @@ export async function registerNovaRoutes(
          (select count(*)::text from nova.campaign_enrollments e
            join nova.campaigns c on c.tenant_id = e.tenant_id and c.campaign_id = e.campaign_id
           where e.tenant_id = $1 and c.status = 'running'
-            and e.status in ('enrolled', 'failed') and e.next_attempt_at <= now()) as "eligibleEnrollments"`,
+            and e.status in ('enrolled', 'failed')
+            and (e.next_attempt_at is null or e.next_attempt_at <= now())) as "eligibleEnrollments",
+         exists (
+           select 1 from nova.compliance_settings settings
+           join nova.voice_policy_approvals approval
+             on approval.tenant_id = settings.tenant_id
+            and approval.policy_revision = settings.policy_revision
+            and approval.status = 'approved'
+            and (approval.expires_at is null or approval.expires_at > now())
+          where settings.tenant_id = $1
+         ) as "currentPolicyApproval",
+         exists (
+           select 1 from nova.exclusion_registry_runs
+            where tenant_id = $1 and status = 'ready' and valid_until > now()
+         ) as "currentExclusionRegistry",
+         coalesce((select max(receipt_count)::text
+           from (
+             select count(distinct gate_name) as receipt_count
+               from nova.voice_cutover_receipts
+              where tenant_id = $1 and status = 'current' and expires_at > now()
+              group by scope_sha256
+           ) scoped_receipts), '0') as "cutoverReceiptCount"`,
       [scope.tenantId]
     );
     const row = result.rows[0]!;
@@ -1982,15 +2010,28 @@ export async function registerNovaRoutes(
       outbox_failed: Number(row.failed),
       outbox_dlq_unresolved: Number(row.unresolvedDlq),
       campaigns_running: Number(row.runningCampaigns),
-      enrollments_eligible: Number(row.eligibleEnrollments)
+      enrollments_eligible: Number(row.eligibleEnrollments),
+      voice_policy_approved: row.currentPolicyApproval ? 1 : 0,
+      exclusion_registry_current: row.currentExclusionRegistry ? 1 : 0,
+      cutover_receipts_current: Number(row.cutoverReceiptCount)
     };
-    const degraded = metrics.outbox_pending_aged > 0 || metrics.outbox_failed > 0 || metrics.outbox_dlq_unresolved > 0;
+    const blockers = [
+      ...(metrics.voice_policy_approved === 0 ? ["voice_policy_unapproved"] : []),
+      ...(metrics.exclusion_registry_current === 0 ? ["exclusion_registry_not_current"] : []),
+      ...(metrics.cutover_receipts_current < 6 ? ["cutover_receipts_incomplete"] : [])
+    ];
+    const degraded =
+      metrics.outbox_pending_aged > 0 ||
+      metrics.outbox_failed > 0 ||
+      metrics.outbox_dlq_unresolved > 0 ||
+      blockers.length > 0;
     return envelope(
       {
         status: degraded ? "degraded" : "ok",
         measured_at: new Date().toISOString(),
         thresholds: { outbox_pending_age_seconds: 300, failed_or_dlq: 0 },
-        metrics
+        metrics,
+        blockers
       },
       request.id
     );
@@ -2757,9 +2798,15 @@ async function ensureTenantSnapshot(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<boolean> {
-  const result = await db.query(`select tenant_id from nova.tenant_snapshots where tenant_id = $1`, [tenantId]);
+  const result = await db.query<{ status: string }>(`select status from nova.tenant_snapshots where tenant_id = $1`, [
+    tenantId
+  ]);
   if (result.rowCount === 0) {
     void reply.code(404).send(envelope({ error: "Tenant snapshot not found; bootstrap required" }, request.id));
+    return false;
+  }
+  if (result.rows[0]?.status !== "active") {
+    void reply.code(409).send(envelope({ error: "Tenant is not active" }, request.id));
     return false;
   }
   return true;

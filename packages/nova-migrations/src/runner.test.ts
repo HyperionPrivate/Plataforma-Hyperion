@@ -23,7 +23,8 @@ describe("NOVA-owned migration set", () => {
       "051-liwa-accepted-pending.sql",
       "052-nova-conversation-messages.sql",
       "053-nova-tenant-owned-routing.sql",
-      "054-nova-voice-orchestration-policy.sql"
+      "054-nova-voice-orchestration-policy.sql",
+      "055-nova-voice-policy-approval-and-exclusions.sql"
     ]);
     expect(sql).not.toContain("platform.products");
     expect(contents.every((content) => /^[a-f0-9]{64}$/.test(computeNovaMigrationChecksum(content)))).toBe(true);
@@ -54,7 +55,11 @@ describe("NOVA-owned migration set", () => {
     const result = await runNovaMigrationsWithClient({ query } as never, sqlDirectory);
 
     expect(result.adopted).toEqual(historical);
-    expect(result.applied).toEqual(["053-nova-tenant-owned-routing.sql", "054-nova-voice-orchestration-policy.sql"]);
+    expect(result.applied).toEqual([
+      "053-nova-tenant-owned-routing.sql",
+      "054-nova-voice-orchestration-policy.sql",
+      "055-nova-voice-policy-approval-and-exclusions.sql"
+    ]);
   });
 
   it("rejects an unmanifested migration before opening a transaction", async () => {

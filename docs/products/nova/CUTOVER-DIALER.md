@@ -48,7 +48,10 @@ tunnel ni URLs efímeras en cutover real.
 
 Orden sugerido: smoke mock → tenant de prueba con dialer → comparar pacing/stats → campañas productivas.
 
-Antes de habilitar el tenant también se debe aplicar `054-nova-voice-orchestration-policy.sql`, guardar la política
-aprobada del tenant y verificar que no existe ninguna mutación pública `POST /voice/calls` o `POST /voice/campaigns`.
+Antes de habilitar el tenant también se deben aplicar `054-nova-voice-orchestration-policy.sql` y
+`055-nova-voice-policy-approval-and-exclusions.sql`, sellar la política vigente, cargar un snapshot completo y no
+vencido del registro de exclusión y ejecutar `governance:voice -- verify-cutover`. El runtime falla cerrado si
+falta cualquiera de esos controles. Verifique además que no existe ninguna mutación pública `POST /voice/calls` o
+`POST /voice/campaigns`.
 El único ingreso de despacho vigente es el evento firmado `voice.call.requested.v2` emitido por NOVA Core. Voice
 mantiene el consumidor `voice.call.requested` v1 durante la ventana N−1; no existe una ruta pública equivalente.

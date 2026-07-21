@@ -107,6 +107,12 @@ Este smoke acredita autorización y encolado durable; por sí solo no acredita q
 llamada. La evidencia de cutover debe añadir el `call_id`, referencia del proveedor, outcome terminal, correlación y
 digest exacto del release, sin incluir PII ni secretos.
 
+4. Genere previamente un UUID de correlación, inclúyalo en el recibo firmado de consentimiento y selle
+   `attest-cutover --gate consented_test_call --subject <correlation-uuid>` con el mismo `--scope` de los otros
+   cinco gates. La primera llamada autorizada de ese alcance consume esa correlación; después de su resultado
+   terminal ejecute `verify-cutover --scope ... --public-key ...`. Un recibo sin llamada terminal real no abre el
+   gate, y un resultado `failed` o `needs_reconciliation` tampoco lo satisface.
+
 ## Aceptación (fase B)
 
 - `POST …/nova/contacts/:contactId/calls` → autorización Core y estado durable `queued`; Voice despacha sólo desde `voice.call.requested.v2` (mantiene consumo v1 durante N−1)

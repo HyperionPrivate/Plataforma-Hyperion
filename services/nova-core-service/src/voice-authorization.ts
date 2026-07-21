@@ -3,6 +3,7 @@ import { contactEligibilityDecidedPayloadSchema, voiceCallRequestedV2PayloadSche
 import type { DatabaseExecutor } from "@hyperion/database";
 import { decideEligibility, DEFAULT_COMPLIANCE, type ComplianceSettings, type EligibilityResult } from "./domain.js";
 import { insertNovaAuditOutboxEvent, insertNovaOutboxEvent } from "./outbox.js";
+import { computeVoicePolicySha256, type RevisionedVoicePolicy } from "./voice-policy.js";
 
 interface LockedContact {
   phoneE164: string;
@@ -27,7 +28,17 @@ interface StoredComplianceSettings {
   maxConcurrentCalls: number;
   minHoursBetweenAttempts: number;
   respectHolidays: boolean;
+  policyRevision: number;
 }
+
+const REQUIRED_CUTOVER_GATES = [
+  "retention_policy",
+  "monitoring_on_call",
+  "coordinated_recovery",
+  "release_artifact",
+  "provider_connectivity",
+  "consented_test_call"
+] as const;
 
 export interface VoiceEligibilitySnapshot {
   contactId: string;
@@ -42,6 +53,7 @@ export interface VoiceEligibilitySnapshot {
   attemptsInRollingWindow: number;
   hoursSinceLastAttempt: number | null;
   activeVoiceCalls: number;
+  cutoverTestCorrelationId: string | null;
 }
 
 export interface VoiceAuthorizationOptions {
@@ -96,34 +108,100 @@ export async function evaluateVoiceEligibility(
             rolling_window_days as "rollingWindowDays",
             max_concurrent_calls as "maxConcurrentCalls",
             min_hours_between_attempts as "minHoursBetweenAttempts",
-            respect_holidays as "respectHolidays"
+            respect_holidays as "respectHolidays",
+            policy_revision as "policyRevision"
        from nova.compliance_settings
       where tenant_id = $1`,
     [tenantId]
   );
-  const settings: ComplianceSettings = stored.rows[0] ?? DEFAULT_COMPLIANCE;
+  const storedRow = stored.rows[0];
+  const storedSettings = storedRow ? { ...storedRow, policyRevision: Number(storedRow.policyRevision) } : undefined;
+  const settings: ComplianceSettings = storedSettings ?? DEFAULT_COMPLIANCE;
 
-  if (!isUsableTimeZone(settings.timeZone)) {
-    return {
-      contactId,
-      phoneE164: row.phoneE164,
-      fullName: row.fullName,
-      agencyCode: row.agencyCode,
-      university: row.university,
-      city: row.city,
-      decision: { eligibility: "blocked_policy", reason: "invalid_time_zone" },
-      settings,
-      attemptsToday: 0,
-      attemptsInRollingWindow: 0,
-      hoursSinceLastAttempt: null,
-      activeVoiceCalls: 0
-    };
+  const tenant = await db.query<{ status: string }>(`select status from nova.tenant_snapshots where tenant_id = $1`, [
+    tenantId
+  ]);
+  if (tenant.rows[0]?.status !== "active") {
+    return blockedSnapshot(contactId, row, settings, "tenant_inactive");
+  }
+  if (!storedSettings) {
+    return blockedSnapshot(contactId, row, settings, "voice_policy_missing");
   }
 
-  const [suppression, holiday, attempts, activeCalls] = await Promise.all([
-    db.query(`select 1 from nova.opt_outs where tenant_id = $1 and phone_e164 = $2 limit 1`, [tenantId, row.phoneE164]),
-    db.query(
-      `select 1
+  if (!isUsableTimeZone(settings.timeZone)) {
+    return blockedSnapshot(contactId, row, settings, "invalid_time_zone");
+  }
+
+  const policySha256 = computeVoicePolicySha256(storedSettings as RevisionedVoicePolicy);
+  const approval = await db.query<{ policySha256: string }>(
+    `select policy_sha256 as "policySha256"
+       from nova.voice_policy_approvals
+      where tenant_id = $1 and policy_revision = $2 and status = 'approved'
+        and (expires_at is null or expires_at > $3::timestamptz)`,
+    [tenantId, storedSettings.policyRevision, at.toISOString()]
+  );
+  if (!approval.rows[0]) {
+    return blockedSnapshot(contactId, row, settings, "voice_policy_unapproved");
+  }
+  if (approval.rows[0].policySha256 !== policySha256) {
+    return blockedSnapshot(contactId, row, settings, "voice_policy_hash_mismatch");
+  }
+
+  const exclusionRun = await db.query<{ runId: string; validUntil: Date }>(
+    `select run_id as "runId", valid_until as "validUntil"
+       from nova.exclusion_registry_runs
+      where tenant_id = $1 and status = 'ready'
+      order by completed_at desc
+      limit 1`,
+    [tenantId]
+  );
+  const currentExclusionRun = exclusionRun.rows[0];
+  if (!currentExclusionRun) {
+    return blockedSnapshot(contactId, row, settings, "exclusion_registry_unavailable");
+  }
+  if (new Date(currentExclusionRun.validUntil).getTime() <= at.getTime()) {
+    return blockedSnapshot(contactId, row, settings, "exclusion_registry_stale");
+  }
+  const exclusion = await db.query(
+    `select 1 from nova.exclusion_registry_entries
+      where tenant_id = $1 and run_id = $2 and phone_e164 = $3 limit 1`,
+    [tenantId, currentExclusionRun.runId, row.phoneE164]
+  );
+  if ((exclusion.rowCount ?? 0) > 0) {
+    return blockedSnapshot(contactId, row, settings, "exclusion_registry_match");
+  }
+
+  const cutover = await db.query<{ testCorrelationId: string }>(
+    `select scope_sha256,
+            max(subject_ref) filter (where gate_name = 'consented_test_call') as "testCorrelationId"
+       from nova.voice_cutover_receipts
+      where tenant_id = $1 and status = 'current' and expires_at > $2::timestamptz
+      group by scope_sha256
+     having count(distinct gate_name) = $3
+      limit 1`,
+    [tenantId, at.toISOString(), REQUIRED_CUTOVER_GATES.length]
+  );
+  if ((cutover.rowCount ?? 0) === 0) {
+    return blockedSnapshot(contactId, row, settings, "voice_cutover_not_ready");
+  }
+  const testCorrelationId = cutover.rows[0]?.testCorrelationId;
+  const usedTestCorrelation = testCorrelationId
+    ? await db.query(
+        `select 1 from nova.outbox_events
+          where tenant_id = $1 and correlation_id::text = lower($2) limit 1`,
+        [tenantId, testCorrelationId]
+      )
+    : undefined;
+  const cutoverTestCorrelationId = (usedTestCorrelation?.rowCount ?? 0) === 0 ? (testCorrelationId ?? null) : null;
+
+  // A transaction executor owns one PostgreSQL connection. Keep these queries
+  // sequential: pg rejects concurrent query dispatch on one client in pg@9.
+  const suppression = await db.query(`select 1 from nova.opt_outs where tenant_id = $1 and phone_e164 = $2 limit 1`, [
+    tenantId,
+    row.phoneE164
+  ]);
+  const holiday = await db.query(
+    `select 1
          from (
            select holiday_date from nova.holidays
            union all
@@ -131,10 +209,10 @@ export async function evaluateVoiceEligibility(
          ) h
         where h.holiday_date = timezone($2, $3::timestamptz)::date
         limit 1`,
-      [tenantId, settings.timeZone, at.toISOString()]
-    ),
-    db.query<{ attemptsToday: string; rollingCount: string; hoursSinceLast: string | null }>(
-      `select count(*) filter (
+    [tenantId, settings.timeZone, at.toISOString()]
+  );
+  const attempts = await db.query<{ attemptsToday: string; rollingCount: string; hoursSinceLast: string | null }>(
+    `select count(*) filter (
                 where timezone($3, created_at)::date = timezone($3, $4::timestamptz)::date
               )::text as "attemptsToday",
               count(*) filter (
@@ -143,15 +221,14 @@ export async function evaluateVoiceEligibility(
               extract(epoch from ($4::timestamptz - max(created_at))) / 3600 as "hoursSinceLast"
          from nova.contact_attempts
         where tenant_id = $1 and contact_id = $2 and channel = 'voice'`,
-      [tenantId, contactId, settings.timeZone, at.toISOString(), settings.rollingWindowDays]
-    ),
-    db.query<{ count: string }>(
-      `select count(*)::text as count
+    [tenantId, contactId, settings.timeZone, at.toISOString(), settings.rollingWindowDays]
+  );
+  const activeCalls = await db.query<{ count: string }>(
+    `select count(*)::text as count
          from nova.contact_attempts
         where tenant_id = $1 and channel = 'voice' and status in ('queued', 'dispatched')`,
-      [tenantId]
-    )
-  ]);
+    [tenantId]
+  );
 
   const frequency = attempts.rows[0];
   const attemptsToday = Number(frequency?.attemptsToday ?? 0);
@@ -183,7 +260,31 @@ export async function evaluateVoiceEligibility(
     attemptsToday,
     attemptsInRollingWindow,
     hoursSinceLastAttempt,
-    activeVoiceCalls
+    activeVoiceCalls,
+    cutoverTestCorrelationId
+  };
+}
+
+function blockedSnapshot(
+  contactId: string,
+  row: LockedContact,
+  settings: ComplianceSettings,
+  reason: string
+): VoiceEligibilitySnapshot {
+  return {
+    contactId,
+    phoneE164: row.phoneE164,
+    fullName: row.fullName,
+    agencyCode: row.agencyCode,
+    university: row.university,
+    city: row.city,
+    decision: { eligibility: "blocked_policy", reason },
+    settings,
+    attemptsToday: 0,
+    attemptsInRollingWindow: 0,
+    hoursSinceLastAttempt: null,
+    activeVoiceCalls: 0,
+    cutoverTestCorrelationId: null
   };
 }
 
@@ -200,7 +301,7 @@ export async function authorizeVoiceCall(
     [options.tenantId, options.contactId, snapshot.decision.eligibility]
   );
 
-  const correlationId = randomUUID();
+  const correlationId = snapshot.cutoverTestCorrelationId ?? randomUUID();
   const eligibilityPayload = contactEligibilityDecidedPayloadSchema.parse({
     contact_id: options.contactId,
     ...snapshot.decision
