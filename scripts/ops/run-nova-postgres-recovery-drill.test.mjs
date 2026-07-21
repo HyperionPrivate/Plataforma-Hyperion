@@ -46,7 +46,8 @@ test("derives the provider migration ledger and parses wrapper evidence determin
     "050-nova-lead-product-line.sql",
     "051-liwa-accepted-pending.sql",
     "052-nova-conversation-messages.sql",
-    "053-nova-tenant-owned-routing.sql"
+    "053-nova-tenant-owned-routing.sql",
+    "054-nova-voice-orchestration-policy.sql"
   ]);
   const values = parseKeyValueOutput("BACKUP_PROFILE=nova\r\nBACKUP_SHA256=abc=def\r\n");
   assert.equal(values.get("BACKUP_PROFILE"), "nova");

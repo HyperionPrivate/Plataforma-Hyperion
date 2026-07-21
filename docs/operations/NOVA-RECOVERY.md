@@ -141,7 +141,7 @@ pnpm ops:nova:rollback:verify -- \
 El verificador valida los dos bundles completos, sus `SHA256SUMS`, attestation, provenance y readbacks; rechaza
 manifests draft, componentes faltantes/adicionales, tags y cualquier digest distinto. La política histórica v1 se
 normaliza para que `nova-migrations` sea control plane forward-only, y sólo su política current se compara con las
-migraciones 047–053 del checkout. Mantenga database-bootstrap, migrador y role-bootstrap current. Adjunte las
+migraciones 047–054 del checkout. Mantenga database-bootstrap, migrador y role-bootstrap current. Adjunte las
 salidas `NOVA_ROLLBACK_*` al drill y ejecute smoke; el comando es offline y no cambia imágenes ni tráfico.
 
 ## RPO, RTO y frecuencia
@@ -164,7 +164,7 @@ guardas; no reemplaza el drill contra PostgreSQL y MinIO/S3 reales.
 
 El ensayo opt-in siguiente sí crea un proyecto Docker nuevo, ejecuta PostgreSQL 16 y los migradores NOVA reales,
 publica un dump mediante los wrappers productivos, lo restaura en `hyperion_nova_restore_drill` y compara marcador,
-ledger 047–053, esquema y owner. Falla cerrado si encuentra cualquier contenedor, red, volumen o imagen con el mismo
+ledger 047–054, esquema y owner. Falla cerrado si encuentra cualquier contenedor, red, volumen o imagen con el mismo
 nombre de proyecto y elimina únicamente los recursos que acaba de crear:
 
 ```bash

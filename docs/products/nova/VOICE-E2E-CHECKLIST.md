@@ -40,8 +40,7 @@ También añade voces ES compartidas a la librería (Fernanda / Veronica), ASR `
 Vars dialer en `.env` local (gitignored):
 
 ```text
-VOICE_MODE=dialer
-DIALER_BASE_URL=http://neutral-dialer:8080
+DIALER_BASE_URL=https://dialer.example.internal
 DIALER_ADMIN_USER=admin
 DIALER_ADMIN_PASSWORD=...
 DIALER_DEMO_API_KEY=...
@@ -64,11 +63,11 @@ SIP_TRUNK_ADDRESS=sip.voipcentral.net
 SIP_TRUNK_USERNAME=...
 SIP_TRUNK_PASSWORD=...
 SIP_TRUNK_TRANSPORT=tcp
-SIP_SMOKE_DDI_E164=+573110456598
-SIP_DDI_E164_LIST=+573110456598,+573110456599,...  # 10 DDIs
+SIP_SMOKE_DDI_E164=<DDI_E164_CONTROLADO>
+SIP_DDI_E164_LIST=<DDI_E164_1>,<DDI_E164_2>,...  # 10 DDIs
 ```
 
-1. Smoke con **un** DDI (`+573110456598`):
+1. Smoke con **un** DDI controlado (`<DDI_E164_CONTROLADO>`):
 
 ```bash
 node scripts/autonomy/elevenlabs-import-sip-ddi.mjs --write-env
@@ -84,7 +83,8 @@ node scripts/autonomy/elevenlabs-import-sip-ddi.mjs --all --write-env
 
 UI alternativa: Agents → Phone Numbers → Import from SIP trunk (mismo dominio/usuario/password).
 
-No ejecutar `NOVA_SMOKE_REQUIRE_VOICE=1` hasta tener `DEMO_DDI_PHONE_NUMBER_ID` no vacío.
+No ejecutar una prueba con destino real hasta tener `DEMO_DDI_PHONE_NUMBER_ID` no vacío y un número de destino
+controlado con consentimiento explícito.
 
 ## Fase B — Llamadas (agente + DDI)
 
@@ -98,15 +98,18 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.dialer.yml --
 3. Smoke (destino de prueba controlado; no campaña a los 10 DDI):
 
 ```bash
-NOVA_SMOKE_EMAIL=... NOVA_SMOKE_PASSWORD=... NOVA_SMOKE_TENANT_ID=... NOVA_SMOKE_REQUIRE_VOICE=1 \
+NOVA_SMOKE_EMAIL=... NOVA_SMOKE_PASSWORD=... NOVA_SMOKE_TENANT_ID=... \
   node scripts/autonomy/nova-smoke.e2e.mjs
 ```
 
 El smoke inicia sesión por `/v1/auth/login`, conserva sólo las cookies aisladas de NOVA y envía CSRF en mutaciones. No acepta el bearer compartido heredado. También exige `403` para un tenant sin grant y `404` para una ruta LUMEN.
+Este smoke acredita autorización y encolado durable; por sí solo no acredita que el proveedor haya completado una
+llamada. La evidencia de cutover debe añadir el `call_id`, referencia del proveedor, outcome terminal, correlación y
+digest exacto del release, sin incluir PII ni secretos.
 
 ## Aceptación (fase B)
 
-- `POST …/voice/calls` con `contact_id` → `dispatched` + `dialer_call_ref`
+- `POST …/nova/contacts/:contactId/calls` → autorización Core y estado durable `queued`; Voice despacha sólo desde `voice.call.requested.v2` (mantiene consumo v1 durante N−1)
 - Poller emite `voice.call.completed` correlacionado
 - nova-core tipifica lead + encola `whatsapp_reviews` si aplica
 - Enrollment pasa `enrolled` → `attempted` → `reached`/`failed`

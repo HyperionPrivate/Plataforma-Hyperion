@@ -153,6 +153,10 @@ export const voiceCallRequestedPayloadSchema = z.object({
   product_flow: novaFlowIdSchema.optional()
 });
 
+export const voiceCallRequestedV2PayloadSchema = voiceCallRequestedPayloadSchema.extend({
+  dynamic_vars: z.record(z.string().max(240)).optional()
+});
+
 export const voiceCallDispatchedPayloadSchema = z.object({
   call_id: z.string().uuid(),
   contact_id: z.string().uuid(),
@@ -297,6 +301,10 @@ export const contactEligibilityDecidedEventSchema = envelopeEvent(
   contactEligibilityDecidedPayloadSchema
 );
 export const voiceCallRequestedEventSchema = envelopeEvent("voice.call.requested", voiceCallRequestedPayloadSchema);
+export const voiceCallRequestedV2EventSchema = envelopeEvent(
+  "voice.call.requested.v2",
+  voiceCallRequestedV2PayloadSchema
+);
 export const voiceCallDispatchedEventSchema = envelopeEvent("voice.call.dispatched", voiceCallDispatchedPayloadSchema);
 export const voiceCallCompletedEventSchema = envelopeEvent("voice.call.completed", voiceCallCompletedPayloadSchema);
 export const waSendRequestedEventSchema = envelopeEvent("wa.send.requested", waSendRequestedPayloadSchema);
@@ -344,3 +352,6 @@ export const novaCatalog = {
     "core.outcome.recorded"
   ] as const
 };
+
+/** Additive event catalog for consumers that have adopted the v2 voice request contract. */
+export const novaEventTypesV2 = [...novaCatalog.eventTypes, "voice.call.requested.v2"] as const;

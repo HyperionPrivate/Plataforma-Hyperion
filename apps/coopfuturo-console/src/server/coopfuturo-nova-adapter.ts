@@ -640,7 +640,7 @@ async function buildCampaigns(token: BffSession, tenant: string): Promise<NextRe
 
   const compliance = (complianceRes.data as Record<string, unknown> | null) ?? {};
   const startHour = Number(compliance.window_start_hour ?? 8);
-  const endHour = Number(compliance.window_end_hour ?? 20);
+  const endHour = Number(compliance.window_end_hour ?? 19);
   const pad = (n: number) => String(Number.isFinite(n) ? n : 0).padStart(2, "0");
   const ventana = `${pad(startHour)}–${pad(endHour)} COT`;
 
@@ -654,7 +654,7 @@ async function buildCampaigns(token: BffSession, tenant: string): Promise<NextRe
       name: String(c.name ?? "Campaña"),
       segment: String(c.product_flow ?? ""),
       channels: c.channel ? [String(c.channel)] : [],
-      continuous: false,
+      continuous: String(c.status ?? "") === "running",
       contacted,
       total,
       conversion,
@@ -1103,32 +1103,16 @@ async function dispatchCall(
     );
   }
   const contactId = ensured.contactId;
-  const contactLookup = await findContactByPhone(token, tenant, phone);
-  const contactFailure = upstreamFailure(contactLookup.result);
-  if (contactFailure) return contactFailure;
-  const contact = contactLookup.contact;
-  const nombre = spokenFirstName(input.name || contact?.full_name || "Asociado");
-  const agencia = String(contact?.agency_code ?? "").trim() || "su sede";
-  const universidad = String(contact?.universidad ?? "").trim() || "su universidad";
-  const ciudad = String(contact?.ciudad ?? "").trim() || "su ciudad";
-  const call = await gw(`/v1/tenants/${tenant}/voice/calls`, token, {
+  const call = await gw(`/v1/tenants/${tenant}/nova/contacts/${contactId}/calls`, token, {
     method: "POST",
     body: JSON.stringify({
-      phone_e164: phone,
-      contact_id: contactId,
-      dynamic_vars: {
-        nombre,
-        agencia,
-        universidad,
-        ciudad,
-        product_flow: input.flow === "B" ? "reactivacion" : "renovacion",
-      },
+      product_flow: input.flow === "B" ? "reactivacion" : "renovacion",
     }),
   });
   if (!call.ok) {
     const detail = (call.data as { error?: string } | null)?.error ?? `HTTP ${call.status}`;
     return NextResponse.json(
-      { ok: false, error: `Dialer: ${detail}` },
+      { ok: false, error: `Autorización de llamada: ${detail}` },
       { status: normalizeCustomerUpstreamStatus(call.status) },
     );
   }

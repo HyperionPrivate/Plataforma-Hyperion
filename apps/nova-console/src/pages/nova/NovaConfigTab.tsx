@@ -14,9 +14,14 @@ interface NovaCatalog {
 interface ComplianceSettings {
   window_start_hour?: number;
   window_end_hour?: number;
+  time_zone?: string;
+  allowed_weekdays?: number[];
   voice_enabled?: boolean;
   whatsapp_enabled?: boolean;
   max_attempts_per_contact?: number;
+  max_attempts_per_day?: number;
+  rolling_window_days?: number;
+  max_concurrent_calls?: number;
   min_hours_between_attempts?: number;
   respect_holidays?: boolean;
   meta_contactos_hoy?: number;
@@ -73,10 +78,15 @@ export function NovaConfigTab({ tenantId }: { tenantId: string }) {
       await api.put(novaPath(tenantId, "compliance/settings"), {
         window_start_hour: Number(compliance.window_start_hour ?? 8),
         window_end_hour: Number(compliance.window_end_hour ?? 19),
+        time_zone: compliance.time_zone || "America/Bogota",
+        allowed_weekdays: compliance.allowed_weekdays ?? [1, 2, 3, 4, 5, 6],
         voice_enabled: Boolean(compliance.voice_enabled ?? true),
         whatsapp_enabled: Boolean(compliance.whatsapp_enabled ?? true),
-        max_attempts_per_contact: Number(compliance.max_attempts_per_contact ?? 3),
-        min_hours_between_attempts: Number(compliance.min_hours_between_attempts ?? 24),
+        max_attempts_per_day: Number(compliance.max_attempts_per_day ?? 2),
+        max_attempts_per_contact: Number(compliance.max_attempts_per_contact ?? 4),
+        rolling_window_days: Number(compliance.rolling_window_days ?? 7),
+        max_concurrent_calls: Number(compliance.max_concurrent_calls ?? 10),
+        min_hours_between_attempts: Number(compliance.min_hours_between_attempts ?? 4),
         respect_holidays: Boolean(compliance.respect_holidays ?? true),
         meta_contactos_hoy: Math.max(0, Math.floor(Number(compliance.meta_contactos_hoy ?? 0)) || 0)
       });
@@ -189,12 +199,12 @@ export function NovaConfigTab({ tenantId }: { tenantId: string }) {
             />
           </label>
           <label>
-            Máx. intentos / contacto
+            Máx. intentos / día
             <input
               type="number"
               min={1}
-              value={compliance.max_attempts_per_contact ?? 3}
-              onChange={(e) => setCompliance((c) => ({ ...c, max_attempts_per_contact: Number(e.target.value) }))}
+              value={compliance.max_attempts_per_day ?? 2}
+              onChange={(e) => setCompliance((c) => ({ ...c, max_attempts_per_day: Number(e.target.value) }))}
             />
           </label>
           <label>
@@ -202,8 +212,57 @@ export function NovaConfigTab({ tenantId }: { tenantId: string }) {
             <input
               type="number"
               min={0}
-              value={compliance.min_hours_between_attempts ?? 24}
+              value={compliance.min_hours_between_attempts ?? 4}
               onChange={(e) => setCompliance((c) => ({ ...c, min_hours_between_attempts: Number(e.target.value) }))}
+            />
+          </label>
+          <label>
+            Máx. intentos / ventana
+            <input
+              type="number"
+              min={1}
+              value={compliance.max_attempts_per_contact ?? 4}
+              onChange={(e) => setCompliance((c) => ({ ...c, max_attempts_per_contact: Number(e.target.value) }))}
+            />
+          </label>
+          <label>
+            Días de ventana móvil
+            <input
+              type="number"
+              min={1}
+              value={compliance.rolling_window_days ?? 7}
+              onChange={(e) => setCompliance((c) => ({ ...c, rolling_window_days: Number(e.target.value) }))}
+            />
+          </label>
+          <label>
+            Máx. llamadas simultáneas
+            <input
+              type="number"
+              min={1}
+              value={compliance.max_concurrent_calls ?? 10}
+              onChange={(e) => setCompliance((c) => ({ ...c, max_concurrent_calls: Number(e.target.value) }))}
+            />
+          </label>
+          <label>
+            Zona horaria IANA
+            <input
+              value={compliance.time_zone ?? "America/Bogota"}
+              onChange={(e) => setCompliance((c) => ({ ...c, time_zone: e.target.value }))}
+            />
+          </label>
+          <label>
+            Días ISO permitidos (1=lunes)
+            <input
+              value={(compliance.allowed_weekdays ?? [1, 2, 3, 4, 5, 6]).join(",")}
+              onChange={(e) =>
+                setCompliance((c) => ({
+                  ...c,
+                  allowed_weekdays: e.target.value
+                    .split(",")
+                    .map(Number)
+                    .filter((day) => Number.isInteger(day) && day >= 1 && day <= 7)
+                }))
+              }
             />
           </label>
         </div>

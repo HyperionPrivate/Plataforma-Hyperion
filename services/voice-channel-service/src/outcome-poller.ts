@@ -29,6 +29,7 @@ interface LocalCallRow {
   campaignId: string | null;
   enrollmentId: string | null;
   status: string;
+  correlationId?: string | null;
   providerConversationId?: string | null;
   createdAt?: Date | string;
 }
@@ -56,7 +57,7 @@ export function startOutcomePoller(options: OutcomePollerOptions): OutcomePoller
   const tick = async (): Promise<number> => {
     let emitted = 0;
     try {
-      emitted += await pollDialerOutcomes(options, fetchImpl);
+      emitted += await pollDialerOutcomes(options, fetchImpl, pollTimeoutMs);
       if (options.elevenLabsApiKey) {
         emitted += await pollElevenLabsStuckCalls(options, fetchImpl, pollTimeoutMs);
       }
@@ -87,7 +88,11 @@ export function startOutcomePoller(options: OutcomePollerOptions): OutcomePoller
   };
 }
 
-async function pollDialerOutcomes(options: OutcomePollerOptions, fetchImpl: typeof fetch): Promise<number> {
+async function pollDialerOutcomes(
+  options: OutcomePollerOptions,
+  fetchImpl: typeof fetch,
+  pollTimeoutMs: number
+): Promise<number> {
   let emitted = 0;
   const [calls, reconciliation] = await Promise.all([
     options.dialer.listCalls({ limit: 100 }),
@@ -106,7 +111,8 @@ async function pollDialerOutcomes(options: OutcomePollerOptions, fetchImpl: type
 
     const local = await options.db.query<LocalCallRow>(
       `select tenant_id as "tenantId", call_id as "callId", contact_id as "contactId",
-              campaign_ref as "campaignId", enrollment_id as "enrollmentId", status
+              campaign_ref as "campaignId", enrollment_id as "enrollmentId", status,
+              correlation_id as "correlationId"
          from voice.calls
         where dialer_call_ref = $1
         limit 1`,
@@ -148,11 +154,42 @@ async function pollDialerOutcomes(options: OutcomePollerOptions, fetchImpl: type
       intent,
       amdLabel: row.amd_label ?? undefined,
       providerConversationId: row.conversation_id ?? undefined,
-      transcriptExcerpt
+      transcriptExcerpt,
+      correlationId: current.correlationId ?? undefined
     });
     if (ok) emitted += 1;
   }
+  await markExpiredUnmatchedCallsForReconciliation(
+    options.db,
+    new Set(calls.map((row) => String(row.id))),
+    pollTimeoutMs
+  );
   return emitted;
+}
+
+async function markExpiredUnmatchedCallsForReconciliation(
+  db: DatabaseClient,
+  observedDialerRefs: ReadonlySet<string>,
+  pollTimeoutMs: number
+): Promise<void> {
+  const expired = await db.query<{ tenantId: string; callId: string; dialerCallRef: string | null }>(
+    `select tenant_id as "tenantId", call_id as "callId", dialer_call_ref as "dialerCallRef"
+       from voice.calls
+      where status = 'dispatched'
+        and created_at <= now() - make_interval(secs => $1)
+      order by created_at
+      limit 100`,
+    [Math.max(60, Math.trunc(pollTimeoutMs / 1000))]
+  );
+  for (const call of expired.rows) {
+    if (call.dialerCallRef && observedDialerRefs.has(call.dialerCallRef)) continue;
+    await db.query(
+      `update voice.calls
+          set status = 'needs_reconciliation', result_code = 'provider_outcome_not_observed', updated_at = now()
+        where tenant_id = $1 and call_id = $2 and status = 'dispatched'`,
+      [call.tenantId, call.callId]
+    );
+  }
 }
 
 /**
@@ -171,7 +208,8 @@ export async function pollElevenLabsStuckCalls(
     `select tenant_id as "tenantId", call_id as "callId", contact_id as "contactId",
             campaign_ref as "campaignId", enrollment_id as "enrollmentId", status,
             provider_conversation_id as "providerConversationId",
-            created_at as "createdAt"
+            created_at as "createdAt",
+            correlation_id as "correlationId"
        from voice.calls
       where status = 'dispatched'
         and provider_conversation_id is not null
@@ -197,7 +235,8 @@ export async function pollElevenLabsStuckCalls(
         enrollmentId: current.enrollmentId,
         status: "failed",
         resultCode: "poll_timeout",
-        providerConversationId: current.providerConversationId
+        providerConversationId: current.providerConversationId,
+        correlationId: current.correlationId ?? undefined
       });
       if (timedOut) emitted += 1;
       continue;
@@ -222,7 +261,8 @@ export async function pollElevenLabsStuckCalls(
       resultCode: elStatus || mappedStatus,
       intent: conversation.intent,
       providerConversationId: current.providerConversationId,
-      transcriptExcerpt: conversation.transcriptExcerpt
+      transcriptExcerpt: conversation.transcriptExcerpt,
+      correlationId: current.correlationId ?? undefined
     });
     if (ok) emitted += 1;
   }
@@ -249,9 +289,10 @@ async function emitCallCompleted(
     amdLabel?: string;
     providerConversationId?: string;
     transcriptExcerpt?: string;
+    correlationId?: string;
   }
 ): Promise<boolean> {
-  const correlationId = randomUUID();
+  const correlationId = input.correlationId ?? randomUUID();
   let emitted = false;
   await options.db.transaction(async (tx: DatabaseExecutor) => {
     const updated = await tx.query(

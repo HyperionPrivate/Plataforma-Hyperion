@@ -6,7 +6,8 @@ import {
   novaCapabilityForMethod,
   novaCatalog,
   novaGrantAllows,
-  voiceCallRequestedPayloadSchema
+  voiceCallRequestedPayloadSchema,
+  voiceCallRequestedV2PayloadSchema
 } from "./index.js";
 
 describe("NOVA-owned authorization contracts", () => {
@@ -50,6 +51,14 @@ describe("NOVA-owned authorization contracts", () => {
         contact_id: "22222222-2222-4222-8222-222222222222",
         phone_e164: "+573001112233",
         product_flow: "tenant_flow_42"
+      }).success
+    ).toBe(true);
+    expect(
+      voiceCallRequestedV2PayloadSchema.safeParse({
+        call_id: "11111111-1111-4111-8111-111111111111",
+        contact_id: "22222222-2222-4222-8222-222222222222",
+        phone_e164: "+573001112233",
+        dynamic_vars: { nombre: "Asociado" }
       }).success
     ).toBe(true);
   });

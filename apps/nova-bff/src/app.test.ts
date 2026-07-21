@@ -281,7 +281,7 @@ describe("NOVA BFF boundary", () => {
   });
 
   it("registers only the reviewed NOVA method, route, capability and role policies", async () => {
-    expect(NOVA_BFF_TENANT_ROUTE_POLICIES).toHaveLength(55);
+    expect(NOVA_BFF_TENANT_ROUTE_POLICIES).toHaveLength(52);
     const routeKeys = NOVA_BFF_TENANT_ROUTE_POLICIES.map((policy) => `${policy.method} ${policy.path}`);
     expect(new Set(routeKeys).size).toBe(routeKeys.length);
     expect(NOVA_BFF_TENANT_ROUTE_POLICIES.every((policy) => !policy.path.includes("*"))).toBe(true);
@@ -295,6 +295,19 @@ describe("NOVA BFF boundary", () => {
         (policy) => policy.method === "POST" && policy.path.endsWith("/nova/reviews/:reviewId/decide")
       )
     ).toMatchObject({ capability: "nova:write", roles: ["admin", "supervisor"] });
+    expect(
+      NOVA_BFF_TENANT_ROUTE_POLICIES.find(
+        (policy) => policy.method === "POST" && policy.path.endsWith("/nova/contacts/:contactId/calls")
+      )
+    ).toMatchObject({ capability: "nova:write", roles: ["admin", "supervisor"] });
+    expect(
+      NOVA_BFF_TENANT_ROUTE_POLICIES.some(
+        (policy) =>
+          policy.method === "POST" &&
+          policy.component === "voice" &&
+          (policy.path.endsWith("/voice/calls") || policy.path.includes("/voice/campaigns"))
+      )
+    ).toBe(false);
     expect(
       NOVA_BFF_TENANT_ROUTE_POLICIES.find(
         (policy) => policy.method === "POST" && policy.path.endsWith("/nova/lab/liwa-event")

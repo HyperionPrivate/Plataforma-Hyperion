@@ -706,8 +706,9 @@ services:
       LIWA_CHANNEL_SERVICE_URL: http://liwa-channel-service:8093
       DOCUMENTS_SERVICE_URL: http://documents-service:8094
       LIWA_ACCOUNT_ID: ${LIWA_ACCOUNT_ID:-}
-      CORE_MODE: ${CORE_MODE:-contract}
+      CORE_MODE: ${CORE_MODE:-disabled}
       CORE_BASE_URL: ${CORE_BASE_URL:-}
+      CORE_API_TOKEN: ${CORE_API_TOKEN:-}
       LIWA_DEFAULT_FLOW_ID: ${LIWA_DEFAULT_FLOW_ID:-1782399915832}
       LIWA_FLOW_ID_B: ${LIWA_FLOW_ID_B:-1782486171458}
       # Tipify positivo → POST LIWA /contacts/{id}/send/{flow_id} sin revisión humana

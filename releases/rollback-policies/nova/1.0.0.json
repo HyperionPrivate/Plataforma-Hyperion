@@ -45,6 +45,10 @@
       {
         "path": "sql/053-nova-tenant-owned-routing.sql",
         "sha256": "2027d498c91982b36cb906ac6a710d1bec06ec0e50f6a4286020bde650d38730"
+      },
+      {
+        "path": "sql/054-nova-voice-orchestration-policy.sql",
+        "sha256": "1e1b6643cdb4b50a7a91f6455cb4eda9273b9fd5ef30e1ca1968be4a54b2dc8c"
       }
     ]
   }

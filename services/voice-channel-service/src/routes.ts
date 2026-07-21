@@ -4,6 +4,7 @@ import {
   novaCatalog,
   tenantIdSchema,
   voiceCallRequestedPayloadSchema,
+  voiceCallRequestedV2PayloadSchema,
   voiceCallDispatchedPayloadSchema,
   voiceCallCompletedPayloadSchema
 } from "@hyperion/nova-contracts";
@@ -34,16 +35,13 @@ const voiceCatalog = {
   product: novaCatalog.product.code,
   contexts: ["voice-channel"] as const,
   transports: ["dialer", "elevenlabs_sip_direct"] as const,
-  eventTypes: ["voice.call.requested", "voice.call.dispatched", "voice.call.completed"] as const
+  eventTypes: [
+    "voice.call.requested",
+    "voice.call.requested.v2",
+    "voice.call.dispatched",
+    "voice.call.completed"
+  ] as const
 };
-
-const callCreateSchema = z.object({
-  phone_e164: z.string().regex(/^\+[1-9]\d{7,14}$/),
-  contact_id: z.string().uuid(),
-  campaign_id: z.string().uuid().optional(),
-  enrollment_id: z.string().uuid().optional(),
-  dynamic_vars: z.record(z.string()).optional()
-});
 
 /** Time-of-day greeting in Colombia (America/Bogota) so the agent never says "buenos días" at night. */
 function colombianGreeting(now: Date = new Date()): string {
@@ -139,12 +137,6 @@ function withGreeting(dynamicVars?: Record<string, string>): Record<string, stri
   return vars;
 }
 
-const campaignCreateSchema = z.object({
-  name: z.string().min(2).max(160),
-  agent_id: z.string().min(1).max(160).optional(),
-  target_calls: z.number().int().nonnegative().optional()
-});
-
 const reconcileSchema = z.object({
   result_code: z.string().max(80),
   intent: z.string().max(80).optional(),
@@ -159,6 +151,7 @@ const internalEventSchema = z.object({
   version: z.number().int().positive().default(1),
   occurredAt: z.string().datetime(),
   tenantId: z.string().uuid().nullable(),
+  correlationId: z.string().uuid().optional(),
   payload: z.record(z.unknown())
 });
 
@@ -173,117 +166,7 @@ export async function registerVoiceRoutes(
 ): Promise<void> {
   const serviceUrls = readServiceUrls();
   const novaDestination = `${serviceUrls.novaCore.replace(/\/$/, "")}/internal/events`;
-  const defaultAgentId = process.env.ELEVENLABS_AGENT_ID?.trim() || process.env.DIALER_DEFAULT_AGENT_ID?.trim() || "";
-
   app.get("/v1/voice/catalog", async (request) => envelope(voiceCatalog, request.id));
-
-  app.post("/v1/tenants/:tenantId/voice/calls", async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
-    if (!scope) return;
-
-    const parsed = callCreateSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send(envelope({ error: "Invalid call payload", issues: parsed.error.issues }, request.id));
-    }
-
-    const callId = randomUUID();
-    const correlationId = randomUUID();
-
-    try {
-      const placed = await dependencies.dialer.placeCall({
-        phoneE164: parsed.data.phone_e164,
-        dynamicVars: withGreeting(parsed.data.dynamic_vars),
-        idempotencyKey: `manual:${scope.tenantId}:${callId}`
-      });
-
-      await scope.db.transaction(async (tx) => {
-        await tx.query(
-          `insert into voice.calls (
-             tenant_id, call_id, contact_id, enrollment_id, contact_phone_e164, campaign_ref,
-             transport, status, dialer_call_ref, provider_conversation_id, correlation_id
-           ) values ($1, $2, $3, $4, $5, $6, 'dialer', 'dispatched', $7, $8, $9)`,
-          [
-            scope.tenantId,
-            callId,
-            parsed.data.contact_id,
-            parsed.data.enrollment_id ?? null,
-            parsed.data.phone_e164,
-            parsed.data.campaign_id ?? null,
-            placed.callRef,
-            placed.conversationId ?? null,
-            correlationId
-          ]
-        );
-
-        await insertVoiceOutboxEvent(tx, {
-          eventId: randomUUID(),
-          eventType: "voice.call.dispatched",
-          tenantId: scope.tenantId,
-          correlationId,
-          businessIdempotencyKey: `voice-dispatched:${callId}`,
-          payload: voiceCallDispatchedPayloadSchema.parse({
-            call_id: callId,
-            contact_id: parsed.data.contact_id,
-            campaign_id: parsed.data.campaign_id,
-            transport: "dialer",
-            dialer_call_ref: placed.callRef,
-            provider_conversation_id: placed.conversationId
-          }),
-          destination: novaDestination
-        });
-      });
-
-      return reply.code(201).send(
-        envelope(
-          {
-            call_id: callId,
-            contact_id: parsed.data.contact_id,
-            status: "dispatched",
-            dialer_call_ref: placed.callRef
-          },
-          request.id
-        )
-      );
-    } catch (error) {
-      return reply
-        .code(502)
-        .send(envelope({ error: error instanceof Error ? error.message : "Dialer placeCall failed" }, request.id));
-    }
-  });
-
-  app.post("/v1/tenants/:tenantId/voice/campaigns", async (request, reply) => {
-    const scope = requireTenantDb(context, request, reply);
-    if (!scope) return;
-    const parsed = campaignCreateSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send(envelope({ error: "Invalid campaign payload" }, request.id));
-
-    const agentId = parsed.data.agent_id || defaultAgentId;
-    if (!agentId) {
-      return reply.code(400).send(envelope({ error: "agent_id or ELEVENLABS_AGENT_ID is required" }, request.id));
-    }
-
-    const campaignId = randomUUID();
-    try {
-      const dialer = await dependencies.dialer.createCampaign({
-        name: parsed.data.name,
-        agentId,
-        targetCalls: parsed.data.target_calls,
-        idempotencyKey: `campaign:${scope.tenantId}:${campaignId}`
-      });
-      await scope.db.query(
-        `insert into voice.campaigns (tenant_id, campaign_id, name, dialer_campaign_ref, status)
-         values ($1, $2, $3, $4, 'draft')`,
-        [scope.tenantId, campaignId, parsed.data.name, dialer.campaignRef]
-      );
-      return reply
-        .code(201)
-        .send(envelope({ campaign_id: campaignId, dialer_campaign_ref: dialer.campaignRef }, request.id));
-    } catch (error) {
-      return reply
-        .code(502)
-        .send(envelope({ error: error instanceof Error ? error.message : "Dialer createCampaign failed" }, request.id));
-    }
-  });
 
   app.get("/v1/tenants/:tenantId/voice/campaigns", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
@@ -319,37 +202,6 @@ export async function registerVoiceRoutes(
     }
   });
 
-  for (const action of ["start", "pause", "stop", "cancel"] as const) {
-    app.post(`/v1/tenants/:tenantId/voice/campaigns/:campaignId/${action}`, async (request, reply) => {
-      const scope = requireTenantDb(context, request, reply);
-      if (!scope) return;
-      const campaignId = readUuid(request.params, "campaignId");
-      if (!campaignId) return reply.code(400).send(envelope({ error: "campaignId must be a UUID" }, request.id));
-
-      const row = await scope.db.query<{ dialerCampaignRef: string | null }>(
-        `select dialer_campaign_ref as "dialerCampaignRef" from voice.campaigns where tenant_id = $1 and campaign_id = $2`,
-        [scope.tenantId, campaignId]
-      );
-      if (row.rowCount === 0) return reply.code(404).send(envelope({ error: "Campaign not found" }, request.id));
-
-      const ref = row.rows[0]!.dialerCampaignRef;
-      if (ref) {
-        if (action === "start") await dependencies.dialer.start(ref);
-        if (action === "pause") await dependencies.dialer.pause(ref);
-        if (action === "stop") await dependencies.dialer.stop(ref);
-        if (action === "cancel") await dependencies.dialer.cancel(ref);
-      }
-
-      const status =
-        action === "start" ? "running" : action === "pause" ? "paused" : action === "stop" ? "stopped" : "cancelled";
-      await scope.db.query(
-        `update voice.campaigns set status = $3, updated_at = now() where tenant_id = $1 and campaign_id = $2`,
-        [scope.tenantId, campaignId, status]
-      );
-      return envelope({ campaign_id: campaignId, status }, request.id);
-    });
-  }
-
   app.get("/v1/tenants/:tenantId/voice/calls/reconciliation", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
@@ -362,6 +214,69 @@ export async function registerVoiceRoutes(
       [scope.tenantId]
     );
     return envelope({ needs_reconciliation: result.rows }, request.id);
+  });
+
+  app.get("/v1/tenants/:tenantId/voice/operations/readiness", async (request, reply) => {
+    const scope = requireTenantDb(context, request, reply);
+    if (!scope) return;
+    if (readHeader(request, "x-operator-role") !== "admin") {
+      return reply.code(403).send(envelope({ error: "NOVA admin role required" }, request.id));
+    }
+
+    const result = await scope.db.query<{
+      pendingAged: string;
+      failed: string;
+      unresolvedDlq: string;
+      reconciliation: string;
+      reconciliationStale: string;
+      dispatchedStale: string;
+    }>(
+      `select
+         (select count(*)::text from voice.outbox_events
+           where tenant_id = $1 and status = 'pending' and available_at < now() - interval '5 minutes') as "pendingAged",
+         (select count(*)::text from voice.outbox_events
+           where tenant_id = $1 and status = 'failed') as failed,
+         (select count(*)::text from voice.outbox_dlq
+           where tenant_id = $1 and redriven_at is null) as "unresolvedDlq",
+         (select count(*)::text from voice.calls
+           where tenant_id = $1 and status = 'needs_reconciliation') as reconciliation,
+         (select count(*)::text from voice.calls
+           where tenant_id = $1 and status = 'needs_reconciliation'
+             and updated_at < now() - interval '15 minutes') as "reconciliationStale",
+         (select count(*)::text from voice.calls
+           where tenant_id = $1 and status in ('requested', 'dispatched', 'ringing', 'answered')
+             and updated_at < now() - interval '30 minutes') as "dispatchedStale"`,
+      [scope.tenantId]
+    );
+    const row = result.rows[0]!;
+    const metrics = {
+      outbox_pending_aged: Number(row.pendingAged),
+      outbox_failed: Number(row.failed),
+      outbox_dlq_unresolved: Number(row.unresolvedDlq),
+      calls_needs_reconciliation: Number(row.reconciliation),
+      calls_reconciliation_stale: Number(row.reconciliationStale),
+      calls_nonterminal_stale: Number(row.dispatchedStale)
+    };
+    const degraded =
+      metrics.outbox_pending_aged > 0 ||
+      metrics.outbox_failed > 0 ||
+      metrics.outbox_dlq_unresolved > 0 ||
+      metrics.calls_reconciliation_stale > 0 ||
+      metrics.calls_nonterminal_stale > 0;
+    return envelope(
+      {
+        status: degraded ? "degraded" : "ok",
+        measured_at: new Date().toISOString(),
+        thresholds: {
+          outbox_pending_age_seconds: 300,
+          reconciliation_age_seconds: 900,
+          nonterminal_call_age_seconds: 1800,
+          failed_or_dlq: 0
+        },
+        metrics
+      },
+      request.id
+    );
   });
 
   app.post("/v1/tenants/:tenantId/voice/calls/:callId/reconcile", async (request, reply) => {
@@ -378,9 +293,10 @@ export async function registerVoiceRoutes(
       campaignId: string | null;
       enrollmentId: string | null;
       dialerCallRef: string | null;
+      correlationId: string | null;
     }>(
       `select contact_id as "contactId", campaign_ref as "campaignId", enrollment_id as "enrollmentId",
-              dialer_call_ref as "dialerCallRef"
+              dialer_call_ref as "dialerCallRef", correlation_id as "correlationId"
          from voice.calls
         where tenant_id = $1 and call_id = $2 and status = 'needs_reconciliation'`,
       [scope.tenantId, callId]
@@ -397,14 +313,25 @@ export async function registerVoiceRoutes(
       });
     }
 
-    const correlationId = randomUUID();
+    const correlationId = row.correlationId ?? randomUUID();
+    const terminalStatus =
+      parsed.data.resolution === "confirmed_not_created" || parsed.data.resolution === "abandoned"
+        ? "failed"
+        : "completed";
     await scope.db.transaction(async (tx) => {
       await tx.query(
         `update voice.calls
-            set status = 'completed', result_code = $3, intent = $4, disposition = $5,
+            set status = $3, result_code = $4, intent = $5, disposition = $6,
                 completed_at = now(), updated_at = now()
           where tenant_id = $1 and call_id = $2`,
-        [scope.tenantId, callId, parsed.data.result_code, parsed.data.intent ?? null, parsed.data.disposition ?? null]
+        [
+          scope.tenantId,
+          callId,
+          terminalStatus,
+          parsed.data.result_code,
+          parsed.data.intent ?? null,
+          parsed.data.disposition ?? null
+        ]
       );
 
       await insertVoiceOutboxEvent(tx, {
@@ -418,7 +345,7 @@ export async function registerVoiceRoutes(
           contact_id: row.contactId!,
           campaign_id: row.campaignId ?? undefined,
           enrollment_id: row.enrollmentId ?? undefined,
-          status: "completed",
+          status: terminalStatus,
           result_code: parsed.data.result_code,
           intent: parsed.data.intent,
           disposition: parsed.data.disposition,
@@ -428,7 +355,7 @@ export async function registerVoiceRoutes(
       });
     });
 
-    return envelope({ call_id: callId, contact_id: row.contactId, status: "completed" }, request.id);
+    return envelope({ call_id: callId, contact_id: row.contactId, status: terminalStatus }, request.id);
   });
 
   app.post("/v1/voice/webhooks/dialer", async (request, reply) => {
@@ -518,9 +445,11 @@ export async function registerVoiceRoutes(
       campaignId: string | null;
       enrollmentId: string | null;
       status: string;
+      correlationId: string | null;
     }>(
       `select tenant_id as "tenantId", call_id as "callId", contact_id as "contactId",
-              campaign_ref as "campaignId", enrollment_id as "enrollmentId", status
+              campaign_ref as "campaignId", enrollment_id as "enrollmentId", status,
+              correlation_id as "correlationId"
          from voice.calls
         where provider_conversation_id = $1
         order by updated_at desc
@@ -554,7 +483,7 @@ export async function registerVoiceRoutes(
       );
     }
 
-    const correlationId = randomUUID();
+    const correlationId = row.correlationId ?? randomUUID();
     await context.db.transaction(async (tx) => {
       await tx.query(
         `update voice.calls
@@ -602,35 +531,45 @@ export async function registerVoiceRoutes(
 
     const parsed = internalEventSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(envelope({ error: "Invalid event envelope" }, request.id));
-    if (parsed.data.type !== "voice.call.requested") {
+    if (parsed.data.type !== "voice.call.requested" && parsed.data.type !== "voice.call.requested.v2") {
       return reply.code(400).send(envelope({ error: "Unsupported event type" }, request.id));
     }
     const tenantId = parsed.data.tenantId;
     if (!tenantId) return reply.code(400).send(envelope({ error: "tenantId is required" }, request.id));
 
-    const callPayload = voiceCallRequestedPayloadSchema.parse(parsed.data.payload);
-    const correlationId = randomUUID();
+    const callPayload: z.infer<typeof voiceCallRequestedV2PayloadSchema> =
+      parsed.data.type === "voice.call.requested.v2"
+        ? voiceCallRequestedV2PayloadSchema.parse(parsed.data.payload)
+        : { ...voiceCallRequestedPayloadSchema.parse(parsed.data.payload), dynamic_vars: undefined };
+    const correlationId = parsed.data.correlationId ?? randomUUID();
 
+    let claimed: boolean;
     try {
-      const placed = await dependencies.dialer.placeCall({
-        phoneE164: callPayload.phone_e164,
-        dynamicVars: withGreeting(),
-        idempotencyKey: `requested:${tenantId}:${callPayload.call_id}`
-      });
+      claimed = await context.db.transaction(async (tx) => {
+        const inbox = await tx.query(
+          `insert into voice.inbox_events (event_id, event_type, tenant_id, payload)
+         values ($1, $2, $3, $4::jsonb)
+         on conflict do nothing
+         returning event_id`,
+          [parsed.data.id, parsed.data.type, tenantId, JSON.stringify(callPayload)]
+        );
+        if ((inbox.rowCount ?? 0) === 0) {
+          const existing = await tx.query<{ identityMatches: boolean }>(
+            `select (event_type = $2 and tenant_id = $3 and payload = $4::jsonb) as "identityMatches"
+             from voice.inbox_events where event_id = $1 for update`,
+            [parsed.data.id, parsed.data.type, tenantId, JSON.stringify(callPayload)]
+          );
+          if (!existing.rows[0]?.identityMatches) throw new Error("voice_inbox_event_conflict");
+          return false;
+        }
 
-      await context.db.transaction(async (tx) => {
-        await tx.query(
+        const insertedCall = await tx.query(
           `insert into voice.calls (
-             tenant_id, call_id, contact_id, enrollment_id, contact_phone_e164, campaign_ref,
-             transport, status, dialer_call_ref, provider_conversation_id, correlation_id
-           ) values ($1, $2, $3, $4, $5, $6, 'dialer', 'dispatched', $7, $8, $9)
-           on conflict (tenant_id, call_id) do update
-           set contact_id = excluded.contact_id,
-               enrollment_id = excluded.enrollment_id,
-               dialer_call_ref = excluded.dialer_call_ref,
-               provider_conversation_id = excluded.provider_conversation_id,
-               status = 'dispatched',
-               updated_at = now()`,
+           tenant_id, call_id, contact_id, enrollment_id, contact_phone_e164, campaign_ref,
+           transport, status, correlation_id
+         ) values ($1, $2, $3, $4, $5, $6, 'dialer', 'requested', $7)
+         on conflict (tenant_id, call_id) do nothing
+         returning call_id`,
           [
             tenantId,
             callPayload.call_id,
@@ -638,11 +577,47 @@ export async function registerVoiceRoutes(
             callPayload.enrollment_id ?? null,
             callPayload.phone_e164,
             callPayload.campaign_id ?? null,
-            placed.callRef,
-            placed.conversationId ?? null,
             correlationId
           ]
         );
+        if ((insertedCall.rowCount ?? 0) === 0) throw new Error("voice_call_identity_conflict");
+        return true;
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "voice_inbox_event_conflict" || message === "voice_call_identity_conflict") {
+        return reply.code(409).send(envelope({ error: message }, request.id));
+      }
+      throw error;
+    }
+
+    if (!claimed) {
+      return reply
+        .code(202)
+        .send(
+          envelope(
+            { status: "duplicate", call_id: callPayload.call_id, contact_id: callPayload.contact_id },
+            request.id
+          )
+        );
+    }
+
+    try {
+      const placed = await dependencies.dialer.placeCall({
+        phoneE164: callPayload.phone_e164,
+        dynamicVars: withGreeting(callPayload.dynamic_vars),
+        idempotencyKey: `requested:${tenantId}:${callPayload.call_id}`
+      });
+
+      await context.db.transaction(async (tx) => {
+        const updated = await tx.query(
+          `update voice.calls
+              set status = 'dispatched', dialer_call_ref = $3,
+                  provider_conversation_id = $4, updated_at = now()
+            where tenant_id = $1 and call_id = $2 and status = 'requested'`,
+          [tenantId, callPayload.call_id, placed.callRef, placed.conversationId ?? null]
+        );
+        if ((updated.rowCount ?? 0) === 0) throw new Error("voice_call_not_requestable");
 
         await insertVoiceOutboxEvent(tx, {
           eventId: randomUUID(),
@@ -660,6 +635,7 @@ export async function registerVoiceRoutes(
           }),
           destination: novaDestination
         });
+        await tx.query(`update voice.inbox_events set processed_at = now() where event_id = $1`, [parsed.data.id]);
       });
 
       return envelope(
@@ -667,9 +643,26 @@ export async function registerVoiceRoutes(
         request.id
       );
     } catch (error) {
-      return reply
-        .code(502)
-        .send(envelope({ error: error instanceof Error ? error.message : "Dialer placeCall failed" }, request.id));
+      await context.db.transaction(async (tx) => {
+        await tx.query(
+          `update voice.calls
+              set status = 'needs_reconciliation', result_code = 'dispatch_ambiguous', updated_at = now()
+            where tenant_id = $1 and call_id = $2 and status = 'requested'`,
+          [tenantId, callPayload.call_id]
+        );
+        await tx.query(`update voice.inbox_events set processed_at = now() where event_id = $1`, [parsed.data.id]);
+      });
+      return reply.code(202).send(
+        envelope(
+          {
+            status: "needs_reconciliation",
+            call_id: callPayload.call_id,
+            contact_id: callPayload.contact_id,
+            error: error instanceof Error ? error.message : "Dialer placeCall outcome is ambiguous"
+          },
+          request.id
+        )
+      );
     }
   });
 

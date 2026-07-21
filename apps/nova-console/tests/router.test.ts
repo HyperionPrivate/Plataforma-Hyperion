@@ -13,6 +13,6 @@ describe("NOVA router boundary", () => {
     expect(novaPath("tenant/id", "campaigns/campaign id/start")).toBe(
       "/v1/tenants/tenant%2Fid/nova/campaigns/campaign%20id/start"
     );
-    expect(voicePath("tenant/id", "calls")).toBe("/v1/tenants/tenant%2Fid/voice/calls");
+    expect(voicePath("tenant/id", "calls/reconciliation")).toBe("/v1/tenants/tenant%2Fid/voice/calls/reconciliation");
   });
 });

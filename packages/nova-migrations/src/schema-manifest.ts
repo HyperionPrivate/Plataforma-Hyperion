@@ -26,6 +26,10 @@ export const NOVA_PROVIDER_LEDGER = Object.freeze([
   {
     name: "053-nova-tenant-owned-routing.sql",
     checksum: "2027d498c91982b36cb906ac6a710d1bec06ec0e50f6a4286020bde650d38730"
+  },
+  {
+    name: "054-nova-voice-orchestration-policy.sql",
+    checksum: "1e1b6643cdb4b50a7a91f6455cb4eda9273b9fd5ef30e1ca1968be4a54b2dc8c"
   }
 ] as const);
 
@@ -69,6 +73,7 @@ export const NOVA_PROVIDER_TABLES = Object.freeze([
   "nova.schema_version",
   "nova.service_migrations",
   "nova.tenant_snapshots",
+  "nova.tenant_holidays",
   "nova.whatsapp_reviews",
   "voice.calls",
   "voice.campaigns",

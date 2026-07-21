@@ -323,6 +323,7 @@
     "nova.compliance_settings": "nova-core",
     "nova.opt_outs": "nova-core",
     "nova.holidays": "nova-core",
+    "nova.tenant_holidays": "nova-core",
     "nova.contact_attempts": "nova-core",
     "nova.analytics_daily": "nova-core",
     "nova.csat_scores": "nova-core",

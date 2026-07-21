@@ -3,6 +3,7 @@ import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 export interface VoiceOutboxDelivery {
   id: string;
   tenantId: string | null;
+  correlationId: string;
   type: string;
   version: number;
   occurredAt: string;
@@ -13,6 +14,7 @@ export interface VoiceOutboxDelivery {
 interface ClaimedVoiceOutboxRow {
   eventId: string;
   tenantId: string | null;
+  correlationId: string;
   eventType: string;
   payload: Record<string, unknown>;
   destination: string;
@@ -57,6 +59,7 @@ export class PostgresVoiceOutbox {
        where event.event_id = candidates.event_id
        returning event.event_id as "eventId",
                  event.tenant_id as "tenantId",
+                 event.correlation_id as "correlationId",
                  event.event_type as "eventType",
                  event.payload,
                  event.destination,
@@ -67,6 +70,7 @@ export class PostgresVoiceOutbox {
     return result.rows.map((row) => ({
       id: row.eventId,
       tenantId: row.tenantId,
+      correlationId: row.correlationId,
       type: row.eventType,
       version: 1,
       occurredAt: row.createdAt.toISOString(),
