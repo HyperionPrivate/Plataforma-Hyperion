@@ -4,7 +4,7 @@ import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 export interface NovaOutboxDelivery {
   id: string;
   tenantId: string | null;
-  correlationId: string;
+  correlationId?: string;
   type: string;
   version: number;
   occurredAt: string;
@@ -83,7 +83,7 @@ export class PostgresNovaOutbox {
     return result.rows.map((row) => ({
       id: row.eventId,
       tenantId: row.tenantId,
-      correlationId: row.correlationId,
+      ...(row.eventType === novaAuditEventRecordContract.eventType ? {} : { correlationId: row.correlationId }),
       type: row.eventType,
       version: 1,
       occurredAt: row.createdAt.toISOString(),

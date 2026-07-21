@@ -124,6 +124,7 @@ describeIntegration("NOVA Audit outbox PostgreSQL recovery", () => {
       version: 1,
       tenantId
     });
+    expect(requestBodies[1]).not.toHaveProperty("correlationId");
     for (const [destination, init] of fetch.mock.calls) {
       expect(destination).toBe(AUDIT_DESTINATION);
       const headers =

@@ -43,6 +43,7 @@ describe("NOVA Audit outbox contract", () => {
     const delivery = {
       id: EVENT_ID,
       tenantId: TENANT_ID,
+      correlationId: CORRELATION_ID,
       type: "voice.call.requested",
       version: 1,
       occurredAt: "2026-07-17T12:00:00.000Z",
@@ -67,6 +68,11 @@ describe("NOVA Audit outbox contract", () => {
     const headers = new Headers(fetch.mock.calls[0]?.[1]?.headers);
     expect(headers.get("authorization")).toBe("Bearer nova-to-voice-test-token-0001");
     expect(headers.get("x-hyperion-operator-assertion")).toBe(`signed:${TENANT_ID}`);
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({
+      id: EVENT_ID,
+      correlationId: CORRELATION_ID,
+      type: "voice.call.requested"
+    });
   });
 
   it("persists a provider-owned audit envelope instead of a raw domain event", async () => {
@@ -113,6 +119,7 @@ describe("NOVA Audit outbox contract", () => {
         {
           eventId: EVENT_ID,
           tenantId: TENANT_ID,
+          correlationId: CORRELATION_ID,
           eventType: novaAuditEventRecordContract.eventType,
           payload: {
             tenantId: TENANT_ID,
@@ -129,11 +136,40 @@ describe("NOVA Audit outbox contract", () => {
     }));
     const outbox = new PostgresNovaOutbox({ query } as never, "nova-worker-test");
 
+    const [delivery] = await outbox.claim(10);
+
+    expect(delivery).toMatchObject({
+      id: EVENT_ID,
+      type: novaAuditEventRecordContract.eventType,
+      tenantId: TENANT_ID,
+      version: 1
+    });
+    expect(delivery).not.toHaveProperty("correlationId");
+  });
+
+  it("keeps correlationId on voice deliveries while omitting it from the Audit wire contract", async () => {
+    const query = vi.fn(async () => ({
+      rows: [
+        {
+          eventId: EVENT_ID,
+          tenantId: TENANT_ID,
+          correlationId: CORRELATION_ID,
+          eventType: "voice.call.requested.v2",
+          payload: { call_id: "44444444-4444-4444-8444-444444444444" },
+          destination: "http://voice-channel-service:8092/v1/voice/internal/events",
+          createdAt: new Date("2026-07-17T12:00:00.000Z")
+        }
+      ],
+      rowCount: 1
+    }));
+    const outbox = new PostgresNovaOutbox({ query } as never, "nova-worker-test");
+
     await expect(outbox.claim(10)).resolves.toEqual([
       expect.objectContaining({
         id: EVENT_ID,
-        type: novaAuditEventRecordContract.eventType,
+        type: "voice.call.requested.v2",
         tenantId: TENANT_ID,
+        correlationId: CORRELATION_ID,
         version: 1
       })
     ]);

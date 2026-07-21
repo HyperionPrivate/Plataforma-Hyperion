@@ -314,17 +314,6 @@ type NovaContact = {
   segment?: string | null;
 };
 
-function spokenFirstName(raw?: string | null): string {
-  const cleaned = String(raw ?? "")
-    .trim()
-    .replace(/\s+/g, " ");
-  if (!cleaned) return "Asociado";
-  const parts = cleaned.split(" ").slice(0, 2);
-  return parts
-    .map((p) => p.charAt(0).toLocaleUpperCase("es-CO") + p.slice(1).toLocaleLowerCase("es-CO"))
-    .join(" ");
-}
-
 async function contactMap(
   token: BffSession,
   tenant: string,
