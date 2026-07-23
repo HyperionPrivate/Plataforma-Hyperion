@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "audId": "AUD-007",
+  "attemptedAt": "2026-07-23T17:01:00Z",
+  "sourceRevision": "b51a6ffeae946e90d45a0fd4f933d589010ef348",
+  "sourceRevisionNote": "squash merge of PR #71 on protected main",
+  "environment": "release-publication",
+  "secretsPresent": ["NPM_TOKEN", "RELEASE_GOVERNANCE_TOKEN"],
+  "canonicalTagsPushed": [
+    "shared/database/v0.1.0",
+    "shared/logger/v0.1.0",
+    "contracts/platform-contracts/v1.1.0",
+    "contracts/audit-contracts/v1.1.0"
+  ],
+  "workflowDispatches": [
+    {
+      "workflow": "publish-shared-libraries.yml",
+      "runId": 30027573618,
+      "inputs": { "library": "database", "version": "0.1.0" },
+      "conclusion": "failure",
+      "url": "https://github.com/HyperionPrivate/Plataforma-Hyperion/actions/runs/30027573618"
+    },
+    {
+      "workflow": "publish-shared-libraries.yml",
+      "runId": 30027576065,
+      "inputs": { "library": "logger", "version": "0.1.0" },
+      "conclusion": "failure",
+      "url": "https://github.com/HyperionPrivate/Plataforma-Hyperion/actions/runs/30027576065"
+    },
+    {
+      "workflow": "publish-provider-contracts.yml",
+      "runId": 30027578358,
+      "inputs": { "contract": "platform-contracts", "version": "1.1.0" },
+      "conclusion": "failure",
+      "url": "https://github.com/HyperionPrivate/Plataforma-Hyperion/actions/runs/30027578358"
+    },
+    {
+      "workflow": "publish-provider-contracts.yml",
+      "runId": 30027581076,
+      "inputs": { "contract": "audit-contracts", "version": "1.1.0" },
+      "conclusion": "failure",
+      "url": "https://github.com/HyperionPrivate/Plataforma-Hyperion/actions/runs/30027581076"
+    }
+  ],
+  "blocker": {
+    "stage": "npm publish",
+    "npmErrorCode": "E403",
+    "message": "Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.",
+    "remediation": "Recreate the npm granular token for the @hyperion scope with Read and write packages and Bypass 2FA / automation, set it as environment secret NPM_TOKEN on release-publication, then re-dispatch the four workflows with the same source_revision (or a new tip if main moved) and archive registry-evidence under releases/published/."
+  },
+  "readbackArchived": false,
+  "ledgerStatusAfterAttempt": "blocked-external"
+}

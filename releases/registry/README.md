@@ -15,9 +15,9 @@ Los workflows ejecutan además el preflight con `--verify-github-access`. Requie
 `RELEASE_GOVERNANCE_TOKEN`, emitido con visibilidad de equipos de la organización y lectura de metadata del
 repositorio. La comprobación consulta cada team previsto, exige `privacy=closed`, comprueba permiso
 `push`/`maintain`/`admin` sobre `HyperionPrivate/Plataforma-Hyperion` y falla si la respuesta es ambigua, 404 o no
-incluye evidencia de escritura. Ownership ya está acreditado; la publicación sigue bloqueada hasta configurar
-secretos del environment (`RELEASE_GOVERNANCE_TOKEN`, `NPM_TOKEN`) y archivar readback bajo `releases/published/`.
-El gate local no acredita credenciales ni artefactos remotos.
+incluye evidencia de escritura. Ownership y secretos del environment ya están configurados; la publicación sigue
+bloqueada porque `NPM_TOKEN` debe permitir bypass 2FA (E403 en el intento 2026-07-23) y aún no hay readback bajo
+`releases/published/`. El gate local no acredita credenciales ni artefactos remotos.
 
 `provider-artifacts.v1.json` fija el nombre npm, owner, path fuente, versión actual y estado de publicación de los
 contratos provider-owned y de las librerías compartidas requeridas para extraer NOVA.

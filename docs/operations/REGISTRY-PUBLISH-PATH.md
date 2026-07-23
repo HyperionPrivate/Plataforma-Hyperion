@@ -39,14 +39,19 @@ Ownership accreditation is complete for the Platform slice:
 
 1. Teams `platform`, `architecture-reviewers` and `release-security` have explicit `push` on
    `HyperionPrivate/Plataforma-Hyperion`.
-2. Environment `release-publication` exists.
+2. Environment `release-publication` exists with secrets `RELEASE_GOVERNANCE_TOKEN` and `NPM_TOKEN`.
 3. `ownershipState` is `verified-repository-access` and CODEOWNERS Platform rules are active.
+4. Canonical tags for the Platform npm tip exist on protected `main`
+   (`b51a6ffeae946e90d45a0fd4f933d589010ef348`): `shared/database/v0.1.0`, `shared/logger/v0.1.0`,
+   `contracts/platform-contracts/v1.1.0`, `contracts/audit-contracts/v1.1.0`.
 
 Publication remains blocked until:
 
-1. Environment secrets `RELEASE_GOVERNANCE_TOKEN` and `NPM_TOKEN` are configured on protected `main`.
-2. Publish workflows run and readback is archived under `releases/published/`.
+1. `NPM_TOKEN` is a granular token with **Bypass 2FA / automation** (and publish rights on `@hyperion`).
+   The 2026-07-23 dispatches reached `npm publish` and failed with E403 for that reason
+   ([attempt evidence](../evidence/aud-007-publish-attempt-20260723.json)).
+2. Publish workflows succeed and registry-evidence is archived under `releases/published/`.
 
 No digest bundle is production-authoritative until those steps complete. Status is tracked in
 [`docs/evidence/audit-open-findings-ledger.md`](../evidence/audit-open-findings-ledger.md) (AUD-007 =
-`blocked-external` until secrets + readback exist).
+`blocked-external` until successful publish + readback exist).

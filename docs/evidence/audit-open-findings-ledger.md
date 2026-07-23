@@ -12,7 +12,7 @@ Estados: `open` | `fixed-verified` | `blocked-external`.
 | AUD-015 | fixed-verified | `pnpm --filter @hyperion/pulso-iris-service exec vitest run src/analytics-routes.test.ts` | 0 | agenda_settings.timezone parametrized | 2026-07-23T16:02Z |
 | AUD-011 | fixed-verified | `pnpm --filter @hyperion/pulso-iris-service exec vitest run src/appointment-routes.test.ts` | 0 | reserve+verify single TX without holdId | 2026-07-23T16:02Z |
 | AUD-006 | fixed-verified | `pnpm --filter @hyperion/lumen-console test` + `pnpm docs:check` | 0 | hide demo nav in staging/prod; badges | 2026-07-23T16:03Z |
-| AUD-007 | blocked-external | `node scripts/releases/verify-registry-publish-path.mjs --verify-github-access` | 0 (ownership) | ownership verified; NPM_TOKEN / RELEASE_GOVERNANCE_TOKEN env secrets absent; no publish dispatch | Checklist humano: configurar secretos environment + workflow_dispatch + releases/published/ |
+| AUD-007 | blocked-external | `node scripts/releases/verify-registry-publish-path.mjs --verify-github-access` | 0 (ownership) | ownership + env secrets OK; tags + workflow_dispatch on `b51a6ff`; npm publish E403 (token needs bypass 2FA) | See `aud-007-publish-attempt-20260723.json` |
 
 ## Verification log
 
@@ -22,11 +22,14 @@ Estados: `open` | `fixed-verified` | `blocked-external`.
 - 2026-07-23T16:02Z AUD-017 voice app.test 12 pass
 - 2026-07-23T16:02Z AUD-015 analytics-routes 3 pass; AUD-011 appointment-routes 1 pass
 - 2026-07-23T16:03Z AUD-006 lumen-console 62 pass; docs:check OK
-- 2026-07-23T16:03Z AUD-007 ownership live verified; publication blocked on missing env secrets (NPM_TOKEN unset)
+- 2026-07-23T16:03Z AUD-007 ownership live verified
+- 2026-07-23T16:15Z AUD-007 environment secrets `RELEASE_GOVERNANCE_TOKEN` and `NPM_TOKEN` present on `release-publication`
+- 2026-07-23T16:58Z PR #71 merged to `main` (`b51a6ffeae946e90d45a0fd4f933d589010ef348`)
+- 2026-07-23T17:01Z AUD-007 publish attempt: canonical tags pushed; four publish workflows dispatched; all failed at `npm publish` with E403 requiring granular token bypass 2FA. Evidence: `docs/evidence/aud-007-publish-attempt-20260723.json`
 
 ## AUD-007 human checklist (remaining)
 
-1. Create PAT with org team visibility → environment secret `RELEASE_GOVERNANCE_TOKEN`.
-2. Set environment secret `NPM_TOKEN` on `release-publication`.
-3. `workflow_dispatch` publish workflows; archive readback under `releases/published/`.
+1. ~~Create PAT with org team visibility → environment secret `RELEASE_GOVERNANCE_TOKEN`.~~ done
+2. ~~Set environment secret `NPM_TOKEN` on `release-publication`.~~ present, but **must be recreated** with Read and write + **Bypass 2FA / automation** for `@hyperion`.
+3. Re-run `workflow_dispatch` publish workflows (shared `database`/`logger`, contracts `platform-contracts`/`audit-contracts`); archive registry-evidence under `releases/published/`.
 4. Flip this row to `fixed-verified` only after readback evidence exists.
