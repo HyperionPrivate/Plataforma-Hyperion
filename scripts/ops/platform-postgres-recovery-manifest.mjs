@@ -75,6 +75,10 @@ export const PLATFORM_POSTGRES_RECOVERY_MANIFEST = Object.freeze({
       Object.freeze({
         name: "004-access-tenant-lifecycle-integrity.sql",
         checksum: "c17283b147bcc57cd66e040e4b8f91e20285667f4c2dd1d23c16671b55d61a08"
+      }),
+      Object.freeze({
+        name: "005-access-jwt-denylist.sql",
+        checksum: "3c88553e9d4d5a6085b8e80c5ef2a7d4391e02fac30ee1ff0c26b0f33e92c7a7"
       })
     ]),
     markerInsertSql: `insert into platform.tenants (id, slug, display_name, status, metadata)
