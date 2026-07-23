@@ -165,8 +165,7 @@ export class PostgresChannelOutbox {
 
   async fail(eventId: string, errorCode: string): Promise<void> {
     const sanitizedErrorCode = sanitizeErrorCode(errorCode);
-    const postDeliveryAck =
-      sanitizedErrorCode === "delivered_unacked" || sanitizedErrorCode === "completion_error";
+    const postDeliveryAck = sanitizedErrorCode === "delivered_unacked" || sanitizedErrorCode === "completion_error";
     await this.db.transaction(async (client) => {
       const failed = await client.query<OutboxLifecycleRow>(
         `update channel_runtime.outbox_events event

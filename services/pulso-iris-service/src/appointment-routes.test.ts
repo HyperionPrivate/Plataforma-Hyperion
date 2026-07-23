@@ -110,13 +110,10 @@ describe("POST /appointments without holdId", () => {
 
     const app = Fastify();
     apps.push(app);
-    await registerAppointmentRoutes(
-      app,
-      {
-        db: { query, transaction, close: vi.fn() },
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
-      } as never
-    );
+    await registerAppointmentRoutes(app, {
+      db: { query, transaction, close: vi.fn() },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+    } as never);
 
     const response = await app.inject({
       method: "POST",

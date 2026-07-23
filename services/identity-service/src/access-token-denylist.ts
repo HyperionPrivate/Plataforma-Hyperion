@@ -12,11 +12,7 @@ export async function isAccessTokenJtiRevoked(db: DatabaseExecutor, jti: string)
   return result.rows.length > 0;
 }
 
-export async function revokeAccessTokenJti(
-  db: DatabaseExecutor,
-  jti: string,
-  expiresAt: Date | string
-): Promise<void> {
+export async function revokeAccessTokenJti(db: DatabaseExecutor, jti: string, expiresAt: Date | string): Promise<void> {
   await db.query(
     `insert into platform.access_token_denylist (jti, expires_at)
      values ($1::uuid, $2::timestamptz)
