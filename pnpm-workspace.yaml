@@ -8,6 +8,7 @@ linkWorkspacePackages: true
 preferWorkspacePackages: true
 overrides:
   fast-uri: 3.1.4
+  find-my-way: 9.7.0
 # Full-stack image rehearsals build several isolated closures at once. Keep
 # pnpm's lockfile supply-chain verification enabled, but avoid overwhelming the
 # registry and tolerate transiently slow metadata responses.

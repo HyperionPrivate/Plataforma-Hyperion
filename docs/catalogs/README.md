@@ -22,6 +22,8 @@ Estadísticas normativas: `products=4`, `services=32`, `debtItems=5`, `execution
   Quedan además `DEBT-022` (cutover ops + CEDCO), `DEBT-024` (registry SemVer) y `DEBT-026` (HA/offsite en
   entorno objetivo). `DEBT-022` es la única excepción del gate de tenant: fija las cuatro selecciones CEDCO por
   slug a bytes, cantidad, owner, issue y vencimiento.
+- Listo para features de producto en monorepo (ops/registry aparte):
+  [`PRODUCT-DEV-READINESS.md`](../architecture/PRODUCT-DEV-READINESS.md).
 - [`execution-plan.v1.json`](execution-plan.v1.json): plan maestro de orquestación por waves, dependencias y gates.
   Solo asigna IDs canónicos; no copia descripciones, estados, brechas ni evidencia de la trazabilidad de producto.
   El estado se deriva de las especificaciones NOVA, LUMEN y PULSO, usando la matriz únicamente para
