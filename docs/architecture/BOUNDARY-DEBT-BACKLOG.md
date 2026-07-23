@@ -86,6 +86,10 @@ Cola residual abierta (transición / ops):
    en verde y triggers históricos de `push`/`schedule` restaurados para el resto de CI
    (`docs/audits/federation-ci-hardening-20260719.md`).
 
+**Desarrollo de producto:** el monorepo ya admite features por célula; lo residual de arriba es ops/registry/
+cutover, no un tip SQL obligatorio. Veredicto y priorización en
+[`PRODUCT-DEV-READINESS.md`](PRODUCT-DEV-READINESS.md).
+
 Cerrados en código (2026-07-20): DEBT-020/032 (fachada gateway multiproducto), DEBT-021 (gateway sin
 `@hyperion/contracts`), DEBT-025 (bridge N-1 administrativo retirado). DEBT-023 queda operativo (`retiring`).
 
