@@ -37,11 +37,11 @@ jobs:
           --health-retries 5
     steps:
       - name: Checkout
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install pinned history-filter prerequisite
@@ -259,7 +259,7 @@ jobs:
       COMPOSE_PROFILES: legacy-gateway
     steps:
       - name: Checkout
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: Materialize allowlisted Docker contexts
@@ -428,7 +428,7 @@ jobs:
       HYPERION_REPOSITORY_ROOT: ${{ github.workspace }}
     steps:
       - name: Checkout current revision
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -473,7 +473,7 @@ jobs:
             -f infra/docker-compose.yml -f infra/docker-compose.jetstream.yml \
             build jetstream-topology-bootstrap
       - name: Checkout exact N-1 base revision
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ steps.n1_base.outputs.sha }}
           path: .ci/n-minus-one
