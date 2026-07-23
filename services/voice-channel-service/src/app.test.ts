@@ -122,7 +122,7 @@ describe("voice product operator assertion", () => {
     expect(rejected.statusCode).toBe(401);
   });
 
-  it.each(["staging", "production"])(
+  it.each(["ci", "staging", "production"])(
     "fails closed for an ElevenLabs callback without a dedicated secret in %s",
     async (deployment) => {
       vi.stubEnv("HYPERION_ENVIRONMENT", deployment);
@@ -138,6 +138,41 @@ describe("voice product operator assertion", () => {
 
       expect(response.statusCode).toBe(401);
       expect(response.json().data.error).toBe("ElevenLabs webhook secret required");
+    }
+  );
+
+  it("accepts unsigned Dialer webhooks only in local", async () => {
+    vi.stubEnv("HYPERION_ENVIRONMENT", "local");
+    vi.stubEnv("DIALER_WEBHOOK_HMAC_SECRET", "");
+    vi.stubEnv("WEBHOOK_HMAC_SECRET", "");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/voice/webhooks/dialer",
+      headers: { "content-type": "application/json" },
+      payload: { event_id: "dialer-event-unsigned", status: "completed" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.signature_valid).toBe(false);
+  });
+
+  it.each(["ci", "staging", "production"])(
+    "rejects unsigned Dialer webhooks in %s",
+    async (deployment) => {
+      vi.stubEnv("HYPERION_ENVIRONMENT", deployment);
+      vi.stubEnv("DIALER_WEBHOOK_HMAC_SECRET", "");
+      vi.stubEnv("WEBHOOK_HMAC_SECRET", "");
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/voice/webhooks/dialer",
+        headers: { "content-type": "application/json" },
+        payload: { event_id: "dialer-event-unsigned", status: "completed" }
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json().data.error).toBe("Webhook secret required");
     }
   );
 });

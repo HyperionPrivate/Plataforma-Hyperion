@@ -92,8 +92,8 @@ Antes de la primera escritura, la suite compara `current_database()` de las seis
 `PULSO_READINESS_ACCEPTANCE_DATABASE_NAME`; una diferencia falla el gate. Sin ambas guardas
 `REQUIRE_PULSO_READINESS_ACCEPTANCE=1` y `PULSO_READINESS_ACCEPTANCE_DATABASE_NAME`, los dos ensayos mutantes se
 omiten deliberadamente y la ejecución no constituye una aceptación completa. La aceptación exige la suite completa
-sin pruebas omitidas: catálogo provider-owned 001–004, versión global 4,
-marker local SOFÍA versión 1, upgrade exacto desde 003, ownership/ACL exactos y DDL denegado a cada runtime. La
+sin pruebas omitidas: catálogo provider-owned 001–016, versión global 16,
+marker local SOFÍA versión 2, transición exacta `008 → 016`, ownership/ACL exactos y DDL denegado a cada runtime. La
 segunda suite congela el requisito 002 como fixture de contrato y demuestra que los markers global y local fallan
 de forma independiente; no sustituye una imagen N−1 publicada ni un rehearsal por digest. La
 evidencia de backup y restore real se conserva en

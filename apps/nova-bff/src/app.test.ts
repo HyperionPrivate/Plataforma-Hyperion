@@ -313,6 +313,16 @@ describe("NOVA BFF boundary", () => {
         (policy) => policy.method === "POST" && policy.path.endsWith("/nova/lab/liwa-event")
       )
     ).toMatchObject({ capability: "nova:write", roles: ["admin", "supervisor"] });
+    expect(
+      NOVA_BFF_TENANT_ROUTE_POLICIES.find(
+        (policy) => policy.method === "GET" && policy.path.endsWith("/nova/dashboard")
+      )
+    ).toMatchObject({ capability: "nova:read", roles: ["admin", "supervisor", "asesor"] });
+    for (const suffix of ["/nova/reviews", "/nova/analytics/daily"]) {
+      expect(
+        NOVA_BFF_TENANT_ROUTE_POLICIES.find((policy) => policy.method === "GET" && policy.path.endsWith(suffix))
+      ).toMatchObject({ capability: "nova:read", roles: ["admin", "supervisor"] });
+    }
 
     const app = buildApp(async () => undefined, vi.fn());
     await app.ready();
@@ -618,6 +628,64 @@ describe("NOVA BFF boundary", () => {
     expect(allowedBootstrap.statusCode).toBe(200);
     expect(requestFetch).toHaveBeenCalledTimes(3);
     expect(signedRoles).toEqual(["supervisor", "supervisor", "admin"]);
+  });
+
+  it("enforces the dashboard, review and analytics role matrix for every NOVA product role", async () => {
+    const matrix = [
+      { method: "GET", suffix: "dashboard", allowed: ["admin", "supervisor", "asesor"] },
+      { method: "GET", suffix: "reviews", allowed: ["admin", "supervisor"] },
+      { method: "GET", suffix: "analytics/daily", allowed: ["admin", "supervisor"] },
+      {
+        method: "POST",
+        suffix: "reviews",
+        payload: { contact_id: "44444444-4444-4444-8444-444444444444" },
+        allowed: ["admin", "supervisor"]
+      },
+      {
+        method: "POST",
+        suffix: "reviews/33333333-3333-4333-8333-333333333333/decide",
+        payload: { decision: "skip" },
+        allowed: ["admin", "supervisor"]
+      }
+    ] as const;
+    const roles = ["admin", "supervisor", "asesor"] as const;
+
+    for (const role of roles) {
+      const requestFetch = vi.fn<typeof fetch>(async (input, init) => {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("x-operator-role")).toBe(role);
+        expect(headers.get("x-hyperion-operator-assertion")).toContain(`|${role}|${tenantId}|NOVA|`);
+        expect(String(input)).toMatch(new RegExp(`^http://nova-core\\.test/v1/tenants/${tenantId}/nova/`));
+        return Response.json({ data: [] });
+      });
+      const app = buildApp(
+        async () =>
+          principal([
+            {
+              productId: "NOVA",
+              roles: [role],
+              capabilities: ["nova:read", "nova:write", "nova:admin"]
+            }
+          ]),
+        requestFetch
+      );
+
+      for (const route of matrix) {
+        const callsBefore = requestFetch.mock.calls.length;
+        const response = await app.inject({
+          method: route.method,
+          url: `/v1/tenants/${tenantId}/nova/${route.suffix}`,
+          headers:
+            route.method === "GET" ? { cookie: sessionCookies } : { cookie: sessionCookies, "x-csrf-token": csrfToken },
+          ...(route.method === "POST" ? { payload: route.payload } : {})
+        });
+        const allowed = route.allowed.some((candidate) => candidate === role);
+        expect(response.statusCode, `${role} ${route.method} ${route.suffix}`).toBe(allowed ? 200 : 403);
+        expect(requestFetch.mock.calls.length, `${role} upstream calls after ${route.method} ${route.suffix}`).toBe(
+          callsBefore + (allowed ? 1 : 0)
+        );
+      }
+    }
   });
 
   it("proxies an allowed route with NOVA workload identity and product-bound assertion", async () => {

@@ -1,0 +1,28 @@
+{
+  "name": "@hyperion/service-runtime",
+  "version": "0.2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/rate-limit": "^11.1.0",
+    "@hyperion/config": "workspace:*",
+    "@hyperion/database": "workspace:*",
+    "@hyperion/logger": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
+    "fastify": "^5.2.1"
+  }
+}

@@ -552,6 +552,7 @@ test("README de catálogos publica estadísticas derivadas y no cifras manuales 
   const catalogs = {
     products: { items: [{ id: "platform" }, { id: "nova" }] },
     services: { items: [{ id: "api" }] },
+    execution: { items: [{ id: "delivery" }], waves: [{ id: "wave" }] },
     debt: {
       baselineStats: { findingGroups: 4, instances: 5, workstreams: 2 },
       items: [
@@ -562,8 +563,9 @@ test("README de catálogos publica estadísticas derivadas y no cifras manuales 
     }
   };
   const valid =
-    "Estadísticas normativas: `products=2`, `services=1`, `debtItems=3`, `findingGroups=4`, " +
-    "`instances=5`, `workstreams=2`, `temporaryExceptions=1` y `transitionInventory=1`.";
+    "Estadísticas normativas: `products=2`, `services=1`, `debtItems=3`, `executionItems=1`, " +
+    "`executionWaves=1`, `findingGroups=4`, `instances=5`, `workstreams=2`, `temporaryExceptions=1` y " +
+    "`transitionInventory=1`.";
   assert.deepEqual(catalogReadmeProblems(valid, catalogs), []);
   assert.deepEqual(catalogReadmeProblems(valid.replace("services=1", "services=9"), catalogs), [
     "docs/catalogs/README.md: services=9; esperado 1 según los catálogos"
@@ -573,7 +575,7 @@ test("README de catálogos publica estadísticas derivadas y no cifras manuales 
 test("docs:check permanece conectado a scripts y workflows", () => {
   const manifest = {
     scripts: {
-      "docs:test": "node --test scripts/docs/check-docs.test.mjs",
+      "docs:test": "node --test scripts/docs/check-docs.test.mjs scripts/docs/execution-plan.test.mjs",
       "docs:check": "node scripts/docs/check-docs.mjs"
     }
   };

@@ -6,7 +6,7 @@
   "owner": "@AdministracionHyperion",
   "createdAt": "2026-07-20T00:00:00Z",
   "rollbackPolicy": "releases/rollback-policies/nova/1.1.0.json",
-  "rollbackPolicySha256": "8ce452c346bc24cfab9273d1b235d1956e11fa5326cf1ff86d27f9e0c3f93134",
+  "rollbackPolicySha256": "56d4fd79599b343f7446440dad243b226c921aa586d06e42824c8d52fa934e1a",
   "components": [
     {
       "id": "nova-core-service",
@@ -15,7 +15,7 @@
       "sourcePath": "services/nova-core-service",
       "versionSource": "services/nova-core-service/package.json",
       "version": "0.2.0",
-      "imageRepository": "ghcr.io/administracionhyperion/nova-core-service"
+      "imageRepository": "ghcr.io/hyperionprivate/nova-core-service"
     },
     {
       "id": "voice-channel-service",
@@ -24,7 +24,7 @@
       "sourcePath": "services/voice-channel-service",
       "versionSource": "services/voice-channel-service/package.json",
       "version": "0.1.0",
-      "imageRepository": "ghcr.io/administracionhyperion/voice-channel-service"
+      "imageRepository": "ghcr.io/hyperionprivate/voice-channel-service"
     },
     {
       "id": "liwa-channel-service",
@@ -33,7 +33,7 @@
       "sourcePath": "services/liwa-channel-service",
       "versionSource": "services/liwa-channel-service/package.json",
       "version": "0.1.0",
-      "imageRepository": "ghcr.io/administracionhyperion/liwa-channel-service"
+      "imageRepository": "ghcr.io/hyperionprivate/liwa-channel-service"
     },
     {
       "id": "documents-service",
@@ -42,7 +42,7 @@
       "sourcePath": "services/documents-service",
       "versionSource": "services/documents-service/package.json",
       "version": "0.1.0",
-      "imageRepository": "ghcr.io/administracionhyperion/documents-service"
+      "imageRepository": "ghcr.io/hyperionprivate/documents-service"
     },
     {
       "id": "nova-bff",
@@ -51,7 +51,7 @@
       "sourcePath": "apps/nova-bff",
       "versionSource": "apps/nova-bff/package.json",
       "version": "1.0.0",
-      "imageRepository": "ghcr.io/administracionhyperion/nova-bff"
+      "imageRepository": "ghcr.io/hyperionprivate/nova-bff"
     },
     {
       "id": "nova-console",
@@ -60,7 +60,7 @@
       "sourcePath": "apps/nova-console",
       "versionSource": "apps/nova-console/package.json",
       "version": "0.1.0",
-      "imageRepository": "ghcr.io/administracionhyperion/nova-console"
+      "imageRepository": "ghcr.io/hyperionprivate/nova-console"
     },
     {
       "id": "coopfuturo-console",
@@ -69,7 +69,7 @@
       "sourcePath": "apps/coopfuturo-console",
       "versionSource": "apps/coopfuturo-console/package.json",
       "version": "0.1.0",
-      "imageRepository": "ghcr.io/administracionhyperion/coopfuturo-console"
+      "imageRepository": "ghcr.io/hyperionprivate/coopfuturo-console"
     },
     {
       "id": "nova-migrations",
@@ -78,7 +78,7 @@
       "sourcePath": "packages/nova-migrations",
       "versionSource": "packages/nova-migrations/package.json",
       "version": "1.1.0",
-      "imageRepository": "ghcr.io/administracionhyperion/nova-migrations"
+      "imageRepository": "ghcr.io/hyperionprivate/nova-migrations"
     },
     {
       "id": "nova-contracts",

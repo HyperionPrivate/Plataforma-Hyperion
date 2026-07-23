@@ -52,7 +52,12 @@ describe("PostgresPulsoOutbox", () => {
     await store.complete("00000000-0000-4000-8000-000000000301");
     await store.fail("00000000-0000-4000-8000-000000000302", "HTTP 503");
     expect(db.calls[0]?.params).toEqual(["00000000-0000-4000-8000-000000000301", "pulso-worker"]);
-    expect(db.calls[1]?.params).toEqual(["00000000-0000-4000-8000-000000000302", "pulso-worker", "http_503"]);
+    expect(db.calls[1]?.params).toEqual([
+      "00000000-0000-4000-8000-000000000302",
+      "pulso-worker",
+      "http_503",
+      false
+    ]);
   });
 
   it.each([

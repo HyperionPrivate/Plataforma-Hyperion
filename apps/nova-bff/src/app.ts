@@ -262,8 +262,8 @@ export function createNovaBff(options: NovaBffOptions): FastifyInstance {
     if (!hasValidCsrf(request)) {
       return reply.code(403).send(envelope({ error: "Valid CSRF token required" }, request.id));
     }
-    // Access JWTs are deliberately brief and stateless. Logout invalidates the
-    // host-only browser cookie; Access does not maintain a JWT denylist.
+    // Clear host-only cookies immediately. Identity also revokes the JWT jti
+    // when the bearer is forwarded (BFFs should proxy logout to Access).
     clearSessionCookies(reply);
     return envelope({ loggedOut: true }, request.id);
   });

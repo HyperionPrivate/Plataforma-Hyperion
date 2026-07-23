@@ -15,8 +15,8 @@ import { MAX_NPM_TARBALL_BYTES, verifyNpmProvenance } from "./verify-npm-provena
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const sourceRevision = "a".repeat(40);
 const generatedAt = "2026-07-17T23:00:00.000Z";
-const sourceRepository = "AdministracionHyperion/Plataforma-Hyperion";
-const catalogVersion = "2.3.0";
+const sourceRepository = "HyperionPrivate/Plataforma-Hyperion";
+const catalogVersion = "2.4.0";
 
 function canonicalSha256(value) {
   const normalize = (entry) => {
@@ -73,7 +73,7 @@ async function fixture() {
         {
           image,
           sourceRevision,
-          builderId: "https://github.com/AdministracionHyperion/Plataforma-Hyperion/.github/workflows/build.yml",
+          builderId: "https://github.com/HyperionPrivate/Plataforma-Hyperion/.github/workflows/build.yml",
           registryInspectionSha256: createHash("sha256").update(`registry:${id}`).digest("hex"),
           verifiedProvenanceSha256: createHash("sha256").update(`provenance:${id}`).digest("hex")
         }

@@ -44,6 +44,7 @@ export interface OutboxEventEnvelope<TPayload = JsonValue> {
 export type HttpOutboxFailureCode =
   | "claim_overflow"
   | "completion_error"
+  | "delivered_unacked"
   | "dispatcher_error"
   | "http_error"
   | "invalid_destination"
@@ -52,6 +53,11 @@ export type HttpOutboxFailureCode =
   | "serialization_error"
   | "timeout"
   | `http_${number}`;
+
+/** Failures after the consumer already accepted the payload — must not requeue HTTP delivery. */
+export function isPostDeliveryAckFailure(errorCode: string): boolean {
+  return errorCode === "delivered_unacked" || errorCode === "completion_error";
+}
 
 export type HttpOutboxFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -300,13 +306,18 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
       }
     }
 
-    try {
-      await this.#complete(event.id);
-      return { completed: true, callbackError: false };
-    } catch {
-      const callbackSucceeded = await this.#markFailed(event.id, "completion_error");
-      return { completed: false, callbackError: !callbackSucceeded };
+    // HTTP destinations already accepted the payload. Never requeue as a normal
+    // delivery failure: retry complete once, then terminal delivered_unacked.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.#complete(event.id);
+        return { completed: true, callbackError: false };
+      } catch {
+        // retry once
+      }
     }
+    const callbackSucceeded = await this.#markFailed(event.id, "delivered_unacked");
+    return { completed: false, callbackError: !callbackSucceeded };
   }
 
   async #request(

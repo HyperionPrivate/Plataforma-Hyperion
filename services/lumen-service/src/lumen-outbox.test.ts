@@ -40,7 +40,8 @@ describe("PostgresLumenOutbox", () => {
     expect(query.mock.calls[1]![1]).toEqual([
       "c1d91672-5d10-4bdc-a887-a07645a28e90",
       "lumen-worker",
-      "http_500__private"
+      "http_500__private",
+      false
     ]);
   });
 });

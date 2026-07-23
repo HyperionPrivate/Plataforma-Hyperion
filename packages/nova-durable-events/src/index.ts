@@ -45,6 +45,7 @@ export interface OutboxEventEnvelope<TPayload = JsonValue> {
 export type HttpOutboxFailureCode =
   | "claim_overflow"
   | "completion_error"
+  | "delivered_unacked"
   | "dispatcher_error"
   | "http_error"
   | "invalid_destination"
@@ -302,13 +303,16 @@ export class HttpOutboxDispatcher<TPayload = JsonValue> {
       return this.#failedDispatch(event.id, sanitizeHttpStatus(outcome.response.status));
     }
 
-    try {
-      await this.#complete(event.id);
-      return { completed: true, callbackError: false };
-    } catch {
-      const callbackSucceeded = await this.#markFailed(event.id, "completion_error");
-      return { completed: false, callbackError: !callbackSucceeded };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.#complete(event.id);
+        return { completed: true, callbackError: false };
+      } catch {
+        // retry once — destinations already accepted
+      }
     }
+    const callbackSucceeded = await this.#markFailed(event.id, "delivered_unacked");
+    return { completed: false, callbackError: !callbackSucceeded };
   }
 
   async #request(event: ClaimedOutboxEvent<TPayload>, body: string): Promise<RequestOutcome | TimeoutOutcome> {

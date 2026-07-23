@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "githubOrganization": "HyperionPrivate",
+  "githubRepository": "HyperionPrivate/Plataforma-Hyperion",
+  "ghcrNamespace": "ghcr.io/hyperionprivate",
+  "npmRegistryOrigin": "https://registry.npmjs.org",
+  "releaseEnvironment": "release-publication",
+  "releaseCells": ["platform"],
+  "ownershipState": "verified-repository-access",
+  "cellOwners": {
+    "platform": "@HyperionPrivate/platform"
+  },
+  "governanceOwners": {
+    "architecture": "@HyperionPrivate/architecture-reviewers",
+    "releaseSecurity": "@HyperionPrivate/release-security"
+  }
+}

@@ -1,3 +1,3 @@
 import { registerRollbackVerifierTests } from "./rollback-verifier-test-helper.mjs";
 
-registerRollbackVerifierTests({ cell: "nova", expectedImageCount: 7, expectedMigrationCount: 10 });
+registerRollbackVerifierTests({ cell: "nova", expectedImageCount: 7, expectedMigrationCount: 11 });

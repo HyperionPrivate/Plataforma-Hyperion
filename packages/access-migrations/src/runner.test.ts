@@ -19,7 +19,8 @@ describe("provider-owned Access migration set", () => {
       "001-access-fresh-baseline.sql",
       "002-access-runtime-role-boundary.sql",
       "003-access-tenant-projection.sql",
-      "004-access-tenant-lifecycle-integrity.sql"
+      "004-access-tenant-lifecycle-integrity.sql",
+      "005-access-jwt-denylist.sql"
     ]);
     expect(createdTables).toEqual([
       "platform.tenants",
@@ -31,7 +32,8 @@ describe("provider-owned Access migration set", () => {
       "access_runtime.lumen_projection_state",
       "access_runtime.lumen_projection_outbox",
       "access_runtime.tenant_projection_state",
-      "access_runtime.tenant_projection_outbox"
+      "access_runtime.tenant_projection_outbox",
+      "platform.access_token_denylist"
     ]);
     expect(sql).not.toMatch(/platform\.(products|agents|prompt_flows|knowledge_sources|integrations|audit_events)/);
     expect(executableIdentifiers).not.toMatch(/\b(?:nova|lumen|pulso_iris|audit_runtime|agent_runtime)\s*\./);
@@ -105,7 +107,8 @@ describe("provider-owned Access migration set", () => {
         "001-access-fresh-baseline.sql",
         "002-access-runtime-role-boundary.sql",
         "003-access-tenant-projection.sql",
-        "004-access-tenant-lifecycle-integrity.sql"
+        "004-access-tenant-lifecycle-integrity.sql",
+        "005-access-jwt-denylist.sql"
       ],
       skipped: []
     });
@@ -115,11 +118,12 @@ describe("provider-owned Access migration set", () => {
         "001-access-fresh-baseline.sql",
         "002-access-runtime-role-boundary.sql",
         "003-access-tenant-projection.sql",
-        "004-access-tenant-lifecycle-integrity.sql"
+        "004-access-tenant-lifecycle-integrity.sql",
+        "005-access-jwt-denylist.sql"
       ]
     });
-    expect(executed.filter((sql) => sql === "begin")).toHaveLength(4);
-    expect(executed.filter((sql) => sql === "commit")).toHaveLength(4);
+    expect(executed.filter((sql) => sql === "begin")).toHaveLength(5);
+    expect(executed.filter((sql) => sql === "commit")).toHaveLength(5);
     expect(executed.filter((sql) => sql.includes("set_config('search_path', 'pg_catalog'"))).toHaveLength(2);
   });
 

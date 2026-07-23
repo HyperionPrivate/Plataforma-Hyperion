@@ -215,9 +215,10 @@ Los resultados `sent`, `failed`, `uncertain`, `reconcile` y `cancel_source` tamp
 dentro de una transacción Channel. Channel agrega `channel.delivery.updated.v1` a su outbox en la misma transacción
 que cambia el outbound, con un stream monotónico por mensaje; PULSO exige la siguiente secuencia y aplica el cambio
 junto con su inbox. El `POST` directo de delivery permanece como superficie autenticada de compatibilidad N-1,
-pero el runtime Channel actual no lo usa para proyectar estados. `PUL-033` sigue parcial solamente porque repetir
-la cancelación por la ruta pública aún devuelve una transición inválida; `PUL-202` sigue parcial por las mutaciones
-CRUD que todavía no exigen una clave idempotente, no por la auditoría ni por un dual-write de delivery.
+pero el runtime Channel actual no lo usa para proyectar estados. `PUL-033` está implementado: la cancelación pública
+serializa carreras, converge reintentos equivalentes y rechaza actor o motivo divergente sin duplicar historial ni
+auditoría. `PUL-202` sigue parcial por las mutaciones CRUD que todavía no exigen una clave idempotente, no por la
+auditoría ni por un dual-write de delivery.
 
 Cada arista HTTP interna usa una credencial `PRODUCTOR_TO_CONSUMIDOR_TOKEN` distinta. El productor envía además
 `x-hyperion-caller`; el consumidor valida en tiempo constante que identidad, secreto y ruta formen una

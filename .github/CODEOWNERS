@@ -1,4 +1,25 @@
-# Propiedad transitoria mientras las celdas se trasladan a la organización.
-# La segunda cuenta permite revisión CODEOWNER independiente del autor del PR.
-# Sustituir ambas cuentas por equipos por celda cuando existan los repositorios federados.
-* @AdministracionHyperion @mateo181230-cmyk
+# ownership-status: verified-repository-access
+# Teams canónicos con push acreditado en HyperionPrivate/Plataforma-Hyperion
+# (platform, architecture-reviewers, release-security). Reglas Platform activas.
+
+* @HyperionPrivate/architecture-reviewers
+/apps/platform-admin-bff/ @HyperionPrivate/platform
+/apps/platform-admin-console/ @HyperionPrivate/platform
+/services/identity-service/ @HyperionPrivate/platform
+/services/tenant-service/ @HyperionPrivate/platform
+/services/audit-service/ @HyperionPrivate/platform
+/packages/access-migrations/ @HyperionPrivate/platform
+/packages/audit-migrations/ @HyperionPrivate/platform
+/packages/platform-contracts/ @HyperionPrivate/platform
+/packages/audit-contracts/ @HyperionPrivate/platform
+/infra/docker-compose.platform*.yml @HyperionPrivate/platform
+/infra/platform.env.example @HyperionPrivate/platform
+/releases/ @HyperionPrivate/release-security @HyperionPrivate/architecture-reviewers
+/releases/catalogs/platform/ @HyperionPrivate/platform @HyperionPrivate/release-security
+/scripts/releases/ @HyperionPrivate/release-security @HyperionPrivate/architecture-reviewers
+/.github/workflows/build-attested-cell-images.yml @HyperionPrivate/release-security
+/.github/workflows/publish-provider-contracts.yml @HyperionPrivate/release-security
+/.github/workflows/publish-shared-libraries.yml @HyperionPrivate/release-security
+/.github/workflows/publish-release.yml @HyperionPrivate/release-security
+/.github/CODEOWNERS @HyperionPrivate/architecture-reviewers @HyperionPrivate/release-security
+/SECURITY.md @HyperionPrivate/release-security

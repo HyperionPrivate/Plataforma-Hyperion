@@ -2,11 +2,13 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { validateExecutionPlanRepository } from "./execution-plan.mjs";
 
 const CATALOG_PATHS = {
   products: "docs/catalogs/products.v1.json",
   services: "docs/catalogs/services.v1.json",
-  debt: "docs/catalogs/debt.v1.json"
+  debt: "docs/catalogs/debt.v1.json",
+  execution: "docs/catalogs/execution-plan.v1.json"
 };
 const CONTROLLED_REQUIREMENT_STATES = new Set([
   "implementado",
@@ -93,7 +95,7 @@ export async function runDocsChecks(root, options = {}) {
       problems.push(`${CATALOG_PATHS.debt}: baseline ausente o inválido (${error.message})`);
     }
   }
-  if (catalogs.products && catalogs.services && catalogs.debt) {
+  if (catalogs.products && catalogs.services && catalogs.debt && catalogs.execution) {
     try {
       const catalogReadme = await readFile(path.join(root, "docs/catalogs/README.md"), "utf8");
       problems.push(...catalogReadmeProblems(catalogReadme, catalogs));
@@ -117,6 +119,9 @@ export async function runDocsChecks(root, options = {}) {
   } catch (error) {
     problems.push(`trazabilidad NOVA: no se pudo leer la especificación o la matriz (${error.message})`);
   }
+
+  const executionPlan = await validateExecutionPlanRepository(root, { now: options.now ?? new Date() });
+  problems.push(...executionPlan.problems);
 
   try {
     const environmentExample = await readFile(path.join(root, ".env.example"), "utf8");
@@ -991,6 +996,8 @@ export function catalogReadmeProblems(content, catalogs) {
     products: catalogs.products?.items?.length ?? 0,
     services: catalogs.services?.items?.length ?? 0,
     debtItems: catalogs.debt?.items?.length ?? 0,
+    executionItems: catalogs.execution?.items?.length ?? 0,
+    executionWaves: catalogs.execution?.waves?.length ?? 0,
     findingGroups: catalogs.debt?.baselineStats?.findingGroups ?? 0,
     instances: catalogs.debt?.baselineStats?.instances ?? 0,
     workstreams: catalogs.debt?.baselineStats?.workstreams ?? 0,
@@ -998,7 +1005,7 @@ export function catalogReadmeProblems(content, catalogs) {
     transitionInventory: (catalogs.debt?.items ?? []).filter((item) => item.source === "transition-inventory").length
   };
   const match = content.match(
-    /Estadísticas normativas:\s*`products=(\d+)`,\s*`services=(\d+)`,\s*`debtItems=(\d+)`,\s*`findingGroups=(\d+)`,\s*`instances=(\d+)`,\s*`workstreams=(\d+)`,\s*`temporaryExceptions=(\d+)`\s*y\s*`transitionInventory=(\d+)`\./
+    /Estadísticas normativas:\s*`products=(\d+)`,\s*`services=(\d+)`,\s*`debtItems=(\d+)`,\s*`executionItems=(\d+)`,\s*`executionWaves=(\d+)`,\s*`findingGroups=(\d+)`,\s*`instances=(\d+)`,\s*`workstreams=(\d+)`,\s*`temporaryExceptions=(\d+)`\s*y\s*`transitionInventory=(\d+)`\./
   );
   if (!match) return ["docs/catalogs/README.md: faltan estadísticas normativas parseables"];
   const fields = Object.keys(expected);
@@ -1012,7 +1019,10 @@ export function catalogReadmeProblems(content, catalogs) {
 
 export function documentationCiProblems(packageManifest, fullStackWorkflow, cellWorkflow) {
   const problems = [];
-  if (packageManifest?.scripts?.["docs:test"] !== "node --test scripts/docs/check-docs.test.mjs") {
+  if (
+    packageManifest?.scripts?.["docs:test"] !==
+    "node --test scripts/docs/check-docs.test.mjs scripts/docs/execution-plan.test.mjs"
+  ) {
     problems.push("package.json: docs:test no ejecuta las pruebas documentales normativas");
   }
   if (packageManifest?.scripts?.["docs:check"] !== "node scripts/docs/check-docs.mjs") {

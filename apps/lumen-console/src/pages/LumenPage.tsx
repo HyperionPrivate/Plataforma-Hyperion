@@ -71,7 +71,7 @@ import {
   lumenSectionHasValue
 } from "../lib/lumen-clinical-state.js";
 import { lumenErrorMessage } from "../lib/lumen-model.js";
-import { LUMEN_VIEWS, lumenViewHref, resolveLumenLocation } from "../lib/lumen-navigation.js";
+import { LUMEN_VIEWS, filterLumenNavViews, lumenViewHref, resolveLumenLocation } from "../lib/lumen-navigation.js";
 import {
   lumenAlertSource,
   lumenSummarySourceById,
@@ -140,6 +140,8 @@ export function LumenPage() {
   const navigate = useNavigate();
   const activeView = resolveLumenLocation(location)?.viewId ?? "preconsulta";
   const activeViewDefinition = LUMEN_VIEWS.find((view) => view.id === activeView) ?? LUMEN_VIEWS[0];
+  const navViews = useMemo(() => filterLumenNavViews(LUMEN_VIEWS), []);
+  const mobileMoreViews = useMemo(() => navViews.filter((view) => !view.mobilePrimary), [navViews]);
   const [worklist, setWorklist] = useState<LumenWorklistEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
   const [detail, setDetail] = useState<LumenEncounterDetail>();
@@ -952,7 +954,7 @@ export function LumenPage() {
             <small>HYPERION ONE</small>
           </div>
           <nav className="lumen-product-nav" aria-label="Experiencias LUMEN">
-            {LUMEN_VIEWS.map((view) => {
+            {navViews.map((view) => {
               const Icon = lumenViewIcon(view.id);
               return (
                 <NavLink
@@ -963,7 +965,7 @@ export function LumenPage() {
                       isActive ? " active" : ""
                     }${interactionLocked ? " disabled" : ""}`
                   }
-                  aria-label={view.label}
+                  aria-label={view.isDemo ? `${view.label} (demo)` : view.label}
                   aria-disabled={interactionLocked}
                   onClick={(event) => {
                     if (interactionLocked) event.preventDefault();
@@ -971,26 +973,29 @@ export function LumenPage() {
                 >
                   <Icon size={18} aria-hidden="true" />
                   <span>{view.shortLabel}</span>
+                  {view.isDemo ? <span className="lumen-nav-demo-badge">Demo</span> : null}
                 </NavLink>
               );
             })}
-            <button
-              ref={mobileMoreTriggerRef}
-              className={`lumen-more-trigger${activeViewDefinition.mobilePrimary ? "" : " active"}`}
-              type="button"
-              aria-expanded={mobileMoreOpen}
-              aria-controls="lumen-more-menu"
-              aria-haspopup="dialog"
-              onClick={() => setMobileMoreOpen((current) => !current)}
-              disabled={interactionLocked}
-            >
-              <MoreHorizontal size={19} aria-hidden="true" />
-              <span>Más</span>
-            </button>
+            {mobileMoreViews.length ? (
+              <button
+                ref={mobileMoreTriggerRef}
+                className={`lumen-more-trigger${activeViewDefinition.mobilePrimary ? "" : " active"}`}
+                type="button"
+                aria-expanded={mobileMoreOpen}
+                aria-controls="lumen-more-menu"
+                aria-haspopup="dialog"
+                onClick={() => setMobileMoreOpen((current) => !current)}
+                disabled={interactionLocked}
+              >
+                <MoreHorizontal size={19} aria-hidden="true" />
+                <span>Más</span>
+              </button>
+            ) : null}
           </nav>
         </header>
 
-        {mobileMoreOpen ? (
+        {mobileMoreOpen && mobileMoreViews.length ? (
           <div className="lumen-more-layer">
             <button
               className="lumen-more-backdrop"
@@ -1016,7 +1021,7 @@ export function LumenPage() {
                 </button>
               </header>
               <div>
-                {LUMEN_VIEWS.filter((view) => !view.mobilePrimary).map((view) => {
+                {mobileMoreViews.map((view) => {
                   const Icon = lumenViewIcon(view.id);
                   return (
                     <NavLink
@@ -1028,6 +1033,7 @@ export function LumenPage() {
                         <Icon size={20} aria-hidden="true" />
                       </span>
                       <strong>{view.label}</strong>
+                      {view.isDemo ? <span className="lumen-nav-demo-badge">Demo</span> : null}
                     </NavLink>
                   );
                 })}

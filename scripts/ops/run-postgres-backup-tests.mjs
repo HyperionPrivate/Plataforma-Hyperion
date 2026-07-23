@@ -24,6 +24,7 @@ const allNodeTests = [
   "scripts/ops/run-lumen-postgres-recovery-drill.test.mjs",
   "scripts/ops/verify-lumen-rollback.test.mjs",
   "scripts/ops/run-pulso-postgres-recovery-drill.test.mjs",
+  "scripts/ops/verify-pulso-postgres-recovery-evidence.test.mjs",
   "scripts/ops/verify-pulso-rollback.test.mjs",
   "scripts/ops/run-pulso-whatsapp-recovery-drill.test.mjs"
 ];
@@ -58,6 +59,7 @@ const nodeTests =
     : selectedCell === "pulso"
       ? [
           "scripts/ops/run-pulso-postgres-recovery-drill.test.mjs",
+          "scripts/ops/verify-pulso-postgres-recovery-evidence.test.mjs",
           "scripts/ops/verify-pulso-rollback.test.mjs",
           "scripts/ops/run-pulso-whatsapp-recovery-drill.test.mjs"
         ]

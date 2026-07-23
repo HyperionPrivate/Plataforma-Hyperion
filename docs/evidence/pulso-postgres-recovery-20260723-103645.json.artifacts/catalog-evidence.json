@@ -1,0 +1,15 @@
+{
+  "aclState": "f\tf\tf\tt\tt\tt\tt\tf\tf\tt\tf\tf\tt\tf\tf\tt\tf\tf\tt\tf\tf\tf",
+  "ledger": "001-pulso-autonomous-baseline.sql\t78166aae10fc425e1d16718c39e387e1d0fdbb3227c7a9a08528fb95379a3904\n002-pulso-runtime-roles.sql\t260599d3c39cd77619a4bb28d68db087ff6e7b38999eca1553f4fb14079ea11c\n003-sofia-readiness-marker.sql\td972b08edbfdb44225f8de1a25892d449dddfb6f3c29bb918b9581107c1bba84\n004-access-channel-tenant-projection.sql\tcffde8ed7621c40ae9ba4e80969928b705654e530019edf49dacf81730d57c77\n005-access-iris-tenant-projection.sql\tbfa7462090f4626f34096deabcb16f2745539a12a888ed904e79f042ea26959d\n006-access-sofia-tenant-projection.sql\tb2750ee6f2347883df55e666b9eeee4195928041be89e84311b0fcde128c60dc\n007-access-integration-tenant-projection.sql\tb4a7ca5b90c4832c748d058cdb3ae89fd377432d90ce49b42151846a865c8991\n008-access-knowledge-tenant-projection.sql\t483b1c4c04e1f4c5cdef8855314647a54b7b8174fb5c5c187e748651f506fbdf\n009-contract-channel-access-tenant-fks.sql\t1d49fdb5bedb22a3be18dea4e75daf1385d88f3e5e15ddfc171ecd0e7247ca3b\n010-contract-integration-access-tenant-fks.sql\t0338bc0773dadfd1a999bd4c972f5c07ca70b804ac53d1cd51651bd4d2f4ddaf\n011-contract-sofia-access-tenant-fks.sql\tbedea536424eea2a5879a07e1442cc092c7f93a90c2d3a84704297c719f4d41f\n012-contract-iris-access-tenant-fks.sql\t920461285ba1bf044dbeba831ce438c324dc072b2e446fcb302ba99b6cecebee\n013-contract-knowledge-access-tenant-fks.sql\t84cefbbcaf514025dbde2261175103ba9ddb712bc03c12014713ffbae663d911\n014-drop-n-minus-one-legacy-adapters.sql\t4e47caa8c78dca99d10d4b4631740268b476633eee96e93da9493f213679f616\n015-revoke-sofia-pulso-iris-control-plane-grants.sql\t99bd6b7ed9d69f2c7f37aba0186fe02115fbbecfc6fcc73ba768d90a9ce13bf2\n016-attest-access-fk-contract.sql\td9dba2e459b6fc66071e4ccc32088f19434413d1d13873da4892fd9b8a851510",
+  "ownerState": "4\t0\t0",
+  "runtimeStates": {
+    "hyperion_pulso": "hyperion_pulso\thyperion_pulso_restore_drill\t16\t016-attest-access-fk-contract.sql\ttrue\tfalse\ttrue\ttrue\tfalse\tfalse\tfalse",
+    "hyperion_sofia": "hyperion_sofia\thyperion_pulso_restore_drill\t15\t015-revoke-sofia-pulso-iris-control-plane-grants.sql\tfalse\ttrue\ttrue\ttrue\tfalse\tfalse\tfalse",
+    "hyperion_knowledge": "hyperion_knowledge\thyperion_pulso_restore_drill\t16\t016-attest-access-fk-contract.sql\ttrue\tfalse\ttrue\ttrue\tfalse\tfalse\tfalse",
+    "hyperion_integration": "hyperion_integration\thyperion_pulso_restore_drill\t16\t016-attest-access-fk-contract.sql\ttrue\tfalse\ttrue\ttrue\tfalse\tfalse\tfalse",
+    "hyperion_channel": "hyperion_channel\thyperion_pulso_restore_drill\t16\t016-attest-access-fk-contract.sql\ttrue\tfalse\ttrue\ttrue\tfalse\tfalse\tfalse"
+  },
+  "schemaVersion": "16\t016-attest-access-fk-contract.sql",
+  "sofiaSchemaVersion": "2\t006-access-sofia-tenant-projection.sql",
+  "userSchemas": "agent_runtime\nchannel_runtime\nintegration_runtime\nknowledge_runtime\nplatform\npulso_iris"
+}

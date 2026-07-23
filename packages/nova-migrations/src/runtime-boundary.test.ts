@@ -5,6 +5,7 @@ import {
   NOVA_PROVIDER_LEDGER,
   NOVA_PROVIDER_ROUTINES,
   NOVA_PROVIDER_TABLES,
+  NOVA_RUNTIME_APPEND_ONLY_TABLES,
   NOVA_RUNTIME_NO_DELETE_TABLES,
   NOVA_RUNTIME_READ_ONLY_TABLES
 } from "./schema-manifest.js";
@@ -48,15 +49,16 @@ function boundaryClient(mutate?: (sql: string, rows: Record<string, unknown>[], 
           const schema_name = relation.split(".")[0]!;
           const ownsSchema = schema_name === ownedSchema;
           const readOnly = (NOVA_RUNTIME_READ_ONLY_TABLES as readonly string[]).includes(relation);
+          const appendOnly = (NOVA_RUNTIME_APPEND_ONLY_TABLES as readonly string[]).includes(relation);
           const noDelete = (NOVA_RUNTIME_NO_DELETE_TABLES as readonly string[]).includes(relation);
           return {
             relation,
             schema_name,
             owner: NOVA_MIGRATOR_ROLE,
             can_select: ownsSchema,
-            can_insert: ownsSchema && !readOnly,
-            can_update: ownsSchema && !readOnly,
-            can_delete: ownsSchema && !readOnly && !noDelete,
+            can_insert: ownsSchema && (!readOnly || appendOnly),
+            can_update: ownsSchema && !readOnly && !appendOnly,
+            can_delete: ownsSchema && !readOnly && !appendOnly && !noDelete,
             can_truncate: false,
             can_references: false,
             can_trigger: false

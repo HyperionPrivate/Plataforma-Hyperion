@@ -10,6 +10,9 @@ export interface NovaBffTenantRoutePolicy {
   roles?: readonly NovaProductRole[];
 }
 
+const NOVA_ALL_ROLES = ["admin", "supervisor", "asesor"] as const satisfies readonly NovaProductRole[];
+const NOVA_MANAGEMENT_ROLES = ["admin", "supervisor"] as const satisfies readonly NovaProductRole[];
+
 function novaTenantRoute(
   method: NovaBffTenantRouteMethod,
   component: NovaCellComponent,
@@ -32,7 +35,7 @@ function novaTenantRoute(
  */
 export const NOVA_BFF_TENANT_ROUTE_POLICIES: readonly NovaBffTenantRoutePolicy[] = Object.freeze([
   novaTenantRoute("GET", "nova", "catalog", "nova:read"),
-  novaTenantRoute("GET", "nova", "dashboard", "nova:read"),
+  novaTenantRoute("GET", "nova", "dashboard", "nova:read", NOVA_ALL_ROLES),
   novaTenantRoute("GET", "nova", "contacts", "nova:read"),
   novaTenantRoute("GET", "nova", "campaigns", "nova:read"),
   novaTenantRoute("GET", "nova", "leads", "nova:read"),
@@ -41,8 +44,8 @@ export const NOVA_BFF_TENANT_ROUTE_POLICIES: readonly NovaBffTenantRoutePolicy[]
   novaTenantRoute("GET", "nova", "conversations/:id/messages", "nova:read"),
   novaTenantRoute("GET", "nova", "core/associates/:documentId", "nova:read"),
   novaTenantRoute("GET", "nova", "conversations/:conversationId/channel-status", "nova:read"),
-  novaTenantRoute("GET", "nova", "reviews", "nova:read"),
-  novaTenantRoute("GET", "nova", "analytics/daily", "nova:read"),
+  novaTenantRoute("GET", "nova", "reviews", "nova:read", NOVA_MANAGEMENT_ROLES),
+  novaTenantRoute("GET", "nova", "analytics/daily", "nova:read", NOVA_MANAGEMENT_ROLES),
   novaTenantRoute("POST", "nova", "contacts/import", "nova:write", ["admin", "supervisor"]),
   novaTenantRoute("POST", "nova", "contacts/import/file", "nova:write", ["admin", "supervisor"]),
   novaTenantRoute("POST", "nova", "contacts/:contactId/score", "nova:write", ["admin", "supervisor"]),

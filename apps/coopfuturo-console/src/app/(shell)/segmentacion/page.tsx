@@ -41,7 +41,8 @@ export default function SegmentacionPage() {
               : `Propensión vs urgencia · ${points.length} contactos (scores demo)`
         }
         actions={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="warning">Demo</Badge>
             <Button variant="outline" onClick={() => refetch()}>
               Refrescar scores
             </Button>
@@ -53,9 +54,13 @@ export default function SegmentacionPage() {
       />
 
       <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--muted)]">
-        Se llena solo con contactos importados y confirmados (commit). Crear campaña o usar
-        Laboratorio no agrega puntos aquí. Los scores actuales son heurísticos de demo; olas y
-        heatmap aún no son operativos.
+        <Badge tone="warning" className="mb-2">
+          Demo · scores heurísticos
+        </Badge>
+        <p>
+          Se llena solo con contactos importados y confirmados (commit). Crear campaña o usar Laboratorio no agrega
+          puntos aquí. Los scores actuales son heurísticos de demo; olas y heatmap aún no son operativos.
+        </p>
       </div>
 
       {empty && (

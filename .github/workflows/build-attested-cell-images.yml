@@ -41,6 +41,7 @@ jobs:
   prepare:
     name: ${{ inputs.cell }} / immutable build plan
     runs-on: ubuntu-latest
+    environment: release-publication
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
@@ -64,6 +65,19 @@ jobs:
             exit 1
           fi
           test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+      - name: Verify canonical identity and effective CODEOWNERS access
+        shell: bash
+        env:
+          GITHUB_OWNERSHIP_TOKEN: ${{ secrets.RELEASE_GOVERNANCE_TOKEN }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          CELL: ${{ inputs.cell }}
+          CATALOG_VERSION: ${{ inputs.catalog_version }}
+        run: >-
+          node scripts/releases/verify-registry-publish-path.mjs
+          --verify-github-access
+          --source-repository "$SOURCE_REPOSITORY"
+          --cell "$CELL"
+          --catalog-version "$CATALOG_VERSION"
       - name: Resolve catalog-owned image matrix
         id: plan
         shell: bash

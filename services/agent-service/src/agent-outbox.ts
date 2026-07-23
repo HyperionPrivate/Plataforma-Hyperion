@@ -75,14 +75,23 @@ export class PostgresAgentOutbox {
   }
 
   async fail(eventId: string, errorCode: string): Promise<void> {
+    const sanitized = sanitizeErrorCode(errorCode);
+    const postDeliveryAck = sanitized === "delivered_unacked" || sanitized === "completion_error";
     await this.db.query(
       `update agent_runtime.outbox_events
-       set status = case when attempt_count >= max_attempts then 'dead_letter' else 'retry_scheduled' end,
-           next_attempt_at = case when attempt_count >= max_attempts then next_attempt_at
-             else now() + make_interval(secs => least(300, power(2, least(attempt_count, 8))::integer)) end,
+       set status = case
+             when $4::boolean then 'dead_letter'
+             when attempt_count >= max_attempts then 'dead_letter'
+             else 'retry_scheduled'
+           end,
+           next_attempt_at = case
+             when $4::boolean then next_attempt_at
+             when attempt_count >= max_attempts then next_attempt_at
+             else now() + make_interval(secs => least(300, power(2, least(attempt_count, 8))::integer))
+           end,
            locked_at = null, locked_by = null, last_error_code = $3, updated_at = now()
        where id = $1 and status = 'processing' and locked_by = $2`,
-      [eventId, this.workerId, sanitizeErrorCode(errorCode)]
+      [eventId, this.workerId, sanitized, postDeliveryAck]
     );
   }
 }

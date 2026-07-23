@@ -1,0 +1,46 @@
+{
+  "name": "@hyperion/platform-contracts",
+  "version": "1.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AdministracionHyperion/Plataforma-Hyperion.git",
+    "directory": "packages/platform-contracts"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./access-tenant-snapshot": {
+      "types": "./dist/access-tenant-snapshot.d.ts",
+      "default": "./dist/access-tenant-snapshot.js"
+    },
+    "./operator-assertion": {
+      "types": "./dist/operator-assertion.d.ts",
+      "default": "./dist/operator-assertion.js"
+    },
+    "./platform-control": {
+      "types": "./dist/platform-control.d.ts",
+      "default": "./dist/platform-control.js"
+    },
+    "./product-catalog": {
+      "types": "./dist/product-catalog.d.ts",
+      "default": "./dist/product-catalog.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.24.2"
+  }
+}

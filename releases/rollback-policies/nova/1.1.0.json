@@ -57,6 +57,10 @@
       {
         "path": "sql/056-nova-legacy-audit-outbox-envelope.sql",
         "sha256": "fc6ce5cf0e629bfb155e9b183ba11caf60a4c0cbc11bee393af1819fd3aae107"
+      },
+      {
+        "path": "sql/057-nova-agency-scoped-analytics.sql",
+        "sha256": "bfd0f9afc89001bff7daa850e57a43ec46906971c1502b34a17ca0059e0e180b"
       }
     ]
   }

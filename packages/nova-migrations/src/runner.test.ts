@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { computeNovaMigrationChecksum, runNovaMigrationsWithClient } from "./runner.js";
-import { NOVA_PROVIDER_LEDGER } from "./schema-manifest.js";
+import { NOVA_PROVIDER_LEDGER, NOVA_PROVIDER_TABLES } from "./schema-manifest.js";
 
 describe("NOVA-owned migration set", () => {
   it("contains only NOVA-cell schemas and no platform product write", async () => {
@@ -25,13 +25,36 @@ describe("NOVA-owned migration set", () => {
       "053-nova-tenant-owned-routing.sql",
       "054-nova-voice-orchestration-policy.sql",
       "055-nova-voice-policy-approval-and-exclusions.sql",
-      "056-nova-legacy-audit-outbox-envelope.sql"
+      "056-nova-legacy-audit-outbox-envelope.sql",
+      "057-nova-agency-scoped-analytics.sql"
     ]);
     expect(sql).not.toContain("platform.products");
     expect(contents.every((content) => /^[a-f0-9]{64}$/.test(computeNovaMigrationChecksum(content)))).toBe(true);
     expect(files.map((name, index) => ({ name, checksum: computeNovaMigrationChecksum(contents[index]!) }))).toEqual(
       NOVA_PROVIDER_LEDGER
     );
+  });
+
+  it("adds agency analytics without mutating the tenant-wide read model contract", async () => {
+    const sql = await readFile(new URL("../sql/057-nova-agency-scoped-analytics.sql", import.meta.url), "utf8");
+    const normalized = sql.toLowerCase();
+
+    expect(normalized).toContain("create table if not exists nova.analytics_daily_by_agency");
+    expect(normalized).toContain("create table if not exists nova.analytics_agency_coverage");
+    expect(normalized).toContain("'__unattributed__'");
+    expect(normalized).toContain("__unattributed__ is reserved for non-assignable analytics history");
+    expect(normalized).toContain("agencies_reserved_analytics_bucket_check");
+    expect(normalized).toContain("operator_grants_reserved_analytics_bucket_check");
+    expect(normalized).toContain("create or replace function nova.backfill_agency_analytics_unattributed");
+    expect(normalized).toContain("select nova.backfill_agency_analytics_unattributed(null)");
+    expect(normalized).toContain("insert into nova.service_migrations(version, name)");
+    expect(normalized).toContain("values (10, '057-nova-agency-scoped-analytics.sql')");
+    expect(normalized).toContain("set current_version = 10");
+    expect(normalized).not.toContain("alter table nova.analytics_daily");
+    expect(normalized).not.toContain("drop table");
+    expect(NOVA_PROVIDER_TABLES).toContain("nova.analytics_daily");
+    expect(NOVA_PROVIDER_TABLES).toContain("nova.analytics_daily_by_agency");
+    expect(NOVA_PROVIDER_TABLES).toContain("nova.analytics_agency_coverage");
   });
 
   it("adopts provider ledgers from an already-applied global deployment", async () => {
@@ -60,7 +83,8 @@ describe("NOVA-owned migration set", () => {
       "053-nova-tenant-owned-routing.sql",
       "054-nova-voice-orchestration-policy.sql",
       "055-nova-voice-policy-approval-and-exclusions.sql",
-      "056-nova-legacy-audit-outbox-envelope.sql"
+      "056-nova-legacy-audit-outbox-envelope.sql",
+      "057-nova-agency-scoped-analytics.sql"
     ]);
   });
 

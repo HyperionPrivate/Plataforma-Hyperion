@@ -75,6 +75,38 @@ describeIntegration("LUMEN autonomous projection persistence", () => {
       status: "duplicate",
       projection: "operator_grant"
     });
+
+    const revoked = operatorEvent({ id: randomUUID(), sourceVersion: 2, isActive: false, canReview: false });
+    await expect(consumeLumenProjectionEvent(db, revoked)).resolves.toEqual({
+      status: "accepted",
+      projection: "operator_grant"
+    });
+    await expect(
+      consumeLumenProjectionEvent(
+        db,
+        operatorEvent({ id: randomUUID(), sourceVersion: 1, isActive: true, canReview: true })
+      )
+    ).resolves.toEqual({ status: "stale", projection: "operator_grant" });
+    await expect(
+      consumeLumenProjectionEvent(
+        db,
+        operatorEvent({ id: randomUUID(), sourceVersion: 3, isActive: true, canReview: false })
+      )
+    ).resolves.toEqual({ status: "accepted", projection: "operator_grant" });
+    await expect(
+      consumeLumenProjectionEvent(
+        db,
+        operatorEvent({ id: randomUUID(), sourceVersion: 4, isActive: true, canReview: true })
+      )
+    ).resolves.toEqual({ status: "accepted", projection: "operator_grant" });
+
+    const storedGrant = await db.query<{ sourceVersion: string; isActive: boolean; canReview: boolean }>(
+      `select source_version::text as "sourceVersion", is_active as "isActive", can_review as "canReview"
+       from lumen.operator_grants where tenant_id = $1 and operator_id = $2`,
+      [tenantId, operatorId]
+    );
+    expect(storedGrant.rows[0]).toEqual({ sourceVersion: "4", isActive: true, canReview: true });
+
     const reference = referenceEvent({ sourceVersion: 20 });
     await expect(consumeLumenProjectionEvent(db, reference)).resolves.toEqual({
       status: "accepted",
@@ -221,7 +253,14 @@ describeIntegration("LUMEN autonomous projection persistence", () => {
   }
 
   function operatorEvent(
-    override: Partial<{ id: string; tenantId: string; operatorId: string }> = {}
+    override: Partial<{
+      id: string;
+      tenantId: string;
+      operatorId: string;
+      sourceVersion: number;
+      isActive: boolean;
+      canReview: boolean;
+    }> = {}
   ): OperatorGrantEvent {
     const eventTenantId = override.tenantId ?? tenantId;
     return parseEvent({
@@ -234,9 +273,9 @@ describeIntegration("LUMEN autonomous projection persistence", () => {
         tenantId: eventTenantId,
         operatorId: override.operatorId ?? operatorId,
         role: "advisor",
-        isActive: true,
-        canReview: true,
-        sourceVersion: 1,
+        isActive: override.isActive ?? true,
+        canReview: override.canReview ?? true,
+        sourceVersion: override.sourceVersion ?? 1,
         sourceUpdatedAt: "2026-07-13T15:00:30.000Z"
       }
     }) as OperatorGrantEvent;

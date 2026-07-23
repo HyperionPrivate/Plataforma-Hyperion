@@ -11,42 +11,42 @@
     {
       "id": "nova-core-service",
       "version": "0.2.0",
-      "image": "ghcr.io/administracionhyperion/nova-core-service@sha256:3a49a35bb679564f0e4c753d58d109d38485f414c569e836cf48cd58c0a338f8"
+      "image": "ghcr.io/hyperionprivate/nova-core-service@sha256:3a49a35bb679564f0e4c753d58d109d38485f414c569e836cf48cd58c0a338f8"
     },
     {
       "id": "voice-channel-service",
       "version": "0.1.0",
-      "image": "ghcr.io/administracionhyperion/voice-channel-service@sha256:c96d6dcc3be4919e70056044e911b6b5bb8af2de64095095bbab41b5e41e3654"
+      "image": "ghcr.io/hyperionprivate/voice-channel-service@sha256:c96d6dcc3be4919e70056044e911b6b5bb8af2de64095095bbab41b5e41e3654"
     },
     {
       "id": "liwa-channel-service",
       "version": "0.1.0",
-      "image": "ghcr.io/administracionhyperion/liwa-channel-service@sha256:ec24bfab41a36273c3ca612a752dc0fb58f82fed0f2d2066b46bd88412373a45"
+      "image": "ghcr.io/hyperionprivate/liwa-channel-service@sha256:ec24bfab41a36273c3ca612a752dc0fb58f82fed0f2d2066b46bd88412373a45"
     },
     {
       "id": "documents-service",
       "version": "0.1.0",
-      "image": "ghcr.io/administracionhyperion/documents-service@sha256:b13e56eb216ef93517eaf3ef61d239024ba1e4686e3f4560a113d5a11d1a466c"
+      "image": "ghcr.io/hyperionprivate/documents-service@sha256:b13e56eb216ef93517eaf3ef61d239024ba1e4686e3f4560a113d5a11d1a466c"
     },
     {
       "id": "nova-bff",
       "version": "1.0.0",
-      "image": "ghcr.io/administracionhyperion/nova-bff@sha256:8659a83766e85d3f77a3eb6811540a7491cbbf4085d9e35415adf3953ca935cb"
+      "image": "ghcr.io/hyperionprivate/nova-bff@sha256:8659a83766e85d3f77a3eb6811540a7491cbbf4085d9e35415adf3953ca935cb"
     },
     {
       "id": "nova-console",
       "version": "0.1.0",
-      "image": "ghcr.io/administracionhyperion/nova-console@sha256:e085dc71c33d5e66ac016ed131decfd33af70ec6241ac4a2826c4ba05dc759c7"
+      "image": "ghcr.io/hyperionprivate/nova-console@sha256:e085dc71c33d5e66ac016ed131decfd33af70ec6241ac4a2826c4ba05dc759c7"
     },
     {
       "id": "coopfuturo-console",
       "version": "0.1.0",
-      "image": "ghcr.io/administracionhyperion/coopfuturo-console@sha256:dfb40ceab5bc29d4b926f55214a2a4eacb0df5ae7902bfe436d3b6756922a7c8"
+      "image": "ghcr.io/hyperionprivate/coopfuturo-console@sha256:dfb40ceab5bc29d4b926f55214a2a4eacb0df5ae7902bfe436d3b6756922a7c8"
     },
     {
       "id": "nova-migrations",
       "version": "1.1.0",
-      "image": "ghcr.io/administracionhyperion/nova-migrations@sha256:9817295ed3c3661a337c373d76e65d78c1309dc0ab968e2fe23dbb88f1e50099"
+      "image": "ghcr.io/hyperionprivate/nova-migrations@sha256:9817295ed3c3661a337c373d76e65d78c1309dc0ab968e2fe23dbb88f1e50099"
     },
     {
       "id": "nova-contracts",

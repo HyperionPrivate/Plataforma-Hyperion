@@ -165,11 +165,18 @@ export class PostgresChannelOutbox {
 
   async fail(eventId: string, errorCode: string): Promise<void> {
     const sanitizedErrorCode = sanitizeErrorCode(errorCode);
+    const postDeliveryAck =
+      sanitizedErrorCode === "delivered_unacked" || sanitizedErrorCode === "completion_error";
     await this.db.transaction(async (client) => {
       const failed = await client.query<OutboxLifecycleRow>(
         `update channel_runtime.outbox_events event
-         set status = case when event.attempt_count >= event.max_attempts then 'dead_letter' else 'retry_scheduled' end,
+         set status = case
+               when $4::boolean then 'dead_letter'
+               when event.attempt_count >= event.max_attempts then 'dead_letter'
+               else 'retry_scheduled'
+             end,
              next_attempt_at = case
+               when $4::boolean then event.next_attempt_at
                when event.attempt_count >= event.max_attempts then event.next_attempt_at
                else now() + make_interval(secs => least(300, power(2, least(event.attempt_count, 8))::integer))
              end,
@@ -177,7 +184,7 @@ export class PostgresChannelOutbox {
          where event.id = $1 and event.status = 'processing' and event.locked_by = $2
          returning event.id, event.tenant_id as "tenantId", event.aggregate_id as "aggregateId",
                    event.aggregate_type as "aggregateType", event.status`,
-        [eventId, this.workerId, sanitizedErrorCode]
+        [eventId, this.workerId, sanitizedErrorCode, postDeliveryAck]
       );
       const event = failed.rows[0];
       if (!event || event.status !== "dead_letter" || event.aggregateType !== "channel_inbound_event") return;

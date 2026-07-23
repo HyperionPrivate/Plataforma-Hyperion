@@ -19,7 +19,8 @@ describe("Access runtime migration manifest", () => {
         "001-access-fresh-baseline.sql",
         "002-access-runtime-role-boundary.sql",
         "003-access-tenant-projection.sql",
-        "004-access-tenant-lifecycle-integrity.sql"
+        "004-access-tenant-lifecycle-integrity.sql",
+        "005-access-jwt-denylist.sql"
       ],
       exactMigrationLedger: [
         {
@@ -37,6 +38,10 @@ describe("Access runtime migration manifest", () => {
         {
           name: "004-access-tenant-lifecycle-integrity.sql",
           checksum: "c17283b147bcc57cd66e040e4b8f91e20285667f4c2dd1d23c16671b55d61a08"
+        },
+        {
+          name: "005-access-jwt-denylist.sql",
+          checksum: "3c88553e9d4d5a6085b8e80c5ef2a7d4391e02fac30ee1ff0c26b0f33e92c7a7"
         }
       ]
     });

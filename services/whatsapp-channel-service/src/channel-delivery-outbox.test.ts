@@ -50,7 +50,8 @@ describe("PostgresChannelDeliveryOutbox", () => {
       "711d8ea7-8015-4ad5-8517-67805a141eb8",
       "worker",
       "http_503",
-      CHANNEL_DELIVERY_EVENT_TYPE
+      CHANNEL_DELIVERY_EVENT_TYPE,
+      false
     ]);
   });
 });

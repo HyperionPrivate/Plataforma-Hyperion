@@ -124,6 +124,11 @@ export class AccessTokenService {
   }
 
   verify(token: string): AccessPrincipal | undefined {
+    return this.verifyClaims(token)?.principal;
+  }
+
+  /** Cryptographic + claim check; caller must still consult the jti denylist when a DB is available. */
+  verifyClaims(token: string): { principal: AccessPrincipal; claims: AccessTokenClaims } | undefined {
     try {
       const parts = token.split(".");
       if (parts.length !== 3) return undefined;
@@ -146,7 +151,7 @@ export class AccessTokenService {
 
       const claims = accessTokenClaimsSchema.parse(decodeJson(encodedClaims));
       if (!this.#claimsAreCurrent(claims)) return undefined;
-      return principalFromAccessTokenClaims(claims);
+      return { principal: principalFromAccessTokenClaims(claims), claims };
     } catch {
       return undefined;
     }

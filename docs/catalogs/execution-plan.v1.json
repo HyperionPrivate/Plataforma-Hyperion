@@ -1,0 +1,286 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "1.1.0",
+  "updatedAt": "2026-07-22",
+  "reviewDue": "2026-08-05",
+  "sourceRefs": {
+    "products": "docs/catalogs/products.v1.json",
+    "requirements": "docs/products/REQUIREMENTS-TRACEABILITY.md",
+    "novaSpec": "docs/products/NOVA.md",
+    "lumenSpec": "docs/products/LUMEN.md",
+    "pulsoSpec": "docs/products/PULSO-IRIS.md",
+    "debt": "docs/catalogs/debt.v1.json",
+    "releaseCatalogs": "releases/catalogs",
+    "releaseManifests": "releases/manifests"
+  },
+  "gatePolicy": {
+    "releaseRequiredGates": ["code", "artifact", "isolation", "recovery", "staging", "operations"]
+  },
+  "waves": [
+    {
+      "id": "WAVE-00",
+      "order": 0,
+      "title": "Cadena de liberación reproducible",
+      "dueDate": "2026-08-15"
+    },
+    {
+      "id": "WAVE-01",
+      "order": 1,
+      "title": "Piloto operativo NOVA",
+      "dueDate": "2026-09-30"
+    },
+    {
+      "id": "WAVE-02",
+      "order": 2,
+      "title": "Plataforma y cutovers transicionales",
+      "dueDate": "2026-10-31"
+    },
+    {
+      "id": "WAVE-03",
+      "order": 3,
+      "title": "LUMEN gobernado y recuperable",
+      "dueDate": "2026-12-31"
+    },
+    {
+      "id": "WAVE-04",
+      "order": 4,
+      "title": "Madurez funcional de PULSO",
+      "dueDate": "2027-03-31"
+    }
+  ],
+  "items": [
+    {
+      "id": "EXEC-PLATFORM-001",
+      "title": "Publicar y verificar la cadena de artefactos de plataforma",
+      "productId": "PLATFORM",
+      "owner": "platform-release",
+      "status": "transitioning",
+      "issue": "HYP-DEBT-024",
+      "dueDate": "2026-08-15",
+      "wave": "WAVE-00",
+      "dependsOn": [],
+      "requirementRefs": [],
+      "debtRefs": ["DEBT-024"],
+      "releaseGate": {
+        "catalogVersion": "2.4.0",
+        "publishedRequired": true
+      },
+      "gateRefs": ["code", "artifact", "isolation", "recovery", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-NOVA-001",
+      "title": "Cerrar dominio, datos, autorización y reconciliación NOVA",
+      "productId": "NOVA",
+      "owner": "nova-product",
+      "status": "transitioning",
+      "issue": "HYP-NOVA-001",
+      "dueDate": "2026-08-31",
+      "wave": "WAVE-01",
+      "dependsOn": ["EXEC-PLATFORM-001"],
+      "requirementRefs": ["NOV-001–NOV-003", "NOV-006–NOV-011", "NOV-013–NOV-014", "NOV-017–NOV-019"],
+      "debtRefs": [],
+      "gateRefs": ["code", "isolation"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-NOVA-002",
+      "title": "Completar proveedores reales y cutovers de canales NOVA",
+      "productId": "NOVA",
+      "owner": "nova-operations",
+      "status": "transitioning",
+      "issue": "HYP-NOVA-001",
+      "dueDate": "2026-09-15",
+      "wave": "WAVE-01",
+      "dependsOn": ["EXEC-PLATFORM-001"],
+      "requirementRefs": ["NOV-004–NOV-005", "NOV-012", "NOV-015–NOV-016"],
+      "debtRefs": [],
+      "gateRefs": ["code", "isolation", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-NOVA-003",
+      "title": "Aceptar y publicar el release operativo NOVA",
+      "productId": "NOVA",
+      "owner": "nova-operations",
+      "status": "planned",
+      "issue": "HYP-NOVA-001",
+      "dueDate": "2026-09-30",
+      "wave": "WAVE-01",
+      "dependsOn": ["EXEC-NOVA-001", "EXEC-NOVA-002"],
+      "requirementRefs": [],
+      "debtRefs": [],
+      "releaseGate": {
+        "catalogVersion": "1.1.0",
+        "publishedRequired": true
+      },
+      "gateRefs": ["code", "artifact", "isolation", "recovery", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-PLATFORM-002",
+      "title": "Retirar migrador y accesos legacy con evidencia operativa",
+      "productId": "PLATFORM",
+      "owner": "platform-data",
+      "status": "transitioning",
+      "issue": "HYP-FED-001",
+      "dueDate": "2026-10-31",
+      "wave": "WAVE-02",
+      "dependsOn": ["EXEC-PLATFORM-001"],
+      "requirementRefs": [],
+      "debtRefs": ["DEBT-022", "DEBT-023"],
+      "gateRefs": ["code", "isolation", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-PULSO-001",
+      "title": "Atestar y ejecutar el cutover FK multi-consumer de PULSO",
+      "productId": "PULSO_IRIS",
+      "owner": "pulso-data",
+      "status": "transitioning",
+      "issue": "HYP-DEBT-005",
+      "dueDate": "2026-10-31",
+      "wave": "WAVE-02",
+      "dependsOn": ["EXEC-PLATFORM-001"],
+      "requirementRefs": [],
+      "debtRefs": ["DEBT-005"],
+      "gateRefs": ["isolation", "recovery", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-LUMEN-001",
+      "title": "Cerrar el núcleo clínico sintético y sus proyecciones",
+      "productId": "LUMEN",
+      "owner": "lumen-product",
+      "status": "transitioning",
+      "issue": "HYP-LUM-001",
+      "dueDate": "2026-10-31",
+      "wave": "WAVE-03",
+      "dependsOn": ["EXEC-PLATFORM-001"],
+      "requirementRefs": [
+        "LUM-001–LUM-005",
+        "LUM-020–LUM-029",
+        "LUM-040–LUM-048",
+        "LUM-060–LUM-065",
+        "LUM-080–LUM-087",
+        "LUM-100–LUM-101"
+      ],
+      "debtRefs": [],
+      "gateRefs": ["code", "isolation"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-LUMEN-002",
+      "title": "Implementar módulos de negocio e integraciones gobernadas LUMEN",
+      "productId": "LUMEN",
+      "owner": "lumen-product",
+      "status": "planned",
+      "issue": "HYP-LUM-001",
+      "dueDate": "2026-11-30",
+      "wave": "WAVE-03",
+      "dependsOn": ["EXEC-LUMEN-001"],
+      "requirementRefs": ["LUM-120–LUM-125", "LUM-141–LUM-147"],
+      "debtRefs": [],
+      "gateRefs": ["code", "isolation", "staging"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-LUMEN-003",
+      "title": "Resolver gobierno clínico y recuperación en entorno objetivo",
+      "productId": "LUMEN",
+      "owner": "lumen-governance",
+      "status": "planned",
+      "issue": "HYP-DEBT-026",
+      "dueDate": "2026-11-30",
+      "wave": "WAVE-03",
+      "dependsOn": ["EXEC-LUMEN-001"],
+      "requirementRefs": ["LUM-140"],
+      "debtRefs": ["DEBT-026"],
+      "gateRefs": ["recovery", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-LUMEN-004",
+      "title": "Aceptar y publicar el release gobernado LUMEN",
+      "productId": "LUMEN",
+      "owner": "lumen-operations",
+      "status": "planned",
+      "issue": "HYP-LUM-001",
+      "dueDate": "2026-12-31",
+      "wave": "WAVE-03",
+      "dependsOn": ["EXEC-LUMEN-002", "EXEC-LUMEN-003"],
+      "requirementRefs": [],
+      "debtRefs": [],
+      "releaseGate": {
+        "catalogVersion": "1.1.0",
+        "publishedRequired": true
+      },
+      "gateRefs": ["code", "artifact", "isolation", "recovery", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-PULSO-002",
+      "title": "Cerrar identidad, canales, memoria y handoff PULSO",
+      "productId": "PULSO_IRIS",
+      "owner": "pulso-product",
+      "status": "transitioning",
+      "issue": "HYP-PUL-001",
+      "dueDate": "2026-12-31",
+      "wave": "WAVE-04",
+      "dependsOn": ["EXEC-PULSO-001", "EXEC-PLATFORM-002"],
+      "requirementRefs": ["PUL-003", "PUL-020–PUL-024", "PUL-054", "PUL-060–PUL-061", "PUL-093"],
+      "debtRefs": [],
+      "gateRefs": ["code", "isolation", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-PULSO-003",
+      "title": "Completar automatizaciones de agenda, RPA y campañas PULSO",
+      "productId": "PULSO_IRIS",
+      "owner": "pulso-automation",
+      "status": "planned",
+      "issue": "HYP-PUL-001",
+      "dueDate": "2027-01-31",
+      "wave": "WAVE-04",
+      "dependsOn": ["EXEC-PULSO-002"],
+      "requirementRefs": ["PUL-035–PUL-037", "PUL-070–PUL-071", "PUL-080"],
+      "debtRefs": [],
+      "gateRefs": ["code", "isolation", "staging", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-PULSO-004",
+      "title": "Cerrar seguridad, observabilidad, SLO y recuperación PULSO",
+      "productId": "PULSO_IRIS",
+      "owner": "pulso-platform",
+      "status": "planned",
+      "issue": "HYP-PUL-001",
+      "dueDate": "2027-02-28",
+      "wave": "WAVE-04",
+      "dependsOn": ["EXEC-PULSO-001"],
+      "requirementRefs": ["PUL-090–PUL-091", "PUL-200–PUL-203", "PUL-206", "PUL-208–PUL-210"],
+      "debtRefs": [],
+      "gateRefs": ["code", "isolation", "recovery", "operations"],
+      "gateEvidence": {}
+    },
+    {
+      "id": "EXEC-PULSO-005",
+      "title": "Aceptar y publicar el release maduro PULSO",
+      "productId": "PULSO_IRIS",
+      "owner": "pulso-operations",
+      "status": "planned",
+      "issue": "HYP-PUL-001",
+      "dueDate": "2027-03-31",
+      "wave": "WAVE-04",
+      "dependsOn": ["EXEC-PULSO-003", "EXEC-PULSO-004"],
+      "requirementRefs": [],
+      "debtRefs": [],
+      "releaseGate": {
+        "catalogVersion": "1.4.0",
+        "publishedRequired": true
+      },
+      "gateRefs": ["code", "artifact", "isolation", "recovery", "staging", "operations"],
+      "gateEvidence": {}
+    }
+  ]
+}

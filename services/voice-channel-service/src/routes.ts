@@ -8,7 +8,7 @@ import {
   voiceCallDispatchedPayloadSchema,
   voiceCallCompletedPayloadSchema
 } from "@hyperion/nova-contracts";
-import { isRestrictedDeploymentEnvironment, readServiceUrls } from "@hyperion/nova-config";
+import { readDeploymentEnvironment, readServiceUrls } from "@hyperion/nova-config";
 import type { DatabaseClient } from "@hyperion/database";
 import type { ServiceContext } from "@hyperion/nova-service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -756,7 +756,7 @@ function verifyDialerWebhook(
   const signature = readHeader(request, "x-dialer-signature") || readHeader(request, "x-webhook-signature");
 
   if (!secret) {
-    if (isRestrictedDeploymentEnvironment(env)) {
+    if (readDeploymentEnvironment(env) !== "local") {
       return { accepted: false, signatureValid: false, statusCode: 401, message: "Webhook secret required" };
     }
     return { accepted: true, signatureValid: false, statusCode: 200 };
@@ -789,7 +789,7 @@ function verifyElevenLabsWebhook(
     readHeader(request, "x-webhook-signature");
 
   if (!secret) {
-    if (isRestrictedDeploymentEnvironment(env)) {
+    if (readDeploymentEnvironment(env) !== "local") {
       return { accepted: false, signatureValid: false, statusCode: 401, message: "ElevenLabs webhook secret required" };
     }
     return { accepted: true, signatureValid: false, statusCode: 200 };

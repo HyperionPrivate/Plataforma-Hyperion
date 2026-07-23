@@ -267,14 +267,18 @@ describe("HttpOutboxDispatcher", () => {
     expect(consoleLog).not.toHaveBeenCalled();
   });
 
-  it("releases the event through fail when complete itself fails", async () => {
+  it("marks delivered_unacked without re-POSTing when complete fails after HTTP 2xx", async () => {
     const complete = vi.fn(async () => Promise.reject(new Error("database detail")));
     const fail = vi.fn(async () => undefined);
-    const dispatcher = createDispatcher({ complete, fail });
+    const fetch = vi.fn(async () => new Response(null, { status: 200 }));
+    const dispatcher = createDispatcher({ complete, fail, fetch });
 
     await expect(dispatcher.drainOnce()).resolves.toMatchObject({ completed: 0, failed: 1, callbackErrors: 0 });
 
-    expect(fail).toHaveBeenCalledWith(EVENT.id, "completion_error");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(fail).toHaveBeenCalledWith(EVENT.id, "delivered_unacked");
+    expect(fail).not.toHaveBeenCalledWith(EVENT.id, "completion_error");
   });
 
   it("swallows fail callback errors and reports only their count", async () => {

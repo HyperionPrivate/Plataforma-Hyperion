@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  LUMEN_DEMO_VIEW_IDS,
   LUMEN_VIEWS,
+  filterLumenNavViews,
   isLumenRoute,
   lumenViewHref,
   normalizeLumenHref,
   normalizeLumenPath,
-  resolveLumenLocation
+  resolveLumenLocation,
+  shouldHideLumenDemoViewsFromNav
 } from "./lumen-navigation.js";
 
 describe("LUMEN navigation", () => {
@@ -33,6 +36,52 @@ describe("LUMEN navigation", () => {
       "asistente",
       "consentimientos"
     ]);
+  });
+
+  it("marca las vistas guiadas como demo y deja operables las clínicas", () => {
+    expect(LUMEN_VIEWS.filter((view) => view.isDemo).map((view) => view.id)).toEqual([...LUMEN_DEMO_VIEW_IDS]);
+    expect(LUMEN_VIEWS.filter((view) => !view.isDemo).map((view) => view.id)).toEqual([
+      "preconsulta",
+      "dictado",
+      "historia"
+    ]);
+  });
+
+  it("oculta vistas demo del nav en staging, production o build Vite production", () => {
+    expect(
+      shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "staging" })
+    ).toBe(true);
+    expect(
+      shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "production" })
+    ).toBe(true);
+    expect(shouldHideLumenDemoViewsFromNav({ MODE: "production", VITE_HYPERION_ENVIRONMENT: "local" })).toBe(
+      true
+    );
+    expect(shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "local" })).toBe(
+      false
+    );
+    expect(shouldHideLumenDemoViewsFromNav({ MODE: "development" })).toBe(false);
+  });
+
+  it("no expone ids demo en nav cuando VITE_HYPERION_ENVIRONMENT=staging", () => {
+    const navViews = filterLumenNavViews(LUMEN_VIEWS, {
+      hideDemoViews: shouldHideLumenDemoViewsFromNav({
+        MODE: "development",
+        VITE_HYPERION_ENVIRONMENT: "staging"
+      })
+    });
+    const navIds = navViews.map((view) => view.id);
+    for (const demoId of LUMEN_DEMO_VIEW_IDS) {
+      expect(navIds).not.toContain(demoId);
+    }
+    expect(navIds).toEqual(["preconsulta", "dictado", "historia"]);
+  });
+
+  it("conserva vistas demo en nav local no restringido", () => {
+    const navViews = filterLumenNavViews(LUMEN_VIEWS, {
+      hideDemoViews: shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "local" })
+    });
+    expect(navViews.map((view) => view.id)).toEqual(LUMEN_VIEWS.map((view) => view.id));
   });
 
   it("normaliza la raiz de LUMEN a preconsulta", () => {

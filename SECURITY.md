@@ -16,7 +16,7 @@ No abras un issue público ni publiques pruebas de concepto que contengan datos,
 
 Usa, en este orden:
 
-1. El formulario privado de GitHub: `https://github.com/AdministracionHyperion/Plataforma-Hyperion/security/advisories/new`.
+1. El formulario privado de GitHub: `https://github.com/HyperionPrivate/Plataforma-Hyperion/security/advisories/new`.
 2. Si el formulario no está disponible, escribe a `administracionhyperion@gmail.com` con el asunto `SECURITY - Hyperion`.
 
 Incluye el componente y versión afectados, impacto, condiciones necesarias, pasos mínimos de reproducción y una forma segura de contacto. Elimina o anonimiza datos personales y credenciales.

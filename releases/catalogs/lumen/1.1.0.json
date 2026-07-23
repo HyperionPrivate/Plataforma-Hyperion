@@ -15,7 +15,7 @@
       "sourcePath": "services/lumen-service",
       "versionSource": "services/lumen-service/package.json",
       "version": "0.1.0",
-      "imageRepository": "ghcr.io/administracionhyperion/lumen-service"
+      "imageRepository": "ghcr.io/hyperionprivate/lumen-service"
     },
     {
       "id": "lumen-bff",
@@ -24,7 +24,7 @@
       "sourcePath": "apps/lumen-bff",
       "versionSource": "apps/lumen-bff/package.json",
       "version": "1.0.0",
-      "imageRepository": "ghcr.io/administracionhyperion/lumen-bff"
+      "imageRepository": "ghcr.io/hyperionprivate/lumen-bff"
     },
     {
       "id": "lumen-console",
@@ -33,7 +33,7 @@
       "sourcePath": "apps/lumen-console",
       "versionSource": "apps/lumen-console/package.json",
       "version": "0.1.0",
-      "imageRepository": "ghcr.io/administracionhyperion/lumen-console"
+      "imageRepository": "ghcr.io/hyperionprivate/lumen-console"
     },
     {
       "id": "lumen-migrations",
@@ -42,7 +42,7 @@
       "sourcePath": "packages/lumen-migrations",
       "versionSource": "packages/lumen-migrations/package.json",
       "version": "1.0.0",
-      "imageRepository": "ghcr.io/administracionhyperion/lumen-migrations",
+      "imageRepository": "ghcr.io/hyperionprivate/lumen-migrations",
       "buildService": "lumen-migrations",
       "composeServices": ["lumen-database-bootstrap", "lumen-migrations", "lumen-role-bootstrap"]
     },

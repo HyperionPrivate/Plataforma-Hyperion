@@ -89,11 +89,18 @@ export class PostgresVoiceOutbox {
   }
 
   async fail(eventId: string, errorCode: string): Promise<void> {
+    const sanitized = sanitizeErrorCode(errorCode);
+    const postDeliveryAck = sanitized === "delivered_unacked" || sanitized === "completion_error";
     await this.db.query(
       `with updated as (
          update voice.outbox_events
-         set status = case when attempt_count >= 8 then 'failed' else 'pending' end,
+         set status = case
+               when $4::boolean then 'failed'
+               when attempt_count >= 8 then 'failed'
+               else 'pending'
+             end,
              available_at = case
+               when $4::boolean then available_at
                when attempt_count >= 8 then available_at
                else now() + make_interval(secs => least(300, power(2, least(attempt_count, 8))::integer))
              end,
@@ -118,7 +125,7 @@ export class PostgresVoiceOutbox {
            last_error = excluded.last_error,
            failed_at = excluded.failed_at,
            redriven_at = null`,
-      [eventId, this.workerId, sanitizeErrorCode(errorCode)]
+      [eventId, this.workerId, sanitized, postDeliveryAck]
     );
   }
 }

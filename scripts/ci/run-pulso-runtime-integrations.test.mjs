@@ -53,7 +53,7 @@ test("PULSO runtime suites use only their fenced database role and execute every
         role: "hyperion_pulso",
         databaseUrlEnvironment: "TEST_PULSO_DATABASE_URL",
         files: 8,
-        tests: 62
+        tests: 63
       },
       {
         name: "agent",
@@ -170,13 +170,13 @@ test("PULSO fixture setup requires an admin URL for the exact runtime database",
   );
 });
 
-test("PULSO runtime reports require all 93 tests in all 14 files to pass", () => {
+test("PULSO runtime reports require all 94 tests in all 14 files to pass", () => {
   const reports = new Map(PULSO_RUNTIME_INTEGRATION_SUITES.map((suite) => [suite.name, passingReport(suite)]));
   assert.deepEqual(verifyPulsoRuntimeIntegrationReports(reports, root), {
     suites: 3,
     files: 14,
-    total: 93,
-    passed: 93,
+    total: 94,
+    passed: 94,
     failed: 0,
     pending: 0,
     todo: 0
@@ -194,7 +194,7 @@ test("PULSO runtime report verification rejects skips, count drift and missing f
   countDrift.testResults[0].assertionResults.push({ fullName: "unreviewed new test", status: "passed" });
   assert.throws(
     () => verifyPulsoRuntimeSuiteReport(suite, countDrift, root),
-    /expected 12 tests but Vitest reported 13/
+    /expected 13 tests but Vitest reported 14/
   );
 
   const missingFile = passingReport(suite);

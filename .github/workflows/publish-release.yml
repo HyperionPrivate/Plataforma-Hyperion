@@ -90,6 +90,21 @@ jobs:
         with:
           node-version: 22
           registry-url: ${{ inputs.npm_registry_origin }}
+      - name: Verify canonical identity and effective CODEOWNERS access
+        shell: bash
+        env:
+          GITHUB_OWNERSHIP_TOKEN: ${{ secrets.RELEASE_GOVERNANCE_TOKEN }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          CELL: ${{ inputs.cell }}
+          CATALOG_VERSION: ${{ inputs.catalog_version }}
+          NPM_REGISTRY_ORIGIN: ${{ inputs.npm_registry_origin }}
+        run: >-
+          node scripts/releases/verify-registry-publish-path.mjs
+          --verify-github-access
+          --source-repository "$SOURCE_REPOSITORY"
+          --registry-origin "$NPM_REGISTRY_ORIGIN"
+          --cell "$CELL"
+          --catalog-version "$CATALOG_VERSION"
       - name: Authenticate registry readback
         shell: bash
         env:

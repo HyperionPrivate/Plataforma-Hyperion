@@ -90,10 +90,18 @@ jobs:
     with:
       cell: pulso
 
+  lumen-database:
+    name: full-stack / lumen-database
+    uses: ./.github/workflows/_lumen-database.yml
+
+  pulso-database:
+    name: full-stack / pulso-database
+    uses: ./.github/workflows/_pulso-database.yml
+
   required:
     name: full-stack / required
     if: always()
-    needs: [workspace, platform, nova, lumen, pulso]
+    needs: [workspace, platform, nova, lumen, pulso, lumen-database, pulso-database]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every federated gate succeeded
@@ -103,9 +111,13 @@ jobs:
           NOVA_RESULT: ${{ needs.nova.result }}
           LUMEN_RESULT: ${{ needs.lumen.result }}
           PULSO_RESULT: ${{ needs.pulso.result }}
+          LUMEN_DATABASE_RESULT: ${{ needs.lumen-database.result }}
+          PULSO_DATABASE_RESULT: ${{ needs.pulso-database.result }}
         run: |
           test "$WORKSPACE_RESULT" = "success"
           test "$PLATFORM_RESULT" = "success"
           test "$NOVA_RESULT" = "success"
           test "$LUMEN_RESULT" = "success"
           test "$PULSO_RESULT" = "success"
+          test "$LUMEN_DATABASE_RESULT" = "success"
+          test "$PULSO_DATABASE_RESULT" = "success"
