@@ -21,12 +21,12 @@ jobs:
       affected: ${{ steps.impact.outputs.affected }}
     steps:
       - name: Checkout dependency graph
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Prove the impact policy and install planner fail closed
@@ -76,11 +76,11 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout boundary source
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Enable pnpm
@@ -102,7 +102,7 @@ jobs:
           node scripts/autonomy/access-channel-projection.e2e.mjs
           --receipt access-channel-projection-receipt.json
       - name: Upload the canonical non-secret receipt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: access-channel-projection-receipt-${{ github.run_id }}
           path: access-channel-projection-receipt.json
