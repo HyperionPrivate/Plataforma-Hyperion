@@ -8,11 +8,29 @@ const NAV = [
   { to: "/operacion", label: "Operación en vivo", icon: Activity, capability: "view:operation" },
   { to: "/conversaciones", label: "Conversaciones", icon: MessagesSquare, capability: "view:conversations" },
   { to: "/agenda", label: "Agenda", icon: CalendarDays, capability: "view:agenda" },
-  { to: "/rpa", label: "Workers RPA", icon: Bot, capability: "view:rpa" },
-  { to: "/campanas", label: "Campañas", icon: Megaphone, capability: "view:campaigns" },
+  {
+    to: "/rpa",
+    label: "Workers RPA",
+    icon: Bot,
+    capability: "view:rpa",
+    simulated: true
+  },
+  {
+    to: "/campanas",
+    label: "Campañas",
+    icon: Megaphone,
+    capability: "view:campaigns",
+    simulated: true
+  },
   { to: "/bi", label: "BI y Reportes", icon: BarChart3, capability: "view:bi" },
   { to: "/configuracion", label: "Configuración", icon: Settings, capability: "view:config" }
-] satisfies Array<{ to: string; label: string; icon: typeof Activity; capability: Capability }>;
+] satisfies Array<{
+  to: string;
+  label: string;
+  icon: typeof Activity;
+  capability: Capability;
+  simulated?: boolean;
+}>;
 
 export function Layout({
   title,
@@ -42,7 +60,12 @@ export function Layout({
           {NAV.filter((item) => can(session.operator.role, item.capability)).map((item) => (
             <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
               <item.icon size={18} aria-hidden="true" />
-              {item.label}
+              <span>{item.label}</span>
+              {item.simulated ? (
+                <span className="nav-badge" aria-label={`${item.label} simulado`}>
+                  Simulado
+                </span>
+              ) : null}
             </NavLink>
           ))}
         </nav>

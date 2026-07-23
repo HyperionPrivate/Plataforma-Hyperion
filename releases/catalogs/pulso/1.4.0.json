@@ -11,47 +11,47 @@
     {
       "id": "agent-service", "kind": "service", "distribution": "oci",
       "sourcePath": "services/agent-service", "versionSource": "services/agent-service/package.json",
-      "version": "0.2.0", "imageRepository": "ghcr.io/administracionhyperion/agent-service"
+      "version": "0.2.0", "imageRepository": "ghcr.io/hyperionprivate/agent-service"
     },
     {
       "id": "prompt-flow-service", "kind": "service", "distribution": "oci",
       "sourcePath": "services/prompt-flow-service", "versionSource": "services/prompt-flow-service/package.json",
-      "version": "0.2.0", "imageRepository": "ghcr.io/administracionhyperion/prompt-flow-service"
+      "version": "0.2.0", "imageRepository": "ghcr.io/hyperionprivate/prompt-flow-service"
     },
     {
       "id": "knowledge-service", "kind": "service", "distribution": "oci",
       "sourcePath": "services/knowledge-service", "versionSource": "services/knowledge-service/package.json",
-      "version": "0.2.0", "imageRepository": "ghcr.io/administracionhyperion/knowledge-service"
+      "version": "0.2.0", "imageRepository": "ghcr.io/hyperionprivate/knowledge-service"
     },
     {
       "id": "integration-service", "kind": "service", "distribution": "oci",
       "sourcePath": "services/integration-service", "versionSource": "services/integration-service/package.json",
-      "version": "0.2.0", "imageRepository": "ghcr.io/administracionhyperion/integration-service"
+      "version": "0.2.0", "imageRepository": "ghcr.io/hyperionprivate/integration-service"
     },
     {
       "id": "pulso-iris-service", "kind": "service", "distribution": "oci",
       "sourcePath": "services/pulso-iris-service", "versionSource": "services/pulso-iris-service/package.json",
-      "version": "0.2.0", "imageRepository": "ghcr.io/administracionhyperion/pulso-iris-service"
+      "version": "0.2.0", "imageRepository": "ghcr.io/hyperionprivate/pulso-iris-service"
     },
     {
       "id": "whatsapp-channel-service", "kind": "service", "distribution": "oci",
       "sourcePath": "services/whatsapp-channel-service", "versionSource": "services/whatsapp-channel-service/package.json",
-      "version": "0.3.0", "imageRepository": "ghcr.io/administracionhyperion/whatsapp-channel-service"
+      "version": "0.3.0", "imageRepository": "ghcr.io/hyperionprivate/whatsapp-channel-service"
     },
     {
       "id": "pulso-bff", "kind": "bff", "distribution": "oci",
       "sourcePath": "apps/pulso-bff", "versionSource": "apps/pulso-bff/package.json",
-      "version": "1.0.0", "imageRepository": "ghcr.io/administracionhyperion/pulso-bff"
+      "version": "1.0.0", "imageRepository": "ghcr.io/hyperionprivate/pulso-bff"
     },
     {
       "id": "pulso-console", "kind": "console", "distribution": "oci",
       "sourcePath": "apps/pulso-console", "versionSource": "apps/pulso-console/package.json",
-      "version": "0.1.0", "imageRepository": "ghcr.io/administracionhyperion/pulso-console"
+      "version": "0.1.0", "imageRepository": "ghcr.io/hyperionprivate/pulso-console"
     },
     {
       "id": "pulso-migrations", "kind": "migrations", "distribution": "oci",
       "sourcePath": "packages/pulso-migrations", "versionSource": "packages/pulso-migrations/package.json",
-      "version": "1.3.0", "imageRepository": "ghcr.io/administracionhyperion/pulso-migrations",
+      "version": "1.3.0", "imageRepository": "ghcr.io/hyperionprivate/pulso-migrations",
       "buildService": "pulso-migrations",
       "composeServices": ["pulso-database-bootstrap", "pulso-migrations", "pulso-role-bootstrap"]
     },

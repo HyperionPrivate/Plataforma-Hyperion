@@ -326,7 +326,7 @@ test("the PULSO PR workflow runs its provider-owned PostgreSQL closure when affe
   assert.match(job, /autonomy\.integration\.test\.ts/);
   const autonomyStart = job.indexOf("Verify autonomous PULSO catalog and five runtime privilege fences");
   const fixtureStart = job.indexOf("Assert frozen SOFIA 002 readiness is revoked by the current contract");
-  const runtimeStart = job.indexOf("Run all 93 PULSO runtime PostgreSQL integrations with fenced roles");
+  const runtimeStart = job.indexOf("Run all 94 PULSO runtime PostgreSQL integrations with fenced roles");
   assert.ok(autonomyStart >= 0 && fixtureStart > autonomyStart && runtimeStart > fixtureStart);
   const autonomyStep = job.slice(autonomyStart, fixtureStart);
   assert.match(autonomyStep, /REQUIRE_PULSO_READINESS_ACCEPTANCE=1/);
@@ -378,7 +378,14 @@ test("the federated full stack runs on main, schedule and manual dispatch", asyn
     assert.match(workflow, new RegExp(`uses: \\.\\/.github/workflows/_cell-ci\\.yml[\\s\\S]*?cell: ${cell}`));
   }
   assert.match(workflow, /name: full-stack \/ required/);
-  assert.match(workflow, /needs: \[workspace, platform, nova, lumen, pulso\]/);
+  assert.match(
+    workflow,
+    /needs: \[workspace, platform, nova, lumen, pulso, lumen-database, pulso-database\]/
+  );
+  assert.match(workflow, /uses: \.\/\.github\/workflows\/_lumen-database\.yml/);
+  assert.match(workflow, /uses: \.\/\.github\/workflows\/_pulso-database\.yml/);
+  assert.match(workflow, /LUMEN_DATABASE_RESULT: \$\{\{ needs\.lumen-database\.result \}\}/);
+  assert.match(workflow, /PULSO_DATABASE_RESULT: \$\{\{ needs\.pulso-database\.result \}\}/);
   assert.doesNotMatch(workflow, /infra\/docker-compose\.yml/);
   assert.doesNotMatch(workflow, /n-minus-one-upgrade-rollback/);
   assert.equal(
@@ -499,10 +506,25 @@ test("security workflows cover pull requests, main, schedules and manual dispatc
   assert.match(codeqlTriggers, /^\s+push:/m);
   assert.match(codeqlTriggers, /^\s+schedule:/m);
   assert.match(codeqlTriggers, /cron:\s*["']17 8 \* \* 2["']/);
+
+  const dependencyAudit = await readFile(path.join(workflowRoot, "dependency-audit.yml"), "utf8");
+  const dependencyAuditTriggers = dependencyAudit.slice(0, dependencyAudit.indexOf("permissions:"));
+  assert.match(dependencyAuditTriggers, /^\s+pull_request:/m);
+  assert.match(dependencyAuditTriggers, /^\s+workflow_dispatch:/m);
+  assert.match(dependencyAuditTriggers, /^\s+push:/m);
+  assert.match(dependencyAuditTriggers, /^\s+schedule:/m);
+  assert.match(dependencyAuditTriggers, /cron:\s*["']29 8 \* \* 2["']/);
+  assert.match(dependencyAudit, /^\s+contents:\s*read\s*$/m);
+  assert.match(dependencyAudit, /run:\s*pnpm security:audit:prod/);
 });
 
 test("Dependabot covers every directory that owns a Docker manifest", async () => {
   const dependabot = await readFile(path.join(root, ".github", "dependabot.yml"), "utf8");
+  const pullRequestLimits = [...dependabot.matchAll(/^\s+open-pull-requests-limit:\s*(\d+)\s*$/gm)].map((match) =>
+    Number(match[1])
+  );
+  assert.ok(pullRequestLimits.length > 0);
+  assert.ok(pullRequestLimits.every((limit) => limit > 0 && limit <= 5));
   const configuredDirectories = new Set(
     [...dependabot.matchAll(/^\s+directory:\s+"([^"]+)"\s*$/gm)].map((match) => match[1])
   );

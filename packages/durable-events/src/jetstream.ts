@@ -13,6 +13,7 @@ export const DEFAULT_JETSTREAM_SUBJECT_PREFIX = "hyperion.events";
 export type JetStreamOutboxFailureCode =
   | "ack_error"
   | "completion_error"
+  | "delivered_unacked"
   | "connection_error"
   | "dispatcher_error"
   | "invalid_event"
@@ -391,13 +392,16 @@ export class JetStreamOutboxDispatcher<TPayload = JsonValue> {
       return this.#failedDispatch(event.id, "ack_error");
     }
 
-    try {
-      await this.#complete(event.id);
-      return { completed: true, callbackError: false };
-    } catch {
-      const callbackSucceeded = await this.#markFailed(event.id, "completion_error");
-      return { completed: false, callbackError: !callbackSucceeded };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.#complete(event.id);
+        return { completed: true, callbackError: false };
+      } catch {
+        // retry once — publish already succeeded
+      }
     }
+    const callbackSucceeded = await this.#markFailed(event.id, "delivered_unacked");
+    return { completed: false, callbackError: !callbackSucceeded };
   }
 
   async #getSession(): Promise<JetStreamPublisherSession> {

@@ -92,7 +92,8 @@ export class HttpDialerAdapter implements DialerAdapter {
       password: string;
       demoApiKey: string;
     },
-    private readonly fetchImpl: typeof fetch = fetch
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly callTimeoutMs = 100_000
   ) {
     assertDialerBaseUrlAllowed(this.baseUrl);
   }
@@ -166,7 +167,7 @@ export class HttpDialerAdapter implements DialerAdapter {
         caller_acknowledged: true,
         dynamic_vars: input.dynamicVars ?? {}
       }),
-      signal: AbortSignal.timeout(10_000)
+      signal: AbortSignal.timeout(this.callTimeoutMs)
     });
     if (!response.ok) {
       if (response.status === 429) {
@@ -324,6 +325,11 @@ export function createDialerAdapter(env: NodeJS.ProcessEnv = process.env): Diale
   const username = env.DIALER_ADMIN_USER?.trim() || env.VOICE_DIALER_USERNAME?.trim();
   const password = env.DIALER_ADMIN_PASSWORD?.trim() || env.VOICE_DIALER_PASSWORD?.trim();
   const demoApiKey = env.DIALER_DEMO_API_KEY?.trim() || env.VOICE_TO_DIALER_TOKEN?.trim();
+  const configuredTimeout = Number(env.DIALER_CALL_TIMEOUT_MS ?? 100_000);
+  const callTimeoutMs =
+    Number.isSafeInteger(configuredTimeout) && configuredTimeout >= 10_000 && configuredTimeout <= 120_000
+      ? configuredTimeout
+      : 100_000;
 
   if (!baseUrl || !username || !password || !demoApiKey) {
     if (isRestrictedDeploymentEnvironment(env)) {
@@ -334,5 +340,5 @@ export function createDialerAdapter(env: NodeJS.ProcessEnv = process.env): Diale
     return new UnconfiguredDialerAdapter();
   }
 
-  return new HttpDialerAdapter(baseUrl, { username, password, demoApiKey });
+  return new HttpDialerAdapter(baseUrl, { username, password, demoApiKey }, fetch, callTimeoutMs);
 }

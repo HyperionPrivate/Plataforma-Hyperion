@@ -19,6 +19,20 @@ import {
   shutdownLifecycleProblems
 } from "./check-compose-identities.mjs";
 
+test("Dialer separa el migrador privilegiado del runtime mínimo", async () => {
+  const compose = await readFile(new URL("../../infra/docker-compose.dialer.yml", import.meta.url), "utf8");
+
+  assert.match(compose, /dialer-runtime-role-bootstrap:/);
+  assert.match(compose, /DB_RUNTIME_USER: \$\{DIALER_RUNTIME_USER:-dialer_runtime\}/);
+  assert.match(compose, /DB_USER: \$\{DIALER_RUNTIME_USER:-dialer_runtime\}/);
+  assert.match(compose, /DB_PASSWORD: \$\{DIALER_RUNTIME_PASSWORD:-dialer-local-runtime-password-31\}/);
+  assert.doesNotMatch(compose, /DB_RUNTIME_USER: \$\{DIALER_POSTGRES_USER/);
+  assert.match(
+    compose,
+    /dialer-migrate:[\s\S]*?dialer-runtime-role-bootstrap:[\s\S]*?condition: service_completed_successfully/
+  );
+});
+
 test("Compose propaga una clase de despliegue explícita a cada workload relevante", () => {
   const servicesFor = (names, deploymentEnvironment) =>
     Object.fromEntries(names.map((name) => [name, { environment: { HYPERION_ENVIRONMENT: deploymentEnvironment } }]));

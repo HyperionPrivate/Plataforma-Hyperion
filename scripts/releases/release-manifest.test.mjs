@@ -27,7 +27,7 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 test("validates every historical catalog and release manifest across all cells", async () => {
   const result = await validateRepositoryReleases(repositoryRoot);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.catalogCount, 14);
+  assert.equal(result.catalogCount, 15);
   assert.equal(result.manifestCount, 14);
   assert.equal(result.rollbackPolicyCount, 3);
   assert.deepEqual(result.cells, ["platform", "nova", "lumen", "pulso"]);
@@ -89,7 +89,7 @@ test("keeps the latest catalogs complete for federated cells and provider contra
   }
 });
 
-test("preserves Platform 1.0.0 as historical traceability while 2.3.0 keeps four artifacts retired", async () => {
+test("preserves Platform 1.0.0 as historical traceability while 2.4.0 keeps four artifacts retired", async () => {
   const historical = JSON.parse(
     await readFile(path.join(repositoryRoot, "releases/catalogs/platform/1.0.0.json"), "utf8")
   );
@@ -102,7 +102,7 @@ test("preserves Platform 1.0.0 as historical traceability while 2.3.0 keeps four
   );
 
   const latest = await readCatalog("platform");
-  assert.equal(latest.catalogVersion, "2.3.0");
+  assert.equal(latest.catalogVersion, "2.4.0");
   assert.equal(latest.components.length, 9);
   assert.equal(latest.components.filter((component) => component.distribution === "oci").length, 7);
   assert.equal(latest.components.filter((component) => component.distribution === "npm").length, 2);
@@ -415,7 +415,7 @@ test("rejects duplicate OCI repositories and Compose aliases instead of publishi
   duplicate.id = "duplicate-migrations-alias";
   duplicate.buildService = "audit-role-bootstrap";
   duplicate.composeServices = ["audit-role-bootstrap"];
-  duplicate.imageRepository = "ghcr.io/administracionhyperion/audit-migrations";
+  duplicate.imageRepository = "ghcr.io/hyperionprivate/audit-migrations";
   catalog.components.push(duplicate);
 
   const errors = validateCatalog(catalog);
@@ -449,10 +449,10 @@ test("generator and validator CLIs expose deterministic automation entrypoints",
     encoding: "utf8"
   });
   assert.equal(validated.status, 0, validated.stderr);
-  assert.match(validated.stdout, /Validated 14 catalog\(s\) and 14 manifest\(s\)/);
+  assert.match(validated.stdout, /Validated 15 catalog\(s\) and 14 manifest\(s\)/);
 });
 
 async function readCatalog(cell) {
-  const version = cell === "platform" ? "2.3.0" : cell === "pulso" ? "1.4.0" : "1.1.0";
+  const version = cell === "platform" ? "2.4.0" : cell === "pulso" ? "1.4.0" : "1.1.0";
   return JSON.parse(await readFile(path.join(repositoryRoot, "releases", "catalogs", cell, `${version}.json`), "utf8"));
 }

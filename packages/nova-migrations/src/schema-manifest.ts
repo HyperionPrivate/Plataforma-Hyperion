@@ -34,6 +34,14 @@ export const NOVA_PROVIDER_LEDGER = Object.freeze([
   {
     name: "055-nova-voice-policy-approval-and-exclusions.sql",
     checksum: "ca766a45f7d99f56a3514f3c3118276c0bf19b1fe49ad6ad4a3ce388acd46104"
+  },
+  {
+    name: "056-nova-legacy-audit-outbox-envelope.sql",
+    checksum: "fc6ce5cf0e629bfb155e9b183ba11caf60a4c0cbc11bee393af1819fd3aae107"
+  },
+  {
+    name: "057-nova-agency-scoped-analytics.sql",
+    checksum: "bfd0f9afc89001bff7daa850e57a43ec46906971c1502b34a17ca0059e0e180b"
   }
 ] as const);
 
@@ -55,7 +63,9 @@ export const NOVA_PROVIDER_TABLES = Object.freeze([
   "liwa.webhook_receipts",
   "nova.agencies",
   "nova.agent_configs",
+  "nova.analytics_agency_coverage",
   "nova.analytics_daily",
+  "nova.analytics_daily_by_agency",
   "nova.campaign_enrollments",
   "nova.campaigns",
   "nova.compliance_settings",
@@ -96,10 +106,16 @@ export const NOVA_PROVIDER_TABLES = Object.freeze([
 export const NOVA_RUNTIME_READ_ONLY_TABLES = Object.freeze([
   "nova.exclusion_registry_entries",
   "nova.exclusion_registry_runs",
+  "nova.migration_ledger",
   "nova.voice_cutover_receipts",
   "nova.voice_policy_approvals"
 ] as const);
 
+export const NOVA_RUNTIME_APPEND_ONLY_TABLES = Object.freeze(["nova.analytics_agency_coverage"] as const);
+
 export const NOVA_RUNTIME_NO_DELETE_TABLES = Object.freeze(["nova.tenant_snapshots"] as const);
 
-export const NOVA_PROVIDER_ROUTINES = Object.freeze(["nova.bump_compliance_policy_revision"] as const);
+export const NOVA_PROVIDER_ROUTINES = Object.freeze([
+  "nova.backfill_agency_analytics_unattributed",
+  "nova.bump_compliance_policy_revision"
+] as const);

@@ -12,7 +12,7 @@ import { createRegistryImageInventory } from "./create-registry-image-inventory.
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const sourceRevision = "c".repeat(40);
 const catalogVersionByCell = Object.freeze({
-  platform: "2.3.0",
+  platform: "2.4.0",
   nova: "1.0.0",
   lumen: "1.1.0",
   pulso: "1.4.0"
@@ -85,7 +85,7 @@ test("each release build plan exactly matches its cell-owned Compose services", 
     );
     for (const component of plan.components) {
       assert.ok(component.composeServices.includes(component.service));
-      assert.match(component.repository, /^ghcr\.io\/administracionhyperion\//);
+      assert.match(component.repository, /^ghcr\.io\/[a-z0-9-]+\//);
     }
   }
 });
@@ -121,7 +121,7 @@ test("platform builds one Access migrator image for all three provider one-shot 
     id: "access-migrations",
     service: "access-migrations",
     composeServices: ["access-database-bootstrap", "access-migrations", "access-role-bootstrap"],
-    repository: "ghcr.io/administracionhyperion/access-migrations"
+    repository: "ghcr.io/hyperionprivate/access-migrations"
   });
   assert.equal(
     plan.components.some((component) => ["access-database-bootstrap", "access-role-bootstrap"].includes(component.id)),
@@ -137,7 +137,7 @@ test("platform builds one Audit migrator image for all three provider one-shot a
     id: "audit-migrations",
     service: "audit-migrations",
     composeServices: ["audit-database-bootstrap", "audit-migrations", "audit-role-bootstrap"],
-    repository: "ghcr.io/administracionhyperion/audit-migrations"
+    repository: "ghcr.io/hyperionprivate/audit-migrations"
   });
   assert.equal(
     plan.components.some((component) => ["audit-database-bootstrap", "audit-role-bootstrap"].includes(component.id)),
@@ -153,7 +153,7 @@ test("LUMEN builds one provider migrator image for all three one-shot aliases", 
     id: "lumen-migrations",
     service: "lumen-migrations",
     composeServices: ["lumen-database-bootstrap", "lumen-migrations", "lumen-role-bootstrap"],
-    repository: "ghcr.io/administracionhyperion/lumen-migrations"
+    repository: "ghcr.io/hyperionprivate/lumen-migrations"
   });
   assert.equal(
     plan.components.some((component) => ["lumen-database-bootstrap", "lumen-role-bootstrap"].includes(component.id)),
@@ -169,7 +169,7 @@ test("PULSO builds one provider migrator image for all three one-shot aliases", 
     id: "pulso-migrations",
     service: "pulso-migrations",
     composeServices: ["pulso-database-bootstrap", "pulso-migrations", "pulso-role-bootstrap"],
-    repository: "ghcr.io/administracionhyperion/pulso-migrations"
+    repository: "ghcr.io/hyperionprivate/pulso-migrations"
   });
   assert.equal(
     plan.components.some((component) => ["pulso-database-bootstrap", "pulso-role-bootstrap"].includes(component.id)),

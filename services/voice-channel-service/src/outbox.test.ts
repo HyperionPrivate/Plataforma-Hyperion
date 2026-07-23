@@ -12,7 +12,7 @@ describe("PostgresVoiceOutbox.fail", () => {
     const [sql, params] = query.mock.calls[0]! as unknown as [string, unknown[]];
     expect(sql).toMatch(/insert into voice\.outbox_dlq/i);
     expect(sql).toMatch(/attempt_count >= 8/i);
-    expect(params).toEqual(["22222222-2222-4222-8222-222222222222", "voice-worker", "webhook_delivery_failed"]);
+    expect(params).toEqual(["22222222-2222-4222-8222-222222222222", "voice-worker", "webhook_delivery_failed", false]);
   });
 });
 

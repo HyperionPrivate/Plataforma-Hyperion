@@ -80,6 +80,30 @@ jobs:
           node-version: 22
           registry-url: ${{ inputs.registry_origin }}
 
+      - name: Verify canonical identity and effective CODEOWNERS access
+        shell: bash
+        env:
+          GITHUB_OWNERSHIP_TOKEN: ${{ secrets.RELEASE_GOVERNANCE_TOKEN }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          CONTRACT: ${{ inputs.contract }}
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          case "$CONTRACT" in
+            platform-contracts|audit-contracts) cell=platform ;;
+            nova-contracts) cell=nova ;;
+            lumen-contracts) cell=lumen ;;
+            pulso-contracts) cell=pulso ;;
+            *) echo 'Unknown provider contract.' >&2; exit 1 ;;
+          esac
+          node scripts/releases/verify-registry-publish-path.mjs \
+            --verify-github-access \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --registry-origin "$REGISTRY_ORIGIN" \
+            --cell "$cell"
+
       - name: Resolve provider package and canonical tag
         shell: bash
         env:

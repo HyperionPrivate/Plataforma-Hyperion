@@ -6,6 +6,7 @@
  *   node scripts/autonomy/elevenlabs-import-sip-ddi.mjs --write-env
  *   node scripts/autonomy/elevenlabs-import-sip-ddi.mjs --all --write-env
  *   node scripts/autonomy/elevenlabs-import-sip-ddi.mjs --split-ab --write-env
+ *   node scripts/autonomy/elevenlabs-import-sip-ddi.mjs --split-ab --existing-only
  *
  * Env:
  *   ELEVENLABS_API_KEY
@@ -13,19 +14,29 @@
  *   ELEVENLABS_AGENT_ID_B (Flujo B; required with --split-ab)
  *   SIP_TRUNK_ADDRESS, SIP_TRUNK_USERNAME, SIP_TRUNK_PASSWORD
  *   SIP_TRUNK_TRANSPORT (default tcp)
+ *   SIP_TRUNK_CODECS (default PCMA/8000,PCMU/8000)
+ *   SIP_TRUNK_MEDIA_ENCRYPTION (default disabled)
+ *   ELEVENLABS_IMPORT_ENV_FILE (default .env; may point to a deployment env file)
  *   SIP_SMOKE_DDI_E164 (default +573110456598)
  *   SIP_DDI_E164_LIST (comma-separated; used with --all / --split-ab)
  *   SIP_DDI_E164_LIST_A / SIP_DDI_E164_LIST_B (optional explicit split)
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  assertOutboundTrunkReadback,
+  buildOutboundTrunkConfig,
+  normalizeSipMediaEncryption,
+  parseSipTrunkCodecs
+} from "./elevenlabs-sip-trunk-config.mjs";
 
 const ROOT = resolve(import.meta.dirname, "../..");
-const ENV_PATH = resolve(ROOT, ".env");
+const ENV_PATH = resolve(ROOT, process.env.ELEVENLABS_IMPORT_ENV_FILE?.trim() || ".env");
 const BASE = "https://api.elevenlabs.io";
 const writeEnv = process.argv.includes("--write-env");
 const importAll = process.argv.includes("--all");
 const splitAb = process.argv.includes("--split-ab");
+const existingOnly = process.argv.includes("--existing-only");
 
 function loadDotEnv() {
   if (!existsSync(ENV_PATH)) return;
@@ -132,11 +143,16 @@ function findPhone(existing, e164) {
   });
 }
 
-async function ensureSipPhone({ e164, label, agentId, trunk }) {
+async function ensureSipPhone({ e164, label, agentId, trunk, existingOnly: skipCreate }) {
+  const outboundTrunkConfig = buildOutboundTrunkConfig(trunk);
   let existing = listPhones(await el("/v1/convai/phone-numbers"));
   let found = findPhone(existing, e164);
   let phoneNumberId = found ? phoneIdOf(found) : "";
   let created = false;
+
+  if (!phoneNumberId && skipCreate) {
+    return { phoneNumberId: "", created: false, skipped: true, e164, agentId: agentId || "", trunkVerified: false };
+  }
 
   if (!phoneNumberId) {
     try {
@@ -150,14 +166,7 @@ async function ensureSipPhone({ e164, label, agentId, trunk }) {
           supports_outbound: true,
           agent_id: agentId || null,
           inbound_trunk_config: null,
-          outbound_trunk_config: {
-            address: trunk.address,
-            transport: trunk.transport,
-            credentials: {
-              username: trunk.username,
-              password: trunk.password
-            }
-          }
+          outbound_trunk_config: outboundTrunkConfig
         }
       });
       phoneNumberId = phoneIdOf(createdRow);
@@ -184,14 +193,17 @@ async function ensureSipPhone({ e164, label, agentId, trunk }) {
     }
   }
 
-  if (agentId) {
-    await el(`/v1/convai/phone-numbers/${phoneNumberId}`, {
-      method: "PATCH",
-      body: { agent_id: agentId }
-    });
-  }
+  await el(`/v1/convai/phone-numbers/${phoneNumberId}`, {
+    method: "PATCH",
+    body: {
+      ...(agentId ? { agent_id: agentId } : {}),
+      outbound_trunk_config: outboundTrunkConfig
+    }
+  });
+  const readback = await el(`/v1/convai/phone-numbers/${phoneNumberId}`);
+  assertOutboundTrunkReadback(readback, outboundTrunkConfig);
 
-  return { phoneNumberId, created, e164, agentId: agentId || "" };
+  return { phoneNumberId, created, e164, agentId: agentId || "", trunkVerified: true };
 }
 
 function defaultCoopList() {
@@ -221,7 +233,9 @@ async function main() {
     address: process.env.SIP_TRUNK_ADDRESS?.trim() || "sip.voipcentral.net",
     username: process.env.SIP_TRUNK_USERNAME?.trim() || "",
     password: process.env.SIP_TRUNK_PASSWORD?.trim() || "",
-    transport: process.env.SIP_TRUNK_TRANSPORT?.trim() || "tcp"
+    transport: process.env.SIP_TRUNK_TRANSPORT?.trim() || "tcp",
+    enabledCodecs: parseSipTrunkCodecs(process.env.SIP_TRUNK_CODECS),
+    mediaEncryption: normalizeSipMediaEncryption(process.env.SIP_TRUNK_MEDIA_ENCRYPTION)
   };
   if (!trunk.username || !trunk.password) {
     throw new Error("SIP_TRUNK_USERNAME and SIP_TRUNK_PASSWORD are required");
@@ -241,8 +255,8 @@ async function main() {
   if (splitAb) {
     const listA = listAEnv.length ? listAEnv : allList.slice(0, 5);
     const listB = listBEnv.length ? listBEnv : allList.slice(5, 10);
-    if (listA.length !== 5 || listB.length !== 5) {
-      throw new Error(`--split-ab expects 5+5 DDIs (got A=${listA.length} B=${listB.length})`);
+    if (!listA.length || !listB.length) {
+      throw new Error(`--split-ab requires at least one DDI per flow (got A=${listA.length} B=${listB.length})`);
     }
     plan = [
       ...listA.map((e164) => ({ e164, agentId: agentA, flow: "A" })),
@@ -260,16 +274,22 @@ async function main() {
       e164: item.e164,
       label,
       agentId: item.agentId,
-      trunk
+      trunk,
+      existingOnly
     });
+    if (result.skipped) {
+      console.log(JSON.stringify({ ddi_suffix: result.e164.slice(-4), flow: item.flow, skipped: "not_listed" }));
+      continue;
+    }
     results.push({ ...result, flow: item.flow });
     console.log(
       JSON.stringify({
-        e164: result.e164,
+        ddi_suffix: result.e164.slice(-4),
         phone_number_id: result.phoneNumberId,
         created: result.created,
         flow: item.flow,
-        agent_id: item.agentId
+        agent_id: item.agentId,
+        trunk_verified: result.trunkVerified
       })
     );
   }

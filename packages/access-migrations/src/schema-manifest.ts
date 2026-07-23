@@ -1,9 +1,10 @@
-export const ACCESS_CURRENT_MIGRATION = "004-access-tenant-lifecycle-integrity.sql";
+export const ACCESS_CURRENT_MIGRATION = "005-access-jwt-denylist.sql";
 export const ACCESS_FRESH_BASELINE_MIGRATION = "001-access-fresh-baseline.sql";
 export const ACCESS_FRESH_PROVIDER_MIGRATIONS = Object.freeze([
   ACCESS_FRESH_BASELINE_MIGRATION,
   "002-access-runtime-role-boundary.sql",
   "003-access-tenant-projection.sql",
+  "004-access-tenant-lifecycle-integrity.sql",
   ACCESS_CURRENT_MIGRATION
 ]);
 export const ACCESS_FRESH_PROVIDER_LEDGER = Object.freeze([
@@ -20,8 +21,12 @@ export const ACCESS_FRESH_PROVIDER_LEDGER = Object.freeze([
     checksum: "5fb558a7d36899e98e532b22e0134665187f3c4db75f63a155cfe9d31821e7c8"
   }),
   Object.freeze({
-    name: ACCESS_CURRENT_MIGRATION,
+    name: "004-access-tenant-lifecycle-integrity.sql",
     checksum: "c17283b147bcc57cd66e040e4b8f91e20285667f4c2dd1d23c16671b55d61a08"
+  }),
+  Object.freeze({
+    name: ACCESS_CURRENT_MIGRATION,
+    checksum: "3c88553e9d4d5a6085b8e80c5ef2a7d4391e02fac30ee1ff0c26b0f33e92c7a7"
   })
 ]);
 

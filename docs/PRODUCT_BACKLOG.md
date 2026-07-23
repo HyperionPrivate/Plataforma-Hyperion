@@ -5,6 +5,8 @@ Este documento ya no mantiene un backlog independiente. Las referencias históri
 - [catálogo de productos](catalogs/products.v1.json);
 - [catálogo de servicios](catalogs/services.v1.json);
 - [catálogo de deuda](catalogs/debt.v1.json);
+- [plan maestro de ejecución](catalogs/execution-plan.v1.json), que solo orquesta referencias y no sustituye la
+  trazabilidad ni crea otro backlog funcional;
 - [trazabilidad de requisitos](products/REQUIREMENTS-TRACEABILITY.md).
 
 Los identificadores `HYP-*` de esos catálogos son el registro local vigente hasta su migración a issues de la

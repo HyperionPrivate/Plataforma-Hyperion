@@ -35,6 +35,11 @@ Crea/actualiza:
 | Valerie Coopfuturo - Flujo A | Renovación (CDAT) | `ELEVENLABS_AGENT_ID` / `DEMO_AGENT_ID` |
 | Valerie Coopfuturo - Flujo B | Reactivación      | `ELEVENLABS_AGENT_ID_B`                 |
 
+El agente de Renovación seleccionado actualmente es
+`agent_0101kxy863dzeejvyrepzxthbhez`. Es administrado externamente: configura
+`NOVA_EL_PRESERVE_AGENT_A=true` para que el bootstrap compruebe que existe sin
+sobrescribir su prompt, voz ni herramientas.
+
 También añade voces ES compartidas a la librería (Fernanda / Veronica), ASR `scribe_realtime`, idioma `es`.
 
 Vars dialer en `.env` local (gitignored):

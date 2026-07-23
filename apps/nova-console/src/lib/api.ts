@@ -1,8 +1,8 @@
 import { parseAccessPrincipal, type AccessPrincipal } from "./session.js";
 
-interface ResponseEnvelope<T> {
+export interface ResponseEnvelope<T> {
   data: T;
-  meta?: { requestId?: string; generatedAt?: string };
+  meta?: { requestId?: string; generatedAt?: string; [key: string]: unknown };
 }
 
 interface RequestOptions {
@@ -76,7 +76,7 @@ function errorDetails(payload: unknown): { message?: string; data?: Record<strin
   return { message: typeof record.error === "string" ? record.error : undefined, data: record };
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function requestPayload(path: string, options: RequestOptions = {}): Promise<unknown> {
   const headers = new Headers();
   if (options.body !== undefined) headers.set("content-type", "application/json");
   if (options.method && options.method !== "GET") addMutationHeaders(headers);
@@ -95,11 +95,22 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     const details = errorDetails(payload);
     throw new ApiError(response.status, details.message ?? `${response.status} ${response.statusText}`, details.data);
   }
-  return unwrap<T>(payload);
+  return payload;
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return unwrap<T>(await requestPayload(path, options));
 }
 
 export const api = {
   get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
+  getEnvelope: async <T>(path: string, signal?: AbortSignal): Promise<ResponseEnvelope<T>> => {
+    const payload = await requestPayload(path, { signal });
+    if (typeof payload === "object" && payload !== null && "data" in payload) {
+      return payload as ResponseEnvelope<T>;
+    }
+    return { data: payload as T };
+  },
   post: <T>(path: string, body: unknown, signal?: AbortSignal) => request<T>(path, { method: "POST", body, signal }),
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body }),
   put: <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body }),

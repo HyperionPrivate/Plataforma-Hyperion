@@ -79,8 +79,8 @@ sudo --preserve-env=ACCESS_RESTORE_ARCHIVE,ACCESS_RESTORE_DATABASE,ACCESS_RESTOR
 Después del restore, ejecute `@hyperion/access-migrations bootstrap:roles` con credenciales nuevas. Valide readiness de
 Identity y Tenant, el ledger exacto, una lectura autorizada y la denegación de `CREATE`/`TEMPORARY` para ambos roles
 antes de cambiar tráfico. El ledger Access debe contener, sin filas adicionales, `001-access-fresh-baseline.sql`,
-`002-access-runtime-role-boundary.sql`, `003-access-tenant-projection.sql` y
-`004-access-tenant-lifecycle-integrity.sql`, conservando sus checksums publicados.
+`002-access-runtime-role-boundary.sql`, `003-access-tenant-projection.sql`,
+`004-access-tenant-lifecycle-integrity.sql` y `005-access-jwt-denylist.sql`, conservando sus checksums publicados.
 
 La validación del restore también debe acreditar `trg_access_tenant_lifecycle_v1` como `ENABLE ALWAYS` sobre
 `platform.tenants` y la función

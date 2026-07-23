@@ -7,7 +7,7 @@ export const RELEASE_CELLS = Object.freeze(["platform", "nova", "lumen", "pulso"
 const SEMVER =
   /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const COMPONENT_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const OWNER = /^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const OWNER = /^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?)?$/;
 const OCI_REPOSITORY = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]*)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$/;
 const OCI_IMAGE =
   /^(?<repository>[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]*)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+)@sha256:(?<digest>[0-9a-f]{64})$/;

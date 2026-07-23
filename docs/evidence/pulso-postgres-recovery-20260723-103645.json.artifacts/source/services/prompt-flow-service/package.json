@@ -1,0 +1,20 @@
+{
+  "name": "@hyperion/prompt-flow-service",
+  "version": "0.2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hyperion/database": "workspace:*",
+    "@hyperion/platform-contracts": "1.1.0",
+    "@hyperion/pulso-migrations": "workspace:*",
+    "@hyperion/service-runtime": "workspace:*"
+  }
+}

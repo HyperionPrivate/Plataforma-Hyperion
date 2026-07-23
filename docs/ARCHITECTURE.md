@@ -68,9 +68,10 @@ readiness hacia la base global; su ledger es `audit_runtime.migration_ledger`. E
 `@hyperion/pulso-migrations` controla checksums en `pulso_iris.migration_ledger`, publica la versión actual en
 `pulso_iris.schema_version`, publica además el marcador owner-owned de SOFÍA en
 `agent_runtime.schema_version` y sólo activa `hyperion_pulso`, `hyperion_sofia`, `hyperion_knowledge`,
-`hyperion_integration` y `hyperion_channel` después de verificar estructura y ACL. Ese baseline autónomo aún
-contiene 37 FKs hacia sus copias locales de `platform.tenants`/`platform.products`, seis lecturas PL/pgSQL entre
-owners y tres funciones `SECURITY DEFINER` N-1; el detector las conserva como deuda efectiva, no como autonomía.
+`hyperion_integration` y `hyperion_channel` después de verificar estructura y ACL. El detector de límites efectivo
+reporta 0 grupos de deuda preexistente (`pnpm architecture:check`); la autonomía operativa restante se rastrea en
+[`docs/catalogs/debt.v1.json`](catalogs/debt.v1.json) (cutover, registry, HA/offsite), no como hallazgos SQL
+baseline.
 
 La selección operativa de tenant usa UUID opacos. `pnpm federation:check` inspecciona SQL embebido en runtimes,
 archivos SQL provider-owned y scripts operativos, y rechaza predicados sobre `slug` aun cuando usen aliases,

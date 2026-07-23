@@ -36,8 +36,9 @@ propiedad explícita de datos y despliegues por servicio.
   continúa únicamente durante la ventana de compatibilidad N/N−1.
 - PostgreSQL compartido como clúster de transición, no como unidad de migración: la base heredada conserva
   `001–046` para compatibilidad, mientras Access, Audit, NOVA, LUMEN y PULSO tienen bases lógicas, migradores,
-  ledgers, roles y readiness provider-owned. PULSO crea `hyperion_pulso`, pero su baseline conserva 46 hallazgos
-  efectivos y su cutover y recuperación sobre una copia del entorno objetivo aún deben demostrarse.
+  ledgers, roles y readiness provider-owned. PULSO crea `hyperion_pulso`; el detector de límites efectivo reporta
+  **0 grupos de deuda preexistente** (`pnpm architecture:check`), y el cutover/recuperación sobre el entorno
+  objetivo productivo siguen pendientes aunque el drill PostgreSQL 001–016 ya tiene recibo local verificado.
 - Outbox/inbox en los handoffs durables implementados: mensajes inbound, resultados de entrega Channel → PULSO,
   procesamiento PULSO → SOFÍA y auditorías de Channel, PULSO y SOFÍA → Audit. PULSO encola la auditoría
   dentro de la misma transacción que la mutación relevante y Audit aplica el evento con inbox idempotente.
@@ -48,8 +49,8 @@ propiedad explícita de datos y despliegues por servicio.
 - PULSO con `pulso-console`, `pulso-bff`, contexto Docker allowlisted, Compose y migrador propios. Los seis
   runtimes con base de datos validan `pulso_iris.schema_version`; SOFÍA accede al dominio PULSO mediante contratos
   owner-owned y Access ya no ejecuta un trigger de inicialización PULSO. El stack global sigue disponible sólo
-  durante el cutover transicional; 37 FKs, seis accesos PL/pgSQL y tres funciones `SECURITY DEFINER` del baseline
-  PULSO permanecen registrados, con owner, issue y vencimiento.
+  durante el cutover transicional. La deuda restante está en
+  [`docs/catalogs/debt.v1.json`](docs/catalogs/debt.v1.json) (`findingGroups=0` en el baseline efectivo).
 - Los clientes web no conservan un bearer compartido en `localStorage`: usan requests same-origin con cookies de
   sesión aisladas por origen; NOVA y la administración neutral añaden protección CSRF explícita en sus BFF.
 - Runtimes con readiness HTTP real, cierre drenado y confianza de proxy desactivada salvo IP/CIDR explícito.

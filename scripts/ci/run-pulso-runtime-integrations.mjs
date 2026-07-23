@@ -25,7 +25,7 @@ export const PULSO_RUNTIME_INTEGRATION_SUITES = Object.freeze([
     fixtureDatabaseUrlEnvironment: "TEST_PULSO_FIXTURE_DATABASE_URL",
     expectedFixtureDatabaseRole: "hyperion",
     files: Object.freeze([
-      Object.freeze({ path: "src/appointment-routes.integration.test.ts", tests: 12 }),
+      Object.freeze({ path: "src/appointment-routes.integration.test.ts", tests: 13 }),
       Object.freeze({ path: "src/audit-client.integration.test.ts", tests: 5 }),
       Object.freeze({ path: "src/channel-delivery-events.integration.test.ts", tests: 8 }),
       Object.freeze({ path: "src/channel-inbound-events.integration.test.ts", tests: 2 }),

@@ -135,8 +135,8 @@ function readKbConfig() {
  * al audio ("Okay, the user confirmed..."). Override: NOVA_EL_LLM=gemini-2.5-flash
  * Default TTS = turbo_v2_5 (v3 falló init SIP en VoipCentral). Override: NOVA_EL_TTS=...
  */
-const LLM_MODEL = process.env.NOVA_EL_LLM?.trim() || "gpt-4o-mini";
-const LLM_FALLBACK = "gemini-2.0-flash";
+const LLM_MODEL = process.env.NOVA_EL_LLM?.trim() || "gemini-2.5-flash-lite";
+const LLM_FALLBACK = "gpt-4o-mini";
 const TTS_MODEL = process.env.NOVA_EL_TTS?.trim() || "eleven_turbo_v2_5";
 const TTS_FALLBACK = "eleven_turbo_v2_5";
 
@@ -162,7 +162,10 @@ function agentPayload({ name, prompt, firstMessage, voiceId, tags, kb }) {
   const promptConfig = {
     prompt,
     llm: LLM_MODEL,
-    temperature: 0.25,
+    temperature: 0.35,
+    max_tokens: 180,
+    ignore_default_personality: true,
+    enable_reasoning_summary: false,
     timezone: "America/Bogota",
     built_in_tools: {
       end_call: {
@@ -176,6 +179,12 @@ function agentPayload({ name, prompt, firstMessage, voiceId, tags, kb }) {
         description:
           "Detecta buzón de voz, contestadora automática o mensaje pregrabado. Si se activa: no dejes mensaje largo; despídete en una frase breve e invoca end_call.",
         params: { system_tool_type: "voicemail_detection" }
+      },
+      skip_turn: {
+        name: "skip_turn",
+        description:
+          "Quédate en silencio y espera cuando el asociado diga que necesita un momento, que está pensando o que todavía no ha terminado de hablar. No uses esta herramienta como relleno ni para evitar responder una pregunta clara.",
+        params: { system_tool_type: "skip_turn" }
       }
     }
   };
@@ -185,8 +194,8 @@ function agentPayload({ name, prompt, firstMessage, voiceId, tags, kb }) {
       enabled: true,
       embedding_model: "multilingual_e5_large_instruct",
       max_vector_distance: 0.6,
-      max_documents_length: 12000,
-      max_retrieved_rag_chunks_count: 8
+      max_documents_length: 6000,
+      max_retrieved_rag_chunks_count: 4
     };
   }
   return {
@@ -201,21 +210,38 @@ function agentPayload({ name, prompt, firstMessage, voiceId, tags, kb }) {
       turn: {
         turn_timeout: 7,
         mode: "turn",
-        turn_eagerness: "eager"
+        turn_eagerness: "eager",
+        turn_model: "turn_v3",
+        speculative_turn: true,
+        retranscribe_on_turn_timeout: false,
+        interruption_ignore_terms: ["sí", "si", "ajá", "aja", "claro", "entiendo", "ok", "mmm"],
+        interruption_ignore_term_languages: ["es"]
       },
       tts: {
         model_id: TTS_MODEL,
         voice_id: voiceId,
         agent_output_audio_format: "pcm_16000",
         text_normalisation_type: "system_prompt",
-        stability: 0.55,
+        stability: 0.48,
         similarity_boost: 0.8,
-        speed: 1.0
+        speed: 1.08
       },
-      conversation: { text_only: false, max_duration_seconds: 600 },
+      conversation: {
+        text_only: false,
+        max_duration_seconds: 600,
+        client_events: [
+          "audio",
+          "interruption",
+          "agent_response",
+          "user_transcript",
+          "agent_response_correction",
+          "agent_tool_response"
+        ]
+      },
       agent: {
         first_message: firstMessage,
         language: "es",
+        disable_first_message_interruptions: true,
         dynamic_variables: {
           dynamic_variable_placeholders: DYNAMIC_VARIABLE_DEFAULTS
         },
@@ -333,6 +359,14 @@ const EVALUATION_CRITERIA = [
 ];
 
 const PROMPT_SHARED_BLOCKS = `
+# Conversación en tiempo real
+- Responde apenas el asociado termine una idea clara. Evita silencios, preámbulos y frases de relleno.
+- Cada intervención debe ser breve: una o dos oraciones cortas y, cuando corresponda, una sola pregunta.
+- No repitas ni resumas toda la respuesta del asociado. Confirma en dos o tres palabras y avanza.
+- No hables encima del asociado. Si empieza o continúa hablando, cede la palabra inmediatamente, escucha y responde solo cuando termine su idea.
+- "Ajá", "sí", "claro" o sonidos breves mientras tú hablas son señales de escucha, no un turno nuevo.
+- Si dice "un momento", "déjeme pensar" o equivalente, usa skip_turn y guarda silencio hasta que vuelva a hablar.
+
 # Current Date
 Fecha y hora actuales (zona America/Bogota): {{system__time}}
 Úsalas solo si el asociado pregunta por el día, horario o para acordar un callback. No las recites al inicio.
@@ -357,6 +391,7 @@ Fecha y hora actuales (zona America/Bogota): {{system__time}}
 # Tools
 - end_call: invócala SOLO tras despedida cortés, opt-out, no-titular sin handoff, o buzón. Nunca a mitad de explicación.
 - voicemail_detection: si hay buzón/contestadora, una frase breve SIN revelar que tiene o tuvo crédito, e invoca end_call. No dejes mensaje largo.
+- skip_turn: úsala si el asociado pide tiempo para pensar o indica que aún no termina. Espera en silencio; no lo apures.
 - Si transfer_to_number está disponible y piden hablar ya con un asesor, ofrécela; si no, confirma que un asesor de {{agencia}} le contactará.
 
 # Guardrails
@@ -521,7 +556,18 @@ function withTtsFallback(payload, modelId) {
   return next;
 }
 
-async function patchOrCreateAgent(name, payload, { preferredId, legacyNames = [] } = {}) {
+async function patchOrCreateAgent(name, payload, { preferredId, legacyNames = [], preservePreferredId = false } = {}) {
+  if (preservePreferredId) {
+    if (!preferredId) {
+      throw new Error(`Preserving ${name} requires an explicit preferred agent id`);
+    }
+    const selected = await el(`/v1/convai/agents/${preferredId}`);
+    if (!selected?.agent_id || selected.agent_id !== preferredId) {
+      throw new Error(`Preserved agent ${preferredId} could not be verified`);
+    }
+    return { agent_id: preferredId, created: false, preserved: true };
+  }
+
   const tryOnce = async (body) => {
     const list = await el("/v1/convai/agents");
     const agents = Array.isArray(list?.agents) ? list.agents : Array.isArray(list) ? list : [];
@@ -573,6 +619,7 @@ async function patchOrCreateAgent(name, payload, { preferredId, legacyNames = []
 async function main() {
   loadDotEnv();
   const writeEnv = process.argv.includes("--write-env");
+  const preserveAgentA = process.env.NOVA_EL_PRESERVE_AGENT_A?.trim().toLowerCase() === "true";
 
   const voiceA = await ensureSharedVoice(VOICE_RENOVACION);
   const voiceB = await ensureSharedVoice(VOICE_REACTIVACION);
@@ -595,7 +642,8 @@ async function main() {
     }),
     {
       preferredId: process.env.ELEVENLABS_AGENT_ID?.trim() || process.env.DEMO_AGENT_ID?.trim() || "",
-      legacyNames: ["NOVA Renovacion Coopfuturo"]
+      legacyNames: ["NOVA Renovacion Coopfuturo"],
+      preservePreferredId: preserveAgentA
     }
   );
 
@@ -641,6 +689,7 @@ async function main() {
   console.log(`DEMO_DDI_PHONE_NUMBER_ID=${ddi || ""}`);
   console.log(`PHONE_NUMBERS_IN_ACCOUNT=${phoneList.length}`);
   console.log(`RENOVACION_CREATED=${renov.created}`);
+  console.log(`RENOVACION_PRESERVED=${renov.preserved === true}`);
   console.log(`REACTIVACION_CREATED=${react.created}`);
   console.log(`KB_ATTACHED=${kb ? kb.id : "none"}`);
 

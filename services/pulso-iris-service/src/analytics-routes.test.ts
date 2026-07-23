@@ -67,6 +67,50 @@ describe("conversation analytics projections", () => {
     expect(sql).toContain("limit 1");
   });
 
+  it("binds dashboard analytics to the tenant agenda timezone", async () => {
+    query.mockImplementation(async (sqlValue: unknown, _params?: unknown[]) => {
+      const sql = String(sqlValue);
+      if (sql.includes("pulso_iris.tenant_snapshots")) {
+        return { rows: [{ status: "active", sourceVersion: "1" }] };
+      }
+      if (sql.includes("from pulso_iris.agenda_settings") && sql.includes("timezone")) {
+        return { rows: [{ timezone: "America/New_York" }] };
+      }
+      return {
+        rows: [
+          {
+            interactionsActive: 0,
+            whatsappToday: 0,
+            voiceToday: 0,
+            whatsappYesterday: 0,
+            voiceYesterday: 0,
+            resolvedToday: 0,
+            handoffToday: 0,
+            abandonedToday: 0,
+            appointmentsTodayBySofia: 0,
+            handoffsOpen: 0
+          }
+        ]
+      };
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${tenantId}/pulso-iris/dashboard/live`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const timezoneLookup = query.mock.calls.find(
+      ([sql]) => String(sql).includes("from pulso_iris.agenda_settings") && String(sql).includes("timezone")
+    );
+    expect(timezoneLookup?.[1]).toEqual([tenantId, "America/Bogota"]);
+    expect(
+      query.mock.calls.some(
+        ([sql, params]) => String(sql).includes("timezone($2, started_at)") && params?.[1] === "America/New_York"
+      )
+    ).toBe(true);
+  });
+
   it("projects the masked WhatsApp identity without selecting the full phone", async () => {
     query.mockImplementation(async (sqlValue: unknown) => {
       const sql = String(sqlValue);

@@ -164,12 +164,21 @@ describeIntegration("LUMEN clinical vertical", () => {
   });
 
   it("keeps encounter reads isolated by tenant", async () => {
-    const own = await app.inject({ method: "GET", url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}` });
+    const headers = { "x-operator-id": operatorId, "x-operator-role": "advisor" };
+    const own = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}`,
+      headers
+    });
     expect(own.statusCode).toBe(200);
     expect(own.json().data.encounter.isDemo).toBe(true);
     expect(own.json().data.encounter.siteId).toBe(siteA);
 
-    const foreign = await app.inject({ method: "GET", url: `/v1/tenants/${tenantB}/lumen/encounters/${encounterA}` });
+    const foreign = await app.inject({
+      method: "GET",
+      url: `/v1/tenants/${tenantB}/lumen/encounters/${encounterA}`,
+      headers: { "x-operator-id": await createOperator(tenantB), "x-operator-role": "advisor" }
+    });
     expect(foreign.statusCode).toBe(404);
   });
 
@@ -583,8 +592,10 @@ describeIntegration("LUMEN clinical vertical", () => {
       expect(lastStructureOrigin).toBe("manual");
       const detail = await app.inject({
         method: "GET",
-        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}`
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}`,
+        headers
       });
+      expect(detail.statusCode).toBe(200);
       expect(detail.json().data.dictations[0].source).toBe("browser_microphone");
     } finally {
       releaseProvider();
@@ -1027,13 +1038,181 @@ describeIntegration("LUMEN clinical vertical", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
-  it("keeps auditors read-only", async () => {
-    const response = await app.inject({
+  it("requires an active local review grant before every clinical mutation and side effect", async () => {
+    const fixture = await createFixture(tenantA, "WRITE-GRANT");
+    const reviewlessOperatorId = await createOperator(tenantA, { canReview: false });
+    const headers = { "x-operator-role": "admin", "x-operator-id": reviewlessOperatorId };
+    const before = await readClinicalEffects(tenantA, fixture.encounterId);
+    const transcriptionCallsBefore = transcriptionCallCount;
+    const structureCallsBefore = structureCallCount;
+
+    const responses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/start`,
+        headers
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/transcriptions`,
+        headers,
+        payload: {
+          audioBase64: validWebmAudioBase64(),
+          mimeType: "audio/webm",
+          source: "authorized_upload",
+          durationSeconds: 8,
+          idempotencyKey: randomUUID()
+        }
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/structure`,
+        headers,
+        payload: { transcript: TEST_TRANSCRIPT, idempotencyKey: randomUUID() }
+      }),
+      app.inject({
+        method: "PATCH",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/record`,
+        headers,
+        payload: { content: CONTENT }
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/approve`,
+        headers
+      })
+    ]);
+
+    expect(responses.map((response) => response.statusCode)).toEqual([403, 403, 403, 403, 403]);
+    for (const response of responses) {
+      expect(response.json().data).toEqual({ error: "Active LUMEN review grant required" });
+    }
+    expect(transcriptionCallCount).toBe(transcriptionCallsBefore);
+    expect(structureCallCount).toBe(structureCallsBefore);
+    await expect(readClinicalEffects(tenantA, fixture.encounterId)).resolves.toEqual(before);
+
+    const inactiveOperatorId = await createOperator(tenantA, { isActive: false, canReview: false });
+    const missingOperatorId = randomUUID();
+    for (const deniedOperatorId of [inactiveOperatorId, missingOperatorId]) {
+      const denied = await app.inject({
+        method: "POST",
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/start`,
+        headers: { "x-operator-role": "advisor", "x-operator-id": deniedOperatorId }
+      });
+      expect(denied.statusCode).toBe(403);
+    }
+    await expect(readClinicalEffects(tenantA, fixture.encounterId)).resolves.toEqual(before);
+
+    const reviewerId = await createOperator(tenantA);
+    const allowed = await app.inject({
       method: "POST",
-      url: `/v1/tenants/${tenantA}/lumen/encounters/${encounterA}/start`,
-      headers: { "x-operator-role": "auditor", "x-operator-id": operatorId }
+      url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}/start`,
+      headers: { "x-operator-role": "auditor", "x-operator-id": reviewerId }
     });
-    expect(response.statusCode).toBe(403);
+    expect(allowed.statusCode).toBe(200);
+
+    for (const operation of ["transcription", "structure"] as const) {
+      const raceFixture = await createFixture(tenantA, `WRITE-GRANT-${operation.toUpperCase()}`);
+      const raceOperatorId = await createOperator(tenantA);
+      const raceHeaders = { "x-operator-role": "advisor", "x-operator-id": raceOperatorId };
+      const callsBefore = operation === "transcription" ? transcriptionCallCount : structureCallCount;
+      let notifyStarted!: () => void;
+      const providerStarted = new Promise<void>((resolve) => {
+        notifyStarted = resolve;
+      });
+      let releaseProvider!: () => void;
+      const providerRelease = new Promise<void>((resolve) => {
+        releaseProvider = resolve;
+      });
+      if (operation === "transcription") {
+        transcriptionBarrier = { started: notifyStarted, release: providerRelease };
+      } else {
+        structureBarrier = { started: notifyStarted, release: providerRelease };
+      }
+
+      try {
+        const request = app.inject(
+          operation === "transcription"
+            ? {
+                method: "POST",
+                url: `/v1/tenants/${tenantA}/lumen/encounters/${raceFixture.encounterId}/transcriptions`,
+                headers: raceHeaders,
+                payload: {
+                  audioBase64: validWebmAudioBase64(0x71),
+                  mimeType: "audio/webm",
+                  source: "browser_microphone",
+                  durationSeconds: 8,
+                  idempotencyKey: randomUUID()
+                }
+              }
+            : {
+                method: "POST",
+                url: `/v1/tenants/${tenantA}/lumen/encounters/${raceFixture.encounterId}/structure`,
+                headers: raceHeaders,
+                payload: { transcript: TEST_TRANSCRIPT, idempotencyKey: randomUUID() }
+              }
+        );
+        await providerStarted;
+
+        // If provider I/O held a database transaction, this revocation would
+        // block on the reservation's FOR SHARE row lock until provider release.
+        const revocation = revokeOperatorGrant(tenantA, raceOperatorId);
+        let revocationTimer!: ReturnType<typeof setTimeout>;
+        const revocationOutcome = await Promise.race([
+          revocation.then(() => "settled" as const),
+          new Promise<"timeout">((resolve) => {
+            revocationTimer = setTimeout(() => resolve("timeout"), 2_000);
+          })
+        ]);
+        clearTimeout(revocationTimer);
+        if (revocationOutcome !== "settled") {
+          releaseProvider();
+          await revocation;
+          throw new Error(`${operation} provider I/O retained a database transaction`);
+        }
+
+        releaseProvider();
+        const response = await request;
+        expect(response.statusCode).toBe(403);
+        expect(response.json().data).toEqual({ error: "Active LUMEN review grant required" });
+      } finally {
+        releaseProvider();
+        if (operation === "transcription") transcriptionBarrier = undefined;
+        else structureBarrier = undefined;
+      }
+
+      expect(operation === "transcription" ? transcriptionCallCount : structureCallCount).toBe(callsBefore + 1);
+      const effects = await readClinicalEffects(tenantA, raceFixture.encounterId);
+      expect(effects).toMatchObject({
+        status: "preconsultation",
+        dictationCount: 0,
+        recordCount: 0,
+        attemptCount: 1,
+        outboxCount: 0
+      });
+      const attempt = await client.query(
+        `select operation, status, error_code as "errorCode",
+                result_entity_id as "resultEntityId", result_snapshot as "resultSnapshot",
+                temp_audio_deleted_at is not null as "temporaryAudioDeleted",
+                cleanup_target_status as "cleanupTargetStatus"
+         from lumen.processing_attempts
+         where tenant_id = $1 and encounter_id = $2`,
+        [tenantA, raceFixture.encounterId]
+      );
+      expect(attempt.rows).toEqual([
+        {
+          operation: operation === "transcription" ? "transcription" : "structuring",
+          status: "failed",
+          errorCode: "operator_grant_revoked",
+          resultEntityId: null,
+          resultSnapshot: null,
+          temporaryAudioDeleted: operation === "transcription",
+          cleanupTargetStatus: null
+        }
+      ]);
+      expect(JSON.stringify(attempt.rows)).not.toContain(TEST_TRANSCRIPT);
+      expect(JSON.stringify(attempt.rows)).not.toContain(JSON.stringify(CONTENT));
+    }
   });
 });
 
@@ -1099,16 +1278,57 @@ async function createFixture(
   return { encounterId: encounter.rows[0].id, patientId, siteId };
 }
 
-async function createOperator(tenantId: string): Promise<string> {
+async function createOperator(
+  tenantId: string,
+  options: { isActive?: boolean; canReview?: boolean } = {}
+): Promise<string> {
   const operatorId = randomUUID();
+  const isActive = options.isActive ?? true;
+  const canReview = options.canReview ?? true;
   await fixtureClient.query(
     `insert into lumen.operator_grants (
        operator_id, tenant_id, role, is_active, can_review,
        source_version, source_updated_at, payload_hash
-     ) values ($1, $2, 'advisor', true, true, 1, now(), $3)`,
-    [operatorId, tenantId, sha256ForTest(`operator:${tenantId}:${operatorId}:1`)]
+     ) values ($1, $2, 'advisor', $3, $4, 1, now(), $5)`,
+    [
+      operatorId,
+      tenantId,
+      isActive,
+      canReview,
+      sha256ForTest(`operator:${tenantId}:${operatorId}:1:${isActive}:${canReview}`)
+    ]
   );
   return operatorId;
+}
+
+async function revokeOperatorGrant(tenantId: string, revokedOperatorId: string): Promise<void> {
+  await fixtureClient.query(
+    `update lumen.operator_grants
+     set is_active = false, can_review = false,
+         source_version = source_version + 1, source_updated_at = now(),
+         payload_hash = $3, updated_at = now()
+     where tenant_id = $1 and operator_id = $2`,
+    [tenantId, revokedOperatorId, sha256ForTest(`operator:${tenantId}:${revokedOperatorId}:revoked`)]
+  );
+}
+
+async function readClinicalEffects(tenantId: string, encounterId: string) {
+  const result = await client.query(
+    `select encounter.status,
+            (select count(*)::int from lumen.dictations
+             where tenant_id = $1 and encounter_id = $2) as "dictationCount",
+            (select count(*)::int from lumen.clinical_records
+             where tenant_id = $1 and encounter_id = $2) as "recordCount",
+            (select count(*)::int from lumen.processing_attempts
+             where tenant_id = $1 and encounter_id = $2) as "attemptCount",
+            (select count(*)::int from lumen.outbox_events
+             where tenant_id = $1
+               and (payload->>'entityId' = $2::text or payload->'metadata'->>'encounterId' = $2::text)) as "outboxCount"
+     from lumen.encounters encounter
+     where encounter.tenant_id = $1 and encounter.id = $2`,
+    [tenantId, encounterId]
+  );
+  return result.rows[0];
 }
 
 async function createCompletedAudioDictation(

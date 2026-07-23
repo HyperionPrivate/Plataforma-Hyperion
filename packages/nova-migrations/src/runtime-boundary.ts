@@ -3,6 +3,7 @@ import {
   NOVA_PROVIDER_LEDGER,
   NOVA_PROVIDER_ROUTINES,
   NOVA_PROVIDER_TABLES,
+  NOVA_RUNTIME_APPEND_ONLY_TABLES,
   NOVA_RUNTIME_NO_DELETE_TABLES,
   NOVA_RUNTIME_READ_ONLY_TABLES
 } from "./schema-manifest.js";
@@ -114,6 +115,7 @@ export async function assertNovaRuntimeDatabaseBoundary(client: NovaBoundaryClie
 
   const expectedTables = new Set<string>(NOVA_PROVIDER_TABLES);
   const readOnlyTables = new Set<string>(NOVA_RUNTIME_READ_ONLY_TABLES);
+  const appendOnlyTables = new Set<string>(NOVA_RUNTIME_APPEND_ONLY_TABLES);
   const noDeleteTables = new Set<string>(NOVA_RUNTIME_NO_DELETE_TABLES);
   for (const [role, tables] of tablesByRole) {
     if (tables.length !== expectedTables.size || tables.some(({ relation }) => !expectedTables.has(relation))) {
@@ -127,7 +129,9 @@ export async function assertNovaRuntimeDatabaseBoundary(client: NovaBoundaryClie
         const expected =
           ownsRuntimeSchema &&
           (privilege === "select" ||
+            (appendOnlyTables.has(table.relation) && privilege === "insert") ||
             (!readOnlyTables.has(table.relation) &&
+              !appendOnlyTables.has(table.relation) &&
               ["insert", "update", "delete"].includes(privilege) &&
               !(privilege === "delete" && noDeleteTables.has(table.relation))));
         if (table[`can_${privilege}`] !== expected) {

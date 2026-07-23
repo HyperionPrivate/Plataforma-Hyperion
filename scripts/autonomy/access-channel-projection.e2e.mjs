@@ -469,7 +469,7 @@ export async function runAccessChannelAcceptance(environment = process.env, opti
     });
 
     const ledgers = await readLedgers(accessFixtureDb, pulsoFixtureDb);
-    assert.equal(ledgers.access.at(-1)?.name, "004-access-tenant-lifecycle-integrity.sql");
+    assert.equal(ledgers.access.at(-1)?.name, "005-access-jwt-denylist.sql");
     // Channel projection lands at 004; the current contract tip persists the Access FK attestation at 016.
     assert.equal(ledgers.pulso.at(-1)?.name, "016-attest-access-fk-contract.sql");
     assert.ok(

@@ -1,0 +1,114 @@
+name: lumen-database
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    name: lumen / logical-database-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: hyperion
+          POSTGRES_PASSWORD: hyperion_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hyperion -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout LUMEN database closure
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install isolated LUMEN database test closure
+        run: >-
+          node scripts/ci/cell-install-plan.mjs --cell lumen
+          --package @hyperion/lumen-migrations
+          --package @hyperion/lumen-service --execute
+      - name: Build provider-owned LUMEN migrator
+        run: pnpm --filter @hyperion/lumen-migrations build
+      - name: Build LUMEN service integration closure
+        run: pnpm --filter @hyperion/lumen-service... build
+      - name: Generate isolated ephemeral LUMEN database credentials
+        run: >-
+          node -e "const fs=require('node:fs');const crypto=require('node:crypto');
+          const names=['LUMEN_MIGRATOR','LUMEN'];
+          const values=names.map((name)=>name+'_DATABASE_PASSWORD='+crypto.randomBytes(24).toString('base64url'));
+          values.forEach((entry)=>process.stdout.write('::add-mask::'+entry.slice(entry.indexOf('=')+1)+'\n'));
+          fs.appendFileSync(process.env.GITHUB_ENV,values.join('\n')+'\n',{mode:0o600})"
+      - name: Bootstrap isolated LUMEN logical database
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          LUMEN_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          LUMEN_POSTGRES_DB=hyperion_lumen_ci
+          LUMEN_MIGRATOR_DATABASE_PASSWORD="$LUMEN_MIGRATOR_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/lumen-migrations bootstrap:database
+      - name: Run provider-owned LUMEN migrations as the dedicated owner
+        shell: bash
+        run: |
+          lumen_migrator_url="postgres://hyperion_lumen_migrator:${LUMEN_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_lumen_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            LUMEN_MIGRATOR_DATABASE_URL="$lumen_migrator_url" \
+            pnpm --filter @hyperion/lumen-migrations migrate
+      - name: Activate only the LUMEN runtime role
+        shell: bash
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci
+          LUMEN_POSTGRES_ADMIN_URL=postgres://hyperion:hyperion_test@localhost:5432/postgres
+          LUMEN_POSTGRES_DB=hyperion_lumen_ci
+          LUMEN_DATABASE_PASSWORD="$LUMEN_DATABASE_PASSWORD"
+          pnpm --filter @hyperion/lumen-migrations bootstrap:roles
+      - name: Verify autonomous LUMEN catalog and runtime privilege fence
+        shell: bash
+        run: |
+          lumen_migrator_url="postgres://hyperion_lumen_migrator:${LUMEN_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_lumen_ci"
+          lumen_runtime_url="postgres://hyperion_lumen:${LUMEN_DATABASE_PASSWORD}@localhost:5432/hyperion_lumen_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true HYPERION_ENVIRONMENT=ci \
+            TEST_LUMEN_MIGRATOR_DATABASE_URL="$lumen_migrator_url" \
+            TEST_LUMEN_DATABASE_URL="$lumen_runtime_url" \
+            pnpm --filter @hyperion/lumen-migrations exec vitest run src/autonomy.integration.test.ts
+      - name: Run all 22 LUMEN service PostgreSQL integrations as the runtime role
+        shell: bash
+        run: |
+          lumen_fixture_url="postgres://hyperion_lumen_migrator:${LUMEN_MIGRATOR_DATABASE_PASSWORD}@localhost:5432/hyperion_lumen_ci"
+          lumen_runtime_url="postgres://hyperion_lumen:${LUMEN_DATABASE_PASSWORD}@localhost:5432/hyperion_lumen_ci"
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true NODE_ENV=test HYPERION_ENVIRONMENT=ci \
+            TEST_DATABASE_URL="$lumen_runtime_url" \
+            TEST_LUMEN_FIXTURE_DATABASE_URL="$lumen_fixture_url" \
+            EXPECTED_DATABASE_ROLE=hyperion_lumen \
+            DURABLE_OUTBOX_ENABLED=false \
+            pnpm --filter @hyperion/lumen-service exec vitest run \
+              src/lumen.integration.test.ts \
+              src/projection-events.integration.test.ts \
+              src/audio-cleanup-readiness.integration.test.ts \
+              --no-file-parallelism --reporter=default --reporter=json \
+              --outputFile.json=/tmp/lumen-service-integration.json
+      - name: Require exactly 22 passing LUMEN integrations with no skips
+        run: >-
+          node -e "const fs=require('node:fs');
+          const result=JSON.parse(fs.readFileSync('/tmp/lumen-service-integration.json','utf8'));
+          const expected={total:22,passed:22,failed:0,pending:0};
+          const actual={total:result.numTotalTests,passed:result.numPassedTests,
+          failed:result.numFailedTests,pending:result.numPendingTests};
+          if(JSON.stringify(actual)!==JSON.stringify(expected)){
+          throw new Error('Unexpected LUMEN integration result: '+JSON.stringify(actual));}
+          process.stdout.write('LUMEN integration result accepted: '+JSON.stringify(actual)+'\n')"
+      - name: Test provider-owned LUMEN PostgreSQL recovery gates
+        run: pnpm ops:lumen:postgres:recovery:test

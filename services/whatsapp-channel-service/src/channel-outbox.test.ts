@@ -126,8 +126,8 @@ describe("PostgresChannelOutbox", () => {
     await outbox.fail(terminalId, "Timeout/private detail");
 
     expect(db.calls[0]?.sql).toContain("'retry_scheduled'");
-    expect(db.calls[0]?.params).toEqual([retryId, "channel-worker", "http_503_private_detail"]);
-    expect(db.calls[1]?.params).toEqual([terminalId, "channel-worker", "timeout_private_detail"]);
+    expect(db.calls[0]?.params).toEqual([retryId, "channel-worker", "http_503_private_detail", false]);
+    expect(db.calls[1]?.params).toEqual([terminalId, "channel-worker", "timeout_private_detail", false]);
     expect(db.calls[2]?.sql).toContain("else 'dead_letter'");
     expect(db.calls[2]?.sql).toContain("status in ('processed', 'ignored')");
     expect(db.calls[2]?.params).toEqual([tenantId, sourceId, terminalId, "timeout_private_detail"]);

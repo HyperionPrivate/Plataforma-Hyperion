@@ -8,7 +8,7 @@ import {
   voiceCallDispatchedPayloadSchema,
   voiceCallCompletedPayloadSchema
 } from "@hyperion/nova-contracts";
-import { isRestrictedDeploymentEnvironment, readServiceUrls } from "@hyperion/nova-config";
+import { readDeploymentEnvironment, readServiceUrls } from "@hyperion/nova-config";
 import type { DatabaseClient } from "@hyperion/database";
 import type { ServiceContext } from "@hyperion/nova-service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -137,13 +137,24 @@ function withGreeting(dynamicVars?: Record<string, string>): Record<string, stri
   return vars;
 }
 
-const reconcileSchema = z.object({
-  result_code: z.string().max(80),
-  intent: z.string().max(80).optional(),
-  disposition: z.string().max(80).optional(),
-  resolution: z.enum(["confirmed_initiated", "confirmed_not_created", "abandoned"]).optional(),
-  conversation_id: z.string().max(160).optional()
-});
+const reconcileSchema = z
+  .object({
+    result_code: z.string().max(80),
+    intent: z.string().max(80).optional(),
+    disposition: z.string().max(80).optional(),
+    resolution: z.enum(["confirmed_initiated", "confirmed_not_created", "abandoned"]).optional(),
+    conversation_id: z.string().max(160).optional(),
+    provider_record_absent: z.literal(true).optional()
+  })
+  .superRefine((value, context) => {
+    if (value.provider_record_absent && value.resolution !== "abandoned") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["resolution"],
+        message: "provider_record_absent requires resolution=abandoned"
+      });
+    }
+  });
 
 const internalEventSchema = z.object({
   id: z.string().uuid(),
@@ -306,7 +317,7 @@ export async function registerVoiceRoutes(
     }
 
     const row = existing.rows[0]!;
-    if (row.dialerCallRef && parsed.data.resolution) {
+    if (row.dialerCallRef && parsed.data.resolution && !parsed.data.provider_record_absent) {
       await dependencies.dialer.reconcileCall(row.dialerCallRef, parsed.data.resolution, {
         conversationId: parsed.data.conversation_id,
         note: parsed.data.result_code
@@ -322,6 +333,7 @@ export async function registerVoiceRoutes(
       await tx.query(
         `update voice.calls
             set status = $3, result_code = $4, intent = $5, disposition = $6,
+                provider_conversation_id = coalesce($7, provider_conversation_id),
                 completed_at = now(), updated_at = now()
           where tenant_id = $1 and call_id = $2`,
         [
@@ -330,7 +342,8 @@ export async function registerVoiceRoutes(
           terminalStatus,
           parsed.data.result_code,
           parsed.data.intent ?? null,
-          parsed.data.disposition ?? null
+          parsed.data.disposition ?? null,
+          parsed.data.conversation_id ?? null
         ]
       );
 
@@ -609,6 +622,30 @@ export async function registerVoiceRoutes(
         idempotencyKey: `requested:${tenantId}:${callPayload.call_id}`
       });
 
+      if (placed.status.trim().toLowerCase() !== "initiated") {
+        await context.db.transaction(async (tx) => {
+          await tx.query(
+            `update voice.calls
+                set status = 'needs_reconciliation', result_code = 'dispatch_ambiguous',
+                    dialer_call_ref = $3, provider_conversation_id = $4, updated_at = now()
+              where tenant_id = $1 and call_id = $2 and status = 'requested'`,
+            [tenantId, callPayload.call_id, placed.callRef, placed.conversationId ?? null]
+          );
+          await tx.query(`update voice.inbox_events set processed_at = now() where event_id = $1`, [parsed.data.id]);
+        });
+        return reply.code(202).send(
+          envelope(
+            {
+              status: "needs_reconciliation",
+              call_id: callPayload.call_id,
+              contact_id: callPayload.contact_id,
+              error: `Dialer returned ${placed.status}; provider outcome requires reconciliation`
+            },
+            request.id
+          )
+        );
+      }
+
       await context.db.transaction(async (tx) => {
         const updated = await tx.query(
           `update voice.calls
@@ -719,7 +756,7 @@ function verifyDialerWebhook(
   const signature = readHeader(request, "x-dialer-signature") || readHeader(request, "x-webhook-signature");
 
   if (!secret) {
-    if (isRestrictedDeploymentEnvironment(env)) {
+    if (readDeploymentEnvironment(env) !== "local") {
       return { accepted: false, signatureValid: false, statusCode: 401, message: "Webhook secret required" };
     }
     return { accepted: true, signatureValid: false, statusCode: 200 };
@@ -752,7 +789,7 @@ function verifyElevenLabsWebhook(
     readHeader(request, "x-webhook-signature");
 
   if (!secret) {
-    if (isRestrictedDeploymentEnvironment(env)) {
+    if (readDeploymentEnvironment(env) !== "local") {
       return { accepted: false, signatureValid: false, statusCode: 401, message: "ElevenLabs webhook secret required" };
     }
     return { accepted: true, signatureValid: false, statusCode: 200 };

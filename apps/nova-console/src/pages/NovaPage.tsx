@@ -32,6 +32,29 @@ import type {
   ReviewRow
 } from "./nova/types.js";
 
+export function readAnalyticsCoverageNotice(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const coverage = value as Record<string, unknown>;
+  const status = typeof coverage.status === "string" ? coverage.status : undefined;
+  const coverageFrom = typeof coverage.coverageFrom === "string" ? coverage.coverageFrom : undefined;
+  const appliedAt = typeof coverage.appliedAt === "string" ? coverage.appliedAt : undefined;
+
+  if (status === "complete_since_cutover" && coverageFrom) {
+    return `El desglose por sede es completo desde ${coverageFrom}. El histórico anterior al corte${
+      appliedAt ? ` (${appliedAt})` : ""
+    } permanece en un agregado no atribuible y no se muestra como dato de una sede.`;
+  }
+  if (status === "partial") {
+    return `El desglose por sede no está disponible porque la reconciliación detectó datos sin atribución${
+      coverageFrom ? ` desde ${coverageFrom}` : ""
+    }. Se requiere un backfill verificado antes de mostrar la serie.`;
+  }
+  if (status === "unavailable") {
+    return "No fue posible verificar la cobertura del desglose por sede; la serie se mantiene oculta.";
+  }
+  return undefined;
+}
+
 export function NovaPage() {
   const { session, tenant, grant } = useNovaConsole();
   const novaRole = primaryNovaRole(grant);
@@ -49,14 +72,17 @@ export function NovaPage() {
   const [reviews, setReviews] = useState<ReviewRow[]>([]);
   const [flowIds, setFlowIds] = useState<string[]>([]);
   const [notice, setNotice] = useState<string>();
+  const [analyticsCoverageNotice, setAnalyticsCoverageNotice] = useState<string>();
 
   const canWriteOps = novaGrantAllows(grant, "nova:write");
   const canAdminOps = novaRole === "admin" && novaGrantAllows(grant, "nova:admin");
   const canReadProviderConfig = novaRole === "admin" || novaRole === "supervisor";
+  const canReadManagementViews = novaRole === "admin" || novaRole === "supervisor";
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(undefined);
+    setAnalyticsCoverageNotice(undefined);
     try {
       const [dash, camps, hands, convs, leadRows] = await Promise.all([
         api.get<DashboardSummary>(novaPath(tenant.id, "dashboard")),
@@ -89,17 +115,29 @@ export function NovaPage() {
         setFlowIds([]);
       }
 
-      try {
-        const daily = await api.get<AnalyticsDailyRow[]>(novaPath(tenant.id, "analytics/daily"));
-        setAnalytics(Array.isArray(daily) ? daily : []);
-      } catch {
+      if (canReadManagementViews) {
+        try {
+          const analyticsResponse = await api.getEnvelope<AnalyticsDailyRow[]>(novaPath(tenant.id, "analytics/daily"));
+          setAnalytics(Array.isArray(analyticsResponse.data) ? analyticsResponse.data : []);
+          setAnalyticsCoverageNotice(readAnalyticsCoverageNotice(analyticsResponse.meta?.analyticsCoverage));
+        } catch (analyticsError) {
+          setAnalytics([]);
+          setAnalyticsCoverageNotice(
+            analyticsError instanceof ApiError ? readAnalyticsCoverageNotice(analyticsError.data?.coverage) : undefined
+          );
+        }
+      } else {
         setAnalytics([]);
       }
 
-      try {
-        const reviewRows = await api.get<ReviewRow[]>(novaPath(tenant.id, "reviews"));
-        setReviews(Array.isArray(reviewRows) ? reviewRows : []);
-      } catch {
+      if (canReadManagementViews) {
+        try {
+          const reviewRows = await api.get<ReviewRow[]>(novaPath(tenant.id, "reviews"));
+          setReviews(Array.isArray(reviewRows) ? reviewRows : []);
+        } catch {
+          setReviews([]);
+        }
+      } else {
         setReviews([]);
       }
 
@@ -120,7 +158,7 @@ export function NovaPage() {
     } finally {
       setLoading(false);
     }
-  }, [canAdminOps, canReadProviderConfig, tenant.id]);
+  }, [canAdminOps, canReadManagementViews, canReadProviderConfig, tenant.id]);
 
   useEffect(() => {
     void refresh();
@@ -336,6 +374,12 @@ export function NovaPage() {
           <Card>
             <CardHead title="Estado" />
             <p role="status">{notice}</p>
+          </Card>
+        ) : null}
+        {analyticsCoverageNotice ? (
+          <Card>
+            <CardHead title="Cobertura de analytics" />
+            <p role="status">{analyticsCoverageNotice}</p>
           </Card>
         ) : null}
         {loading ? <LoadingState label="Cargando NOVA…" /> : null}

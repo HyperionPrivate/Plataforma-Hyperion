@@ -157,7 +157,7 @@ jobs:
             TEST_SOFIA_DATABASE_URL="$sofia_runtime_url" \
             pnpm --filter @hyperion/service-runtime exec vitest run \
               src/sofia-n-minus-one-readiness.integration.test.ts --no-file-parallelism
-      - name: Run all 93 PULSO runtime PostgreSQL integrations with fenced roles
+      - name: Run all 94 PULSO runtime PostgreSQL integrations with fenced roles
         shell: bash
         run: |
           pulso_runtime_url="postgres://hyperion_pulso:${PULSO_DATABASE_PASSWORD}@localhost:5432/hyperion_pulso_n1_fixture_ci"

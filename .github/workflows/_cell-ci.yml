@@ -193,6 +193,10 @@ jobs:
             TEST_NOVA_MIGRATOR_DATABASE_URL="$nova_migrator_url" \
             TEST_NOVA_DATABASE_URL="$nova_runtime_url" \
             pnpm --filter @hyperion/nova-core-service exec vitest run src/campaign-orchestrator.integration.test.ts
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 CI=true \
+            TEST_NOVA_MIGRATOR_DATABASE_URL="$nova_migrator_url" \
+            TEST_NOVA_DATABASE_URL="$nova_runtime_url" \
+            pnpm --filter @hyperion/nova-core-service exec vitest run src/operator-read-scope.integration.test.ts
       - name: Exercise real NOVA to Audit outage, lost acknowledgement and idempotent retry
         shell: bash
         run: |

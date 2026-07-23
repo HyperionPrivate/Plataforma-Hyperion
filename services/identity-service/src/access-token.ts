@@ -124,6 +124,11 @@ export class AccessTokenService {
   }
 
   verify(token: string): AccessPrincipal | undefined {
+    return this.verifyClaims(token)?.principal;
+  }
+
+  /** Cryptographic + claim check; caller must still consult the jti denylist when a DB is available. */
+  verifyClaims(token: string): { principal: AccessPrincipal; claims: AccessTokenClaims } | undefined {
     try {
       const parts = token.split(".");
       if (parts.length !== 3) return undefined;
@@ -146,7 +151,7 @@ export class AccessTokenService {
 
       const claims = accessTokenClaimsSchema.parse(decodeJson(encodedClaims));
       if (!this.#claimsAreCurrent(claims)) return undefined;
-      return principalFromAccessTokenClaims(claims);
+      return { principal: principalFromAccessTokenClaims(claims), claims };
     } catch {
       return undefined;
     }
@@ -205,8 +210,8 @@ export async function loadAccessTokenServices(
   environment: NodeJS.ProcessEnv = process.env,
   dependencies: AccessTokenEnvironmentDependencies = {}
 ): Promise<ReadonlyMap<string, AccessTokenService>> {
-  const privateKeyFile = environment.ACCESS_TOKEN_PRIVATE_KEY_FILE?.trim();
-  const privateKeyPem = environment.ACCESS_TOKEN_PRIVATE_KEY_PEM?.trim();
+  const privateKeyFile = environment.ACCESS_TOKEN_PRIVATE_KEY_FILE?.trim() || undefined;
+  const privateKeyPem = environment.ACCESS_TOKEN_PRIVATE_KEY_PEM?.trim() || undefined;
   const required = signingKeysRequired(environment);
   if (privateKeyFile && privateKeyPem) {
     throw new Error("Configure only one of ACCESS_TOKEN_PRIVATE_KEY_FILE or ACCESS_TOKEN_PRIVATE_KEY_PEM");

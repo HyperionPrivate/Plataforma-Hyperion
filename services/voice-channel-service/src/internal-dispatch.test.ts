@@ -67,4 +67,64 @@ describe("voice.call.requested ingestion", () => {
       await app.close();
     }
   );
+
+  it("persists Dialer references and requires reconciliation when dispatch is unknown", async () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      queries.push({ sql, params });
+      if (sql.includes("insert into voice.inbox_events")) {
+        return { rows: [{ event_id: EVENT_ID }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    const db = {
+      query,
+      transaction: (work: (tx: { query: typeof query }) => unknown) => work({ query }),
+      close: vi.fn()
+    };
+    const dialer = {
+      placeCall: vi.fn().mockResolvedValue({
+        callRef: "provider-call-ambiguous",
+        conversationId: "provider-conversation-ambiguous",
+        status: "dispatch_unknown"
+      })
+    };
+    const app = Fastify();
+    await registerVoiceRoutes(
+      app,
+      { config: {}, db, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } } as never,
+      { dialer: dialer as never }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/voice/internal/events",
+      payload: {
+        id: EVENT_ID,
+        type: "voice.call.requested.v2",
+        version: 1,
+        occurredAt: new Date().toISOString(),
+        tenantId: TENANT_ID,
+        correlationId: "55555555-5555-4555-8555-555555555555",
+        payload: {
+          call_id: CALL_ID,
+          contact_id: CONTACT_ID,
+          phone_e164: "+573001234567",
+          product_flow: "renovacion"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json().data.status).toBe("needs_reconciliation");
+    const ambiguousUpdate = queries.find(({ sql }) => sql.includes("result_code = 'dispatch_ambiguous'"));
+    expect(ambiguousUpdate?.params).toEqual([
+      TENANT_ID,
+      CALL_ID,
+      "provider-call-ambiguous",
+      "provider-conversation-ambiguous"
+    ]);
+    expect(queries.some(({ sql }) => sql.includes("voice.call.dispatched"))).toBe(false);
+    await app.close();
+  });
 });

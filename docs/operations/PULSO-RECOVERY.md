@@ -21,12 +21,10 @@ PostgreSQL sin snapshot consistente de WhatsApp **no es un backup completo de PU
 
 - La fuente debe llamarse `hyperion_pulso` o pertenecer al namespace de ensayo `hyperion_pulso_*`.
 - El owner de toda base restaurada es `hyperion_pulso_migrator`.
-- El catálogo efectivo contiene únicamente las migraciones provider-owned `001-pulso-autonomous-baseline.sql`,
-  `002-pulso-runtime-roles.sql`, `003-sofia-readiness-marker.sql`,
-  `004-access-channel-tenant-projection.sql`, `005-access-iris-tenant-projection.sql`,
-  `006-access-sofia-tenant-projection.sql`, `007-access-integration-tenant-projection.sql` y
-  `015-revoke-sofia-pulso-iris-control-plane-grants.sql`, con versión global terminal 15 y marker local SOFÍA versión 2 en
-  `agent_runtime.schema_version`.
+- El catálogo efectivo contiene exactamente las 16 migraciones provider-owned consecutivas desde
+  `001-pulso-autonomous-baseline.sql` hasta `016-attest-access-fk-contract.sql`, con versión global terminal 16 y
+  marker local SOFÍA versión 2 en `agent_runtime.schema_version`. El runner compara esa lista con los archivos SQL
+  reales y falla si falta, sobra o cambia de orden una migración.
 - Los cinco roles runtime son `hyperion_pulso`, `hyperion_sofia`, `hyperion_knowledge`, `hyperion_integration` y
   `hyperion_channel`; ninguno recibe DDL ni acceso al ledger.
 - Los dumps viven en `backups/pulso/pulso-<UTC>.dump.gz` y el restore exige su SHA-256 exacto y confirmación
@@ -59,7 +57,7 @@ pnpm db:pulso:restore
 ```
 
 Después del restore, ejecute de nuevo migraciones y bootstrap de roles contra la base restaurada. Deben omitir
-exactamente 001–004, conservar la versión global 4 y el marker SOFÍA local 1, y reproducir schema, ownership y ACL
+exactamente 001–016, conservar la versión global 16 y el marker SOFÍA local 2, y reproducir schema, ownership y ACL
 antes del smoke funcional.
 
 ## Snapshot separado de sesiones WhatsApp
@@ -148,17 +146,40 @@ normal y en `finally`. `SIGKILL` no es interceptable y todavía puede dejar recu
 limpieza manual; nunca debe registrarse `cleanupVerified: true` en ese caso. Este riesgo es otro motivo para no
 autorizar el drill ni el restore como operación desatendida.
 
-## Drill PostgreSQL aislado y evidencia 2026-07-18
+## Drill PostgreSQL aislado y recibo verificable
 
 El comando opt-in crea un proyecto Compose aleatorio, construye solo el migrador PULSO, inserta un marker, ejecuta
-los wrappers productivos y restaura en `hyperion_pulso_restore_drill`:
+los wrappers productivos y restaura en `hyperion_pulso_restore_drill`. Cree primero un directorio real y privado; el
+runner rechaza un parent symlink, un destino existente y cualquier extensión distinta de `.json`:
 
 ```bash
+mkdir -p backups/pulso/evidence
+receipt="backups/pulso/evidence/pulso-postgres-recovery-$(date -u +%Y%m%dT%H%M%SZ).json"
+test ! -e "${receipt}"
+
 pnpm ops:pulso:postgres:recovery:drill \
-  --confirm "RUN ISOLATED PULSO POSTGRES RECOVERY DRILL"
+  --confirm "RUN ISOLATED PULSO POSTGRES RECOVERY DRILL" \
+  --evidence-output "${receipt}"
+
+pnpm ops:pulso:recovery:verify \
+  --evidence "${receipt}"
 ```
 
-El rerun final terminó correctamente con esta evidencia reproducible:
+`--evidence-output` crea el destino de forma exclusiva y nunca sobrescribe un recibo. El archivo indicado contiene
+únicamente el JSON final y tiene un bundle hermano `<recibo>.artifacts`; ninguno se conserva si el drill falla o si
+la limpieza no termina con `cleanupVerified: true`. El bundle contiene el dump **sintético** aislado, schema, ledger,
+catálogo ACL/runtime, logs crudos, clausura de fuentes generada y fuentes de los comandos. No contiene credenciales ni
+el parche Git crudo. Las líneas `PULSO_POSTGRES_RECOVERY_EVIDENCE_*` y
+`PULSO_POSTGRES_RECOVERY_DRILL_VERIFIED=true` permanecen en stdout como resumen, por lo que **no debe redirigirse
+stdout al recibo**.
+
+El verificador fail-closed exige el contrato v2 `pulso`/`postgres-only`, catálogo exacto 001–016, markers 16/16/2,
+roles y ACL, canario preservado, cleanup e inventario Docker. Además, vuelve a leer el bundle y recalcula los SHA-256
+del dump, schema, ledger, catálogo, logs y clausuras; una mutación en cualquiera falla. Los hashes de status y parche
+Git permanecen como provenance declarada porque sus contenidos crudos no se conservan para evitar secretos. El
+bundle no tiene firma externa y continúa siendo evidencia del drill sintético local, no de recuperación productiva.
+
+El rerun de 2026-07-18 terminó correctamente con esta evidencia reproducible histórica:
 
 - operación UTC: `20260718T104147Z`;
 - proyecto: `hyperion-pulso-recovery-acceptance-20260718t104147z-a2fcaec0`;
@@ -197,15 +218,15 @@ lookup por nombre que no era visible para el runtime restaurado. El proceso limp
 preservó 17/17 recursos preexistentes. La sonda se corrigió para resolver por OID mediante `pg_catalog`; el gate no
 destructivo terminó 14/14 y el rerun final anterior pasó. Ese fallo no se cuenta como evidencia de restore exitoso.
 
-### Evidencia current v4 — operación UTC 2026-07-19
+### Última evidencia histórica v4 — operación UTC 2026-07-19
 
-El recibo current completo está en
+El último recibo versionado está en
 [`pulso-postgres-recovery-20260719-v4.json`](../evidence/pulso-postgres-recovery-20260719-v4.json). La operación
 `20260719T055031Z` ejecutó backup y restore PostgreSQL aislados desde el worktree federado y acreditó:
 
 - las migraciones provider-owned 001–004 y el rerun skip-only exacto de las cuatro;
-- el marker global `15/015-revoke-sofia-pulso-iris-control-plane-grants.sql` y el marker local SOFÍA
-  `2/006-access-sofia-tenant-projection.sql`;
+- el marker global histórico `4/004-access-channel-tenant-projection.sql` y el marker local SOFÍA histórico
+  `1/003-sofia-readiness-marker.sql`;
 - restore con owner `hyperion_pulso_migrator`, cinco roles runtime, bootstrap de cinco roles, ACL exactas y
   privilegios públicos de base revocados;
 - un canario de recuperación preservado byte a byte: fuente y restore comparten SHA-256
@@ -220,6 +241,32 @@ El recibo sella además la clausura de 287 archivos, los cuatro SQL y las fuente
 `workingTreeIncluded: true`, por lo que el commit por sí solo no reproduce esos bytes. Su alcance continúa siendo
 `postgres-only` y `whatsappSessionsIncluded: false`: no acredita sesiones WhatsApp, offsite, RPO/RTO, cutover,
 smoke productivo, rollback desplegado, publicación OCI ni una imagen N−1 publicada por digest.
+
+Esta evidencia ya no representa el tip actual: el runner y el catálogo provider-owned exigen ahora las migraciones
+001–016, versión global 16 y marker local SOFÍA 2. El verificador actual la rechaza explícitamente con exit code no
+cero como `historical ... v4 evidence is not current`; el archivo histórico permanece inmutable.
+
+### Evidencia current — operación UTC 2026-07-23
+
+El recibo vigente del tip provider-owned 001–016 está en
+[`pulso-postgres-recovery-20260723-103645.json`](../evidence/pulso-postgres-recovery-20260723-103645.json) con bundle
+hermano `.artifacts`. La operación `20260723T153645Z` acreditó:
+
+- las dieciséis migraciones provider-owned y el rerun skip-only exacto de 001–016;
+- marker global `16/016-attest-access-fk-contract.sql` y marker local SOFÍA `2/006-access-sofia-tenant-projection.sql`;
+- restore con owner `hyperion_pulso_migrator`, cinco roles runtime, ACL exactas y privilegios públicos de base
+  revocados;
+- canario de recuperación preservado byte a byte entre fuente y restore;
+- eliminación de la base fuente antes de validar el restore y `cleanupVerified: true`.
+
+Verificación local:
+
+```bash
+pnpm ops:pulso:recovery:verify --evidence docs/evidence/pulso-postgres-recovery-20260723-103645.json
+```
+
+El recibo declara `workingTreeIncluded: true` y `scope: postgres-only` / `whatsappSessionsIncluded: false`: no
+acredita sesiones WhatsApp, offsite, RPO/RTO, cutover productivo ni bundles OCI publicados.
 
 ## Rollback de release por digest
 

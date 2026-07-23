@@ -15,6 +15,7 @@ import {
   platformControlTenantId,
   tenantIdSchema,
   type AccessPrincipal,
+  type AccessTokenClaims,
   type ProductGrant,
   type ProductGrantUpsert
 } from "@hyperion/platform-contracts";
@@ -38,6 +39,7 @@ import {
   verifyPassword
 } from "./auth.js";
 import { AccessTokenSizeError, loadAccessTokenServices, type AccessTokenService } from "./access-token.js";
+import { isAccessTokenJtiRevoked, revokeAccessTokenJti } from "./access-token-denylist.js";
 import {
   AccessTenantProjectionReconciler,
   PostgresAccessTenantProjectionOutbox,
@@ -746,11 +748,20 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     }
 
     if (isJwtLike(token)) {
-      const principal = verifyAccessToken(accessTokenServices, token);
-      if (!principal) {
+      const verified = verifyAccessTokenClaims(accessTokenServices, token);
+      if (!verified) {
         return reply.code(401).send(envelope({ error: "Invalid or expired session" }, request.id));
       }
-      return envelope(accessMe(principal), request.id);
+      // Without a database, cryptographic verification still applies; denylist
+      // enforcement requires Access storage (logout already needs DB).
+      if (
+        context.db &&
+        typeof verified.claims.jti === "string" &&
+        (await isAccessTokenJtiRevoked(context.db, verified.claims.jti))
+      ) {
+        return reply.code(401).send(envelope({ error: "Invalid or expired session" }, request.id));
+      }
+      return envelope(accessMe(verified.principal), request.id);
     }
 
     if (!context.db) {
@@ -801,10 +812,18 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
     }
 
     if (isJwtLike(token)) {
-      if (!verifyAccessToken(accessTokenServices, token)) {
+      const verified = verifyAccessTokenClaims(accessTokenServices, token);
+      if (!verified) {
         return reply.code(401).send(envelope({ error: "Invalid or expired session" }, request.id));
       }
-      return envelope({ loggedOut: true, locallyRevoked: false }, request.id);
+      if (!context.db) {
+        return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
+      }
+      if (typeof verified.claims.jti !== "string") {
+        return reply.code(401).send(envelope({ error: "Invalid or expired session" }, request.id));
+      }
+      await revokeAccessTokenJti(context.db, verified.claims.jti, new Date(verified.claims.exp * 1000));
+      return envelope({ loggedOut: true, locallyRevoked: true }, request.id);
     }
 
     if (!context.db) {
@@ -909,13 +928,13 @@ function isJwtLike(token: string): boolean {
   return token.split(".").length === 3;
 }
 
-function verifyAccessToken(
+function verifyAccessTokenClaims(
   services: ReadonlyMap<string, AccessTokenService>,
   token: string
-): AccessPrincipal | undefined {
+): { principal: AccessPrincipal; claims: AccessTokenClaims } | undefined {
   for (const service of services.values()) {
-    const principal = service.verify(token);
-    if (principal) return principal;
+    const verified = service.verifyClaims(token);
+    if (verified) return verified;
   }
   return undefined;
 }

@@ -16,7 +16,7 @@ import {
   type LumenFieldEvidenceOrigin,
   type LumenWorklistEntry
 } from "@hyperion/lumen-contracts";
-import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
+import type { DatabaseClient, DatabaseExecutor, DatabaseTransaction } from "@hyperion/database";
 import { envelope, tenantIdSchema } from "@hyperion/platform-contracts";
 import type { ServiceContext } from "@hyperion/service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -115,6 +115,8 @@ export async function registerLumenRoutes(
   app.get("/v1/tenants/:tenantId/lumen/worklist", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
+    const operatorId = await requireClinicalReadGrant(scope.db, scope.tenantId, request, reply);
+    if (!operatorId) return;
     const rows = await fetchWorklist(scope.db, scope.tenantId);
     return envelope(rows, request.id);
   });
@@ -122,6 +124,8 @@ export async function registerLumenRoutes(
   app.get("/v1/tenants/:tenantId/lumen/encounters/:encounterId", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
+    const operatorId = await requireClinicalReadGrant(scope.db, scope.tenantId, request, reply);
+    if (!operatorId) return;
     const encounterId = readUuid(request.params, "encounterId");
     if (!encounterId) return reply.code(400).send(envelope({ error: "encounterId must be a UUID" }, request.id));
 
@@ -133,14 +137,16 @@ export async function registerLumenRoutes(
   app.post("/v1/tenants/:tenantId/lumen/encounters/:encounterId/start", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
-    if (!requireClinicalWrite(request, reply)) return;
+    const operatorId = await requireClinicalWriteGrant(scope.db, scope.tenantId, request, reply);
+    if (!operatorId) return;
     const encounterId = readUuid(request.params, "encounterId");
     if (!encounterId) return reply.code(400).send(envelope({ error: "encounterId must be a UUID" }, request.id));
     if (!(await requireMutableEncounter(scope.db, scope.tenantId, encounterId, request, reply))) return;
-    const operatorId = readOperatorId(request);
-    if (!operatorId) return reply.code(400).send(envelope({ error: "x-operator-id must be a UUID" }, request.id));
 
-    await scope.db.transaction(async (client) => {
+    const outcome = await scope.db.transaction(async (client) => {
+      if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) {
+        return { state: "forbidden" } as const;
+      }
       const result = await client.query(
         `update lumen.encounters
          set status = 'in_progress', updated_at = now()
@@ -158,7 +164,9 @@ export async function registerLumenRoutes(
           transitionVersion: "preconsultation-in_progress"
         });
       }
+      return { state: "completed" } as const;
     });
+    if (outcome.state === "forbidden") return sendClinicalWriteForbidden(request, reply);
     const detail = await loadEncounterDetail(scope.db, scope.tenantId, encounterId);
     return envelope(detail, request.id);
   });
@@ -169,14 +177,13 @@ export async function registerLumenRoutes(
     async (request, reply) => {
       const scope = requireTenantDb(context, request, reply);
       if (!scope) return;
-      if (!requireClinicalWrite(request, reply)) return;
+      const operatorId = await requireClinicalWriteGrant(scope.db, scope.tenantId, request, reply);
+      if (!operatorId) return;
       const encounterId = readUuid(request.params, "encounterId");
       if (!encounterId) return reply.code(400).send(envelope({ error: "encounterId must be a UUID" }, request.id));
       const input = parseBody(lumenTranscriptionInputSchema, request, reply);
       if (!input) return;
       if (!(await requireMutableEncounter(scope.db, scope.tenantId, encounterId, request, reply))) return;
-      const operatorId = readOperatorId(request);
-      if (!operatorId) return reply.code(400).send(envelope({ error: "x-operator-id must be a UUID" }, request.id));
       if (!dependencies.transcriber.isConfigured()) {
         return reply
           .code(503)
@@ -195,6 +202,9 @@ export async function registerLumenRoutes(
       }
 
       const reservation = await scope.db.transaction(async (client) => {
+        if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) {
+          return { state: "forbidden" } as const;
+        }
         const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
         if (mutable === "not_found") return { state: "not_found" } as const;
         if (mutable === "approved") return { state: "approved" } as const;
@@ -212,6 +222,7 @@ export async function registerLumenRoutes(
           cleanupOwner: dependencies.audioCleanupOwner
         });
       });
+      if (reservation.state === "forbidden") return sendClinicalWriteForbidden(request, reply);
       if (reservation.state === "not_found") {
         return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
       }
@@ -237,6 +248,9 @@ export async function registerLumenRoutes(
         throwIfRequestAborted(requestAbort.signal);
         const completedTranscription = transcription;
         const outcome = await scope.db.transaction(async (client) => {
+          if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) {
+            return { state: "forbidden" } as const;
+          }
           const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
           if (mutable !== "mutable") return { state: mutable } as const;
           throwIfRequestAborted(requestAbort.signal);
@@ -304,35 +318,68 @@ export async function registerLumenRoutes(
           return { state: "created", dictation } as const;
         });
 
-        if (outcome.state === "not_found") {
-          await failProcessingAttempt(scope.db, {
+        if (outcome.state === "forbidden") {
+          await closeProcessingAttemptAfterGrantRevocation(scope.db, {
             attemptId: reservation.attemptId,
-            errorCode: "encounter_not_found",
-            cancelled: false,
             temporaryAudioDeleted: transcription.temporaryAudioDeleted
           });
+          return sendClinicalWriteForbidden(request, reply);
+        }
+        if (outcome.state === "not_found") {
+          const failureRecorded = await failProcessingAttemptWithClinicalWriteGrant(
+            scope.db,
+            scope.tenantId,
+            operatorId,
+            {
+              attemptId: reservation.attemptId,
+              errorCode: "encounter_not_found",
+              cancelled: false,
+              temporaryAudioDeleted: transcription.temporaryAudioDeleted
+            }
+          );
+          if (!failureRecorded) {
+            await closeProcessingAttemptAfterGrantRevocation(scope.db, {
+              attemptId: reservation.attemptId,
+              temporaryAudioDeleted: transcription.temporaryAudioDeleted
+            });
+            return sendClinicalWriteForbidden(request, reply);
+          }
           return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
         }
         if (outcome.state === "approved") {
-          await failProcessingAttempt(scope.db, {
-            attemptId: reservation.attemptId,
-            errorCode: "encounter_approved",
-            cancelled: false,
-            temporaryAudioDeleted: transcription.temporaryAudioDeleted
-          });
+          const failureRecorded = await failProcessingAttemptWithClinicalWriteGrant(
+            scope.db,
+            scope.tenantId,
+            operatorId,
+            {
+              attemptId: reservation.attemptId,
+              errorCode: "encounter_approved",
+              cancelled: false,
+              temporaryAudioDeleted: transcription.temporaryAudioDeleted
+            }
+          );
+          if (!failureRecorded) {
+            await closeProcessingAttemptAfterGrantRevocation(scope.db, {
+              attemptId: reservation.attemptId,
+              temporaryAudioDeleted: transcription.temporaryAudioDeleted
+            });
+            return sendClinicalWriteForbidden(request, reply);
+          }
           return reply.code(409).send(envelope({ error: "Approved encounters are immutable" }, request.id));
         }
         return reply.code(201).send(envelope(outcome.dictation, request.id));
       } catch (error) {
         const cancelled = requestAbort.signal.aborted || (isSpeechToTextError(error) && error.code === "cancelled");
-        await scope.db.transaction(async (client) => {
+        const temporaryAudioDeleted =
+          transcription?.temporaryAudioDeleted === true ||
+          (isSpeechToTextError(error) && error.temporaryAudioDeleted === true);
+        const failureRecorded = await scope.db.transaction(async (client) => {
+          if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) return false;
           await failProcessingAttempt(client, {
             attemptId: reservation.attemptId,
             errorCode: isSpeechToTextError(error) ? error.code : "transcription_failed",
             cancelled,
-            temporaryAudioDeleted:
-              transcription?.temporaryAudioDeleted === true ||
-              (isSpeechToTextError(error) && error.temporaryAudioDeleted === true)
+            temporaryAudioDeleted
           });
           await insertDurableAudit(client, {
             tenantId: scope.tenantId,
@@ -349,7 +396,16 @@ export async function registerLumenRoutes(
               audioStored: false
             }
           });
+          return true;
         });
+        if (!failureRecorded) {
+          await closeProcessingAttemptAfterGrantRevocation(scope.db, {
+            attemptId: reservation.attemptId,
+            temporaryAudioDeleted
+          });
+          if (cancelled && reply.raw.destroyed) return;
+          return sendClinicalWriteForbidden(request, reply);
+        }
         if (cancelled && reply.raw.destroyed) return;
         return sendSpeechToTextError(reply, request, error);
       } finally {
@@ -361,14 +417,13 @@ export async function registerLumenRoutes(
   app.post("/v1/tenants/:tenantId/lumen/encounters/:encounterId/structure", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
-    if (!requireClinicalWrite(request, reply)) return;
+    const operatorId = await requireClinicalWriteGrant(scope.db, scope.tenantId, request, reply);
+    if (!operatorId) return;
     const encounterId = readUuid(request.params, "encounterId");
     if (!encounterId) return reply.code(400).send(envelope({ error: "encounterId must be a UUID" }, request.id));
     const input = parseBody(lumenStructureInputSchema, request, reply);
     if (!input) return;
     if (!(await requireMutableEncounter(scope.db, scope.tenantId, encounterId, request, reply))) return;
-    const operatorId = readOperatorId(request);
-    if (!operatorId) return reply.code(400).send(envelope({ error: "x-operator-id must be a UUID" }, request.id));
     if (!dependencies.structurer.isConfigured()) {
       return reply.code(503).send(envelope({ error: "Clinical structuring provider is not configured" }, request.id));
     }
@@ -387,6 +442,9 @@ export async function registerLumenRoutes(
 
     const inputSha256 = structureInputSha256(requestedDictationId, input.transcript);
     const reservation = await scope.db.transaction(async (client) => {
+      if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) {
+        return { state: "forbidden" } as const;
+      }
       const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
       if (mutable === "not_found") return { state: "not_found" } as const;
       if (mutable === "approved") return { state: "approved" } as const;
@@ -400,6 +458,7 @@ export async function registerLumenRoutes(
         model: dependencies.structurer.model
       });
     });
+    if (reservation.state === "forbidden") return sendClinicalWriteForbidden(request, reply);
     if (reservation.state === "not_found") {
       return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
     }
@@ -432,6 +491,9 @@ export async function registerLumenRoutes(
       throwIfRequestAborted(requestAbort.signal);
 
       const outcome = await scope.db.transaction(async (client) => {
+        if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) {
+          return { state: "forbidden" } as const;
+        }
         const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
         if (mutable !== "mutable") return { state: mutable } as const;
         throwIfRequestAborted(requestAbort.signal);
@@ -580,36 +642,60 @@ export async function registerLumenRoutes(
         return { state: "created", record } as const;
       });
 
+      if (outcome.state === "forbidden") {
+        await closeProcessingAttemptAfterGrantRevocation(scope.db, { attemptId: reservation.attemptId });
+        return sendClinicalWriteForbidden(request, reply);
+      }
       if (outcome.state === "not_found") {
-        await failProcessingAttempt(scope.db, {
-          attemptId: reservation.attemptId,
-          errorCode: "encounter_not_found",
-          cancelled: false
-        });
+        const failureRecorded = await failProcessingAttemptWithClinicalWriteGrant(
+          scope.db,
+          scope.tenantId,
+          operatorId,
+          { attemptId: reservation.attemptId, errorCode: "encounter_not_found", cancelled: false }
+        );
+        if (!failureRecorded) {
+          await closeProcessingAttemptAfterGrantRevocation(scope.db, { attemptId: reservation.attemptId });
+          return sendClinicalWriteForbidden(request, reply);
+        }
         return reply.code(404).send(envelope({ error: "Encounter not found" }, request.id));
       }
       if (outcome.state === "approved") {
-        await failProcessingAttempt(scope.db, {
-          attemptId: reservation.attemptId,
-          errorCode: "record_approved",
-          cancelled: false
-        });
+        const failureRecorded = await failProcessingAttemptWithClinicalWriteGrant(
+          scope.db,
+          scope.tenantId,
+          operatorId,
+          { attemptId: reservation.attemptId, errorCode: "record_approved", cancelled: false }
+        );
+        if (!failureRecorded) {
+          await closeProcessingAttemptAfterGrantRevocation(scope.db, { attemptId: reservation.attemptId });
+          return sendClinicalWriteForbidden(request, reply);
+        }
         return reply.code(409).send(envelope({ error: "Approved clinical records cannot be replaced" }, request.id));
       }
       if (outcome.state === "dictation_not_found") {
-        await failProcessingAttempt(scope.db, {
-          attemptId: reservation.attemptId,
-          errorCode: "dictation_not_found",
-          cancelled: false
-        });
+        const failureRecorded = await failProcessingAttemptWithClinicalWriteGrant(
+          scope.db,
+          scope.tenantId,
+          operatorId,
+          { attemptId: reservation.attemptId, errorCode: "dictation_not_found", cancelled: false }
+        );
+        if (!failureRecorded) {
+          await closeProcessingAttemptAfterGrantRevocation(scope.db, { attemptId: reservation.attemptId });
+          return sendClinicalWriteForbidden(request, reply);
+        }
         return reply.code(422).send(envelope({ error: "dictationId does not belong to this encounter" }, request.id));
       }
       if (outcome.state === "record_changed" || outcome.state === "dictation_changed") {
-        await failProcessingAttempt(scope.db, {
-          attemptId: reservation.attemptId,
-          errorCode: "clinical_input_changed",
-          cancelled: false
-        });
+        const failureRecorded = await failProcessingAttemptWithClinicalWriteGrant(
+          scope.db,
+          scope.tenantId,
+          operatorId,
+          { attemptId: reservation.attemptId, errorCode: "clinical_input_changed", cancelled: false }
+        );
+        if (!failureRecorded) {
+          await closeProcessingAttemptAfterGrantRevocation(scope.db, { attemptId: reservation.attemptId });
+          return sendClinicalWriteForbidden(request, reply);
+        }
         return reply
           .code(409)
           .send(
@@ -619,7 +705,8 @@ export async function registerLumenRoutes(
       return reply.code(201).send(envelope(outcome.record, request.id));
     } catch (error) {
       const cancelled = requestAbort.signal.aborted;
-      await scope.db.transaction(async (client) => {
+      const failureRecorded = await scope.db.transaction(async (client) => {
+        if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) return false;
         await failProcessingAttempt(client, {
           attemptId: reservation.attemptId,
           errorCode: cancelled ? "cancelled" : providerErrorCode(error),
@@ -639,7 +726,13 @@ export async function registerLumenRoutes(
             humanApprovalRequired: true
           }
         });
+        return true;
       });
+      if (!failureRecorded) {
+        await closeProcessingAttemptAfterGrantRevocation(scope.db, { attemptId: reservation.attemptId });
+        if (cancelled && reply.raw.destroyed) return;
+        return sendClinicalWriteForbidden(request, reply);
+      }
       if (cancelled && reply.raw.destroyed) return;
       return sendProviderError(reply, request, error);
     } finally {
@@ -650,23 +743,25 @@ export async function registerLumenRoutes(
   app.patch("/v1/tenants/:tenantId/lumen/encounters/:encounterId/record", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
-    if (!requireClinicalWrite(request, reply)) return;
+    const operatorId = await requireClinicalWriteGrant(scope.db, scope.tenantId, request, reply);
+    if (!operatorId) return;
     const encounterId = readUuid(request.params, "encounterId");
     if (!encounterId) return reply.code(400).send(envelope({ error: "encounterId must be a UUID" }, request.id));
     if (!(await requireMutableEncounter(scope.db, scope.tenantId, encounterId, request, reply))) return;
-    const operatorId = readOperatorId(request);
-    if (!operatorId) return reply.code(400).send(envelope({ error: "x-operator-id must be a UUID" }, request.id));
     const input = parseBody(lumenClinicalRecordPatchSchema, request, reply);
     if (!input) return;
 
-    const record = await scope.db.transaction(async (client) => {
+    const outcome = await scope.db.transaction(async (client) => {
+      if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) {
+        return { state: "forbidden" } as const;
+      }
       const current = await client.query<{ id: string; content: unknown }>(
         `select id, content from lumen.clinical_records
          where tenant_id = $1 and encounter_id = $2 and status = 'draft'
          for update`,
         [scope.tenantId, encounterId]
       );
-      if (current.rowCount === 0) return undefined;
+      if (current.rowCount === 0) return { state: "not_found" } as const;
       const previousContent = lumenClinicalRecordContentSchema.parse(current.rows[0]!.content);
       const requestedRemainingFields = new Set(input.content.uncertainties.map((uncertainty) => uncertainty.field));
       const resolvedFields = [
@@ -708,7 +803,7 @@ export async function registerLumenRoutes(
                    approved_at as "approvedAt", created_at as "createdAt", updated_at as "updatedAt"`,
         [scope.tenantId, encounterId, JSON.stringify(nextContent)]
       );
-      if (result.rowCount === 0) return undefined;
+      if (result.rowCount === 0) return { state: "not_found" } as const;
       const updated = parseRecord(result.rows[0]!);
       const previousDocument = previousContent as unknown as Record<string, unknown>;
       const updatedDocument = updated.content as unknown as Record<string, unknown>;
@@ -735,26 +830,29 @@ export async function registerLumenRoutes(
           reviewedSections
         }
       });
-      return updated;
+      return { state: "updated", record: updated } as const;
     });
-    if (!record) {
+    if (outcome.state === "forbidden") return sendClinicalWriteForbidden(request, reply);
+    if (outcome.state === "not_found") {
       return reply
         .code(409)
         .send(envelope({ error: "Draft clinical record not found or already approved" }, request.id));
     }
-    return envelope(record, request.id);
+    return envelope(outcome.record, request.id);
   });
 
   app.post("/v1/tenants/:tenantId/lumen/encounters/:encounterId/approve", async (request, reply) => {
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
-    if (!requireClinicalWrite(request, reply)) return;
-    const operatorId = readOperatorId(request);
-    if (!operatorId) return reply.code(400).send(envelope({ error: "x-operator-id must be a UUID" }, request.id));
+    const operatorId = await requireClinicalWriteGrant(scope.db, scope.tenantId, request, reply);
+    if (!operatorId) return;
     const encounterId = readUuid(request.params, "encounterId");
     if (!encounterId) return reply.code(400).send(envelope({ error: "encounterId must be a UUID" }, request.id));
 
     const outcome = await scope.db.transaction(async (client) => {
+      if (!(await holdClinicalWriteGrant(client, scope.tenantId, operatorId))) {
+        return { state: "forbidden" } as const;
+      }
       const mutable = await lockMutableEncounter(client, scope.tenantId, encounterId);
       if (mutable === "not_found") return { state: "not_found" } as const;
       if (mutable === "approved") return { state: "approved" } as const;
@@ -819,6 +917,7 @@ export async function registerLumenRoutes(
       if (result.rowCount === 0) return { state: "conflict" } as const;
       return { state: "approved_record", record: parseRecord(result.rows[0]!) } as const;
     });
+    if (outcome.state === "forbidden") return sendClinicalWriteForbidden(request, reply);
     if (outcome.state === "not_found" || outcome.state === "record_not_found") {
       return reply.code(404).send(envelope({ error: "Clinical record not found" }, request.id));
     }
@@ -1179,13 +1278,86 @@ function parseBody<T extends z.ZodTypeAny>(
   return parsed.data;
 }
 
-function requireClinicalWrite(request: FastifyRequest, reply: FastifyReply): boolean {
-  const role = readHeader(request, "x-operator-role");
-  if (role === "admin" || role === "coordinator" || role === "advisor") return true;
-  void reply
-    .code(403)
-    .send(envelope({ error: role === "auditor" ? "Read-only role" : "Clinical operator role required" }, request.id));
-  return false;
+async function requireClinicalReviewGrant(
+  db: DatabaseExecutor,
+  tenantId: string,
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<string | undefined> {
+  const operatorId = readOperatorId(request);
+  if (!operatorId) {
+    void reply.code(400).send(envelope({ error: "x-operator-id must be a UUID" }, request.id));
+    return undefined;
+  }
+
+  if (await hasClinicalWriteGrant(db, tenantId, operatorId)) return operatorId;
+
+  sendClinicalWriteForbidden(request, reply);
+  return undefined;
+}
+
+const requireClinicalWriteGrant = requireClinicalReviewGrant;
+const requireClinicalReadGrant = requireClinicalReviewGrant;
+
+async function hasClinicalWriteGrant(db: DatabaseExecutor, tenantId: string, operatorId: string): Promise<boolean> {
+  const grant = await db.query(
+    `select 1
+     from lumen.operator_grants
+     where tenant_id = $1 and operator_id = $2
+       and is_active and can_review
+     limit 1`,
+    [tenantId, operatorId]
+  );
+  return grant.rowCount === 1;
+}
+
+async function holdClinicalWriteGrant(db: DatabaseTransaction, tenantId: string, operatorId: string): Promise<boolean> {
+  const grant = await db.query(
+    `select 1
+     from lumen.operator_grants
+     where tenant_id = $1 and operator_id = $2
+       and is_active and can_review
+     for share`,
+    [tenantId, operatorId]
+  );
+  return grant.rowCount === 1;
+}
+
+async function failProcessingAttemptWithClinicalWriteGrant(
+  db: DatabaseClient,
+  tenantId: string,
+  operatorId: string,
+  input: Parameters<typeof failProcessingAttempt>[1]
+): Promise<boolean> {
+  return db.transaction(async (client) => {
+    if (!(await holdClinicalWriteGrant(client, tenantId, operatorId))) return false;
+    await failProcessingAttempt(client, input);
+    return true;
+  });
+}
+
+/**
+ * A processing reservation can be committed while the grant is valid and then
+ * observe a revocation after provider I/O. This system-owned compensation is
+ * deliberately limited to the technical attempt row: it writes no clinical
+ * content and emits no actor-attributed outbox event.
+ */
+async function closeProcessingAttemptAfterGrantRevocation(
+  db: DatabaseClient,
+  input: { attemptId: string; temporaryAudioDeleted?: boolean }
+): Promise<void> {
+  await db.transaction(async (client) => {
+    await failProcessingAttempt(client, {
+      attemptId: input.attemptId,
+      errorCode: "operator_grant_revoked",
+      cancelled: false,
+      temporaryAudioDeleted: input.temporaryAudioDeleted
+    });
+  });
+}
+
+function sendClinicalWriteForbidden(request: FastifyRequest, reply: FastifyReply): unknown {
+  return reply.code(403).send(envelope({ error: "Active LUMEN review grant required" }, request.id));
 }
 
 function readOperatorId(request: FastifyRequest): string | undefined {

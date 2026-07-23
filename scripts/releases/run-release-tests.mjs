@@ -7,6 +7,7 @@ import { assertReleaseCell, parseCellScopeArguments } from "./release-scope.mjs"
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 export const GLOBAL_RELEASE_TEST_FILES = Object.freeze([
+  "scripts/releases/release-identity.test.mjs",
   "scripts/releases/release-manifest.test.mjs",
   "scripts/releases/rollback-policy.test.mjs",
   "scripts/releases/published-release.test.mjs",

@@ -15,7 +15,7 @@ import {
   optOutPayloadSchema,
   tipificacionRecordedPayloadSchema
 } from "@hyperion/nova-contracts";
-import { readServiceUrls } from "@hyperion/nova-config";
+import { isRestrictedDeploymentEnvironment, readServiceUrls } from "@hyperion/nova-config";
 import type { DatabaseClient, DatabaseExecutor } from "@hyperion/database";
 import type { ServiceContext } from "@hyperion/nova-service-runtime";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -243,9 +243,14 @@ export async function registerLiwaRoutes(
   };
 
   app.post("/v1/liwa/webhooks", async (request, reply) => handleInboundWebhook(request, reply));
-  app.post("/v1/liwa/webhooks/simulate", async (request, reply) =>
-    handleInboundWebhook(request, reply, { simulate: true })
-  );
+  app.post("/v1/liwa/webhooks/simulate", async (request, reply) => {
+    if (isRestrictedDeploymentEnvironment()) {
+      return reply
+        .code(404)
+        .send(envelope({ error: "LIWA webhook simulate is disabled in restricted environments" }, request.id));
+    }
+    return handleInboundWebhook(request, reply, { simulate: true });
+  });
 
   app.post("/v1/liwa/internal/events", async (request, reply) => {
     if (!context.db) return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));

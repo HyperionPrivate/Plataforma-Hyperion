@@ -204,6 +204,7 @@
     "lumen.guard_processing_attempt_transition": "lumen",
     "lumen.require_open_n1_compatibility_window": "lumen",
     "lumen.require_attested_legacy_cleanup_terminal": "lumen",
+    "nova.backfill_agency_analytics_unattributed": "nova-core",
     "nova.bump_compliance_policy_revision": "nova-core"
   },
   "tables": {
@@ -211,6 +212,7 @@
     "platform.tenants": "access",
     "platform.operators": "access",
     "platform.operator_sessions": "access",
+    "platform.access_token_denylist": "access",
     "platform.operator_tenants": "access",
     "platform.products": "access",
     "access_runtime.migration_ledger": "access",
@@ -326,7 +328,9 @@
     "nova.holidays": "nova-core",
     "nova.tenant_holidays": "nova-core",
     "nova.contact_attempts": "nova-core",
+    "nova.analytics_agency_coverage": "nova-core",
     "nova.analytics_daily": "nova-core",
+    "nova.analytics_daily_by_agency": "nova-core",
     "nova.csat_scores": "nova-core",
     "nova.outbox_dlq": "nova-core",
     "nova.voice_policy_approvals": "nova-core",

@@ -37,6 +37,29 @@ export interface LumenViewDefinition {
   icon: LumenIconId;
   requiresEncounter: boolean;
   mobilePrimary: boolean;
+  /** Guided demo surface (AUD-006); not clinical operable scope. */
+  isDemo: boolean;
+}
+
+export const LUMEN_DEMO_VIEW_IDS = [
+  "laboratorios",
+  "asistente",
+  "modelos",
+  "consentimientos",
+  "facturacion",
+  "dashboard"
+] as const satisfies readonly LumenViewId[];
+
+export type LumenDemoViewId = (typeof LUMEN_DEMO_VIEW_IDS)[number];
+
+export interface LumenConsoleEnvironment {
+  viteMode: string;
+  hyperionEnvironment?: string;
+}
+
+export interface LumenConsoleEnvironmentInput {
+  MODE?: string;
+  VITE_HYPERION_ENVIRONMENT?: string;
 }
 
 export interface LumenLocationLike {
@@ -61,7 +84,8 @@ export const LUMEN_VIEWS = [
     shortLabel: "Preconsulta",
     icon: "clipboard-pulse",
     requiresEncounter: true,
-    mobilePrimary: true
+    mobilePrimary: true,
+    isDemo: false
   },
   {
     id: "dictado",
@@ -70,7 +94,8 @@ export const LUMEN_VIEWS = [
     shortLabel: "Dictado",
     icon: "mic",
     requiresEncounter: true,
-    mobilePrimary: true
+    mobilePrimary: true,
+    isDemo: false
   },
   {
     id: "historia",
@@ -79,7 +104,8 @@ export const LUMEN_VIEWS = [
     shortLabel: "Historia",
     icon: "file-check-2",
     requiresEncounter: true,
-    mobilePrimary: true
+    mobilePrimary: true,
+    isDemo: false
   },
   {
     id: "laboratorios",
@@ -88,7 +114,8 @@ export const LUMEN_VIEWS = [
     shortLabel: "Labs",
     icon: "flask-conical",
     requiresEncounter: false,
-    mobilePrimary: false
+    mobilePrimary: false,
+    isDemo: true
   },
   {
     id: "asistente",
@@ -97,7 +124,8 @@ export const LUMEN_VIEWS = [
     shortLabel: "Asistente",
     icon: "sparkles",
     requiresEncounter: true,
-    mobilePrimary: false
+    mobilePrimary: false,
+    isDemo: true
   },
   {
     id: "modelos",
@@ -106,7 +134,8 @@ export const LUMEN_VIEWS = [
     shortLabel: "Modelos",
     icon: "settings-2",
     requiresEncounter: false,
-    mobilePrimary: false
+    mobilePrimary: false,
+    isDemo: true
   },
   {
     id: "consentimientos",
@@ -115,7 +144,8 @@ export const LUMEN_VIEWS = [
     shortLabel: "Consent.",
     icon: "signature",
     requiresEncounter: true,
-    mobilePrimary: false
+    mobilePrimary: false,
+    isDemo: true
   },
   {
     id: "facturacion",
@@ -124,7 +154,8 @@ export const LUMEN_VIEWS = [
     shortLabel: "Facturación",
     icon: "receipt-text",
     requiresEncounter: false,
-    mobilePrimary: false
+    mobilePrimary: false,
+    isDemo: true
   },
   {
     id: "dashboard",
@@ -133,9 +164,40 @@ export const LUMEN_VIEWS = [
     shortLabel: "Dashboard",
     icon: "chart-no-axes-combined",
     requiresEncounter: false,
-    mobilePrimary: false
+    mobilePrimary: false,
+    isDemo: true
   }
 ] as const satisfies readonly LumenViewDefinition[];
+
+export function readLumenConsoleEnvironment(
+  env: LumenConsoleEnvironmentInput = import.meta.env
+): LumenConsoleEnvironment {
+  const hyperionEnvironment = env.VITE_HYPERION_ENVIRONMENT?.trim().toLowerCase();
+  return {
+    viteMode: env.MODE ?? "development",
+    hyperionEnvironment: hyperionEnvironment || undefined
+  };
+}
+
+/** Hide guided-demo modules from primary nav in staging/production or Vite production builds. */
+export function shouldHideLumenDemoViewsFromNav(env: LumenConsoleEnvironmentInput = import.meta.env): boolean {
+  const { viteMode, hyperionEnvironment } = readLumenConsoleEnvironment(env);
+  if (viteMode === "production") return true;
+  return hyperionEnvironment === "staging" || hyperionEnvironment === "production";
+}
+
+export function filterLumenNavViews<T extends Pick<LumenViewDefinition, "id" | "isDemo">>(
+  views: readonly T[],
+  options?: { hideDemoViews?: boolean }
+): T[] {
+  const hideDemoViews = options?.hideDemoViews ?? shouldHideLumenDemoViewsFromNav();
+  if (!hideDemoViews) return [...views];
+  return views.filter((view) => !view.isDemo);
+}
+
+export function isLumenDemoView(viewId: LumenViewId): boolean {
+  return (LUMEN_DEMO_VIEW_IDS as readonly LumenViewId[]).includes(viewId);
+}
 
 const DEFAULT_PATH: LumenPath = "/lumen/preconsulta";
 

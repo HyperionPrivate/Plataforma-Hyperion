@@ -206,7 +206,7 @@ pnpm release:generate -- \
   --status published \
   --source-revision <40-character-git-sha> \
   --images-verified \
-  --image lumen-service=ghcr.io/administracionhyperion/lumen-service@sha256:<64-hex-oci-digest> \
+  --image lumen-service=ghcr.io/hyperionprivate/lumen-service@sha256:<64-hex-oci-digest> \
   --output releases/manifests/lumen/0.2.0.json
 ```
 

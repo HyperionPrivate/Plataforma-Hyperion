@@ -171,7 +171,7 @@ test("the real boundary rehearsal is opt-in, isolated and preserves exact eviden
   assert.match(source, /projectionForeignKeysToPlatformTenants: 0/);
   assert.match(source, /legacyChannelForeignKeysToPlatformTenants: 0/);
   assert.match(source, /hardDeleteSqlState: "55000"/);
-  assert.match(source, /004-access-tenant-lifecycle-integrity\.sql/);
+  assert.match(source, /005-access-jwt-denylist\.sql/);
   assert.match(source, /004-access-channel-tenant-projection\.sql/);
   assert.match(source, /005-access-iris-tenant-projection\.sql/);
   assert.match(source, /006-access-sofia-tenant-projection\.sql/);

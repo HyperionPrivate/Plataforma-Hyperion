@@ -408,7 +408,7 @@ test("el callback ElevenLabs recibe un secreto NOVA dedicado y falla cerrado si 
     verifier,
     /env\.ELEVENLABS_WEBHOOK_SECRET\?\.trim\(\) \|\| env\.ELEVENLABS_WEBHOOK_HMAC_SECRET\?\.trim\(\)/
   );
-  assert.match(verifier, /if \(!secret\) \{\s*if \(isRestrictedDeploymentEnvironment\(env\)\)/);
+  assert.match(verifier, /if \(!secret\) \{\s*if \(readDeploymentEnvironment\(env\) !== "local"\)/);
   assert.match(verifier, /statusCode: 401, message: "ElevenLabs webhook secret required"/);
 
   for (const deployment of ["staging", "production"]) {

@@ -219,8 +219,8 @@ export async function registerAppointmentRoutes(
     if (!settings) return;
     const operatorId = readOperatorId(request.headers as Record<string, unknown>);
     const operatorRole = readOperatorRole(request.headers as Record<string, unknown>);
-    let holdId = input.holdId;
-    let holdWasCreated = false;
+    const holdId = input.holdId;
+    const holdWasCreated = false;
 
     if (holdId && operatorRole === "advisor") {
       const ownership = await scope.db.query<{ createdBy: string }>(
@@ -269,15 +269,65 @@ export async function registerAppointmentRoutes(
       if (invalidRef) return sendReferenceError(reply, request, invalidRef.label);
       if (!(await validateBookableRequest(scope.db, scope.tenantId, holdInput, settings, request, reply))) return;
       try {
-        const reserved = await scope.db.transaction(async (tx) => {
-          const provider = new InternalAgendaProvider(asTransactionalDatabase(tx));
-          const result = await provider.reserve(holdInput);
-          await emitExpiredHolds(emitAudit, result.expiredHolds, tx);
-          if (!result.idempotent) await emitHoldCreated(emitAudit, result.hold, request, tx);
-          return result;
+        const completed = await scope.db.transaction(async (tx) => {
+          const transactionalDb = asTransactionalDatabase(tx);
+          const provider = new InternalAgendaProvider(transactionalDb);
+          const reserved = await provider.reserve(holdInput);
+          await emitExpiredHolds(emitAudit, reserved.expiredHolds, tx);
+          if (!reserved.idempotent) await emitHoldCreated(emitAudit, reserved.hold, request, tx);
+          const resolvedHoldId = reserved.hold.id;
+          const wasCreated = !reserved.idempotent;
+          const result =
+            settings.mode === "internal"
+              ? await provider.verify({
+                  tenantId: scope.tenantId,
+                  holdId: resolvedHoldId,
+                  appointmentIdempotencyKey,
+                  origin: input.origin ?? "advisor",
+                  actorId: operatorId
+                })
+              : await submitHybridAppointment(transactionalDb, {
+                  tenantId: scope.tenantId,
+                  holdId: resolvedHoldId,
+                  idempotencyKey: appointmentIdempotencyKey,
+                  origin: input.origin ?? "advisor",
+                  actorId: operatorId,
+                  externalSlaMinutes: settings.externalConfirmationSlaMinutes
+                });
+          const appointment = await findAppointment(transactionalDb, scope.tenantId, result.appointment.id);
+          if (!appointment) throw new Error("Appointment was not persisted");
+
+          if (!result.idempotent) {
+            await emitAudit(
+              {
+                tenantId: scope.tenantId,
+                actorId: operatorId,
+                eventType:
+                  settings.mode === "internal" ? "appointment.verified" : "appointment.pending_external_confirmation",
+                entityType: "appointment",
+                entityId: appointment.id,
+                metadata: { mode: settings.mode }
+              },
+              tx
+            );
+            await emitAudit(
+              {
+                tenantId: scope.tenantId,
+                actorId: operatorId,
+                eventType: "appointment.registered",
+                entityType: "appointment",
+                entityId: appointment.id,
+                metadata: { mode: settings.mode }
+              },
+              tx
+            );
+          }
+          return { appointment, result, holdWasCreated: wasCreated };
         });
-        holdId = reserved.hold.id;
-        holdWasCreated = !reserved.idempotent;
+
+        return reply
+          .code(completed.result.idempotent && !completed.holdWasCreated ? 200 : 201)
+          .send(envelope(completed.appointment, request.id));
       } catch (error) {
         return handleReservationError(error, scope.db, scope.tenantId, holdInput, settings, request, reply);
       }
@@ -555,6 +605,20 @@ export async function registerAppointmentRoutes(
     try {
       const appointment = await scope.db.transaction(async (tx) => {
         const transactionalDb = asTransactionalDatabase(tx);
+        const current = await lockAppointmentForCancellation(transactionalDb, scope.tenantId, appointmentId);
+        if (
+          current?.status === "cancelled" &&
+          current.cancelledBy === operatorId &&
+          current.cancellationReason === input.reason
+        ) {
+          return current;
+        }
+        if (current?.status === "cancelled") {
+          throw new AgendaProviderError(
+            "idempotency_conflict",
+            "Appointment cancellation conflicts with the prior cancellation"
+          );
+        }
         const provider = new InternalAgendaProvider(transactionalDb);
         await provider.cancel({ tenantId: scope.tenantId, appointmentId, actorId: operatorId, reason: input.reason });
         const cancelled = await findAppointment(transactionalDb, scope.tenantId, appointmentId);
@@ -957,6 +1021,21 @@ async function findAppointment(
   const result = await db.query(
     `select ${APPOINTMENT_COLUMNS}
      from pulso_iris.appointments where tenant_id = $1 and id = $2`,
+    [tenantId, appointmentId]
+  );
+  return pulsoIrisAppointmentListSchema.parse(result.rows)[0];
+}
+
+async function lockAppointmentForCancellation(
+  db: Pick<Database, "query">,
+  tenantId: string,
+  appointmentId: string
+): Promise<PulsoIrisAppointment | undefined> {
+  const result = await db.query(
+    `select ${APPOINTMENT_COLUMNS}
+     from pulso_iris.appointments
+     where tenant_id = $1 and id = $2
+     for update`,
     [tenantId, appointmentId]
   );
   return pulsoIrisAppointmentListSchema.parse(result.rows)[0];

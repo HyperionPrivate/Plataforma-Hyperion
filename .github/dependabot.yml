@@ -1,8 +1,8 @@
 version: 2
 
-# Temporary: open-pull-requests-limit 0 while Actions minutes are exhausted.
-# Dependabot version checks may still appear in the Actions UI, but no PRs
-# (and therefore no PR-triggered workflows) are opened until limits are restored.
+# Keep routine updates bounded so dependency maintenance resumes without
+# saturating the product-cell CI matrix. Security updates remain enabled in
+# the repository settings and use GitHub's separate security-update limit.
 updates:
   - package-ecosystem: npm
     directory: "/"
@@ -11,7 +11,7 @@ updates:
       day: monday
       time: "09:00"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     versioning-strategy: increase-if-necessary
     groups:
       production-minor-patch:
@@ -32,7 +32,7 @@ updates:
       day: monday
       time: "09:15"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 3
     versioning-strategy: increase-if-necessary
     groups:
       coopfuturo-minor-patch:
@@ -47,7 +47,7 @@ updates:
       day: monday
       time: "09:30"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 2
     groups:
       github-actions:
         patterns:
@@ -60,7 +60,7 @@ updates:
       day: monday
       time: "09:45"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 2
 
   - package-ecosystem: docker
     directory: "/infra/docker"
@@ -69,7 +69,7 @@ updates:
       day: monday
       time: "10:00"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 2
 
   - package-ecosystem: docker
     directory: "/infra/docker/cells"
@@ -78,7 +78,7 @@ updates:
       day: monday
       time: "10:05"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 2
 
   - package-ecosystem: docker
     directory: "/infra/docker/hostname-edge"
@@ -87,7 +87,7 @@ updates:
       day: monday
       time: "10:10"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 2
 
   - package-ecosystem: docker
     directory: "/infra/docker/legacy"
@@ -96,7 +96,7 @@ updates:
       day: monday
       time: "10:15"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 2
 
   - package-ecosystem: docker
     directory: "/apps/coopfuturo-console"
@@ -105,4 +105,4 @@ updates:
       day: monday
       time: "10:20"
       timezone: America/Bogota
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 2

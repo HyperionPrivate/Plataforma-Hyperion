@@ -66,6 +66,40 @@ services:
       timeout: 5s
       retries: 5
 
+  dialer-runtime-role-bootstrap:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: "no"
+    environment:
+      PGHOST: dialer-postgres
+      PGPORT: "5432"
+      PGDATABASE: ${DIALER_POSTGRES_DB:-dialer}
+      PGUSER: ${DIALER_POSTGRES_USER:-dialer}
+      PGPASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
+      DIALER_RUNTIME_USER: ${DIALER_RUNTIME_USER:-dialer_runtime}
+      DIALER_RUNTIME_PASSWORD: ${DIALER_RUNTIME_PASSWORD:-dialer-local-runtime-password-31}
+    command:
+      - sh
+      - -ec
+      - |
+        psql --set=ON_ERROR_STOP=1 \
+          --set=runtime_user="$$DIALER_RUNTIME_USER" \
+          --set=runtime_password="$$DIALER_RUNTIME_PASSWORD" <<'SQL'
+        SELECT format(
+          'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L',
+          :'runtime_user',
+          :'runtime_password'
+        )
+        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'runtime_user') \gexec
+        SELECT format(
+          'ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L',
+          :'runtime_user',
+          :'runtime_password'
+        ) \gexec
+        SQL
+    depends_on:
+      dialer-postgres:
+        condition: service_healthy
+
   dialer-migrate:
     <<: *dialer-build
     restart: "no"
@@ -76,11 +110,11 @@ services:
       APP_ENV: ${DIALER_APP_ENV:-local}
       DB_USER: ${DIALER_POSTGRES_USER:-dialer}
       DB_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
-      DB_RUNTIME_USER: ${DIALER_POSTGRES_USER:-dialer}
+      DB_RUNTIME_USER: ${DIALER_RUNTIME_USER:-dialer_runtime}
       DB_MIGRATION_COMMAND_TIMEOUT_SECONDS: ${DB_MIGRATION_COMMAND_TIMEOUT_SECONDS:-600}
     depends_on:
-      dialer-postgres:
-        condition: service_healthy
+      dialer-runtime-role-bootstrap:
+        condition: service_completed_successfully
 
   # API listens on 8080 inside the container (see Dialer/docker/Dockerfile.dialer).
   # Do not scale this service horizontally — single Uvicorn worker is intentional.
@@ -123,8 +157,8 @@ services:
       REDIS_CONNECT_TIMEOUT_SECONDS: ${REDIS_CONNECT_TIMEOUT_SECONDS:-2}
       REQUIRE_REDIS: "true"
       REQUIRE_DATABASE: "true"
-      DB_USER: ${DIALER_POSTGRES_USER:-dialer}
-      DB_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
+      DB_USER: ${DIALER_RUNTIME_USER:-dialer_runtime}
+      DB_PASSWORD: ${DIALER_RUNTIME_PASSWORD:-dialer-local-runtime-password-31}
       DB_AUTO_SCHEMA: "false"
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_CALL_TIMEOUT_SECONDS: ${ELEVENLABS_CALL_TIMEOUT_SECONDS:-90}
@@ -196,7 +230,7 @@ services:
       DB_USER: ${DIALER_POSTGRES_USER:-dialer}
       DB_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
       DB_SSLMODE: ${DIALER_DB_SSLMODE:-disable}
-      DB_RUNTIME_USER: ${DIALER_POSTGRES_USER:-dialer}
+      DB_RUNTIME_USER: ${DIALER_RUNTIME_USER:-dialer_runtime}
       INSERT_TEST_DDIS: "false"
     depends_on:
       dialer-postgres:
@@ -222,8 +256,8 @@ services:
       DB_HOST: dialer-postgres
       DB_PORT: "5432"
       DB_NAME: ${DIALER_POSTGRES_DB:-dialer}
-      DB_USER: ${DIALER_POSTGRES_USER:-dialer}
-      DB_PASSWORD: ${DIALER_POSTGRES_PASSWORD:-dialer-local-dev-password-24}
+      DB_USER: ${DIALER_RUNTIME_USER:-dialer_runtime}
+      DB_PASSWORD: ${DIALER_RUNTIME_PASSWORD:-dialer-local-runtime-password-31}
       DB_SSLMODE: ${DIALER_DB_SSLMODE:-disable}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_BASE_URL: ${ELEVENLABS_BASE_URL:-https://api.elevenlabs.io/v1}
@@ -282,6 +316,7 @@ services:
     environment:
       VOICE_MODE: dialer
       DIALER_BASE_URL: ${DIALER_BASE_URL:-http://neutral-dialer:8080}
+      DIALER_CALL_TIMEOUT_MS: ${DIALER_CALL_TIMEOUT_MS:-100000}
       DIALER_ADMIN_USER: ${DIALER_ADMIN_USER:-${AUTH_ADMIN_USER:-admin}}
       DIALER_ADMIN_PASSWORD: ${DIALER_ADMIN_PASSWORD:-${AUTH_ADMIN_PASSWORD:?AUTH_ADMIN_PASSWORD is required}}
       DIALER_DEMO_API_KEY: ${DIALER_DEMO_API_KEY:-${DEMO_API_KEY:-${VOICE_TO_DIALER_TOKEN:-}}}
