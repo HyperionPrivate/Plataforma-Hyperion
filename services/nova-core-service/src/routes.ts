@@ -375,10 +375,7 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
-    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, [
-      "admin",
-      "supervisor"
-    ]);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin", "supervisor"]);
     if (!operator) return;
 
     const parsed = contactImportSchema.safeParse(request.body);
@@ -476,10 +473,7 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
-    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, [
-      "admin",
-      "supervisor"
-    ]);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin", "supervisor"]);
     if (!operator) return;
 
     const body = Buffer.isBuffer(request.body)
@@ -537,10 +531,7 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
-    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, [
-      "admin",
-      "supervisor"
-    ]);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin", "supervisor"]);
     if (!operator) return;
 
     const result = await scope.db.query<{
@@ -669,10 +660,7 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
-    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, [
-      "admin",
-      "supervisor"
-    ]);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin", "supervisor"]);
     if (!operator) return;
 
     const result = await scope.db.query(
@@ -688,10 +676,7 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
-    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, [
-      "admin",
-      "supervisor"
-    ]);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin", "supervisor"]);
     if (!operator) return;
 
     const productFlow = readProductFlow(request.params);
@@ -755,10 +740,7 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
-    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, [
-      "admin",
-      "supervisor"
-    ]);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin", "supervisor"]);
     if (!operator) return;
 
     const contactId = readUuid(request.params, "contactId");
@@ -859,10 +841,7 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
-    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, [
-      "admin",
-      "supervisor"
-    ]);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin", "supervisor"]);
     if (!operator) return;
 
     const contactId = readUuid(request.params, "contactId");
@@ -1597,10 +1576,7 @@ export async function registerNovaRoutes(
     const scope = requireTenantDb(context, request, reply);
     if (!scope) return;
     if (!(await ensureTenantSnapshot(scope.db, scope.tenantId, request, reply))) return;
-    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, [
-      "admin",
-      "supervisor"
-    ]);
+    const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin", "supervisor"]);
     if (!operator) return;
 
     const parsed = labLiwaEventSchema.safeParse(request.body);
@@ -1782,16 +1758,18 @@ export async function registerNovaRoutes(
         where tenant_id = $1 and is_active = true`,
       [scope.tenantId]
     );
-    if (Number(existingGrants.rows[0]?.count ?? 0) > 0) {
+    const isInitialBootstrap = Number(existingGrants.rows[0]?.count ?? 0) === 0;
+    let bootstrapOperatorId: string;
+    if (!isInitialBootstrap) {
       const operator = await requireOperatorScope(scope.db, scope.tenantId, request, reply, ["admin"]);
       if (!operator) return;
+      bootstrapOperatorId = operator.operatorId;
     } else {
       const operatorId = readHeaderString(request.headers["x-operator-id"]);
       if (!tenantIdSchema.safeParse(operatorId).success) {
-        return reply
-          .code(403)
-          .send(envelope({ error: "Verified operator identity required" }, request.id));
+        return reply.code(403).send(envelope({ error: "Verified operator identity required" }, request.id));
       }
+      bootstrapOperatorId = operatorId!;
     }
 
     const parsed = bootstrapSchema.safeParse({
@@ -1801,6 +1779,20 @@ export async function registerNovaRoutes(
     if (!parsed.success) {
       return reply.code(400).send(envelope({ error: "Invalid bootstrap payload" }, request.id));
     }
+
+    // First bootstrap without an explicit grant list seeds the caller as tenant admin so
+    // subsequent agency-scoped writes (import, campaigns, etc.) are not locked out.
+    const operatorGrants =
+      isInitialBootstrap && parsed.data.operator_grants.length === 0
+        ? [
+            {
+              operator_id: bootstrapOperatorId,
+              role: "admin" as const,
+              agency_codes: [] as string[],
+              is_active: true
+            }
+          ]
+        : parsed.data.operator_grants;
 
     const now = new Date();
     const payloadHash = createHash("sha256")
@@ -1848,7 +1840,7 @@ export async function registerNovaRoutes(
         );
       }
 
-      for (const grant of parsed.data.operator_grants) {
+      for (const grant of operatorGrants) {
         const grantHash = createHash("sha256").update(JSON.stringify(grant)).digest("hex");
         await tx.query(
           `insert into nova.operator_grants (
@@ -1884,7 +1876,7 @@ export async function registerNovaRoutes(
           tenant_id: parsed.data.tenant_id,
           display_name: parsed.data.display_name,
           agencies: parsed.data.agencies.length,
-          operator_grants: parsed.data.operator_grants.length
+          operator_grants: operatorGrants.length
         },
         request.id
       )

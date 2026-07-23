@@ -19,12 +19,7 @@ describe("PostgresNovaOutbox.fail", () => {
     expect(sql).toMatch(/insert into nova\.outbox_dlq/i);
     expect(sql).toMatch(/attempt_count >= 8/i);
     expect(sql).toMatch(/where status = 'failed'/i);
-    expect(params).toEqual([
-      "11111111-1111-4111-8111-111111111111",
-      "worker-test",
-      "dialer_timeout_",
-      false
-    ]);
+    expect(params).toEqual(["11111111-1111-4111-8111-111111111111", "worker-test", "dialer_timeout_", false]);
   });
 });
 

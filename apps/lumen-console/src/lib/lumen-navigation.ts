@@ -180,9 +180,7 @@ export function readLumenConsoleEnvironment(
 }
 
 /** Hide guided-demo modules from primary nav in staging/production or Vite production builds. */
-export function shouldHideLumenDemoViewsFromNav(
-  env: LumenConsoleEnvironmentInput = import.meta.env
-): boolean {
+export function shouldHideLumenDemoViewsFromNav(env: LumenConsoleEnvironmentInput = import.meta.env): boolean {
   const { viteMode, hyperionEnvironment } = readLumenConsoleEnvironment(env);
   if (viteMode === "production") return true;
   return hyperionEnvironment === "staging" || hyperionEnvironment === "production";

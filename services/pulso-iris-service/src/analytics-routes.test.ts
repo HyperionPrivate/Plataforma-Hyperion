@@ -68,7 +68,7 @@ describe("conversation analytics projections", () => {
   });
 
   it("binds dashboard analytics to the tenant agenda timezone", async () => {
-    query.mockImplementation(async (sqlValue: unknown, params?: unknown[]) => {
+    query.mockImplementation(async (sqlValue: unknown, _params?: unknown[]) => {
       const sql = String(sqlValue);
       if (sql.includes("pulso_iris.tenant_snapshots")) {
         return { rows: [{ status: "active", sourceVersion: "1" }] };

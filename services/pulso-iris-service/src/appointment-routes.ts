@@ -219,8 +219,8 @@ export async function registerAppointmentRoutes(
     if (!settings) return;
     const operatorId = readOperatorId(request.headers as Record<string, unknown>);
     const operatorRole = readOperatorRole(request.headers as Record<string, unknown>);
-    let holdId = input.holdId;
-    let holdWasCreated = false;
+    const holdId = input.holdId;
+    const holdWasCreated = false;
 
     if (holdId && operatorRole === "advisor") {
       const ownership = await scope.db.query<{ createdBy: string }>(

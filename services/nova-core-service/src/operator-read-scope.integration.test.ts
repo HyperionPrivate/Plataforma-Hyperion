@@ -286,11 +286,7 @@ integration("NOVA operator read scope PostgreSQL boundary", () => {
     const crossAgencyScore = await post(`contacts/${otherAgencyContactId}/score`, supervisorId, {});
     expect(crossAgencyScore.statusCode).toBe(404);
 
-    const crossAgencyEligibility = await post(
-      `contacts/${otherAgencyContactId}/eligibility`,
-      supervisorId,
-      {}
-    );
+    const crossAgencyEligibility = await post(`contacts/${otherAgencyContactId}/eligibility`, supervisorId, {});
     expect(crossAgencyEligibility.statusCode).toBe(404);
 
     const crossAgencyImport = await post("contacts/import", supervisorId, {

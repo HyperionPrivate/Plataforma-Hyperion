@@ -754,7 +754,11 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       }
       // Without a database, cryptographic verification still applies; denylist
       // enforcement requires Access storage (logout already needs DB).
-      if (context.db && (await isAccessTokenJtiRevoked(context.db, verified.claims.jti))) {
+      if (
+        context.db &&
+        typeof verified.claims.jti === "string" &&
+        (await isAccessTokenJtiRevoked(context.db, verified.claims.jti))
+      ) {
         return reply.code(401).send(envelope({ error: "Invalid or expired session" }, request.id));
       }
       return envelope(accessMe(verified.principal), request.id);
@@ -814,6 +818,9 @@ export const registerRoutes: RouteRegistrar = async (app, context) => {
       }
       if (!context.db) {
         return reply.code(503).send(envelope({ error: "DATABASE_URL is required" }, request.id));
+      }
+      if (typeof verified.claims.jti !== "string") {
+        return reply.code(401).send(envelope({ error: "Invalid or expired session" }, request.id));
       }
       await revokeAccessTokenJti(context.db, verified.claims.jti, new Date(verified.claims.exp * 1000));
       return envelope({ loggedOut: true, locallyRevoked: true }, request.id);
@@ -919,13 +926,6 @@ function accessMe(principal: AccessPrincipal) {
 
 function isJwtLike(token: string): boolean {
   return token.split(".").length === 3;
-}
-
-function verifyAccessToken(
-  services: ReadonlyMap<string, AccessTokenService>,
-  token: string
-): AccessPrincipal | undefined {
-  return verifyAccessTokenClaims(services, token)?.principal;
 }
 
 function verifyAccessTokenClaims(

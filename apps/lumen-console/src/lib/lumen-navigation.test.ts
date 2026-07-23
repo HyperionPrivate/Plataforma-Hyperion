@@ -48,18 +48,12 @@ describe("LUMEN navigation", () => {
   });
 
   it("oculta vistas demo del nav en staging, production o build Vite production", () => {
-    expect(
-      shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "staging" })
-    ).toBe(true);
-    expect(
-      shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "production" })
-    ).toBe(true);
-    expect(shouldHideLumenDemoViewsFromNav({ MODE: "production", VITE_HYPERION_ENVIRONMENT: "local" })).toBe(
+    expect(shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "staging" })).toBe(true);
+    expect(shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "production" })).toBe(
       true
     );
-    expect(shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "local" })).toBe(
-      false
-    );
+    expect(shouldHideLumenDemoViewsFromNav({ MODE: "production", VITE_HYPERION_ENVIRONMENT: "local" })).toBe(true);
+    expect(shouldHideLumenDemoViewsFromNav({ MODE: "development", VITE_HYPERION_ENVIRONMENT: "local" })).toBe(false);
     expect(shouldHideLumenDemoViewsFromNav({ MODE: "development" })).toBe(false);
   });
 

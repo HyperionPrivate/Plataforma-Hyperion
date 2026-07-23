@@ -592,8 +592,10 @@ describeIntegration("LUMEN clinical vertical", () => {
       expect(lastStructureOrigin).toBe("manual");
       const detail = await app.inject({
         method: "GET",
-        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}`
+        url: `/v1/tenants/${tenantA}/lumen/encounters/${fixture.encounterId}`,
+        headers
       });
+      expect(detail.statusCode).toBe(200);
       expect(detail.json().data.dictations[0].source).toBe("browser_microphone");
     } finally {
       releaseProvider();
