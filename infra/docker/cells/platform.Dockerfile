@@ -167,7 +167,7 @@ COPY --from=platform-admin-bff-build /app/apps/platform-admin-bff/dist apps/plat
 USER node
 CMD ["node", "apps/platform-admin-bff/dist/index.js"]
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS platform-admin-console
+FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6 AS platform-admin-console
 
 ENV BFF_UPSTREAM=http://platform-admin-bff:8098 \
     CONSOLE_CELL=platform \
