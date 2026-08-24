@@ -216,7 +216,7 @@ USER node
 
 CMD ["node", "packages/nova-migrations/dist/index.js"]
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS nova-console
+FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6 AS nova-console
 
 ENV BFF_UPSTREAM=http://nova-bff:8095 \
     CONSOLE_CELL=nova \
