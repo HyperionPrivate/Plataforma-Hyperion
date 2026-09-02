@@ -23,6 +23,6 @@
     "@hyperion/database": "workspace:*",
     "@hyperion/logger": "workspace:*",
     "@hyperion/platform-contracts": "1.1.0",
-    "fastify": "^5.2.1"
+    "fastify": "^5.12.1"
   }
 }
