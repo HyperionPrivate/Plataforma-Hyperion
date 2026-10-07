@@ -17,7 +17,7 @@
     "@hyperion/pulso-contracts": "1.1.0",
     "@hyperion/pulso-migrations": "workspace:*",
     "@hyperion/service-runtime": "workspace:*",
-    "fastify": "^5.2.1",
+    "fastify": "^5.12.5",
     "zod": "^3.24.2"
   }
 }
